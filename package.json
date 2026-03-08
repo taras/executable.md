@@ -1,0 +1,23 @@
+{
+  "name": "executable-markdown-agents",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Executable MDX — durable markdown workflows with component expansion and code execution",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@effectionx/durable-effects": "https://pkg.pr.new/thefrontside/effectionx/@effectionx/durable-effects@180",
+    "@effectionx/durable-streams": "https://pkg.pr.new/thefrontside/effectionx/@effectionx/durable-streams@179",
+    "effection": "4.1.0-alpha.7",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
