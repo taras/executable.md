@@ -25,3 +25,5 @@ export type {
   SampleContext,
   Json,
 } from "./src/types.ts";
+
+export { healSegment } from "./src/heal.ts";
