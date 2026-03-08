@@ -32,7 +32,8 @@ function makeRuntime(files: Record<string, string>): DurableRuntime {
       // Simple mock exec — just return the command as stdout
       const cmd = options.command.join(" ");
       if (cmd.includes("bash -c")) {
-        const script = options.command[2] ?? "";
+        // Code block content includes trailing newline — trim for matching
+        const script = (options.command[2] ?? "").trim();
         // Simulate a few commands
         if (script.startsWith("echo ")) {
           return {
