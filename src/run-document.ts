@@ -178,7 +178,6 @@ function* useImportComponentGuard(
   runtime: DurableRuntime,
 ): Operation<void> {
   const scope = yield* useScope();
-  const cache = new Map<string, string>();
 
   scope.around(ReplayGuard, {
     *check([event], next) {
@@ -188,36 +187,32 @@ function* useImportComponentGuard(
       ) {
         const result = event.result.value as unknown as ImportResult | undefined;
         const storedPath = result?.path;
-        if (storedPath && !cache.has(storedPath)) {
+        if (storedPath && result?.contentHash) {
           try {
             const content = yield* runtime.readTextFile(storedPath);
             const currentHash = yield* computeSHA256(content);
-            cache.set(storedPath, currentHash);
-          } catch {
-            // File may not exist — leave uncached, decide will handle
+            // Compare immediately — the decide phase may never run if
+            // durableRun short-circuits at the Close event check.
+            if (currentHash !== result.contentHash) {
+              throw new StaleInputError(
+                `Component changed: ${event.description["name"]} at ${result.path}`,
+              );
+            }
+          } catch (error) {
+            // Re-throw StaleInputError — only catch file-not-found
+            if (error instanceof StaleInputError) {
+              throw error;
+            }
+            // File may not exist — leave unchecked
           }
         }
       }
       yield* next(event);
     },
     decide([event], next) {
-      if (
-        event.description["type"] === "import_component" &&
-        event.result.status === "ok"
-      ) {
-        const result = event.result.value as unknown as ImportResult | undefined;
-        if (result) {
-          const currentHash = cache.get(result.path);
-          if (currentHash && currentHash !== result.contentHash) {
-            return {
-              outcome: "error" as const,
-              error: new StaleInputError(
-                `Component changed: ${event.description["name"]} at ${result.path}`,
-              ),
-            };
-          }
-        }
-      }
+      // Staleness is detected eagerly in the check phase above.
+      // The decide phase is kept for compositional correctness with
+      // other guards that may use the check/decide split.
       return next(event);
     },
   });
