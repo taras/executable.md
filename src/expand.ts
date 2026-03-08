@@ -22,6 +22,7 @@ import { interpolate } from "./interpolate.ts";
 import { validateProps } from "./validate.ts";
 import { scanSegments } from "./scanner.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { healSegment } from "./heal.ts";
 
 // ---------------------------------------------------------------------------
 // Types for the expansion context
@@ -70,9 +71,12 @@ export function* expandSegments(
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
+        // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
+        // Runs synchronously — no yield, no journal entry
+        const healed = healSegment(segment.content);
         // Interpolate {meta.key} and {props.key} — runtime, no journal
         const interpolated = interpolate(
-          segment.content,
+          healed,
           parentMeta,
           parentProps,
         );

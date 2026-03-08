@@ -171,12 +171,116 @@ single `ComponentInvocation` with no children. Block tags
 are the recursively scanned segments between the tags.
 
 **Executable code blocks.** A fenced code block whose info string
-contains `exec` after the language identifier is executable. Everything
-else in the document — paragraphs, headings, lists, links, images,
-standard code fences — is passive text.
+contains `exec` or `eval` after the language identifier is executable.
+Everything else in the document — paragraphs, headings, lists, links,
+images, standard code fences — is passive text.
 
 Parsing is a runtime operation. It is deterministic from its input text
 and produces no journal entries.
+
+### 2.3 Markdown healing: remend
+
+Components and executable code blocks are **semantic boundaries**.
+Markdown constructs (emphasis, links, code spans, math) cannot span
+them. Each text segment must be valid markdown independently.
+
+When the boundary scanner splits a document at an execution boundary,
+the text segment before the boundary may contain unclosed markdown
+constructs. For example:
+
+```markdown
+Hello **world
+<Component />
+more text
+```
+
+Produces two text segments: `Hello **world\n` (unclosed bold) and
+`\nmore text`. Without healing, the unclosed `**` in the first
+segment would bleed into the component expansion output, corrupting
+the rendered markdown.
+
+**remend** (`remend` npm package, MIT, Vercel) heals incomplete
+streaming markdown. It is a pure function `string → string` that
+closes unclosed constructs: bold, italic, strikethrough, code spans,
+links, images, code fences, and math blocks.
+
+#### Where healing runs in the pipeline
+
+```
+raw text → boundary scanner → text segments
+                                    ↓
+                               remend(segment, { htmlTags: false })
+                                    ↓
+                               interpolation ({meta.key}, {props.key})
+                                    ↓
+                               expansion / rendering
+```
+
+Healing runs **after** the boundary scanner (which produces segments)
+and **before** interpolation (which resolves `{meta.key}` references).
+This ordering is important:
+
+- **After scanning:** The scanner guarantees no incomplete JSX in
+  text segments. Remend only sees passive markdown.
+- **Before interpolation:** If an interpolation result contains
+  markdown markers (e.g., `{meta.title}` resolves to `**bold**`),
+  those markers are *not* double-healed — they were introduced after
+  healing.
+- **Before expansion:** Children passed through `<Content />` are
+  healed before substitution into the parent body.
+
+#### `htmlTags: false`
+
+This option is **required**. It tells remend not to close HTML-like
+tags (`<div>`, `<span>`, etc.) in text segments. Without it, remend
+would try to close any `<` it finds, including:
+
+- Legitimate angle brackets in text (`a < b`, `x > y`)
+- Lowercase HTML tags that the scanner correctly passed through
+- Residual angle brackets from scanner edge cases
+
+The boundary scanner owns JSX/HTML completeness. Remend owns
+markdown construct completeness. `htmlTags: false` enforces this
+separation.
+
+#### What remend heals
+
+| Construct | Unclosed example | Healed output |
+|-----------|-----------------|---------------|
+| Bold | `**text` | `**text**` |
+| Italic | `*text` | `*text*` |
+| Strikethrough | `~~text` | `~~text~~` |
+| Inline code | `` `code `` | `` `code` `` |
+| Link | `[text](url` | `[text](url)` |
+| Link text | `[text` | `[text]` |
+| Image | `![alt](url` | `![alt](url)` |
+| Code fence | ```` ``` ```` (unclosed) | ```` ``` ```` + closing fence |
+| Math | `$$formula` | `$$formula$$` |
+
+#### What remend does NOT heal
+
+- **Orphaned closing markers.** `more** text` (closing `**` without
+  opener) — remend doesn't strip these. They render as literal text
+  in most markdown engines, which is acceptable.
+- **JSX/HTML tags.** Disabled via `htmlTags: false`.
+- **Cross-boundary constructs.** If a user writes `**` before a
+  component and `**` after, these are two separate incomplete
+  constructs, not one spanning construct. Each is healed independently.
+
+#### Implementation
+
+```typescript
+import remend from "remend";
+
+function healSegment(text: string): string {
+  return remend(text, { htmlTags: false });
+}
+```
+
+Healing is a **runtime operation** — pure, synchronous, deterministic
+from its input. No journal entry. Runs on every execution (live and
+replay) because it operates on the text content, which is either
+fresh (live) or stored (replay, fed from journal).
 
 ---
 
@@ -1115,8 +1219,10 @@ function* expandSegments(
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
+        // Heal incomplete markdown constructs at segment boundaries
+        const healed = healSegment(segment.content);
         // Interpolate {meta.key} and {props.key} — runtime, no journal
-        const interpolated = interpolate(segment.content, parentMeta, parentProps);
+        const interpolated = interpolate(healed, parentMeta, parentProps);
         result.push({ type: "text", content: interpolated });
         break;
       }
@@ -1884,6 +1990,82 @@ instead of all under `root`).
 | E7 | Undeclared prop in full document | PropValidationError with component name and prop name |
 | E8 | `silent exec` in full document | Command runs, result journaled, output omitted |
 | E9 | `sample exec` in full document | Command + LLM both journaled, LLM response in output |
+| E10 | Unclosed bold across component boundary | `**text\n<Comp />\nmore` → healed bold in first segment, component expanded, `more` unaffected |
+
+### Tier F — Markdown healing (remend)
+
+**Healing at component boundaries:**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F1 | Unclosed bold before component | `Hello **world\n<Comp />` | Text segment healed to `Hello **world**` |
+| F2 | Unclosed italic before component | `Hello *world\n<Comp />` | Text segment healed to `Hello *world*` |
+| F3 | Unclosed strikethrough | `Hello ~~world\n<Comp />` | Text segment healed to `Hello ~~world~~` |
+| F4 | Unclosed inline code | ``Hello `code\n<Comp />`` | Text segment healed to ``Hello `code` `` |
+| F5 | Unclosed link text | `Hello [text\n<Comp />` | Text segment healed to `Hello [text]` |
+| F6 | Unclosed link | `Hello [text](url\n<Comp />` | Text segment healed to `Hello [text](url)` |
+| F7 | Unclosed image | `Hello ![alt](url\n<Comp />` | Text segment healed to `Hello ![alt](url)` |
+| F8 | Unclosed code fence | ```` ```js\ncode\n<Comp /> ```` | Scanner: code fence suppresses JSX — component is inside fence, not a boundary |
+
+**Healing at exec block boundaries:**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F9 | Unclosed bold before exec | `Hello **world\n` `` ```bash exec `` | Text segment healed to `Hello **world**` |
+| F10 | Unclosed code span before exec | ``Hello `code\n`` `` ```bash exec `` | Text segment healed to ``Hello `code` `` |
+
+**`htmlTags: false` — angle brackets in text:**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F11 | Less-than in text | `a < b\n<Comp />` | Text segment unchanged: `a < b` — no HTML healing |
+| F12 | Greater-than in text | `a > b\n<Comp />` | Text segment unchanged: `a > b` |
+| F13 | Lowercase HTML tag in text | `<div>content\n<Comp />` | Text segment unchanged — `htmlTags: false` prevents closing |
+| F14 | Angle brackets inside code span | `` `a < b` `` before `<Comp />` | Already complete — no healing needed |
+
+**Orphaned closing markers (NOT healed):**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F15 | Orphaned bold closer | Text segment starts with `world** more` | Unchanged — remend does not strip orphaned closers |
+| F16 | Orphaned italic closer | Text segment starts with `text* more` | Unchanged |
+
+**Nested and multiple unclosed constructs:**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F17 | Nested bold inside italic | `*hello **world\n<Comp />` | Both healed: `*hello **world***` (or equivalent valid nesting) |
+| F18 | Multiple unclosed at same boundary | ``**bold `code *italic\n<Comp />`` | All three healed independently |
+
+**No-op cases (healing is identity):**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F19 | Complete markdown | `Hello **world** more text` | Unchanged |
+| F20 | Empty text segment | `` | Unchanged (empty string) |
+| F21 | Text with no markdown constructs | `Hello world` | Unchanged |
+| F22 | Already escaped markers | `Hello \*world\n<Comp />` | Unchanged — `\*` is not an opener |
+
+**Interaction with interpolation:**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F23 | Unclosed bold containing interpolation | `**{meta.title}\n<Comp />` | Bold healed first, then `{meta.title}` interpolated inside healed bold |
+| F24 | Interpolation result with markers | `{meta.title}` resolves to `**bold**` | NOT double-healed — markers from interpolation are post-healing |
+
+**Interaction with Content slot:**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F25 | Children with unclosed bold | `<Wrap>**hello</Wrap>` | Children healed to `**hello**` before substitution into Wrap's body |
+| F26 | Component body segment healed independently | Wrap body has `*intro\n<Content />` | Body's text segment healed to `*intro*`, children substituted separately |
+
+**Math blocks (if supported by remend):**
+
+| # | Test | Input | Verify |
+|---|------|-------|--------|
+| F27 | Unclosed inline math | `$formula\n<Comp />` | Healed to `$formula$` |
+| F28 | Unclosed display math | `$$formula\n<Comp />` | Healed to `$$formula$$` |
 
 ---
 
@@ -1955,3 +2137,6 @@ A.md references <C />.
 | 19 | `null` shorthand means required, no default | `name: null` declares a required input with no default — the minimal way to say "caller must provide this" |
 | 20 | Meta supports optional typed definitions | `meta:` key with JSON Schema subset for components that need schema validation on their own metadata |
 | 21 | Prop validation is runtime, not durable | Deterministic from component definition + caller props — no journal entry needed |
+| 22 | Components are semantic boundaries for markdown constructs | Bold, italic, links, code spans cannot span across a component or exec block — each text segment is healed independently |
+| 23 | Remend runs after scanning, before interpolation | Heals incomplete markdown in text segments; `htmlTags: false` required — boundary scanner owns JSX completeness, remend owns markdown completeness |
+| 24 | Healing is runtime, not durable | Pure function of text content — runs on both live and replay, no journal entry |
