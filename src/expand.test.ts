@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it } from "@effectionx/bdd/node";
 import assert from "node:assert/strict";
 import { expandSegments } from "./expand.ts";
 import type { ExpansionContext } from "./expand.ts";
@@ -6,6 +6,7 @@ import { scanSegments } from "./scanner.ts";
 import { interpolate } from "./interpolate.ts";
 import { validateProps, PropValidationError } from "./validate.ts";
 import { renderSegments } from "./render.ts";
+import type { Operation } from "effection";
 import type {
   Segment,
   ComponentDefinition,
@@ -62,29 +63,23 @@ function makeCtx(
   };
 }
 
-function* run(
+function expand(
   segments: Segment[],
   ctx: ExpansionContext,
   meta: Record<string, unknown> = {},
   props: Record<string, Json> = {},
-): Generator<unknown, string, unknown> {
-  const expanded = yield* expandSegments(
-    segments,
-    meta,
-    props,
-    new Set(),
-    ctx,
-  );
-  return renderSegments(expanded);
-}
-
-/** Run a generator to completion (no durable effects in tests). */
-function runSync<T>(gen: Generator<unknown, T, unknown>): T {
-  let result = gen.next();
-  while (!result.done) {
-    result = gen.next(result.value);
+): Operation<string> {
+  function* op() {
+    const expanded = yield* expandSegments(
+      segments,
+      meta,
+      props,
+      new Set(),
+      ctx,
+    );
+    return renderSegments(expanded);
   }
-  return result.value;
+  return op() as unknown as Operation<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,190 +88,190 @@ function runSync<T>(gen: Generator<unknown, T, unknown>): T {
 
 describe("expansion", () => {
   // C1: Basic expansion
-  it("C1: basic expansion — component body in output", () => {
+  it("C1: basic expansion — component body in output", function*() {
     const comp = makeComponent("Greeting", "Hello world!");
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments("<Greeting />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "Hello world!");
   });
 
   // C2: Content slot
-  it("C2: content slot — children at <Content /> position", () => {
+  it("C2: content slot — children at <Content /> position", function*() {
     const comp = makeComponent("Wrap", "Before <Content /> After");
     const ctx = makeCtx({ Wrap: comp });
     const segments = scanSegments("<Wrap>middle</Wrap>");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "Before middle After");
   });
 
   // C3: Nested expansion
-  it("C3: nested expansion — A contains B", () => {
+  it("C3: nested expansion — A contains B", function*() {
     const compB = makeComponent("B", "inner");
     const compA = makeComponent("A", "outer <B /> end");
     const ctx = makeCtx({ A: compA, B: compB });
     const segments = scanSegments("<A />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "outer inner end");
   });
 
   // C4: Transitive expansion — A→B→C
-  it("C4: transitive expansion — A references B references C", () => {
+  it("C4: transitive expansion — A references B references C", function*() {
     const compC = makeComponent("C", "leaf");
     const compB = makeComponent("B", "mid(<C />)");
     const compA = makeComponent("A", "top(<B />)");
     const ctx = makeCtx({ A: compA, B: compB, C: compC });
     const segments = scanSegments("<A />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "top(mid(leaf))");
   });
 
   // C5: Direct cycle
-  it("C5: direct cycle — A contains A → ErrorSegment", () => {
+  it("C5: direct cycle — A contains A → ErrorSegment", function*() {
     const compA = makeComponent("A", "start <A /> end");
     const ctx = makeCtx({ A: compA });
     const segments = scanSegments("<A />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.ok(output.includes("ERROR"));
     assert.ok(output.includes("Cycle detected"));
   });
 
   // C6: Mutual cycle — A→B→A
-  it("C6: mutual cycle — A→B→A → ErrorSegment", () => {
+  it("C6: mutual cycle — A→B→A → ErrorSegment", function*() {
     const compA = makeComponent("A", "a(<B />)");
     const compB = makeComponent("B", "b(<A />)");
     const ctx = makeCtx({ A: compA, B: compB });
     const segments = scanSegments("<A />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.ok(output.includes("ERROR"));
     assert.ok(output.includes("Cycle detected"));
   });
 
   // C8: Frontmatter interpolation
-  it("C8: frontmatter interpolation — {meta.title}", () => {
+  it("C8: frontmatter interpolation — {meta.title}", function*() {
     const comp = makeComponent("Page", "Title: {meta.title}", {
       meta: { title: "My Page" },
     });
     const ctx = makeCtx({ Page: comp });
     const segments = scanSegments("<Page />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "Title: My Page");
   });
 
   // C9: Props interpolation
-  it("C9: props interpolation — {props.name}", () => {
+  it("C9: props interpolation — {props.name}", function*() {
     const comp = makeComponent("Greeting", "Hello, {props.name}!", {
       inputs: { name: { type: "string", required: true } },
     });
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments('<Greeting name="world" />');
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "Hello, world!");
   });
 
   // C10: Missing interpolation key → empty string
-  it("C10: missing interpolation key → empty string", () => {
+  it("C10: missing interpolation key → empty string", function*() {
     const comp = makeComponent("Comp", "value: {meta.nonexistent}");
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "value: ");
   });
 
   // C11: Nested key access
-  it("C11: nested key access — {meta.config.db.host}", () => {
+  it("C11: nested key access — {meta.config.db.host}", function*() {
     const comp = makeComponent("Comp", "host: {meta.config.db.host}", {
       meta: { config: { db: { host: "localhost" } } },
     });
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "host: localhost");
   });
 
   // C12: No Content slot — children silently discarded
-  it("C12: no Content slot — children silently discarded", () => {
+  it("C12: no Content slot — children silently discarded", function*() {
     const comp = makeComponent("NoSlot", "fixed content");
     const ctx = makeCtx({ NoSlot: comp });
     const segments = scanSegments("<NoSlot>ignored</NoSlot>");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "fixed content");
   });
 
   // C13: Multiple Content slots
-  it("C13: multiple Content slots — each replaced with same children", () => {
+  it("C13: multiple Content slots — each replaced with same children", function*() {
     const comp = makeComponent(
       "Multi",
       "first: <Content /> second: <Content />",
     );
     const ctx = makeCtx({ Multi: comp });
     const segments = scanSegments("<Multi>stuff</Multi>");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "first: stuff second: stuff");
   });
 
   // C16: Default applied
-  it("C16: default applied — props.greeting resolves to default", () => {
+  it("C16: default applied — props.greeting resolves to default", function*() {
     const comp = makeComponent("Greeting", "{props.greeting}, world!", {
       inputs: { greeting: { type: "string", default: "Hello" } },
     });
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments("<Greeting />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "Hello, world!");
   });
 
   // C20: No inputs, no props — valid
-  it("C20: no inputs, no props — valid", () => {
+  it("C20: no inputs, no props — valid", function*() {
     const comp = makeComponent("Badge", "badge");
     const ctx = makeCtx({ Badge: comp });
     const segments = scanSegments("<Badge />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "badge");
   });
 
   // C22: Optional with no default, not passed → empty string
-  it("C22: optional with no default, not passed → empty in interpolation", () => {
+  it("C22: optional with no default, not passed → empty in interpolation", function*() {
     const comp = makeComponent("Comp", "val:{props.opt}", {
       inputs: { opt: { type: "string", required: false } },
     });
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "val:");
   });
 
   // Code block expansion
-  it("code block expansion via modifier chain", () => {
+  it("code block expansion via modifier chain", function*() {
     const ctx = makeCtx(
       {},
       { output: "hello\n", exitCode: 0, stderr: "" },
     );
     const segments = scanSegments("```bash exec\necho hello\n```\n");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "hello\n");
   });
 
   // Code block with non-zero exit
-  it("code block with non-zero exit → error", () => {
+  it("code block with non-zero exit → error", function*() {
     const ctx = makeCtx(
       {},
       { output: "", exitCode: 1, stderr: "not found" },
     );
     const segments = scanSegments("```bash exec\nfoo\n```\n");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.ok(output.includes("ERROR"));
     assert.ok(output.includes("not found"));
   });
 
   // Silent code block → no output
-  it("silent code block produces no output", () => {
+  it("silent code block produces no output", function*() {
     const ctx = makeCtx(
       {},
       { output: "", exitCode: 0, stderr: "" },
     );
     const segments = scanSegments("```bash silent exec\necho hello\n```\n");
-    const output = runSync(run(segments, ctx));
+    const output = yield* expand(segments, ctx);
     assert.equal(output, "");
   });
 });
@@ -287,7 +282,7 @@ describe("expansion", () => {
 
 describe("validateProps", () => {
   // C14: Undeclared prop rejected
-  it("C14: undeclared prop → PropValidationError", () => {
+  it("C14: undeclared prop → PropValidationError", function*() {
     assert.throws(
       () => validateProps("Comp", { foo: "bar" }, {}),
       (err: unknown) => {
@@ -299,7 +294,7 @@ describe("validateProps", () => {
   });
 
   // C15: Required prop missing
-  it("C15: required prop missing → PropValidationError", () => {
+  it("C15: required prop missing → PropValidationError", function*() {
     assert.throws(
       () =>
         validateProps("Comp", {}, {
@@ -314,7 +309,7 @@ describe("validateProps", () => {
   });
 
   // C17: Type mismatch rejected
-  it("C17: type mismatch → PropValidationError", () => {
+  it("C17: type mismatch → PropValidationError", function*() {
     assert.throws(
       () =>
         validateProps("Comp", { count: "abc" }, {
@@ -329,7 +324,7 @@ describe("validateProps", () => {
   });
 
   // C18: Enum validated — invalid value
-  it("C18: enum invalid value → PropValidationError", () => {
+  it("C18: enum invalid value → PropValidationError", function*() {
     assert.throws(
       () =>
         validateProps("Comp", { model: "bad" }, {
@@ -344,7 +339,7 @@ describe("validateProps", () => {
   });
 
   // C19: Enum accepted — valid value
-  it("C19: enum valid value → accepted", () => {
+  it("C19: enum valid value → accepted", function*() {
     const result = validateProps("Comp", { model: "a" }, {
       model: { type: "string", enum: ["a", "b"] },
     });
@@ -352,7 +347,7 @@ describe("validateProps", () => {
   });
 
   // C21: No inputs, some props → error
-  it("C21: no inputs, some props → PropValidationError", () => {
+  it("C21: no inputs, some props → PropValidationError", function*() {
     assert.throws(
       () => validateProps("Badge", { size: "lg" }, {}),
       (err: unknown) => {
@@ -362,7 +357,7 @@ describe("validateProps", () => {
     );
   });
 
-  it("applies default when prop not provided", () => {
+  it("applies default when prop not provided", function*() {
     const result = validateProps("Comp", {}, {
       greeting: { type: "string", default: "Hello" },
     });
@@ -375,33 +370,33 @@ describe("validateProps", () => {
 // ---------------------------------------------------------------------------
 
 describe("interpolate", () => {
-  it("replaces meta references", () => {
+  it("replaces meta references", function*() {
     assert.equal(interpolate("{meta.title}", { title: "Hello" }, {}), "Hello");
   });
 
-  it("replaces props references", () => {
+  it("replaces props references", function*() {
     assert.equal(interpolate("{props.name}", {}, { name: "world" }), "world");
   });
 
-  it("missing key → empty string", () => {
+  it("missing key → empty string", function*() {
     assert.equal(interpolate("{meta.nope}", {}, {}), "");
   });
 
-  it("array → comma-joined", () => {
+  it("array → comma-joined", function*() {
     assert.equal(
       interpolate("{meta.tags}", { tags: ["a", "b", "c"] }, {}),
       "a, b, c",
     );
   });
 
-  it("nested access", () => {
+  it("nested access", function*() {
     assert.equal(
       interpolate("{meta.a.b.c}", { a: { b: { c: "deep" } } }, {}),
       "deep",
     );
   });
 
-  it("escaped braces → literal", () => {
+  it("escaped braces → literal", function*() {
     assert.equal(
       interpolate("\\{meta.title}", { title: "Hello" }, {}),
       "{meta.title}",
