@@ -1,10 +1,10 @@
-import { describe, it } from "node:test";
+import { describe, it } from "@effectionx/bdd/node";
 import assert from "node:assert/strict";
 import { parseFrontmatter, normalizeInputDef, inferType } from "./frontmatter.ts";
 
 describe("parseFrontmatter", () => {
   // B4: Simple frontmatter (meta only, no inputs)
-  it("B4: simple frontmatter — meta keys except inputs", () => {
+  it("B4: simple frontmatter — meta keys except inputs", function*() {
     const result = parseFrontmatter({
       emoji: "wave",
       title: "Hello",
@@ -14,7 +14,7 @@ describe("parseFrontmatter", () => {
   });
 
   // B5: Typed meta definitions
-  it("B5: typed meta definitions resolve defaults", () => {
+  it("B5: typed meta definitions resolve defaults", function*() {
     const result = parseFrontmatter({
       meta: {
         model: { type: "string", enum: ["gpt-4", "claude-3"], default: "gpt-4" },
@@ -27,7 +27,7 @@ describe("parseFrontmatter", () => {
   });
 
   // B6: Shorthand input — value as default
-  it("B6: shorthand input — greeting: Hello", () => {
+  it("B6: shorthand input — greeting: Hello", function*() {
     const result = parseFrontmatter({
       inputs: {
         greeting: "Hello",
@@ -40,7 +40,7 @@ describe("parseFrontmatter", () => {
   });
 
   // B7: Full input definition
-  it("B7: full input definition — name: { type: string, required: true }", () => {
+  it("B7: full input definition — name: { type: string, required: true }", function*() {
     const result = parseFrontmatter({
       inputs: {
         name: { type: "string", required: true },
@@ -53,7 +53,7 @@ describe("parseFrontmatter", () => {
   });
 
   // B8: Null shorthand — required, no default
-  it("B8: null shorthand — required, type any, no default", () => {
+  it("B8: null shorthand — required, type any, no default", function*() {
     const result = parseFrontmatter({
       inputs: {
         name: null,
@@ -66,7 +66,7 @@ describe("parseFrontmatter", () => {
   });
 
   // B14: No inputs key — empty inputs
-  it("B14: no inputs key — empty inputs record", () => {
+  it("B14: no inputs key — empty inputs record", function*() {
     const result = parseFrontmatter({
       color: "blue",
     });
@@ -74,7 +74,7 @@ describe("parseFrontmatter", () => {
     assert.equal(result.meta["color"], "blue");
   });
 
-  it("shorthand number default", () => {
+  it("shorthand number default", function*() {
     const result = parseFrontmatter({
       inputs: { count: 0 },
     });
@@ -84,7 +84,7 @@ describe("parseFrontmatter", () => {
     assert.equal(input.required, false);
   });
 
-  it("shorthand boolean default", () => {
+  it("shorthand boolean default", function*() {
     const result = parseFrontmatter({
       inputs: { verbose: false },
     });
@@ -94,7 +94,7 @@ describe("parseFrontmatter", () => {
     assert.equal(input.required, false);
   });
 
-  it("shorthand array default", () => {
+  it("shorthand array default", function*() {
     const result = parseFrontmatter({
       inputs: { tags: ["alpha", "beta"] },
     });
@@ -103,7 +103,7 @@ describe("parseFrontmatter", () => {
     assert.deepEqual(input.default, ["alpha", "beta"]);
   });
 
-  it("full definition with enum", () => {
+  it("full definition with enum", function*() {
     const result = parseFrontmatter({
       inputs: {
         model: {
@@ -120,7 +120,7 @@ describe("parseFrontmatter", () => {
     assert.equal(input.required, false);
   });
 
-  it("full definition with description", () => {
+  it("full definition with description", function*() {
     const result = parseFrontmatter({
       inputs: {
         temperature: {
@@ -134,7 +134,7 @@ describe("parseFrontmatter", () => {
     assert.equal(input.description, "LLM temperature parameter");
   });
 
-  it("implied required — no default, required not explicitly set", () => {
+  it("implied required — no default, required not explicitly set", function*() {
     const result = parseFrontmatter({
       inputs: {
         name: { type: "string" },
@@ -144,7 +144,7 @@ describe("parseFrontmatter", () => {
     assert.equal(input.required, true);
   });
 
-  it("not required — has default, required not explicitly set", () => {
+  it("not required — has default, required not explicitly set", function*() {
     const result = parseFrontmatter({
       inputs: {
         greeting: { type: "string", default: "Hello" },
@@ -154,7 +154,7 @@ describe("parseFrontmatter", () => {
     assert.equal(input.required, false);
   });
 
-  it("meta with non-typed values under meta key", () => {
+  it("meta with non-typed values under meta key", function*() {
     const result = parseFrontmatter({
       meta: {
         color: "blue",
@@ -168,20 +168,20 @@ describe("parseFrontmatter", () => {
 });
 
 describe("normalizeInputDef", () => {
-  it("null → required, type any", () => {
+  it("null → required, type any", function*() {
     const result = normalizeInputDef(null);
     assert.equal(result.type, "any");
     assert.equal(result.required, true);
   });
 
-  it("string shorthand", () => {
+  it("string shorthand", function*() {
     const result = normalizeInputDef("Hello");
     assert.equal(result.type, "string");
     assert.equal(result.default, "Hello");
     assert.equal(result.required, false);
   });
 
-  it("object with type key → full definition", () => {
+  it("object with type key → full definition", function*() {
     const result = normalizeInputDef({
       type: "number",
       default: 42,
@@ -193,10 +193,10 @@ describe("normalizeInputDef", () => {
 });
 
 describe("inferType", () => {
-  it("string", () => assert.equal(inferType("hello"), "string"));
-  it("number", () => assert.equal(inferType(42), "number"));
-  it("boolean", () => assert.equal(inferType(true), "boolean"));
-  it("array", () => assert.equal(inferType([1, 2]), "array"));
-  it("object", () => assert.equal(inferType({ a: 1 }), "object"));
-  it("undefined", () => assert.equal(inferType(undefined), "any"));
+  it("string", function*() { assert.equal(inferType("hello"), "string"); });
+  it("number", function*() { assert.equal(inferType(42), "number"); });
+  it("boolean", function*() { assert.equal(inferType(true), "boolean"); });
+  it("array", function*() { assert.equal(inferType([1, 2]), "array"); });
+  it("object", function*() { assert.equal(inferType({ a: 1 }), "object"); });
+  it("undefined", function*() { assert.equal(inferType(undefined), "any"); });
 });

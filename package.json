@@ -17,6 +17,7 @@
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
+    "@effectionx/bdd": "^0.5.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   }
