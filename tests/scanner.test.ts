@@ -1,6 +1,12 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { scanSegments, parseInfoString } from "./scanner.ts";
+import assert from "node:assert/strict";
+import { scanSegments, parseInfoString } from "../src/scanner.ts";
+import type {
+  ComponentInvocation,
+  ExecutableCodeBlock,
+  TextSegment,
+} from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Tier A — Boundary scanner tests (spec §11)

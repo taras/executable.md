@@ -14,7 +14,7 @@ import { expect } from "@std/expect";
 import { InMemoryStream, StaleInputError } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
-import { runDocument } from "./run-document.ts";
+import { runDocument } from "../src/run-document.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
