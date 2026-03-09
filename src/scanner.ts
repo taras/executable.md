@@ -101,6 +101,15 @@ export function scanSegments(text: string): Segment[] {
       continue;
     }
 
+    // Skip inline code spans — content inside backticks is inert
+    if (text[pos] === "`") {
+      const codeEnd = skipInlineCode(text, pos);
+      if (codeEnd !== -1) {
+        pos = codeEnd;
+        continue;
+      }
+    }
+
     // Check for component invocation: `<` followed by uppercase letter
     if (
       text[pos] === "<" &&
@@ -566,6 +575,49 @@ function parseChildren(
       return { children, end: pos + closingTag.length };
     }
 
+    // Check for fenced code block inside children
+    const fenceMatch = matchFenceOpen(text, pos);
+    if (fenceMatch) {
+      if (pos > textStart) {
+        pushText(children, text.slice(textStart, pos));
+      }
+
+      const fenceEnd = findFenceClose(
+        text,
+        fenceMatch.contentStart,
+        fenceMatch.fenceChar,
+        fenceMatch.fenceLen,
+      );
+      const content = text.slice(fenceMatch.contentStart, fenceEnd.contentEnd);
+      const fullFence = text.slice(pos, fenceEnd.fenceEnd);
+      const parsed = parseInfoString(fenceMatch.infoString);
+
+      if (parsed.executable) {
+        children.push({
+          type: "codeBlock",
+          language: parsed.language,
+          content,
+          modifiers: parsed.modifiers,
+          executable: true,
+        } satisfies ExecutableCodeBlock);
+      } else {
+        pushText(children, fullFence);
+      }
+
+      pos = fenceEnd.fenceEnd;
+      textStart = pos;
+      continue;
+    }
+
+    // Skip inline code spans — content inside backticks is inert
+    if (text[pos] === "`") {
+      const codeEnd = skipInlineCode(text, pos);
+      if (codeEnd !== -1) {
+        pos = codeEnd;
+        continue;
+      }
+    }
+
     // Check for nested component
     if (
       text[pos] === "<" &&
@@ -589,6 +641,49 @@ function parseChildren(
 
   // No closing tag found
   return { children, end: -1 };
+}
+
+// ---------------------------------------------------------------------------
+// Inline code span skipping
+// ---------------------------------------------------------------------------
+
+/**
+ * If `pos` is at a backtick, skip past the closing backtick sequence
+ * of the inline code span. Returns the position after the closing
+ * backticks, or -1 if no matching close is found (unclosed code span).
+ *
+ * Handles multi-backtick sequences per CommonMark: the opening and
+ * closing sequences must have the same number of backticks.
+ */
+function skipInlineCode(text: string, pos: number): number {
+  if (text[pos] !== "`") return -1;
+
+  // Count opening backticks
+  let backtickLen = 0;
+  let p = pos;
+  while (p < text.length && text[p] === "`") {
+    backtickLen++;
+    p++;
+  }
+
+  // Search for matching closing sequence (same length)
+  while (p < text.length) {
+    if (text[p] === "`") {
+      let closeLen = 0;
+      while (p < text.length && text[p] === "`") {
+        closeLen++;
+        p++;
+      }
+      if (closeLen === backtickLen) {
+        return p; // position after closing backticks
+      }
+      // Wrong length — keep searching
+      continue;
+    }
+    p++;
+  }
+
+  return -1; // unclosed code span
 }
 
 // ---------------------------------------------------------------------------
