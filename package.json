@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@effectionx/bdd": "^0.5.1",
+    "@std/expect": "npm:@jsr/std__expect@^1.0.18",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   }

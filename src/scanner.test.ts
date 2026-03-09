@@ -1,11 +1,6 @@
 import { describe, it } from "@effectionx/bdd/node";
-import assert from "node:assert/strict";
+import { expect } from "@std/expect";
 import { scanSegments, parseInfoString } from "./scanner.ts";
-import type {
-  ComponentInvocation,
-  ExecutableCodeBlock,
-  TextSegment,
-} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Tier A — Boundary scanner tests (spec §11)
@@ -15,75 +10,71 @@ describe("scanSegments", () => {
   // A1: Self-closing component
   it("A1: self-closing component", function*() {
     const segments = scanSegments("Hello <Comp /> world");
-    assert.equal(segments.length, 3);
-    assert.equal(segments[0]!.type, "text");
-    assert.equal((segments[0] as TextSegment).content, "Hello ");
-
-    const comp = segments[1] as ComponentInvocation;
-    assert.equal(comp.type, "component");
-    assert.equal(comp.name, "Comp");
-    assert.equal(comp.selfClosing, true);
-    assert.deepEqual(comp.props, {});
-    assert.deepEqual(comp.children, []);
-
-    assert.equal(segments[2]!.type, "text");
-    assert.equal((segments[2] as TextSegment).content, " world");
+    expect(segments).toMatchObject([
+      { type: "text", content: "Hello " },
+      {
+        type: "component",
+        name: "Comp",
+        selfClosing: true,
+        props: {},
+        children: [],
+      },
+      { type: "text", content: " world" },
+    ]);
   });
 
   // A2: Block component with text children
   it("A2: block component with text children", function*() {
     const segments = scanSegments("<Comp>hello world</Comp>");
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.type, "component");
-    assert.equal(comp.name, "Comp");
-    assert.equal(comp.selfClosing, false);
-    assert.equal(comp.children.length, 1);
-    assert.equal(comp.children[0]!.type, "text");
-    assert.equal((comp.children[0] as TextSegment).content, "hello world");
+    expect(segments).toMatchObject([
+      {
+        type: "component",
+        name: "Comp",
+        selfClosing: false,
+        children: [{ type: "text", content: "hello world" }],
+      },
+    ]);
   });
 
   // A3: Dotted component name
   it("A3: dotted component name", function*() {
     const segments = scanSegments("<Ns.Sub />");
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.name, "Ns.Sub");
-    assert.equal(comp.selfClosing, true);
+    expect(segments).toMatchObject([
+      { name: "Ns.Sub", selfClosing: true },
+    ]);
   });
 
   // A4: String attribute with `>`
   it("A4: string attribute containing >", function*() {
     const segments = scanSegments('<Comp title="a > b" />');
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.props["title"], "a > b");
+    expect(segments).toMatchObject([
+      { props: { title: "a > b" } },
+    ]);
   });
 
   // A5: Expression attribute with nested braces
   it("A5: expression attribute with nested braces", function*() {
     const segments = scanSegments('<Comp data={{ a: 1 }} />');
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.deepEqual(comp.props["data"], { a: 1 });
+    expect(segments).toMatchObject([
+      { props: { data: { a: 1 } } },
+    ]);
   });
 
   // A6: Template literal attribute
   it("A6: template literal attribute", function*() {
     const segments = scanSegments("<Comp label={`hello`} />");
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.type, "component");
+    expect(segments).toMatchObject([
+      { type: "component" },
+    ]);
     // Scanner completes without error
   });
 
   // A7: Spread props
   it("A7: spread props", function*() {
     const segments = scanSegments("<Comp {...props} />");
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.type, "component");
-    assert.equal(comp.selfClosing, true);
+    expect(segments).toMatchObject([
+      { type: "component", selfClosing: true },
+    ]);
     // Spread props are skipped, no crash
   });
 
@@ -94,92 +85,98 @@ describe("scanSegments", () => {
     // Or if B is right after <, it would be `<B` which IS uppercase
     // Let's use lowercase to be safe
     const segments2 = scanSegments("a < b && c > d");
-    assert.equal(segments2.length, 1);
-    assert.equal(segments2[0]!.type, "text");
+    expect(segments2).toMatchObject([
+      { type: "text" },
+    ]);
   });
 
   // A9: Incomplete tag at end of input
   it("A9: incomplete tag at end of input", function*() {
     const segments = scanSegments("Hello <MyComp");
     // Should be treated as text since tag is incomplete
-    assert.equal(segments.length, 1);
-    assert.equal(segments[0]!.type, "text");
+    expect(segments).toMatchObject([
+      { type: "text" },
+    ]);
   });
 
   // A10: Code block with `exec` modifier
   it("A10: code block with exec modifier", function*() {
     const segments = scanSegments("```bash exec\nls -la\n```\n");
-    assert.equal(segments.length, 1);
-    const block = segments[0] as ExecutableCodeBlock;
-    assert.equal(block.type, "codeBlock");
-    assert.equal(block.language, "bash");
-    assert.equal(block.content, "ls -la\n");
-    assert.equal(block.executable, true);
-    assert.equal(block.modifiers.length, 1);
-    assert.equal(block.modifiers[0]!.name, "exec");
+    expect(segments).toMatchObject([
+      {
+        type: "codeBlock",
+        language: "bash",
+        content: "ls -la\n",
+        executable: true,
+        modifiers: [{ name: "exec" }],
+      },
+    ]);
   });
 
   // A11: Code block with `silent exec`
   it("A11: code block with silent exec", function*() {
     const segments = scanSegments("```bash silent exec\nls\n```\n");
-    assert.equal(segments.length, 1);
-    const block = segments[0] as ExecutableCodeBlock;
-    assert.equal(block.type, "codeBlock");
-    assert.equal(block.language, "bash");
-    assert.equal(block.executable, true);
-    assert.equal(block.modifiers.length, 2);
-    assert.equal(block.modifiers[0]!.name, "silent");
-    assert.equal(block.modifiers[1]!.name, "exec");
+    expect(segments).toMatchObject([
+      {
+        type: "codeBlock",
+        language: "bash",
+        executable: true,
+        modifiers: [{ name: "silent" }, { name: "exec" }],
+      },
+    ]);
   });
 
   // A12: Code block without `exec`
   it("A12: code block without exec is text", function*() {
     const segments = scanSegments("```bash\nls -la\n```\n");
-    assert.equal(segments.length, 1);
-    assert.equal(segments[0]!.type, "text");
-    assert.ok((segments[0] as TextSegment).content.includes("ls -la"));
+    expect(segments.length).toBe(1);
+    expect(segments[0]!.type).toBe("text");
+    expect((segments[0] as { content: string }).content).toContain("ls -la");
   });
 
   // A13: Code block with modifiers but no exec
   it("A13: code block with modifiers but no exec", function*() {
     const segments = scanSegments("```bash silent\nls\n```\n");
-    assert.equal(segments.length, 1);
-    assert.equal(segments[0]!.type, "text");
+    expect(segments).toMatchObject([
+      { type: "text" },
+    ]);
   });
 
   // A14: Component inside fenced code block
   it("A14: component inside fenced code block is text", function*() {
     const segments = scanSegments("```jsx\n<Component />\n```\n");
-    assert.equal(segments.length, 1);
-    assert.equal(segments[0]!.type, "text");
-    assert.ok((segments[0] as TextSegment).content.includes("<Component />"));
+    expect(segments.length).toBe(1);
+    expect(segments[0]!.type).toBe("text");
+    expect((segments[0] as { content: string }).content).toContain("<Component />");
   });
 
   // A15: Boolean prop
   it("A15: boolean prop", function*() {
     const segments = scanSegments("<Comp verbose />");
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.props["verbose"], true);
+    expect(segments).toMatchObject([
+      { props: { verbose: true } },
+    ]);
   });
 
   // A16: Numeric expression prop
   it("A16: numeric expression prop", function*() {
     const segments = scanSegments("<Comp count={42} />");
-    assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.props["count"], 42);
+    expect(segments).toMatchObject([
+      { props: { count: 42 } },
+    ]);
   });
 
   // A17: Modifier with params
   it("A17: modifier with params", function*() {
     const segments = scanSegments("```bash timeout=30s exec\nls\n```\n");
-    assert.equal(segments.length, 1);
-    const block = segments[0] as ExecutableCodeBlock;
-    assert.equal(block.modifiers.length, 2);
-    assert.equal(block.modifiers[0]!.name, "timeout");
-    assert.equal(block.modifiers[0]!.params, "30s");
-    assert.equal(block.modifiers[1]!.name, "exec");
+    expect(segments).toMatchObject([
+      {
+        modifiers: [
+          { name: "timeout", params: "30s" },
+          { name: "exec" },
+        ],
+      },
+    ]);
   });
 
   // Additional edge cases
@@ -193,74 +190,83 @@ echo hi
 \`\`\`
 `;
     const segments = scanSegments(input);
-    assert.equal(segments.length, 4);
-    assert.equal(segments[0]!.type, "text");
-    assert.equal(segments[1]!.type, "component");
-    assert.equal(segments[2]!.type, "text"); // newline between component and code block
-    assert.equal(segments[3]!.type, "codeBlock");
+    expect(segments).toMatchObject([
+      { type: "text" },
+      { type: "component" },
+      { type: "text" }, // newline between component and code block
+      { type: "codeBlock" },
+    ]);
   });
 
   it("nested components", function*() {
     const segments = scanSegments("<Outer><Inner /></Outer>");
-    assert.equal(segments.length, 1);
-    const outer = segments[0] as ComponentInvocation;
-    assert.equal(outer.name, "Outer");
-    assert.equal(outer.children.length, 1);
-    const inner = outer.children[0] as ComponentInvocation;
-    assert.equal(inner.name, "Inner");
-    assert.equal(inner.selfClosing, true);
+    expect(segments).toMatchObject([
+      {
+        name: "Outer",
+        children: [
+          { name: "Inner", selfClosing: true },
+        ],
+      },
+    ]);
   });
 
   it("component with multiple string props", function*() {
     const segments = scanSegments('<Comp name="alice" role="admin" />');
-    const comp = segments[0] as ComponentInvocation;
-    assert.equal(comp.props["name"], "alice");
-    assert.equal(comp.props["role"], "admin");
+    expect(segments).toMatchObject([
+      { props: { name: "alice", role: "admin" } },
+    ]);
   });
 });
 
 describe("parseInfoString", () => {
   it("parses language only", function*() {
     const result = parseInfoString("bash");
-    assert.equal(result.language, "bash");
-    assert.equal(result.modifiers.length, 0);
-    assert.equal(result.executable, false);
+    expect(result).toMatchObject({
+      language: "bash",
+      modifiers: [],
+      executable: false,
+    });
   });
 
   it("parses language + exec", function*() {
     const result = parseInfoString("bash exec");
-    assert.equal(result.language, "bash");
-    assert.equal(result.modifiers.length, 1);
-    assert.equal(result.modifiers[0]!.name, "exec");
-    assert.equal(result.executable, true);
+    expect(result).toMatchObject({
+      language: "bash",
+      modifiers: [{ name: "exec" }],
+      executable: true,
+    });
   });
 
   it("parses language + silent + exec", function*() {
     const result = parseInfoString("bash silent exec");
-    assert.equal(result.language, "bash");
-    assert.equal(result.modifiers.length, 2);
-    assert.equal(result.modifiers[0]!.name, "silent");
-    assert.equal(result.modifiers[1]!.name, "exec");
-    assert.equal(result.executable, true);
+    expect(result).toMatchObject({
+      language: "bash",
+      modifiers: [{ name: "silent" }, { name: "exec" }],
+      executable: true,
+    });
   });
 
   it("parses modifier with params", function*() {
     const result = parseInfoString("bash timeout=30s exec");
-    assert.equal(result.modifiers.length, 2);
-    assert.equal(result.modifiers[0]!.name, "timeout");
-    assert.equal(result.modifiers[0]!.params, "30s");
-    assert.equal(result.modifiers[1]!.name, "exec");
+    expect(result).toMatchObject({
+      modifiers: [
+        { name: "timeout", params: "30s" },
+        { name: "exec" },
+      ],
+    });
   });
 
   it("eval makes executable", function*() {
     const result = parseInfoString("js eval");
-    assert.equal(result.executable, true);
+    expect(result.executable).toBe(true);
   });
 
   it("empty string", function*() {
     const result = parseInfoString("");
-    assert.equal(result.language, "");
-    assert.equal(result.modifiers.length, 0);
-    assert.equal(result.executable, false);
+    expect(result).toMatchObject({
+      language: "",
+      modifiers: [],
+      executable: false,
+    });
   });
 });

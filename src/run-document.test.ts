@@ -10,7 +10,7 @@
  *   Staleness — golden run, mutate file, rerun with freshness:true → StaleInputError
  */
 import { describe, it } from "@effectionx/bdd/node";
-import assert from "node:assert/strict";
+import { expect } from "@std/expect";
 import { InMemoryStream, StaleInputError } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
@@ -135,25 +135,19 @@ describe("Tier B — durable import", () => {
       (e) => e.type === "yield" && e.description["type"] === "import_component",
     );
 
-    assert.equal(imports.length, 1, "should have 1 import event (root)");
+    expect(imports.length).toBe(1);
 
     const rootImport = imports[0]!;
-    assert.equal(rootImport.type, "yield");
-    assert.equal(rootImport.description["name"], "__root__");
+    expect(rootImport).toMatchObject({
+      type: "yield",
+      description: { name: "__root__" },
+      result: { status: "ok", value: { path: "README.md" } },
+    });
 
     // Result should contain path and contentHash
     const result = (rootImport as any).result;
-    assert.equal(result.status, "ok");
-    assert.equal(result.value.path, "README.md");
-    assert.ok(
-      typeof result.value.contentHash === "string" &&
-        result.value.contentHash.startsWith("sha256:"),
-      "contentHash should be sha256:...",
-    );
-    assert.ok(
-      result.value.content.includes("Hello world"),
-      "content should be stored in journal",
-    );
+    expect(result.value.contentHash).toMatch(/^sha256:/);
+    expect(result.value.content).toContain("Hello world");
   });
 
   // B2: durableImportComponent replay — stored result returned, no I/O
@@ -181,7 +175,7 @@ describe("Tier B — durable import", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult, "replay should produce same output");
+    expect(secondResult).toBe(firstResult);
   });
 
   // B3: replay + runtime parsing — stored content parsed to same meta/inputs/segments
@@ -213,8 +207,8 @@ describe("Tier B — durable import", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult);
-    assert.ok(secondResult.includes("# Parsed"));
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("# Parsed");
   });
 
   // B9: import missing component — error propagated
@@ -233,11 +227,10 @@ describe("Tier B — durable import", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("ERROR"), "should have error marker");
-    assert.ok(
+    expect(result).toContain("ERROR");
+    expect(
       result.includes("Cannot resolve component") || result.includes("Failed to import"),
-      "should mention resolution failure",
-    );
+    ).toBeTruthy();
   });
 
   // B10: stale import — file changed, guard installed → StaleInputError
@@ -282,12 +275,9 @@ describe("Tier B — durable import", () => {
         runtime: changedRuntime,
         freshness: true,
       });
-      assert.fail("should have thrown StaleInputError");
+      throw new Error("should have thrown StaleInputError");
     } catch (error) {
-      assert.ok(
-        error instanceof StaleInputError,
-        `expected StaleInputError, got: ${error}`,
-      );
+      expect(error).toBeInstanceOf(StaleInputError);
     }
   });
 
@@ -319,8 +309,8 @@ describe("Tier B — durable import", () => {
     });
 
     // Should use stored (original) content
-    assert.equal(secondResult, firstResult, "should replay with original content");
-    assert.ok(secondResult.includes("original"), "should have original content");
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("original");
   });
 
   // B12: root document as component — __root__ import, same journal shape
@@ -347,12 +337,8 @@ describe("Tier B — durable import", () => {
         e.description["name"] === "__root__",
     );
 
-    assert.ok(rootImport, "should have __root__ import");
-    assert.equal(
-      (rootImport as any).result.value.path,
-      "doc.md",
-      "root import path should match docPath",
-    );
+    expect(rootImport).toBeTruthy();
+    expect((rootImport as any).result.value.path).toBe("doc.md");
   });
 
   // B13: dotted name resolution — Ns.Sub → components/Ns/Sub.md
@@ -372,7 +358,7 @@ describe("Tier B — durable import", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Click me"), "should have resolved dotted component");
+    expect(result).toContain("Click me");
 
     // Verify journal has the import with correct path
     const events = stream.snapshot();
@@ -382,9 +368,8 @@ describe("Tier B — durable import", () => {
         e.description["type"] === "import_component" &&
         e.description["name"] === "Ui.Button",
     );
-    assert.ok(compImport, "should have Ui.Button import");
-    assert.equal(
-      (compImport as any).result.value.path,
+    expect(compImport).toBeTruthy();
+    expect((compImport as any).result.value.path).toBe(
       "components/Ui/Button.md",
     );
   });
@@ -407,7 +392,7 @@ describe("Tier B — durable import", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Banner from root"), "should find in fallback dir");
+    expect(result).toContain("Banner from root");
   });
 });
 
@@ -436,23 +421,16 @@ describe("Tier D — code execution and modifiers", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("hello"), "should have exec stdout in output");
+    expect(result).toContain("hello");
 
     // Verify journal
     const events = stream.snapshot();
     const execEvent = events.find(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.ok(execEvent, "should have exec event in journal");
-    assert.ok(
-      Array.isArray((execEvent as any).description.command),
-      "command should be array in journal",
-    );
-    assert.equal(
-      (execEvent as any).result.status,
-      "ok",
-      "exec result should be ok",
-    );
+    expect(execEvent).toBeTruthy();
+    expect(Array.isArray((execEvent as any).description.command)).toBeTruthy();
+    expect((execEvent as any).result.status).toBe("ok");
   });
 
   // D2: exec replay — command not re-executed
@@ -484,8 +462,8 @@ describe("Tier D — code execution and modifiers", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult, "replay should produce same output");
-    assert.ok(secondResult.includes("hello"), "should have exec output from replay");
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("hello");
   });
 
   // D3: non-zero exit code → ErrorSegment in output
@@ -508,10 +486,9 @@ describe("Tier D — code execution and modifiers", () => {
       freshness: false,
     });
 
-    assert.ok(
+    expect(
       result.includes("ERROR") || result.includes("failed"),
-      "should have error for non-zero exit",
-    );
+    ).toBeTruthy();
   });
 
   // D4: multi-line command — full script passed to -c
@@ -540,22 +517,12 @@ describe("Tier D — code execution and modifiers", () => {
     const execEvent = events.find(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.ok(execEvent, "should have exec event");
+    expect(execEvent).toBeTruthy();
     const command = (execEvent as any).description.command;
-    assert.deepEqual(
-      command.slice(0, 2),
-      ["bash", "-c"],
-      "should be bash -c",
-    );
+    expect(command.slice(0, 2)).toEqual(["bash", "-c"]);
     // The third element should contain both lines
-    assert.ok(
-      command[2].includes("echo line1"),
-      "should have first line",
-    );
-    assert.ok(
-      command[2].includes("echo line2"),
-      "should have second line",
-    );
+    expect(command[2]).toContain("echo line1");
+    expect(command[2]).toContain("echo line2");
   });
 
   // D5: python exec — python -c invocation
@@ -595,7 +562,7 @@ describe("Tier D — code execution and modifiers", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("hello"), "should have python output");
+    expect(result).toContain("hello");
 
     // Verify command in journal
     const events = stream.snapshot();
@@ -603,8 +570,8 @@ describe("Tier D — code execution and modifiers", () => {
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
     const command = (execEvent as any).description.command;
-    assert.equal(command[0], "python");
-    assert.equal(command[1], "-c");
+    expect(command[0]).toBe("python");
+    expect(command[1]).toBe("-c");
   });
 
   // D6: bash silent exec — chain: silent wraps exec, exec journals, silent returns empty
@@ -628,14 +595,14 @@ describe("Tier D — code execution and modifiers", () => {
     });
 
     // Output should be empty (silent suppresses)
-    assert.ok(!result.includes("secret"), "silent should suppress exec output");
+    expect(result).not.toContain("secret");
 
     // Journal should still have exec event
     const events = stream.snapshot();
     const execs = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.equal(execs.length, 1, "exec should be journaled even when silent");
+    expect(execs.length).toBe(1);
   });
 
   // D7: silent exec replay — still produces empty output from stored result
@@ -669,8 +636,8 @@ describe("Tier D — code execution and modifiers", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult);
-    assert.ok(!secondResult.includes("secret"), "silent should suppress on replay too");
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).not.toContain("secret");
   });
 
   // D15: unknown modifier in chain → error
@@ -693,11 +660,10 @@ describe("Tier D — code execution and modifiers", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("ERROR"), "should have error");
-    assert.ok(
+    expect(result).toContain("ERROR");
+    expect(
       result.includes("Unknown modifier") || result.includes("frobnicate"),
-      "should mention unknown modifier",
-    );
+    ).toBeTruthy();
   });
 
   // D16: no terminal modifier → error
@@ -721,14 +687,8 @@ describe("Tier D — code execution and modifiers", () => {
     });
 
     // Without exec/eval, code block is passive text — preserved as-is
-    assert.ok(
-      result.includes("```bash"),
-      "passive code block should be preserved",
-    );
-    assert.ok(
-      result.includes("echo test"),
-      "code block content should be in output",
-    );
+    expect(result).toContain("```bash");
+    expect(result).toContain("echo test");
   });
 
   // D17: custom modifier registration
@@ -761,10 +721,7 @@ describe("Tier D — code execution and modifiers", () => {
       },
     });
 
-    assert.ok(
-      result.includes("HELLO"),
-      "custom modifier should transform output to uppercase",
-    );
+    expect(result).toContain("HELLO");
   });
 
   // D19: modifier parsing — timeout=30s
@@ -795,7 +752,7 @@ describe("Tier D — code execution and modifiers", () => {
       },
     });
 
-    assert.equal(receivedParams, "30s", "timeout modifier should receive '30s' params");
+    expect(receivedParams).toBe("30s");
   });
 });
 
@@ -845,30 +802,30 @@ describe("runDocument", () => {
     });
 
     // Check output contains expected content
-    assert.ok(result.includes("# My Project"), "should have title");
-    assert.ok(result.includes("hi Hello, world!"), "should have greeting");
-    assert.ok(result.includes("main.ts"), "should have exec output");
-    assert.ok(result.includes("utils.ts"), "should have exec output");
+    expect(result).toContain("# My Project");
+    expect(result).toContain("hi Hello, world!");
+    expect(result).toContain("main.ts");
+    expect(result).toContain("utils.ts");
 
     // Check journal has events
     const events = stream.snapshot();
-    assert.ok(events.length > 0, "should have journal events");
+    expect(events.length).toBeGreaterThan(0);
 
     // Should have import_component events for root and Greeting
     const imports = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "import_component",
     );
-    assert.equal(imports.length, 2, "should have 2 import events");
+    expect(imports.length).toBe(2);
 
     // Should have exec event
     const execs = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.equal(execs.length, 1, "should have 1 exec event");
+    expect(execs.length).toBe(1);
 
     // Should have close event
     const closes = events.filter((e) => e.type === "close");
-    assert.equal(closes.length, 1, "should have 1 close event");
+    expect(closes.length).toBe(1);
   });
 
   // E2: Full replay — zero file reads, zero exec calls
@@ -912,9 +869,9 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult);
-    assert.equal(readCalled, false, "should not read during replay");
-    assert.equal(execCalled, false, "should not exec during replay");
+    expect(secondResult).toBe(firstResult);
+    expect(readCalled).toBe(false);
+    expect(execCalled).toBe(false);
   });
 
   // E6: Props flow through expansion
@@ -943,7 +900,7 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Hello, Alice!"));
+    expect(result).toContain("Hello, Alice!");
   });
 
   // E7: Undeclared prop in full document
@@ -970,11 +927,10 @@ describe("runDocument", () => {
     });
 
     // Should contain error about undeclared prop
-    assert.ok(result.includes("ERROR"), "should have error marker");
-    assert.ok(
+    expect(result).toContain("ERROR");
+    expect(
       result.includes("Unknown prop") || result.includes("Prop validation"),
-      "should mention prop validation",
-    );
+    ).toBeTruthy();
   });
 
   // E8: Silent exec in full document
@@ -1002,16 +958,16 @@ describe("runDocument", () => {
     });
 
     // Output should NOT contain the exec result
-    assert.ok(!result.includes("hidden"), "silent should suppress output");
-    assert.ok(result.includes("before"), "should have text before");
-    assert.ok(result.includes("after"), "should have text after");
+    expect(result).not.toContain("hidden");
+    expect(result).toContain("before");
+    expect(result).toContain("after");
 
     // But the journal should have the exec event
     const events = stream.snapshot();
     const execs = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.equal(execs.length, 1, "exec should be journaled even when silent");
+    expect(execs.length).toBe(1);
   });
 
   // Simple text document — no components, no exec
@@ -1030,7 +986,7 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.equal(result, "# Hello World\n\nThis is a test.\n");
+    expect(result).toBe("# Hello World\n\nThis is a test.\n");
   });
 
   // Default props applied
@@ -1059,7 +1015,7 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Hello, world!"));
+    expect(result).toContain("Hello, world!");
   });
 
   // E3: Crash mid-expansion, resume — partial replay then live
@@ -1136,9 +1092,9 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Hello, world!"), "component should replay");
-    assert.ok(result.includes("done"), "exec should run live");
-    assert.ok(execCalled, "exec should have been called live (not replayed)");
+    expect(result).toContain("Hello, world!");
+    expect(result).toContain("done");
+    expect(execCalled).toBeTruthy();
   });
 
   // E4: Component file changed, guard on → staleness detected
@@ -1207,14 +1163,10 @@ describe("runDocument", () => {
       freshness: true,
     });
 
-    assert.ok(
+    expect(
       result.includes("Component changed") || result.includes("Greeting"),
-      "should report staleness in output",
-    );
-    assert.ok(
-      result.includes("ERROR"),
-      "should render as error",
-    );
+    ).toBeTruthy();
+    expect(result).toContain("ERROR");
   });
 
   // E5: new component added — replay existing, live for new
@@ -1252,8 +1204,8 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Header content"), "header should be present");
-    assert.ok(result.includes("Footer content"), "footer should be present");
+    expect(result).toContain("Header content");
+    expect(result).toContain("Footer content");
   });
 
   // E10: unclosed bold across component boundary — healed
@@ -1276,19 +1228,15 @@ describe("runDocument", () => {
     // The **bold should be healed (closed) before component expansion.
     // remend appends closing ** after the text segment (including trailing \n).
     // Result: "This is **bold\n**" + "greeting\n" + "\nmore text\n"
-    assert.ok(result.includes("greeting"), "component should expand");
-    assert.ok(result.includes("more text"), "trailing text preserved");
+    expect(result).toContain("greeting");
+    expect(result).toContain("more text");
 
     // The first text segment should be healed — it should contain both
     // opening ** and closing ** (remend closes the unclosed bold).
     // The closing ** appears after the newline: "**bold\n**"
     const beforeComponent = result.split("greeting")[0]!;
     const openCount = (beforeComponent.match(/\*\*/g) || []).length;
-    assert.equal(
-      openCount,
-      2,
-      "should have both opening and closing ** before component (bold healed)",
-    );
+    expect(openCount).toBe(2);
   });
 
   // E2 complex: full replay with component + exec — zero I/O
@@ -1341,17 +1289,13 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult);
-    assert.ok(secondResult.includes("# Test"));
-    assert.ok(secondResult.includes("Hello, world!"));
-    assert.ok(secondResult.includes("output"));
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("# Test");
+    expect(secondResult).toContain("Hello, world!");
+    expect(secondResult).toContain("output");
 
     // No new events should be appended during replay
-    assert.equal(
-      stream.snapshot().length,
-      goldenEventCount,
-      "no new events should be appended during replay",
-    );
+    expect(stream.snapshot().length).toBe(goldenEventCount);
   });
 
   // Multiple components — verify all are imported and expanded
@@ -1372,15 +1316,15 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("HEADER"));
-    assert.ok(result.includes("FOOTER"));
+    expect(result).toContain("HEADER");
+    expect(result).toContain("FOOTER");
 
     // 3 import_component events: root + Header + Footer
     const events = stream.snapshot();
     const imports = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "import_component",
     );
-    assert.equal(imports.length, 3, "should have 3 imports (root + 2 components)");
+    expect(imports.length).toBe(3);
   });
 
   // Transitive components — A references B
@@ -1401,16 +1345,16 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("before"));
-    assert.ok(result.includes("INNER"));
-    assert.ok(result.includes("after"));
+    expect(result).toContain("before");
+    expect(result).toContain("INNER");
+    expect(result).toContain("after");
 
     // 3 imports: root, Wrapper, Inner
     const events = stream.snapshot();
     const imports = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "import_component",
     );
-    assert.equal(imports.length, 3);
+    expect(imports.length).toBe(3);
   });
 
   // Content slot with exec
@@ -1436,8 +1380,8 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("BEFORE"));
-    assert.ok(result.includes("inside"));
-    assert.ok(result.includes("AFTER"));
+    expect(result).toContain("BEFORE");
+    expect(result).toContain("inside");
+    expect(result).toContain("AFTER");
   });
 });
