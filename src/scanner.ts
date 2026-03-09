@@ -217,7 +217,6 @@ function findFenceClose(
     // Check for closing fence
     if (pos < text.length && text[pos] === fenceChar) {
       let closeFenceLen = 0;
-      const closeFenceStart = pos;
       while (pos < text.length && text[pos] === fenceChar) {
         closeFenceLen++;
         pos++;
@@ -360,7 +359,7 @@ function parseAttributes(
     const attrNameStart = pos;
     while (
       pos < text.length &&
-      /[A-Za-z0-9_\-]/.test(text[pos]!)
+      /[A-Za-z0-9_-]/.test(text[pos]!)
     ) {
       pos++;
     }

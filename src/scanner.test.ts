@@ -80,7 +80,7 @@ describe("scanSegments", () => {
 
   // A8: Not a component — comparison expression
   it("A8: not a component — comparison expression", function*() {
-    const segments = scanSegments("a < B && c > d");
+    const _segments = scanSegments("a < B && c > d");
     // '<' followed by ' B' (space before B) — not a tag
     // Or if B is right after <, it would be `<B` which IS uppercase
     // Let's use lowercase to be safe

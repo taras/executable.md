@@ -15,7 +15,6 @@ import {
   DurableRuntimeCtx,
   durableRun,
   createDurableOperation,
-  ephemeral,
   type DurableStream,
   type DurableRuntime,
   ReplayGuard,
@@ -24,14 +23,13 @@ import {
 import {
   computeSHA256,
 } from "@effectionx/durable-effects";
-import type { Workflow, Json, DurableEffect } from "@effectionx/durable-streams";
+import type { Workflow, Json } from "@effectionx/durable-streams";
 import type {
   Segment,
   ComponentDefinition,
   ImportResult,
   Modifier,
   CodeBlockContext,
-  CodeBlockResult,
 } from "./types.ts";
 import { scanSegments } from "./scanner.ts";
 import { parseFrontmatter } from "./frontmatter.ts";

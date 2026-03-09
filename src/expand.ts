@@ -20,8 +20,6 @@ import type {
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
 import { validateProps } from "./validate.ts";
-import { scanSegments } from "./scanner.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
 import { healSegment } from "./heal.ts";
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
+    "lint": "oxlint src/",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "@effectionx/bdd": "^0.5.1",
     "@std/expect": "npm:@jsr/std__expect@^1.0.18",
     "@types/node": "^22.0.0",
+    "oxlint": "^1.51.0",
     "typescript": "^5.7.0"
   }
 }
