@@ -1,6 +1,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { parseFrontmatter, normalizeInputDef, inferType } from "./frontmatter.ts";
+import { parseFrontmatter, normalizeInputDef, inferType } from "../src/frontmatter.ts";
 
 describe("parseFrontmatter", () => {
   // B4: Simple frontmatter (meta only, no inputs)

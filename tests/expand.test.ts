@@ -1,11 +1,11 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { expandSegments } from "./expand.ts";
-import type { ExpansionContext } from "./expand.ts";
-import { scanSegments } from "./scanner.ts";
-import { interpolate } from "./interpolate.ts";
-import { validateProps, PropValidationError } from "./validate.ts";
-import { renderSegments } from "./render.ts";
+import { expandSegments } from "../src/expand.ts";
+import type { ExpansionContext } from "../src/expand.ts";
+import { scanSegments } from "../src/scanner.ts";
+import { interpolate } from "../src/interpolate.ts";
+import { validateProps, PropValidationError } from "../src/validate.ts";
+import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
 import type {
   Segment,
@@ -14,7 +14,7 @@ import type {
   CodeBlockResult,
   Modifier,
   CodeBlockContext,
-} from "./types.ts";
+} from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

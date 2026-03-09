@@ -168,7 +168,17 @@ attributes with nested braces, template literals, nested JSX in
 attributes, and spread props. Self-closing tags (`<Comp />`) produce a
 single `ComponentInvocation` with no children. Block tags
 (`<Comp>...</Comp>`) produce a `ComponentInvocation` whose `children`
-are the recursively scanned segments between the tags.
+are the recursively scanned segments between the tags — including
+fenced code blocks (executable ones become `ExecutableCodeBlock`
+segments, non-executable ones become `TextSegment`s) and nested
+component invocations.
+
+**Inline code spans.** Content inside backtick code spans (`` `...` ``,
+``` ``...`` ```, etc.) is inert — `<[A-Z]` inside an inline code span
+does not trigger component parsing. The scanner skips past matching
+backtick sequences per CommonMark rules before checking for component
+invocations. This applies at both the top level and inside component
+children.
 
 **Executable code blocks.** A fenced code block whose info string
 contains `exec` or `eval` after the language identifier is executable.
@@ -1419,7 +1429,8 @@ Rules:
 - Nested access via dot notation: `{meta.config.retry.count}`
 - Missing key → empty string (no error)
 - Arrays → comma-joined: `{meta.tags}` → `"alpha, beta"`
-- Inside backtick code spans and fenced code blocks: never interpolated
+- Inside fenced code blocks: never interpolated
+- Inside backtick code spans: interpolated (use `\{...\}` for literal braces)
 - Escaped braces: `\{not interpolated\}` → literal `{not interpolated}`
 
 Interpolation is a runtime operation — deterministic from its inputs,
@@ -1900,6 +1911,12 @@ instead of all under `root`).
 | A15 | Boolean prop | `<Comp verbose />` → props.verbose: true |
 | A16 | Numeric expression prop | `<Comp count={42} />` → props.count: 42 |
 | A17 | Modifier with params | `` ```bash timeout=30s exec `` → modifiers: [{name: "timeout", params: "30s"}, {name: "exec"}] |
+| A14b | Component inside inline code span | `` Use `<Content />` for slot `` → single TextSegment |
+| A14c | Component inside double-backtick span | `` Use ``<Content />`` for slot `` → single TextSegment |
+| A14d | Component inside code span with other text | `` hello `see <Content />` world `` → single TextSegment |
+| A14e | Exec code block inside component children | `<Section>` wrapping `` ```bash exec `` → children include ExecutableCodeBlock |
+| A14f | Non-exec code block inside component children | `<Section>` wrapping `` ```yaml `` → children: TextSegment (passthrough) |
+| A14g | Inline code span protects component syntax in children | `<Section>` with `` `<Content />` `` in children → no component parsed |
 
 ### Tier B — Component import and frontmatter
 

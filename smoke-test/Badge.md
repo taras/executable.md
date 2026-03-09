@@ -1,0 +1,5 @@
+---
+label: "✓ verified"
+---
+
+*{meta.label}*

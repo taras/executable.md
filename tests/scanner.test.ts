@@ -1,6 +1,12 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { scanSegments, parseInfoString } from "./scanner.ts";
+import assert from "node:assert/strict";
+import { scanSegments, parseInfoString } from "../src/scanner.ts";
+import type {
+  ComponentInvocation,
+  ExecutableCodeBlock,
+  TextSegment,
+} from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Tier A — Boundary scanner tests (spec §11)
@@ -148,6 +154,80 @@ describe("scanSegments", () => {
     expect(segments.length).toBe(1);
     expect(segments[0]!.type).toBe("text");
     expect((segments[0] as { content: string }).content).toContain("<Component />");
+  });
+
+  // A14b: Component inside inline code span is text
+  it("A14b: component inside inline code span is text", function*() {
+    const segments = scanSegments("Use `<Content />` for slot");
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0]!.type, "text");
+    assert.ok((segments[0] as TextSegment).content.includes("`<Content />`"));
+  });
+
+  // A14c: Component inside double-backtick code span is text
+  it("A14c: component inside double-backtick code span is text", function*() {
+    const segments = scanSegments("Use ``<Content />`` for slot");
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0]!.type, "text");
+    assert.ok((segments[0] as TextSegment).content.includes("``<Content />``"));
+  });
+
+  // A14d: Component after inline code span with other content
+  it("A14d: component inside code span with surrounding text", function*() {
+    const segments = scanSegments("hello `see <Content />` world");
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0]!.type, "text");
+    assert.ok((segments[0] as TextSegment).content.includes("`see <Content />`"));
+  });
+
+  // A14e: Exec code block inside component children
+  it("A14e: exec code block inside component children produces codeBlock segment", function*() {
+    const input = '<Section title="test">\n\n```bash exec\necho hello\n```\n\n</Section>';
+    const segments = scanSegments(input);
+    assert.equal(segments.length, 1);
+    const comp = segments[0] as ComponentInvocation;
+    assert.equal(comp.type, "component");
+    assert.equal(comp.name, "Section");
+    // Children should contain: text, codeBlock, text
+    const codeBlocks = comp.children.filter((c) => c.type === "codeBlock");
+    assert.equal(codeBlocks.length, 1);
+    assert.equal(codeBlocks[0]!.type, "codeBlock");
+    assert.equal((codeBlocks[0] as ExecutableCodeBlock).language, "bash");
+    assert.equal((codeBlocks[0] as ExecutableCodeBlock).executable, true);
+  });
+
+  // A14f: Non-executable code block inside component children stays as text
+  it("A14f: non-exec code block inside component children is text", function*() {
+    const input = '<Section title="test">\n\n```yaml\nkey: value\n```\n\n</Section>';
+    const segments = scanSegments(input);
+    assert.equal(segments.length, 1);
+    const comp = segments[0] as ComponentInvocation;
+    // Non-executable code block should be part of text children
+    const codeBlocks = comp.children.filter((c) => c.type === "codeBlock");
+    assert.equal(codeBlocks.length, 0);
+    // The yaml block should be in a text segment
+    const textContent = comp.children
+      .filter((c) => c.type === "text")
+      .map((c) => (c as TextSegment).content)
+      .join("");
+    assert.ok(textContent.includes("```yaml"));
+    assert.ok(textContent.includes("key: value"));
+  });
+
+  // A14g: Inline code span inside component children
+  it("A14g: inline code span inside component children protects component syntax", function*() {
+    const input = '<Section title="test">\n\nUse `<Content />` here\n\n</Section>';
+    const segments = scanSegments(input);
+    assert.equal(segments.length, 1);
+    const comp = segments[0] as ComponentInvocation;
+    // Children should be a single text segment — Content is not parsed as component
+    const components = comp.children.filter((c) => c.type === "component");
+    assert.equal(components.length, 0);
+    const textContent = comp.children
+      .filter((c) => c.type === "text")
+      .map((c) => (c as TextSegment).content)
+      .join("");
+    assert.ok(textContent.includes("`<Content />`"));
   });
 
   // A15: Boolean prop
