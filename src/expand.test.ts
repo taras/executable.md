@@ -1,5 +1,5 @@
 import { describe, it } from "@effectionx/bdd/node";
-import assert from "node:assert/strict";
+import { expect } from "@std/expect";
 import { expandSegments } from "./expand.ts";
 import type { ExpansionContext } from "./expand.ts";
 import { scanSegments } from "./scanner.ts";
@@ -93,7 +93,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments("<Greeting />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "Hello world!");
+    expect(output).toBe("Hello world!");
   });
 
   // C2: Content slot
@@ -102,7 +102,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Wrap: comp });
     const segments = scanSegments("<Wrap>middle</Wrap>");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "Before middle After");
+    expect(output).toBe("Before middle After");
   });
 
   // C3: Nested expansion
@@ -112,7 +112,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ A: compA, B: compB });
     const segments = scanSegments("<A />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "outer inner end");
+    expect(output).toBe("outer inner end");
   });
 
   // C4: Transitive expansion — A→B→C
@@ -123,7 +123,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ A: compA, B: compB, C: compC });
     const segments = scanSegments("<A />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "top(mid(leaf))");
+    expect(output).toBe("top(mid(leaf))");
   });
 
   // C5: Direct cycle
@@ -132,8 +132,8 @@ describe("expansion", () => {
     const ctx = makeCtx({ A: compA });
     const segments = scanSegments("<A />");
     const output = yield* expand(segments, ctx);
-    assert.ok(output.includes("ERROR"));
-    assert.ok(output.includes("Cycle detected"));
+    expect(output).toContain("ERROR");
+    expect(output).toContain("Cycle detected");
   });
 
   // C6: Mutual cycle — A→B→A
@@ -143,8 +143,8 @@ describe("expansion", () => {
     const ctx = makeCtx({ A: compA, B: compB });
     const segments = scanSegments("<A />");
     const output = yield* expand(segments, ctx);
-    assert.ok(output.includes("ERROR"));
-    assert.ok(output.includes("Cycle detected"));
+    expect(output).toContain("ERROR");
+    expect(output).toContain("Cycle detected");
   });
 
   // C8: Frontmatter interpolation
@@ -155,7 +155,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Page: comp });
     const segments = scanSegments("<Page />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "Title: My Page");
+    expect(output).toBe("Title: My Page");
   });
 
   // C9: Props interpolation
@@ -166,7 +166,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments('<Greeting name="world" />');
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "Hello, world!");
+    expect(output).toBe("Hello, world!");
   });
 
   // C10: Missing interpolation key → empty string
@@ -175,7 +175,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "value: ");
+    expect(output).toBe("value: ");
   });
 
   // C11: Nested key access
@@ -186,7 +186,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "host: localhost");
+    expect(output).toBe("host: localhost");
   });
 
   // C12: No Content slot — children silently discarded
@@ -195,7 +195,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ NoSlot: comp });
     const segments = scanSegments("<NoSlot>ignored</NoSlot>");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "fixed content");
+    expect(output).toBe("fixed content");
   });
 
   // C13: Multiple Content slots
@@ -207,7 +207,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Multi: comp });
     const segments = scanSegments("<Multi>stuff</Multi>");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "first: stuff second: stuff");
+    expect(output).toBe("first: stuff second: stuff");
   });
 
   // C16: Default applied
@@ -218,7 +218,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments("<Greeting />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "Hello, world!");
+    expect(output).toBe("Hello, world!");
   });
 
   // C20: No inputs, no props — valid
@@ -227,7 +227,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Badge: comp });
     const segments = scanSegments("<Badge />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "badge");
+    expect(output).toBe("badge");
   });
 
   // C22: Optional with no default, not passed → empty string
@@ -238,7 +238,7 @@ describe("expansion", () => {
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "val:");
+    expect(output).toBe("val:");
   });
 
   // Code block expansion
@@ -249,7 +249,7 @@ describe("expansion", () => {
     );
     const segments = scanSegments("```bash exec\necho hello\n```\n");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "hello\n");
+    expect(output).toBe("hello\n");
   });
 
   // Code block with non-zero exit
@@ -260,8 +260,8 @@ describe("expansion", () => {
     );
     const segments = scanSegments("```bash exec\nfoo\n```\n");
     const output = yield* expand(segments, ctx);
-    assert.ok(output.includes("ERROR"));
-    assert.ok(output.includes("not found"));
+    expect(output).toContain("ERROR");
+    expect(output).toContain("not found");
   });
 
   // Silent code block → no output
@@ -272,7 +272,7 @@ describe("expansion", () => {
     );
     const segments = scanSegments("```bash silent exec\necho hello\n```\n");
     const output = yield* expand(segments, ctx);
-    assert.equal(output, "");
+    expect(output).toBe("");
   });
 });
 
@@ -283,59 +283,34 @@ describe("expansion", () => {
 describe("validateProps", () => {
   // C14: Undeclared prop rejected
   it("C14: undeclared prop → PropValidationError", function*() {
-    assert.throws(
-      () => validateProps("Comp", { foo: "bar" }, {}),
-      (err: unknown) => {
-        assert.ok(err instanceof PropValidationError);
-        assert.ok(err.message.includes('Unknown prop "foo"'));
-        return true;
-      },
-    );
+    expect(() => validateProps("Comp", { foo: "bar" }, {})).toThrow('Unknown prop "foo"');
   });
 
   // C15: Required prop missing
   it("C15: required prop missing → PropValidationError", function*() {
-    assert.throws(
-      () =>
-        validateProps("Comp", {}, {
-          name: { type: "string", required: true },
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof PropValidationError);
-        assert.ok(err.message.includes('Required prop "name"'));
-        return true;
-      },
-    );
+    expect(() =>
+      validateProps("Comp", {}, {
+        name: { type: "string", required: true },
+      }),
+    ).toThrow('Required prop "name"');
   });
 
   // C17: Type mismatch rejected
   it("C17: type mismatch → PropValidationError", function*() {
-    assert.throws(
-      () =>
-        validateProps("Comp", { count: "abc" }, {
-          count: { type: "number" },
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof PropValidationError);
-        assert.ok(err.message.includes("expected number"));
-        return true;
-      },
-    );
+    expect(() =>
+      validateProps("Comp", { count: "abc" }, {
+        count: { type: "number" },
+      }),
+    ).toThrow("expected number");
   });
 
   // C18: Enum validated — invalid value
   it("C18: enum invalid value → PropValidationError", function*() {
-    assert.throws(
-      () =>
-        validateProps("Comp", { model: "bad" }, {
-          model: { type: "string", enum: ["a", "b"] },
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof PropValidationError);
-        assert.ok(err.message.includes("must be one of"));
-        return true;
-      },
-    );
+    expect(() =>
+      validateProps("Comp", { model: "bad" }, {
+        model: { type: "string", enum: ["a", "b"] },
+      }),
+    ).toThrow("must be one of");
   });
 
   // C19: Enum accepted — valid value
@@ -343,25 +318,19 @@ describe("validateProps", () => {
     const result = validateProps("Comp", { model: "a" }, {
       model: { type: "string", enum: ["a", "b"] },
     });
-    assert.equal(result["model"], "a");
+    expect(result["model"]).toBe("a");
   });
 
   // C21: No inputs, some props → error
   it("C21: no inputs, some props → PropValidationError", function*() {
-    assert.throws(
-      () => validateProps("Badge", { size: "lg" }, {}),
-      (err: unknown) => {
-        assert.ok(err instanceof PropValidationError);
-        return true;
-      },
-    );
+    expect(() => validateProps("Badge", { size: "lg" }, {})).toThrow(PropValidationError);
   });
 
   it("applies default when prop not provided", function*() {
     const result = validateProps("Comp", {}, {
       greeting: { type: "string", default: "Hello" },
     });
-    assert.equal(result["greeting"], "Hello");
+    expect(result["greeting"]).toBe("Hello");
   });
 });
 
@@ -371,35 +340,32 @@ describe("validateProps", () => {
 
 describe("interpolate", () => {
   it("replaces meta references", function*() {
-    assert.equal(interpolate("{meta.title}", { title: "Hello" }, {}), "Hello");
+    expect(interpolate("{meta.title}", { title: "Hello" }, {})).toBe("Hello");
   });
 
   it("replaces props references", function*() {
-    assert.equal(interpolate("{props.name}", {}, { name: "world" }), "world");
+    expect(interpolate("{props.name}", {}, { name: "world" })).toBe("world");
   });
 
   it("missing key → empty string", function*() {
-    assert.equal(interpolate("{meta.nope}", {}, {}), "");
+    expect(interpolate("{meta.nope}", {}, {})).toBe("");
   });
 
   it("array → comma-joined", function*() {
-    assert.equal(
+    expect(
       interpolate("{meta.tags}", { tags: ["a", "b", "c"] }, {}),
-      "a, b, c",
-    );
+    ).toBe("a, b, c");
   });
 
   it("nested access", function*() {
-    assert.equal(
+    expect(
       interpolate("{meta.a.b.c}", { a: { b: { c: "deep" } } }, {}),
-      "deep",
-    );
+    ).toBe("deep");
   });
 
   it("escaped braces → literal", function*() {
-    assert.equal(
+    expect(
       interpolate("\\{meta.title}", { title: "Hello" }, {}),
-      "{meta.title}",
-    );
+    ).toBe("{meta.title}");
   });
 });

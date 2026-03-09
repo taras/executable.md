@@ -1,12 +1,17 @@
 /**
- * Integration tests for runDocument (Tier E from spec §11).
+ * Integration tests for runDocument (Tiers B, D, E from spec §11).
  *
  * Uses stubRuntime from @effectionx/durable-effects for isolation
  * and InMemoryStream from @effectionx/durable-streams for journaling.
+ *
+ * Test patterns:
+ *   Golden run — InMemoryStream() (empty) + stubRuntime(overrides) → assert output + journal
+ *   Replay    — reuse same InMemoryStream (has events) + stubRuntime() (throws on I/O) → zero I/O
+ *   Staleness — golden run, mutate file, rerun with freshness:true → StaleInputError
  */
 import { describe, it } from "@effectionx/bdd/node";
-import assert from "node:assert/strict";
-import { InMemoryStream } from "@effectionx/durable-streams";
+import { expect } from "@std/expect";
+import { InMemoryStream, StaleInputError } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "./run-document.ts";
@@ -61,6 +66,701 @@ function makeRuntime(files: Record<string, string>): DurableRuntime {
   });
 }
 
+/**
+ * Create a runtime that throws on all I/O — proves replay uses no live execution.
+ */
+function noIORuntime(): DurableRuntime {
+  return stubRuntime({
+    *readTextFile(_path: string) {
+      throw new Error("UNEXPECTED: readTextFile called during replay");
+    },
+    *stat(_path: string): Generator<never, StatResult, unknown> {
+      throw new Error("UNEXPECTED: stat called during replay");
+    },
+    *exec(_options: unknown) {
+      throw new Error("UNEXPECTED: exec called during replay");
+    },
+  });
+}
+
+/**
+ * Create a runtime with exec that returns non-zero exit codes.
+ */
+function makeRuntimeWithFailingExec(
+  files: Record<string, string>,
+  exitCode: number,
+  stderr: string,
+): DurableRuntime {
+  return stubRuntime({
+    *readTextFile(path: string) {
+      const content = files[path];
+      if (content === undefined) {
+        throw new Error(`ENOENT: no such file: ${path}`);
+      }
+      return content;
+    },
+    *stat(path: string): Generator<never, StatResult, unknown> {
+      const exists = path in files;
+      return { exists, isFile: exists, isDirectory: false };
+    },
+    *exec(_options: unknown) {
+      return { exitCode, stdout: "", stderr };
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tier B — Component import (durable integration tests)
+// ---------------------------------------------------------------------------
+
+describe("Tier B — durable import", () => {
+  // B1: durableImportComponent golden run — journal shape
+  it("B1: import golden run — journal has import_component with path + contentHash", function* () {
+    const files: Record<string, string> = {
+      "README.md": "Hello world\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    const events = stream.snapshot();
+    const imports = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "import_component" ? [e] : [],
+    );
+
+    expect(imports.length).toBe(1);
+
+    const rootImport = imports[0]!;
+    expect(rootImport).toMatchObject({
+      type: "yield",
+      description: { name: "__root__" },
+      result: { status: "ok", value: { path: "README.md" } },
+    });
+
+    // Result should contain path and contentHash
+    const result = rootImport.result;
+    expect(result.status).toBe("ok");
+    const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
+    expect(value.contentHash).toMatch(/^sha256:/);
+    expect(value.content).toContain("Hello world");
+  });
+
+  // B2: durableImportComponent replay — stored result returned, no I/O
+  it("B2: import replay — stored result returned, no file read", function* () {
+    const files: Record<string, string> = {
+      "README.md": "Hello world\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden run
+    const firstResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Replay — no I/O runtime
+    const secondResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime: noIORuntime(),
+      freshness: false,
+    });
+
+    expect(secondResult).toBe(firstResult);
+  });
+
+  // B3: replay + runtime parsing — stored content parsed to same meta/inputs/segments
+  it("B3: replay parses stored content to same result", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "---",
+        "title: Parsed",
+        "---",
+        "",
+        "# {meta.title}",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const firstResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    const secondResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime: noIORuntime(),
+      freshness: false,
+    });
+
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("# Parsed");
+  });
+
+  // B9: import missing component — error propagated
+  it("B9: import missing component — error in output", function* () {
+    const files: Record<string, string> = {
+      "README.md": "<Missing />\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("ERROR");
+    expect(
+      result.includes("Cannot resolve component") || result.includes("Failed to import"),
+    ).toBeTruthy();
+  });
+
+  // B10: stale import — file changed, guard installed → StaleInputError
+  //
+  // ReplayGuard.decide only fires when the workflow actually replays
+  // effects (inside each effect's enter()). durableRun short-circuits
+  // at the Close event for completed workflows, so we simulate an
+  // interrupted run by stripping the Close event from the journal.
+  it("B10: stale import — file changed with freshness:true → StaleInputError", function* () {
+    const originalFiles: Record<string, string> = {
+      "README.md": "Hello original\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(originalFiles);
+
+    // Golden run — produces Yield + Close events
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Build a new stream with only the Yield events (no Close).
+    // This simulates an interrupted workflow where replay must
+    // re-run each effect through the decide phase.
+    const yieldEvents = stream.snapshot().filter((e) => e.type === "yield");
+    const interruptedStream = new InMemoryStream(yieldEvents);
+
+    // Change the file content
+    const changedFiles: Record<string, string> = {
+      "README.md": "Hello changed\n",
+    };
+    const changedRuntime = makeRuntime(changedFiles);
+
+    // Replay with freshness check — guard's decide phase detects hash mismatch
+    try {
+      yield* runDocument({
+        docPath: "README.md",
+        stream: interruptedStream,
+        runtime: changedRuntime,
+        freshness: true,
+      });
+      throw new Error("should have thrown StaleInputError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(StaleInputError);
+    }
+  });
+
+  // B11: stale import — no guard → replay uses stored content silently
+  it("B11: stale import — no guard (freshness:false) → silent replay", function* () {
+    const originalFiles: Record<string, string> = {
+      "README.md": "Hello original\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(originalFiles);
+
+    // Golden run
+    const firstResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Change the file and replay WITHOUT guard
+    const changedRuntime = makeRuntime({ "README.md": "Hello changed\n" });
+
+    const secondResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime: changedRuntime,
+      freshness: false,
+    });
+
+    // Should use stored (original) content
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("original");
+  });
+
+  // B12: root document as component — __root__ import, same journal shape
+  it("B12: root document imported as __root__", function* () {
+    const files: Record<string, string> = {
+      "doc.md": "Root content\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    yield* runDocument({
+      docPath: "doc.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    const events = stream.snapshot();
+    const [rootImport] = events.flatMap((e) =>
+      e.type === "yield" &&
+      e.description.type === "import_component" &&
+      e.description.name === "__root__"
+        ? [e]
+        : [],
+    );
+
+    expect(rootImport).toBeTruthy();
+    expect(rootImport!.result).toMatchObject({ status: "ok", value: { path: "doc.md" } });
+  });
+
+  // B13: dotted name resolution — Ns.Sub → components/Ns/Sub.md
+  it("B13: dotted component name resolves to nested path", function* () {
+    const files: Record<string, string> = {
+      "README.md": "<Ui.Button />\n",
+      "components/Ui/Button.md": "Click me\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("Click me");
+
+    // Verify journal has the import with correct path
+    const events = stream.snapshot();
+    const [compImport] = events.flatMap((e) =>
+      e.type === "yield" &&
+      e.description.type === "import_component" &&
+      e.description.name === "Ui.Button"
+        ? [e]
+        : [],
+    );
+    expect(compImport).toBeTruthy();
+    expect(compImport!.result).toMatchObject({
+      status: "ok",
+      value: { path: "components/Ui/Button.md" },
+    });
+  });
+
+  // B15: default resolver middleware — resolves via runtime.stat in search path order
+  it("B15: resolver searches component dirs in order", function* () {
+    // Component exists in root dir (second search path), not components/
+    const files: Record<string, string> = {
+      "README.md": "<Banner />\n",
+      "Banner.md": "Banner from root\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("Banner from root");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier D — Code execution and modifier middleware
+// ---------------------------------------------------------------------------
+
+describe("Tier D — code execution and modifiers", () => {
+  // D1: bash exec golden run
+  it("D1: bash exec golden run — stdout in output, exec in journal", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash exec",
+        "echo hello",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("hello");
+
+    // Verify journal
+    const events = stream.snapshot();
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execEvent).toBeTruthy();
+    expect(Array.isArray(execEvent!.description.command)).toBeTruthy();
+    expect(execEvent!.result.status).toBe("ok");
+  });
+
+  // D2: exec replay — command not re-executed
+  it("D2: exec replay — stored stdout used, no re-execution", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash exec",
+        "echo hello",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden run
+    const firstResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Replay — no I/O
+    const secondResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime: noIORuntime(),
+      freshness: false,
+    });
+
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("hello");
+  });
+
+  // D3: non-zero exit code → ErrorSegment in output
+  it("D3: non-zero exit code → error in output", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash exec",
+        "failing-command",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntimeWithFailingExec(files, 1, "command not found");
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(
+      result.includes("ERROR") || result.includes("failed"),
+    ).toBeTruthy();
+  });
+
+  // D4: multi-line command — full script passed to -c
+  it("D4: multi-line command — full script in journal", function* () {
+    const multiLineScript = "echo line1\necho line2";
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash exec",
+        multiLineScript,
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Verify the command array in journal contains full script
+    const events = stream.snapshot();
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execEvent).toBeTruthy();
+    const command = execEvent!.description.command as string[];
+    expect(command.slice(0, 2)).toEqual(["bash", "-c"]);
+    // The third element should contain both lines
+    expect(command[2]).toContain("echo line1");
+    expect(command[2]).toContain("echo line2");
+  });
+
+  // D5: python exec — python -c invocation
+  it("D5: python exec — python -c in command array", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```python exec",
+        "print('hello')",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    // Custom runtime that handles python -c
+    const runtime = stubRuntime({
+      *readTextFile(path: string) {
+        const content = files[path];
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      *stat(path: string): Generator<never, StatResult, unknown> {
+        const exists = path in files;
+        return { exists, isFile: exists, isDirectory: false };
+      },
+      *exec(options: { command: string[] }) {
+        if (options.command[0] === "python" && options.command[1] === "-c") {
+          return { exitCode: 0, stdout: "hello\n", stderr: "" };
+        }
+        return { exitCode: 1, stdout: "", stderr: "unexpected command" };
+      },
+    });
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("hello");
+
+    // Verify command in journal
+    const events = stream.snapshot();
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    const command = execEvent!.description.command as string[];
+    expect(command[0]).toBe("python");
+    expect(command[1]).toBe("-c");
+  });
+
+  // D6: bash silent exec — chain: silent wraps exec, exec journals, silent returns empty
+  it("D6: bash silent exec — exec journals, output suppressed", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash silent exec",
+        "echo secret",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Output should be empty (silent suppresses)
+    expect(result).not.toContain("secret");
+
+    // Journal should still have exec event
+    const events = stream.snapshot();
+    const execs = events.filter(
+      (e) => e.type === "yield" && e.description["type"] === "exec",
+    );
+    expect(execs.length).toBe(1);
+  });
+
+  // D7: silent exec replay — still produces empty output from stored result
+  it("D7: silent exec replay — still empty output", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "before\n",
+        "```bash silent exec",
+        "echo secret",
+        "```",
+        "\nafter",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden
+    const firstResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Replay
+    const secondResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime: noIORuntime(),
+      freshness: false,
+    });
+
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).not.toContain("secret");
+  });
+
+  // D15: unknown modifier in chain → error
+  it("D15: unknown modifier → error in output", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash frobnicate exec",
+        "echo test",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("ERROR");
+    expect(
+      result.includes("Unknown modifier") || result.includes("frobnicate"),
+    ).toBeTruthy();
+  });
+
+  // D16: no terminal modifier → error
+  it("D16: no terminal modifier — code block without exec/eval is passive text", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash",
+        "echo test",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Without exec/eval, code block is passive text — preserved as-is
+    expect(result).toContain("```bash");
+    expect(result).toContain("echo test");
+  });
+
+  // D17: custom modifier registration
+  it("D17: custom modifier registration — handler runs in chain", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash uppercase exec",
+        "echo hello",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+      modifiers: {
+        uppercase: function* (_context, _params, next) {
+          const inner = yield* next();
+          return {
+            output: inner.output.toUpperCase(),
+            exitCode: inner.exitCode,
+            stderr: inner.stderr,
+          };
+        },
+      },
+    });
+
+    expect(result).toContain("HELLO");
+  });
+
+  // D19: modifier parsing — timeout=30s
+  it("D19: modifier with params parsed correctly", function* () {
+    // We test that the modifier receives its params
+    let receivedParams: string | undefined;
+    const files: Record<string, string> = {
+      "README.md": [
+        "```bash timeout=30s exec",
+        "echo test",
+        "```",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+      modifiers: {
+        timeout: function* (_context, params, next) {
+          receivedParams = params;
+          return yield* next();
+        },
+      },
+    });
+
+    expect(receivedParams).toBe("30s");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tier E — End-to-end tests
 // ---------------------------------------------------------------------------
@@ -107,30 +807,30 @@ describe("runDocument", () => {
     });
 
     // Check output contains expected content
-    assert.ok(result.includes("# My Project"), "should have title");
-    assert.ok(result.includes("hi Hello, world!"), "should have greeting");
-    assert.ok(result.includes("main.ts"), "should have exec output");
-    assert.ok(result.includes("utils.ts"), "should have exec output");
+    expect(result).toContain("# My Project");
+    expect(result).toContain("hi Hello, world!");
+    expect(result).toContain("main.ts");
+    expect(result).toContain("utils.ts");
 
     // Check journal has events
     const events = stream.snapshot();
-    assert.ok(events.length > 0, "should have journal events");
+    expect(events.length).toBeGreaterThan(0);
 
     // Should have import_component events for root and Greeting
     const imports = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "import_component",
     );
-    assert.equal(imports.length, 2, "should have 2 import events");
+    expect(imports.length).toBe(2);
 
     // Should have exec event
     const execs = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.equal(execs.length, 1, "should have 1 exec event");
+    expect(execs.length).toBe(1);
 
     // Should have close event
     const closes = events.filter((e) => e.type === "close");
-    assert.equal(closes.length, 1, "should have 1 close event");
+    expect(closes.length).toBe(1);
   });
 
   // E2: Full replay — zero file reads, zero exec calls
@@ -174,9 +874,9 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.equal(secondResult, firstResult);
-    assert.equal(readCalled, false, "should not read during replay");
-    assert.equal(execCalled, false, "should not exec during replay");
+    expect(secondResult).toBe(firstResult);
+    expect(readCalled).toBe(false);
+    expect(execCalled).toBe(false);
   });
 
   // E6: Props flow through expansion
@@ -205,7 +905,7 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Hello, Alice!"));
+    expect(result).toContain("Hello, Alice!");
   });
 
   // E7: Undeclared prop in full document
@@ -232,11 +932,10 @@ describe("runDocument", () => {
     });
 
     // Should contain error about undeclared prop
-    assert.ok(result.includes("ERROR"), "should have error marker");
-    assert.ok(
+    expect(result).toContain("ERROR");
+    expect(
       result.includes("Unknown prop") || result.includes("Prop validation"),
-      "should mention prop validation",
-    );
+    ).toBeTruthy();
   });
 
   // E8: Silent exec in full document
@@ -264,16 +963,16 @@ describe("runDocument", () => {
     });
 
     // Output should NOT contain the exec result
-    assert.ok(!result.includes("hidden"), "silent should suppress output");
-    assert.ok(result.includes("before"), "should have text before");
-    assert.ok(result.includes("after"), "should have text after");
+    expect(result).not.toContain("hidden");
+    expect(result).toContain("before");
+    expect(result).toContain("after");
 
     // But the journal should have the exec event
     const events = stream.snapshot();
     const execs = events.filter(
       (e) => e.type === "yield" && e.description["type"] === "exec",
     );
-    assert.equal(execs.length, 1, "exec should be journaled even when silent");
+    expect(execs.length).toBe(1);
   });
 
   // Simple text document — no components, no exec
@@ -292,11 +991,11 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.equal(result, "# Hello World\n\nThis is a test.\n");
+    expect(result).toBe("# Hello World\n\nThis is a test.\n");
   });
 
   // Default props applied
-  it("default props applied when not provided", function*() {
+  it("default props applied when not provided", function* () {
     const files: Record<string, string> = {
       "README.md": "<Greeting />\n",
       "components/Greeting.md": [
@@ -321,6 +1020,373 @@ describe("runDocument", () => {
       freshness: false,
     });
 
-    assert.ok(result.includes("Hello, world!"));
+    expect(result).toContain("Hello, world!");
+  });
+
+  // E3: Crash mid-expansion, resume — partial replay then live
+  it("E3: crash mid-expansion — partial replay + live for remaining", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        '<Greeting name="world" />',
+        "",
+        "```bash exec",
+        "echo done",
+        "```",
+      ].join("\n"),
+      "components/Greeting.md": [
+        "---",
+        "inputs:",
+        "  name:",
+        "    type: string",
+        "    required: true",
+        "---",
+        "",
+        "Hello, {props.name}!",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden run to get full journal
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    const fullEvents = stream.snapshot();
+
+    // Simulate crash: create a new stream with only partial events
+    // (imports but NO exec, NO close)
+    const partialEvents = fullEvents.filter(
+      (e) =>
+        e.type === "yield" && e.description["type"] === "import_component",
+    );
+
+    const partialStream = new InMemoryStream(partialEvents);
+
+    // Resume: imports replay from journal, exec runs live
+    let execCalled = false;
+    const resumeRuntime = stubRuntime({
+      *readTextFile(path: string) {
+        // Only called if the runtime needs to re-read files not in journal
+        const content = files[path];
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      *stat(path: string): Generator<never, StatResult, unknown> {
+        const exists = path in files;
+        return { exists, isFile: exists, isDirectory: false };
+      },
+      *exec(options: { command: string[] }) {
+        execCalled = true;
+        const script = (options.command[2] ?? "").trim();
+        if (script === "echo done") {
+          return { exitCode: 0, stdout: "done\n", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream: partialStream,
+      runtime: resumeRuntime,
+      freshness: false,
+    });
+
+    expect(result).toContain("Hello, world!");
+    expect(result).toContain("done");
+    expect(execCalled).toBeTruthy();
+  });
+
+  // E4: Component file changed, guard on → staleness detected
+  //
+  // Strip the Close event so durableRun actually replays effects through
+  // the decide phase. When the Greeting component's hash mismatches, the
+  // guard raises StaleInputError. The expansion engine catches import
+  // errors and renders them as ErrorSegments (the error doesn't propagate
+  // to the caller because expandComponent wraps all import failures).
+  //
+  // For the __root__ document, staleness throws at the top level (B10).
+  // For child components, it surfaces as an error in the rendered output.
+  it("E4: component file changed with guard → staleness error in output", function* () {
+    const files: Record<string, string> = {
+      "README.md": '<Greeting name="world" />\n',
+      "components/Greeting.md": [
+        "---",
+        "inputs:",
+        "  name:",
+        "    type: string",
+        "    required: true",
+        "---",
+        "",
+        "Hello, {props.name}!",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden run — produces Yield + Close events
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Strip Close event — simulates interrupted workflow
+    const yieldEvents = stream.snapshot().filter((e) => e.type === "yield");
+    const interruptedStream = new InMemoryStream(yieldEvents);
+
+    // Change component file
+    const changedFiles: Record<string, string> = {
+      ...files,
+      "components/Greeting.md": [
+        "---",
+        "inputs:",
+        "  name:",
+        "    type: string",
+        "    required: true",
+        "---",
+        "",
+        "Hola, {props.name}!",
+      ].join("\n"),
+    };
+    const changedRuntime = makeRuntime(changedFiles);
+
+    // Replay with guard — decide phase detects hash mismatch on Greeting.
+    // The expansion engine catches the StaleInputError and renders it as
+    // an ErrorSegment (same as any import failure for child components).
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream: interruptedStream,
+      runtime: changedRuntime,
+      freshness: true,
+    });
+
+    expect(
+      result.includes("Component changed") || result.includes("Greeting"),
+    ).toBeTruthy();
+    expect(result).toContain("ERROR");
+  });
+
+  // E5: new component added — replay existing, live for new
+  it("E5: new component added — replays existing, live for new", function* () {
+    const files: Record<string, string> = {
+      "README.md": "<Header />\n",
+      "components/Header.md": "Header content\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden run with just Header
+    yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Now add Footer to the document
+    const updatedFiles: Record<string, string> = {
+      "README.md": "<Header />\n<Footer />\n",
+      "components/Header.md": "Header content\n",
+      "components/Footer.md": "Footer content\n",
+    };
+
+    const newStream = new InMemoryStream();
+    const updatedRuntime = makeRuntime(updatedFiles);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream: newStream,
+      runtime: updatedRuntime,
+      freshness: false,
+    });
+
+    expect(result).toContain("Header content");
+    expect(result).toContain("Footer content");
+  });
+
+  // E10: unclosed bold across component boundary — healed
+  it("E10: unclosed bold across component boundary — healed in first segment", function* () {
+    const files: Record<string, string> = {
+      "README.md": "This is **bold\n<Greeting />\nmore text\n",
+      "components/Greeting.md": "greeting\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // The **bold should be healed (closed) before component expansion.
+    // remend appends closing ** after the text segment (including trailing \n).
+    // Result: "This is **bold\n**" + "greeting\n" + "\nmore text\n"
+    expect(result).toContain("greeting");
+    expect(result).toContain("more text");
+
+    // The first text segment should be healed — it should contain both
+    // opening ** and closing ** (remend closes the unclosed bold).
+    // The closing ** appears after the newline: "**bold\n**"
+    const beforeComponent = result.split("greeting")[0]!;
+    const openCount = (beforeComponent.match(/\*\*/g) || []).length;
+    expect(openCount).toBe(2);
+  });
+
+  // E2 complex: full replay with component + exec — zero I/O
+  it("E2 complex: full replay with component + exec — zero I/O on second run", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "---",
+        "title: Test",
+        "---",
+        "",
+        "# {meta.title}",
+        "",
+        '<Greeting name="world" />',
+        "",
+        "```bash exec",
+        "echo output",
+        "```",
+      ].join("\n"),
+      "components/Greeting.md": [
+        "---",
+        "inputs:",
+        "  name:",
+        "    type: string",
+        "    required: true",
+        "---",
+        "",
+        "Hello, {props.name}!",
+      ].join("\n"),
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    // Golden run
+    const firstResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    // Record journal size
+    const goldenEventCount = stream.snapshot().length;
+
+    // Replay — no I/O
+    const secondResult = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime: noIORuntime(),
+      freshness: false,
+    });
+
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("# Test");
+    expect(secondResult).toContain("Hello, world!");
+    expect(secondResult).toContain("output");
+
+    // No new events should be appended during replay
+    expect(stream.snapshot().length).toBe(goldenEventCount);
+  });
+
+  // Multiple components — verify all are imported and expanded
+  it("multiple components — all imported and expanded", function* () {
+    const files: Record<string, string> = {
+      "README.md": "<Header />\n<Footer />\n",
+      "components/Header.md": "HEADER\n",
+      "components/Footer.md": "FOOTER\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("HEADER");
+    expect(result).toContain("FOOTER");
+
+    // 3 import_component events: root + Header + Footer
+    const events = stream.snapshot();
+    const imports = events.filter(
+      (e) => e.type === "yield" && e.description["type"] === "import_component",
+    );
+    expect(imports.length).toBe(3);
+  });
+
+  // Transitive components — A references B
+  it("transitive components — A → B, both imported", function* () {
+    const files: Record<string, string> = {
+      "README.md": "<Wrapper />\n",
+      "components/Wrapper.md": "before\n<Inner />\nafter\n",
+      "components/Inner.md": "INNER\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("before");
+    expect(result).toContain("INNER");
+    expect(result).toContain("after");
+
+    // 3 imports: root, Wrapper, Inner
+    const events = stream.snapshot();
+    const imports = events.filter(
+      (e) => e.type === "yield" && e.description["type"] === "import_component",
+    );
+    expect(imports.length).toBe(3);
+  });
+
+  // Content slot with exec
+  it("Content slot + exec — both work together", function* () {
+    const files: Record<string, string> = {
+      "README.md": [
+        "<Wrapper>",
+        "```bash exec",
+        "echo inside",
+        "```",
+        "</Wrapper>",
+      ].join("\n"),
+      "components/Wrapper.md": "BEFORE\n<Content />\nAFTER\n",
+    };
+
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime(files);
+
+    const result = yield* runDocument({
+      docPath: "README.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(result).toContain("BEFORE");
+    expect(result).toContain("inside");
+    expect(result).toContain("AFTER");
   });
 });

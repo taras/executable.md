@@ -75,7 +75,6 @@ export function composeModifierChain(
     const handler = registry.get(mod.name);
     if (!handler) {
       const missingName = mod.name;
-      const outerChain = chain;
       chain = function* () {
         throw new Error(`Unknown modifier: ${missingName}`);
       };
