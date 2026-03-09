@@ -131,8 +131,8 @@ describe("Tier B — durable import", () => {
     });
 
     const events = stream.snapshot();
-    const imports = events.filter(
-      (e) => e.type === "yield" && e.description["type"] === "import_component",
+    const imports = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "import_component" ? [e] : [],
     );
 
     expect(imports.length).toBe(1);
@@ -145,9 +145,11 @@ describe("Tier B — durable import", () => {
     });
 
     // Result should contain path and contentHash
-    const result = (rootImport as any).result;
-    expect(result.value.contentHash).toMatch(/^sha256:/);
-    expect(result.value.content).toContain("Hello world");
+    const result = rootImport.result;
+    expect(result.status).toBe("ok");
+    const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
+    expect(value.contentHash).toMatch(/^sha256:/);
+    expect(value.content).toContain("Hello world");
   });
 
   // B2: durableImportComponent replay — stored result returned, no I/O
@@ -330,15 +332,16 @@ describe("Tier B — durable import", () => {
     });
 
     const events = stream.snapshot();
-    const rootImport = events.find(
-      (e) =>
-        e.type === "yield" &&
-        e.description["type"] === "import_component" &&
-        e.description["name"] === "__root__",
+    const [rootImport] = events.flatMap((e) =>
+      e.type === "yield" &&
+      e.description.type === "import_component" &&
+      e.description.name === "__root__"
+        ? [e]
+        : [],
     );
 
     expect(rootImport).toBeTruthy();
-    expect((rootImport as any).result.value.path).toBe("doc.md");
+    expect(rootImport!.result).toMatchObject({ status: "ok", value: { path: "doc.md" } });
   });
 
   // B13: dotted name resolution — Ns.Sub → components/Ns/Sub.md
@@ -362,16 +365,18 @@ describe("Tier B — durable import", () => {
 
     // Verify journal has the import with correct path
     const events = stream.snapshot();
-    const compImport = events.find(
-      (e) =>
-        e.type === "yield" &&
-        e.description["type"] === "import_component" &&
-        e.description["name"] === "Ui.Button",
+    const [compImport] = events.flatMap((e) =>
+      e.type === "yield" &&
+      e.description.type === "import_component" &&
+      e.description.name === "Ui.Button"
+        ? [e]
+        : [],
     );
     expect(compImport).toBeTruthy();
-    expect((compImport as any).result.value.path).toBe(
-      "components/Ui/Button.md",
-    );
+    expect(compImport!.result).toMatchObject({
+      status: "ok",
+      value: { path: "components/Ui/Button.md" },
+    });
   });
 
   // B15: default resolver middleware — resolves via runtime.stat in search path order
@@ -425,12 +430,12 @@ describe("Tier D — code execution and modifiers", () => {
 
     // Verify journal
     const events = stream.snapshot();
-    const execEvent = events.find(
-      (e) => e.type === "yield" && e.description["type"] === "exec",
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
     );
     expect(execEvent).toBeTruthy();
-    expect(Array.isArray((execEvent as any).description.command)).toBeTruthy();
-    expect((execEvent as any).result.status).toBe("ok");
+    expect(Array.isArray(execEvent!.description.command)).toBeTruthy();
+    expect(execEvent!.result.status).toBe("ok");
   });
 
   // D2: exec replay — command not re-executed
@@ -514,11 +519,11 @@ describe("Tier D — code execution and modifiers", () => {
 
     // Verify the command array in journal contains full script
     const events = stream.snapshot();
-    const execEvent = events.find(
-      (e) => e.type === "yield" && e.description["type"] === "exec",
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
     );
     expect(execEvent).toBeTruthy();
-    const command = (execEvent as any).description.command;
+    const command = execEvent!.description.command as string[];
     expect(command.slice(0, 2)).toEqual(["bash", "-c"]);
     // The third element should contain both lines
     expect(command[2]).toContain("echo line1");
@@ -566,10 +571,10 @@ describe("Tier D — code execution and modifiers", () => {
 
     // Verify command in journal
     const events = stream.snapshot();
-    const execEvent = events.find(
-      (e) => e.type === "yield" && e.description["type"] === "exec",
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
     );
-    const command = (execEvent as any).description.command;
+    const command = execEvent!.description.command as string[];
     expect(command[0]).toBe("python");
     expect(command[1]).toBe("-c");
   });
