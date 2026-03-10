@@ -74,10 +74,10 @@ Dotted names map to directory paths. The component below lives at
 Code blocks with `exec` in the info string are executed as shell
 commands. The output replaces the code block in the rendered document.
 
-How many markdown files are in the components directory?
+How many markdown files are in the smoke-test directory?
 
 ```bash exec
-find components -name '*.md' | wc -l | tr -d ' '
+find smoke-test -name '*.md' | wc -l | tr -d ' '
 ```
 
 The info string is a **middleware chain** read left-to-right. Each
