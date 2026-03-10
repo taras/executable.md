@@ -10,6 +10,7 @@
  * expanded recursively.
  */
 
+import type { Operation } from "effection";
 import type {
   Segment,
   ComponentDefinition,
@@ -33,7 +34,7 @@ import { healSegment } from "./heal.ts";
  */
 export type ComponentImporter = (
   name: string,
-) => Generator<unknown, ComponentDefinition, unknown>;
+) => Operation<ComponentDefinition>;
 
 /**
  * Function that executes a modifier chain for a code block.
@@ -41,7 +42,7 @@ export type ComponentImporter = (
 export type ModifierChainRunner = (
   modifiers: Modifier[],
   context: CodeBlockContext,
-) => Generator<unknown, CodeBlockResult, unknown>;
+) => Operation<CodeBlockResult>;
 
 export interface ExpansionContext {
   importComponent: ComponentImporter;
@@ -63,7 +64,7 @@ export function* expandSegments(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   ctx: ExpansionContext,
-): Generator<unknown, Segment[], unknown> {
+): Operation<Segment[]> {
   const result: Segment[] = [];
 
   for (const segment of segments) {
@@ -154,7 +155,7 @@ function* expandComponent(
   children: Segment[],
   hideSet: Set<string>,
   ctx: ExpansionContext,
-): Generator<unknown, Segment[], unknown> {
+): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
     return [

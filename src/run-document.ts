@@ -304,11 +304,10 @@ function* documentWorkflow(
     },
   };
 
-  // Expand all segments — this generator yields durable effects
-  // through the import and modifier chain functions. The cast is
-  // safe because expandSegments only forwards DurableEffect yields
-  // from durableImportComponent and the modifier chain. The expansion
-  // engine itself does not yield any non-durable values.
+  // Expand all segments — returns Operation<Segment[]>. The narrowing
+  // cast to Workflow is safe because expandSegments only forwards
+  // DurableEffect yields from durableImportComponent and the modifier
+  // chain. The expansion engine itself does not yield any non-durable values.
   const expandGen = expandSegments(
     root.bodySegments,
     root.meta,

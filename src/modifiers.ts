@@ -65,7 +65,7 @@ export function useCodeBlock(): Workflow<CodeBlockContext> {
  * The generator type returned by modifier middleware — a workflow that
  * yields durable effects and returns a CodeBlockResult.
  */
-export type CodeBlockWorkflow = Generator<unknown, CodeBlockResult, unknown>;
+export type CodeBlockWorkflow = Workflow<CodeBlockResult>;
 
 /**
  * A modifier middleware — conforms to Middleware<[], CodeBlockWorkflow>.
