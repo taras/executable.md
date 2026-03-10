@@ -215,7 +215,7 @@ This had two problems:
 
 Three changes:
 
-**1. Reusable middleware primitive (`src/middleware.ts`):**
+**1. Reusable middleware primitive (`@effectionx/middleware`):**
 
 ```typescript
 type Middleware<TArgs extends unknown[], TReturn> = (
@@ -226,7 +226,8 @@ type Middleware<TArgs extends unknown[], TReturn> = (
 
 Plus a `combine()` function matching Effection's `api-internal.ts`.
 This is decoupled from modifier-specific types and reusable for any
-future middleware scenario.
+future middleware scenario. Originally implemented as `src/middleware.ts`,
+this was extracted to the `@effectionx/middleware` shared package.
 
 **2. Factory pattern for modifier registration:**
 
