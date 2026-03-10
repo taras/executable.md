@@ -99,30 +99,32 @@ need to call runtime APIs directly), use `ephemeral()`.
 
 ---
 
-## DEC-003: ModifierHandler return type
+## DEC-003: Modifier middleware return type
 
-**Status:** Decided  
+**Status:** Decided (updated by DEC-006)  
 **Date:** 2026-03-08
 
 ### Context
 
-`ModifierHandler` functions compose into chains. Terminal handlers
-(`exec`) yield `DurableEffect` values (via `createDurableOperation`).
-Wrapping handlers (`silent`) call `next()` which runs the inner chain.
+Modifier middleware compose into chains. Terminal handlers (`exec`)
+yield `DurableEffect` values (via `createDurableOperation`). Wrapping
+handlers (`silent`) call `next()` which runs the inner chain.
 
 ### Decision
 
-`ModifierHandler` returns `Workflow<CodeBlockResult>` since the chain
-ultimately yields durable effects. The `next` parameter is also typed
-as `() => Workflow<CodeBlockResult>`.
+Each modifier is a `ModifierFactory` that returns a
+`Middleware<[], CodeBlockWorkflow>`. The `CodeBlockWorkflow` type is
+`Generator<unknown, CodeBlockResult, unknown>`, which is compatible
+with `Workflow<CodeBlockResult>` since the chain ultimately yields
+durable effects.
 
 ```typescript
-type ModifierHandler = (
-  context: CodeBlockContext,
-  params: string | undefined,
-  next: () => Workflow<CodeBlockResult>,
-) => Workflow<CodeBlockResult>;
+type CodeBlockWorkflow = Generator<unknown, CodeBlockResult, unknown>;
+type ModifierMiddleware = Middleware<[], CodeBlockWorkflow>;
+type ModifierFactory = (params: string | undefined) => ModifierMiddleware;
 ```
+
+See DEC-006 for the full rationale behind this signature change.
 
 ---
 
@@ -177,3 +179,100 @@ means API changes in the preview packages only affect one file.
 The expansion engine accepts abstract `ComponentImporter` and
 `ModifierChainRunner` functions — it doesn't know about durable effects.
 This was a good architectural decision that happened naturally.
+
+---
+
+## DEC-006: Modifier middleware alignment with Effection v4.1
+
+**Status:** Decided  
+**Date:** 2026-03-09
+
+### Context
+
+The original `ModifierHandler` type was:
+
+```typescript
+type ModifierHandler = (
+  context: CodeBlockContext,
+  params: string | undefined,
+  next: () => Workflow<CodeBlockResult>,
+) => Workflow<CodeBlockResult>;
+```
+
+This had two problems:
+
+1. **`context` was a handler parameter.** Effection has a first-class
+   `Context` system for scope-inherited values. Passing the code block
+   context as a function argument bypassed this — every handler received
+   data it might not need, and the signature didn't match Effection's
+   middleware shape.
+
+2. **The signature didn't match `Middleware<TArgs, TReturn>`.** Effection
+   v4.1's Api system uses `(args: TArgs, next: (...args: TArgs) => TReturn) => TReturn`.
+   Our three-argument `(context, params, next)` was a custom shape that
+   couldn't be composed with the same `combine()` primitive.
+
+### Decision
+
+Three changes:
+
+**1. Reusable middleware primitive (`src/middleware.ts`):**
+
+```typescript
+type Middleware<TArgs extends unknown[], TReturn> = (
+  args: TArgs,
+  next: (...args: TArgs) => TReturn,
+) => TReturn;
+```
+
+Plus a `combine()` function matching Effection's `api-internal.ts`.
+This is decoupled from modifier-specific types and reusable for any
+future middleware scenario.
+
+**2. Factory pattern for modifier registration:**
+
+```typescript
+type ModifierMiddleware = Middleware<[], CodeBlockWorkflow>;
+type ModifierFactory = (params: string | undefined) => ModifierMiddleware;
+```
+
+Each registered modifier is a factory. When the chain is composed,
+the factory is called with the parsed params from the info string
+(e.g., `"brief"` from `sample=brief`). The returned middleware
+conforms to `Middleware<[], ...>` — no arguments flow through `next`,
+params are captured in the factory closure.
+
+**3. Effection Context for code block metadata:**
+
+```typescript
+const CodeBlockCtx = createContext<CodeBlockContext>("codeBlock");
+function useCodeBlock(): Workflow<CodeBlockContext> {
+  return ephemeral(CodeBlockCtx.expect());
+}
+```
+
+`composeModifierChain` sets the context via `CodeBlockCtx.with()`,
+which scopes the value to the chain execution. Handlers that need the
+code block info (language, content, componentName) call `useCodeBlock()`
+instead of receiving it as a parameter. The `ephemeral()` bridge makes
+this work inside durable workflow generators (see DEC-001).
+
+### Why `CodeBlockCtx.with()` instead of `Context.set()`
+
+`Context.with(value, operation)` scopes the value to the operation's
+lifetime and restores the previous value when done. This is the correct
+primitive because:
+
+- Each code block gets its own context for the duration of its chain
+- No context leaks between code blocks
+- The chain runs inside `ephemeral()` which bridges the Operation
+  world (where Context lives) with the Workflow world (where durable
+  effects are yielded)
+
+### Lesson learned
+
+When building middleware systems, start from the target middleware type
+(`Middleware<TArgs, TReturn>`) and derive the domain-specific types
+from it — not the other way around. The original design started from
+the domain (what does a modifier handler need?) and ended up with a
+custom shape that didn't compose with the rest of the framework.
