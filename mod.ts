@@ -28,8 +28,8 @@ export type {
 
 export { healSegment } from "./src/heal.ts";
 
-export type { Middleware } from "./src/middleware.ts";
-export { combine } from "./src/middleware.ts";
+export type { Middleware } from "@effectionx/middleware";
+export { combine } from "@effectionx/middleware";
 
 export type {
   ModifierFactory,

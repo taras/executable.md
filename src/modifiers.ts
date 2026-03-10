@@ -14,8 +14,8 @@ import { createContext } from "effection";
 import type { Operation } from "effection";
 import { ephemeral } from "@effectionx/durable-streams";
 import type { Workflow } from "@effectionx/durable-streams";
-import type { Middleware } from "./middleware.ts";
-import { combine } from "./middleware.ts";
+import type { Middleware } from "@effectionx/middleware";
+import { combine } from "@effectionx/middleware";
 import type {
   CodeBlockContext,
   CodeBlockResult,
