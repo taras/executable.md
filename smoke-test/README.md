@@ -164,6 +164,32 @@ Eval blocks produce **no rendered output** — they exist for bindings
 and side effects. The output from eval blocks is empty, so nothing
 appears between this text and the next section.
 
+The `persist` modifier extends a block's resource lifetime from the
+block scope to the component scope. Resources spawned inside a `persist
+eval` block — such as Effection channels, servers, or database connections
+— remain alive for all subsequent blocks in the component, then are torn
+down when the component finishes expanding. Bindings are shared as usual:
+
+```js persist eval
+// Resources spawned here live until this component finishes expanding.
+const serverConfig = { host: "localhost", port: 3000 };
+const connectionString = `${serverConfig.host}:${serverConfig.port}`;
+```
+
+The binding from the persist block is available in later blocks:
+
+```js eval
+const endpoint = "ws://" + connectionString + "/ws";
+```
+
+The `timeout` modifier cancels the block if it does not complete within
+the specified duration. Accepted units: `ms`, `s`, `m`. If the block
+times out, an error is recorded in the output and execution halts.
+
+```js timeout=30s eval
+const startedAt = Date.now();
+```
+
 Eval and exec blocks coexist independently in the same document:
 
 ```bash exec
@@ -216,6 +242,8 @@ cat <<'EOF'
 | Props passthrough        | <PropDemo greeting="Hey" subject="w">  |
 | Durability               | Timestamp stable across reruns          |
 | eval modifier            | js eval blocks with shared bindings     |
+| persist modifier         | js persist eval block, resource lifetime|
+| timeout modifier         | js timeout=30s eval block               |
 | eval + exec coexistence  | Both modifier types in same document    |
 EOF
 ```

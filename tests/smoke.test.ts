@@ -4,7 +4,8 @@
  * the output contains expected content from every feature: frontmatter
  * interpolation, component expansion, nested components, dotted names,
  * executable code blocks, silent modifier, props, Content slot, markdown
- * healing, and non-executable passthrough.
+ * healing, non-executable passthrough, eval blocks with shared bindings,
+ * persist modifier, and timeout modifier.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
@@ -101,11 +102,21 @@ describe("smoke test", () => {
     expect(output).not.toContain("Hello from eval");
     expect(output).not.toContain("with 3 numbers");
 
+    // persist eval block — bindings available but resource prose is visible
+    // The block itself produces no output; the explanatory prose around it does
+    expect(output).not.toContain("localhost:3000"); // persist block binding — no output
+    expect(output).not.toContain("ws://localhost"); // downstream eval block — no output
+
+    // timeout eval block — produces no output
+    expect(output).not.toContain("startedAt");
+
     // But exec blocks in the same document still produce output
     expect(output).toContain("Exec blocks are independent of eval bindings");
 
     // Eval summary table entries
     expect(output).toContain("eval modifier");
+    expect(output).toContain("persist modifier");
+    expect(output).toContain("timeout modifier");
     expect(output).toContain("eval + exec coexistence");
 
     // ----- Durability section -----
