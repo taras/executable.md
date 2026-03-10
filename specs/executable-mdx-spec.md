@@ -12,17 +12,21 @@ An executable MDX document is a markdown file containing embedded JSX
 component invocations and annotated code blocks. The system treats each
 document as a durable workflow: text is emitted immediately, component
 references are resolved from the file system and expanded recursively,
-and code blocks marked as executable are run via `durableExec`. The
-journal records every I/O operation so that execution survives crashes
-and replays from the journal on restart.
+and code blocks marked as executable are either run as subprocess
+commands via `durableExec` or evaluated in-process as Effection
+generator operations via `durableEval`. The journal records every I/O
+operation so that execution survives crashes and replays from the
+journal on restart.
 
 The system is built entirely on the existing durable execution
-infrastructure — `createDurableOperation`, `durableExec`,
+infrastructure — `createDurableOperation`, `durableExec`, `durableEval`,
 `durableGlob`, replay guards, and the Divergence API. The main
-addition is `durableImportComponent`, a new durable effect that wraps
+additions are `durableImportComponent` (a durable effect that wraps
 the Resolve Api and `DurableRuntime` file read into a single journaled
 operation, with a custom `useImportComponentGuard` for staleness
-detection.
+detection) and the in-process evaluation system (source transform,
+shared VM context, binding environment, and eval scope for resource
+lifetime management — see §4).
 
 ### 1.1 Example
 
@@ -337,11 +341,12 @@ This is middleware composition, not a bag of flags. Order matters:
 ### 3.2 Detection rule
 
 A fenced code block is executable when the info string contains `exec`
-as one of the words after the language (case-sensitive). The first word
-is always the language. All subsequent words are the middleware chain.
+or `eval` as one of the words after the language (case-sensitive). The
+first word is always the language. All subsequent words are the
+middleware chain.
 
-A code block with no `exec` anywhere in the chain is passive text —
-not executable, not processed.
+A code block with neither `exec` nor `eval` anywhere in the chain is
+passive text — not executable, not processed.
 
 ### 3.3 Modifier middleware and registration
 
@@ -350,9 +355,9 @@ next handler in the chain. The rightmost modifier (`exec` or `eval`)
 is the terminal — it performs the actual I/O. Every other modifier
 calls `next()` to invoke the inner chain, then transforms the result.
 
-The modifier system uses the same `Middleware<TArgs, TReturn>` type
-as Effection v4.1's Api system, ensuring a single composable
-middleware primitive across the codebase.
+The modifier system uses the `Middleware<TArgs, TReturn>` type and
+`combine()` function from `@effectionx/middleware`, ensuring a single
+composable middleware primitive across the codebase.
 
 #### Middleware primitive
 
@@ -375,6 +380,7 @@ type Middleware<TArgs extends unknown[], TReturn> = (
 interface CodeBlockContext {
   language: string;       // "bash", "python", etc.
   content: string;        // The code inside the fence
+  blockId: string;        // Unique within the document run, e.g. "eval:root:0"
   componentName?: string; // Component this block is inside (if any)
 }
 
@@ -436,6 +442,9 @@ The host installs built-in factories before `durableRun`:
 registry.set("exec", createExecFactory(runtime));
 registry.set("silent", silentFactory);
 registry.set("sample", sampleFactory);
+registry.set("eval", evalFactory);
+registry.set("persist", persistFactory);
+registry.set("timeout", timeoutFactory);
 ```
 
 Custom factories can be provided via `RunDocumentOptions.modifiers`.
@@ -465,9 +474,64 @@ function createExecFactory(runtime: DurableRuntime): ModifierFactory {
 }
 ```
 
-**`eval`** (future) — evaluates the code block in-process via
-`durableEval`. Also a terminal handler. For scripting languages
-where subprocess execution is unnecessary.
+**`eval`** — evaluates the code block in-process as an Effection
+generator operation via `durableEval`. Also a terminal handler. Unlike
+`exec` (subprocess), `eval` executes code in the same Effection
+process, enabling direct access to live in-memory objects, native
+`yield*` of Effection operations, and shared state across blocks
+within a component via a binding environment (see §4).
+
+Eval blocks produce **no rendered output** — they exist for bindings
+and side effects.
+
+```typescript
+export const evalFactory: ModifierFactory = (_params) =>
+  (_args, _next) => (function* () {
+    const ctx = yield* useCodeBlock();
+    const env = yield* ephemeral(EvalEnvCtx.expect());
+    const evalCtx = yield* ephemeral(EvalCtxKey.expect());
+    const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
+
+    const transformed = transformBlock(
+      ctx.content,
+      ctx.blockId,
+      Object.keys(env.values),
+    );
+
+    const result = yield* durableEval(
+      `eval:${ctx.blockId}`,
+      function* (source, bindings) {
+        Object.assign(env.values, bindings);
+        const fn = compileBlock(source, evalCtx.vmContext);
+
+        if (persist) {
+          // Run inside evalScope.eval() to retain spawned resources
+          const evalScope = yield* EvalScopeCtx.expect();
+          const blockResult = yield* evalScope.eval(
+            () => fn(env.values) as unknown as Operation<void>,
+          );
+          unbox(blockResult);
+        } else {
+          yield* fn(env.values) as unknown as Operation<void>;
+        }
+
+        return serializeExports(env.values, transformed.exports);
+      },
+      {
+        source: transformed.code,
+        language: ctx.language,
+        bindings: serializeExports(env.values, transformed.imports),
+      },
+    );
+
+    // On replay, restore serializable exports from the journal
+    if (result.value && typeof result.value === "object") {
+      Object.assign(env.values, result.value);
+    }
+
+    return { output: "", exitCode: 0, stderr: "" };
+  })();
+```
 
 #### Built-in wrapping handlers
 
@@ -502,6 +566,57 @@ const sampleFactory: ModifierFactory = (params) =>
     });
     return { ...inner, output: sampled };
   }();
+```
+
+**`persist`** — extends resource lifetime from block scope to the
+component's eval scope. Without `persist`, resources spawned inside an
+eval block are torn down when the block completes. With `persist`, the
+block's compiled code runs via `evalScope.eval()`, retaining spawned
+resources for the lifetime of the component expansion. See §4.5 for
+the context flag pattern.
+
+`persist` itself does not call `evalScope.eval()` — it sets a context
+flag (`PersistFlagCtx`) that `evalFactory` reads to decide whether to
+route through the eval scope:
+
+```typescript
+export const persistFactory: ModifierFactory = (_params) =>
+  (_args, next) => (function* () {
+    return yield* ephemeral(
+      PersistFlagCtx.with(true, function* () {
+        return yield* next() as unknown as Operation<CodeBlockResult>;
+      }),
+    );
+  })();
+```
+
+| Info string | Behavior |
+|---|---|
+| `js eval` | Block completes; spawned resources torn down at block end |
+| `js persist eval` | Block completes; spawned resources live until component ends |
+
+**`timeout`** — cancels the block if it does not complete within the
+specified duration. Uses `timebox()` from `@effectionx/timebox`, which
+returns a discriminated union (`Timeboxed<T>`) instead of throwing.
+Accepted units: `ms`, `s`, `m`. Default: `30s`.
+
+```typescript
+export const timeoutFactory: ModifierFactory = (params) =>
+  (_args, next) => (function* () {
+    const ms = parseDuration(params ?? "30s");
+    const result = yield* timebox(ms, () => next());
+    if (result.timeout) {
+      throw new Error(`eval block timed out after ${params ?? "30s"}`);
+    }
+    return result.value;
+  })();
+
+function parseDuration(s: string): number {
+  if (s.endsWith("ms")) return parseInt(s, 10);
+  if (s.endsWith("m"))  return parseInt(s, 10) * 60_000;
+  if (s.endsWith("s"))  return parseInt(s, 10) * 1_000;
+  return parseInt(s, 10);
+}
 ```
 
 #### Chain composition
@@ -741,16 +856,294 @@ Future modifiers (not yet specified):
 
 | Modifier | Type | Behavior |
 |----------|------|----------|
-| `timeout=30s` | Wrapping | Wraps `next()` with a deadline |
 | `capture=varname` | Wrapping | Stores output into a named binding |
 | `stderr` | Wrapping | Includes stderr in output |
 | `ignore-error` | Wrapping | Converts non-zero exit codes to success |
 
 ---
 
-## 4. Component model
+## 4. In-process evaluation
 
-### 4.1 Components are markdown files with a declared interface
+Eval blocks run JavaScript **in-process** as Effection generator operations.
+Unlike `exec` blocks (which run shell commands in a subprocess), `eval`
+blocks execute in the same Effection process. This section describes the
+architecture: source transform, VM context, binding environment, eval
+scope, and durable replay.
+
+### 4.1 Source transform
+
+Top-level `const`/`let`/`function`/`class` declarations are scoped to the
+block invocation. The source transform rewrites them so their values are
+also written to `env`, making them available to subsequent blocks and to
+the journal system.
+
+**Implementation:** `src/eval-transform.ts` using **acorn** for parsing
+and **magic-string** for string mutations.
+
+```typescript
+interface TransformResult {
+  code: string;       // transformed body, without the generator wrapper
+  map: string;        // V3 source map JSON
+  exports: string[];  // top-level names written to env
+  imports: string[];  // names read from env (free variables present in env)
+  mode: "generator" | "async" | "sync";
+}
+
+function transformBlock(
+  source: string,
+  blockId: string,
+  currentEnvKeys: string[],
+): TransformResult;
+```
+
+#### Transform rules
+
+| Statement | Transform |
+|---|---|
+| `const x = expr` | `const x = expr; env.x = x;` |
+| `let x = expr` | `let x = expr; env.x = x;` |
+| `function f() {}` | `function f() {} env.f = f;` |
+| `class C {}` | `class C {} env.C = C;` |
+| `const { a, b } = expr` | `const { a, b } = expr; env.a = a; env.b = b;` |
+| Nested declarations | Not exported — only direct `ast.body` children |
+
+Top-level free variable references that exist in the current `env` are
+injected as a destructuring preamble:
+
+```typescript
+// If block references `port` and env.values.port exists:
+const { port } = env;
+```
+
+Only names actually used as free variables are injected — not all of `env`.
+
+#### Transform pipeline
+
+1. **Parse** with acorn (`ecmaVersion: "latest"`, `sourceType: "module"`)
+2. **Detect mode** — see below
+3. **Collect exports** — walk `ast.body`; extract bound names from each
+   top-level declaration, recursively unpacking destructuring patterns
+4. **Collect imports** — find free variable references in `currentEnvKeys`
+5. **Build preamble** — `const { a, b } = env;` for each imported name
+6. **Append env-writes** — `env.x = x;` after each top-level declaration
+   via `s.appendLeft(node.end, ...)`
+7. **Append** `//# sourceURL=eval:${blockId}` for debugger identification
+8. **Generate** source map via `s.generateMap({ source: blockId, hires: true })`
+
+The transform produces the **body** of the generator function. The
+`function*(env) {` wrapper is added by `compileBlock` (§4.2).
+
+#### Execution mode auto-detection
+
+Mode is detected from the AST — no modifier needed:
+
+| Condition | Mode |
+|---|---|
+| Top-level `yield` expression in `ast.body` | `"generator"` |
+| Top-level `await` expression in `ast.body` | `"async"` |
+| Neither | `"sync"` |
+
+Only direct children of `ast.body` are inspected. `yield`/`await` inside
+nested function bodies do not count.
+
+A block with both top-level `yield` and top-level `await` is a
+transform-time error.
+
+#### Generator wrapping
+
+All blocks are wrapped in a generator function by `compileBlock`. The
+source must be wrapped in `(async function*() {...})` before parsing so
+both `yield` and `await` are syntactically valid. Mode detection then
+rejects mixed yield+await at the semantic level. The acorn wrapper
+prefix `(async function*() {\n` is 22 characters — AST node positions
+must be offset-corrected when used with MagicString on the original
+source.
+
+#### Binding serialization
+
+```typescript
+function serializeExports(
+  env: Record<string, unknown>,
+  names: string[],
+): Record<string, Json> {
+  const result: Record<string, Json> = {};
+  for (const name of names) {
+    const value = env[name];
+    if (isJson(value)) {
+      result[name] = value as Json;
+    }
+    // Non-serializable values silently omitted.
+    // They remain in env.values as live references during this run
+    // but are absent from the journal and not restored on replay.
+  }
+  return result;
+}
+```
+
+### 4.2 VM context
+
+A single `vm.Context` is created at document run start and reused for all
+eval blocks across the entire document. Context creation is expensive
+(~7–21ms).
+
+```typescript
+// src/eval-context.ts
+import { createContext as createEffectionContext } from "effection";
+import { createContext as vmCreateContext } from "node:vm";
+
+export interface EvalContext {
+  vmContext: object;
+}
+
+export const EvalCtxKey = createEffectionContext<EvalContext>("evalContext");
+
+export function createEvalContext(
+  globals: Record<string, unknown> = {},
+): EvalContext {
+  const sandbox = {
+    // Effection APIs available in blocks without import
+    sleep, spawn, call, resource, useScope,
+    createChannel, each, suspend, createSignal,
+    // Convergence — poll and wait for conditions
+    when,
+    // Standard globals
+    console,
+    // Host-provided extras
+    ...globals,
+  };
+  return { vmContext: vmCreateContext(sandbox) };
+}
+```
+
+Set on the root document scope so all eval blocks share the same VM
+context. Handlers access it via `ephemeral(EvalCtxKey.expect())`.
+
+#### Compiling blocks
+
+```typescript
+import { runInContext } from "node:vm";
+
+function compileBlock(
+  transformedBodyCode: string,
+  vmContext: object,
+): (env: Record<string, unknown>) => Generator<unknown, void, unknown> {
+  return runInContext(
+    `(function*(env) {\n${transformedBodyCode}\n})`,
+    vmContext,
+  );
+}
+```
+
+The trailing newline before `})` is critical — the transformed code ends
+with a `//# sourceURL` comment, and without the newline the closing `})`
+would be swallowed by the comment.
+
+### 4.3 Binding environment
+
+```typescript
+// src/eval-env.ts
+export interface EvalEnv {
+  values: Record<string, unknown>;
+}
+
+export const EvalEnvCtx = createContext<EvalEnv>("evalEnv");
+```
+
+Created fresh at the start of component expansion. Each eval block reads
+bindings from `values` (via env preamble) and writes new bindings back
+(via env-write transforms). Handlers access it via
+`ephemeral(EvalEnvCtx.expect())`.
+
+The binding environment is scoped to the document expansion lifetime via
+`EvalEnvCtx.with()` — matching the same `Context.with()` pattern as
+`CodeBlockCtx.with()` in `composeModifierChain`.
+
+### 4.4 Eval scope and resource lifetime
+
+Each document gets a dedicated **eval scope** — an Effection scope whose
+lifetime matches the document's expansion. Resources spawned by `persist`
+blocks are retained in this scope until expansion completes.
+
+```typescript
+// src/eval-env.ts
+export const EvalScopeCtx = createContext<EvalScope>("evalScope");
+export const PersistFlagCtx = createContext<boolean>("persistFlag");
+```
+
+The eval scope is created in `runDocument()` (§8.1) **before**
+`durableRun` via `resource(useEvalScope())`. This is critical:
+`evalScope.eval()` sends to a channel whose processor must be
+reachable by the Effection scheduler — this only works when both sender
+and processor share an ancestor scope outside the durable execution
+boundary.
+
+#### The context flag pattern
+
+`persist` does not wrap the entire modifier chain in `evalScope.eval()`.
+That would hang because the durable effects in the workflow can't
+interact with the journal from within the eval scope's channel
+processor. Instead:
+
+1. `persist` sets `PersistFlagCtx = true` via `Context.with()`
+2. `evalFactory` reads `PersistFlagCtx` after compiling the block
+3. When true, only the **compiled VM block** (`fn(env.values)`) runs
+   inside `evalScope.eval()` — not the entire modifier chain
+4. Resources spawned during that execution are retained until the
+   eval scope is destroyed (when component expansion completes)
+
+### 4.5 Durable replay
+
+#### What is journaled
+
+`evalFactory` wraps execution in `durableEval`. Journal entry shape:
+
+```json
+{ "type": "eval", "name": "eval:root:0", "language": "js" }
+
+{ "status": "ok", "value": {
+    "value": { "port": 4321, "config": { "debug": true } },
+    "sourceHash": "sha256:abc123...",
+    "bindingsHash": "sha256:def456..."
+  }
+}
+```
+
+`value.value` contains only the JSON-serializable subset of exports.
+Non-serializable bindings (functions, class instances, live objects) are
+omitted — they remain in `env.values` as live references during the
+current run but are absent from the journal and not restored on replay.
+
+#### Staleness detection
+
+The code freshness guard detects when source or bindings have changed
+since the last run. If a hash mismatch is found, `StaleInputError` is
+raised before replay of that block begins.
+
+#### `persist` during replay
+
+On replay, `durableEval` returns the stored result directly — the
+block's generator body is never entered. `persist` is a transparent
+no-op: no `evalScope.eval()` call is made, no resources are retained.
+
+### 4.6 File locations
+
+| File | Contents |
+|---|---|
+| `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
+| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()`, `EvalCtxKey`, `EvalContext` |
+| `src/eval-env.ts` | `EvalEnv`, `EvalEnvCtx`, `EvalScopeCtx`, `PersistFlagCtx` |
+| `src/eval-handler.ts` | `evalFactory` |
+| `src/modifiers/persist.ts` | `persistFactory` |
+| `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
+
+Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
+`@effectionx/converge`, `acorn`, `magic-string`.
+
+---
+
+## 5. Component model
+
+### 5.1 Components are markdown files with a declared interface
 
 A component is a markdown file with YAML frontmatter that declares
 both the component's own metadata and its input interface. The file
@@ -881,7 +1274,7 @@ all top-level keys except `inputs` are meta values (the simple case).
 This dual syntax allows components to range from minimal (just
 key-value pairs) to fully typed (every field constrained).
 
-### 4.2 Resolution (Resolve Api)
+### 5.2 Resolution (Resolve Api)
 
 Resolution maps a component name to a file system path. It is an
 **Effection Api** — the core behavior is overridable via middleware
@@ -982,7 +1375,7 @@ function* useDurableGlobResolver(
 With `useGlobContentGuard` installed, replay detects when files are
 added or removed from component directories.
 
-### 4.3 Import: `durableImportComponent`
+### 5.3 Import: `durableImportComponent`
 
 Import is a single durable effect that resolves a component name,
 reads the file, and computes its content hash. The Resolve Api runs
@@ -1215,7 +1608,7 @@ producing the same segments deterministically. If
 compares hashes before replay starts — if the file changed,
 `StaleInputError` halts replay.
 
-### 4.4 The root document is a component
+### 5.4 The root document is a component
 
 The entry point treats the root document through the same import
 pipeline as any component. This gives it hash tracking, replay guard
@@ -1242,9 +1635,9 @@ function* documentWorkflow(docPath: string): Workflow<string> {
 
 ---
 
-## 5. Expansion
+## 6. Expansion
 
-### 5.1 The expansion algorithm
+### 6.1 The expansion algorithm
 
 Expansion is a term-rewriting process. Each component invocation is
 replaced by the component's body, with `<Content />` substituted by
@@ -1331,7 +1724,7 @@ The modifier chain composition, handler registration, and
 composes the chain from the info string and runs it via
 `composeModifierChain`.
 
-### 5.2 Component expansion with cycle detection
+### 6.2 Component expansion with cycle detection
 
 ```typescript
 const MAX_EXPANSION_DEPTH = 64;
@@ -1397,7 +1790,7 @@ entries. They are deterministic from the component dependency graph,
 which is reconstructed identically during replay because the same
 components are imported in the same order.
 
-### 5.3 Content slot: `<Content />`
+### 6.3 Content slot: `<Content />`
 
 When the boundary scanner encounters `<Content />` inside a component
 body, it produces a `ComponentInvocation` with `name: "Content"`.
@@ -1433,7 +1826,7 @@ invocation site are silently discarded. If the component body contains
 multiple `<Content />`, each is replaced independently (all receive the
 same children).
 
-### 5.4 Frontmatter interpolation: `{meta.key}` and `{props.key}`
+### 6.4 Frontmatter interpolation: `{meta.key}` and `{props.key}`
 
 Inside component text segments, `{meta.key}` references resolve against
 the component's own frontmatter. `{props.key}` references resolve
@@ -1473,7 +1866,7 @@ Rules:
 Interpolation is a runtime operation — deterministic from its inputs,
 no journal entry.
 
-### 5.5 Prop validation
+### 6.5 Prop validation
 
 Components only accept props declared in their `inputs` frontmatter.
 Undeclared props are rejected at expansion time. Missing required props
@@ -1615,11 +2008,11 @@ color: blue
 
 ---
 
-## 6. Staleness and replay
+## 7. Staleness and replay
 
-### 6.1 File staleness via `useImportComponentGuard`
+### 7.1 File staleness via `useImportComponentGuard`
 
-The custom `useImportComponentGuard` (defined in §4.3) handles
+The custom `useImportComponentGuard` (defined in §5.3) handles
 staleness detection for `import_component` effects. It reads
 `result.value.path` and `result.value.contentHash` from stored
 journal entries, re-reads those files, and compares hashes.
@@ -1637,7 +2030,7 @@ When installed before `durableRun`, it:
 If any component file changed since the last run, replay halts with
 `StaleInputError` before the workflow even starts executing.
 
-### 6.2 Staleness policy via middleware
+### 7.2 Staleness policy via middleware
 
 The default behavior (halt on any stale file) is correct for
 production. For development workflows, users may want different
@@ -1671,7 +2064,7 @@ uses stored content regardless of current file state. Useful for
 **Selective staleness.** Install a custom guard that only checks
 certain component names or paths.
 
-### 6.3 What happens when a file changes
+### 7.3 What happens when a file changes
 
 **Scenario: component file changed, `useImportComponentGuard` installed.**
 
@@ -1698,9 +2091,9 @@ certain component names or paths.
 
 ---
 
-## 7. Entry point
+## 8. Entry point
 
-### 7.1 `runDocument`
+### 8.1 `runDocument`
 
 ```typescript
 interface RunDocumentOptions {
@@ -1718,6 +2111,12 @@ interface RunDocumentOptions {
 
   /** Install file content guard (default: true) */
   freshness?: boolean;
+
+  /** Custom modifier factories to register alongside built-ins. */
+  modifiers?: Record<string, ModifierFactory>;
+
+  /** Sample Api middleware for the `sample` modifier. */
+  sampleHandler?: SampleApi;
 }
 
 function* runDocument(options: RunDocumentOptions): Operation<string> {
@@ -1727,6 +2126,7 @@ function* runDocument(options: RunDocumentOptions): Operation<string> {
     runtime,
     componentDirs = ["./components", "./"],
     freshness = true,
+    modifiers: customModifiers = {},
   } = options;
 
   // Install runtime
@@ -1750,8 +2150,23 @@ function* runDocument(options: RunDocumentOptions): Operation<string> {
   });
   yield* useDirectoryResolver(componentDirs);
 
-  // Install built-in modifier handlers (exec, silent, sample)
+  // Create shared VM context for all eval blocks (§4.2)
+  const evalCtx = createEvalContext();
+  yield* EvalCtxKey.set(evalCtx);
+
+  // Create eval scope — MUST be created before durableRun (§4.4).
+  // The channel processor task and the sender inside durableEval
+  // must share an ancestor scope outside the durable execution boundary.
+  const evalScope = yield* resource(useEvalScope());
+  yield* EvalScopeCtx.set(evalScope);
+
+  // Install built-in modifier handlers (exec, silent, sample, eval, persist, timeout)
   yield* useBuiltinModifiers();
+
+  // Install custom modifier handlers
+  for (const [name, factory] of Object.entries(customModifiers)) {
+    registry.set(name, factory);
+  }
 
   // Run the durable workflow
   return yield* durableRun(
@@ -1761,7 +2176,7 @@ function* runDocument(options: RunDocumentOptions): Operation<string> {
 }
 ```
 
-### 7.2 Usage from standalone code
+### 8.2 Usage from standalone code
 
 ```typescript
 import { run } from "effection";
@@ -1781,9 +2196,9 @@ await run(function* () {
 
 ---
 
-## 8. Journal shape
+## 9. Journal shape
 
-### 8.1 Effect vocabulary for MDX execution
+### 9.1 Effect vocabulary for MDX execution
 
 All effects use existing durable effect types from
 `@effectionx/durable-effects` except `import_component`, which is
@@ -1793,10 +2208,11 @@ new to the MDX execution layer.
 |-----------|------------|-------------|-------|
 | Import component | `import_component` | `{ComponentName}` | path + content + contentHash in result |
 | Execute code block | `exec` | `exec:{command_preview}` | Command array in description, stdout/stderr/exitCode in result |
+| Evaluate code block | `eval` | `eval:{blockId}` | source + language + bindings in description; serializable exports + hashes in result (§4.5) |
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 
-### 8.2 Example journal for a multi-component document
+### 9.2 Example journal for a multi-component document
 
 With the default directory resolver:
 
@@ -1813,7 +2229,10 @@ With the default directory resolver:
 [3] yield  root  { type: "exec", name: "exec:date +%Y", command: ["bash", "-c", "date +%Y"], timeout: 30000 }
     result: { status: "ok", value: { exitCode: 0, stdout: "2026\n", stderr: "" } }
 
-[4] close  root  result: { status: "ok", value: "...rendered output..." }
+[4] yield  root  { type: "eval", name: "eval:root:0", language: "js" }
+    result: { status: "ok", value: { value: { port: 4321 }, sourceHash: "sha256:ddd...", bindingsHash: "sha256:eee..." } }
+
+[5] close  root  result: { status: "ok", value: "...rendered output..." }
 ```
 
 With the durable glob resolver middleware (`useDurableGlobResolver`),
@@ -1831,7 +2250,7 @@ The glob entry is protected by `useGlobContentGuard` — if files are
 added to or removed from the components directory between runs,
 replay halts with `StaleInputError`.
 
-### 8.3 Sequential coroutine IDs
+### 9.3 Sequential coroutine IDs
 
 In the basic sequential model, all effects run under the `root`
 coroutine ID. When parallel expansion is introduced (via `durableAll`
@@ -1840,9 +2259,9 @@ standard scheme: `root.0`, `root.1`, etc.
 
 ---
 
-## 9. Rendering
+## 10. Rendering
 
-### 9.1 Segment → output
+### 10.1 Segment → output
 
 After expansion, the segment stream is flattened into a string:
 
@@ -1876,7 +2295,7 @@ function renderSegment(segment: Segment): string {
 }
 ```
 
-### 9.2 Error rendering
+### 10.2 Error rendering
 
 Errors are rendered as HTML comments by default. This keeps the output
 valid markdown while making errors visible. An error rendering strategy
@@ -1885,7 +2304,7 @@ visible warning blocks, collect into a separate error report).
 
 ---
 
-## 10. Parallel expansion (future)
+## 11. Parallel expansion (future)
 
 When a document contains multiple independent component invocations at
 the same level, they can be expanded concurrently via `durableAll`:
@@ -1925,7 +2344,7 @@ instead of all under `root`).
 
 ---
 
-## 11. Test plan
+## 12. Test plan
 
 ### Tier A — Boundary scanner
 
@@ -2121,9 +2540,117 @@ instead of all under `root`).
 | F27 | Unclosed inline math | `$formula\n<Comp />` | Healed to `$formula$` |
 | F28 | Unclosed display math | `$$formula\n<Comp />` | Healed to `$$formula$$` |
 
+### Tier G — Source transform (`eval-transform`)
+
+| # | Test | Verify |
+|---|------|--------|
+| G1 | `const x = 1` exports | Transformed code appends `env.x = x;` |
+| G2 | `let x = 1` exports | Transformed code appends `env.x = x;` |
+| G3 | `function f() {}` exports | Transformed code appends `env.f = f;` |
+| G4 | `class C {}` exports | Transformed code appends `env.C = C;` |
+| G5 | Destructured `const { a, b } = expr` | Both `env.a = a; env.b = b;` appended |
+| G6 | Nested declarations not exported | `if (true) { const x = 1 }` — no env write for `x` |
+| G7 | Imports from env | Block referencing `port` when env has `port` → preamble: `const { port } = env;` |
+| G8 | Only used free variables imported | Block has `port` in env but doesn't reference it → no preamble |
+| G9 | Mode detection: `yield` | Top-level `yield*` → mode `"generator"` |
+| G10 | Mode detection: `await` | Top-level `await` → mode `"async"` |
+| G11 | Mode detection: neither | Plain statements → mode `"sync"` |
+| G12 | Mode detection: both yield and await | Top-level yield + await → transform error |
+| G13 | Nested yield not counted | `function* inner() { yield 1 }` → mode `"sync"` |
+| G14 | Source map generated | `TransformResult.map` is valid V3 source map JSON |
+| G15 | `sourceURL` comment appended | Transformed code ends with `//# sourceURL=eval:blockId` |
+| G16 | Empty block | Empty source → valid transform with no exports/imports |
+
+### Tier H — VM context (`eval-context`)
+
+| # | Test | Verify |
+|---|------|--------|
+| H1 | VM context creation | `createEvalContext()` returns `EvalContext` with `vmContext` |
+| H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block |
+| H3 | `console` available | `console.log` callable without error |
+| H4 | Custom globals | `createEvalContext({ fetch })` → `fetch` accessible in block |
+| H5 | `compileBlock` returns generator function | Return value is callable, returns a generator |
+| H6 | Context reuse across blocks | Same `vmContext` used for two blocks — shared globals |
+| H7 | Trailing newline in `compileBlock` | `//# sourceURL` comment doesn't swallow closing `})` |
+| H8 | Isolation from host | Block cannot access host module scope (e.g., `require`) |
+
+### Tier I — Middleware conformance (eval modifiers)
+
+| # | Test | Verify |
+|---|------|--------|
+| I1 | `eval` is terminal | `evalFactory` ignores `next` — never calls it |
+| I2 | `eval` returns empty output | `result.output === ""`, `exitCode === 0` |
+| I3 | `persist eval` composes | `persist` sets `PersistFlagCtx`, `eval` reads it |
+| I4 | `timeout=5s eval` composes | Timeout cancels after 5s if block hangs |
+| I5 | `timeout eval` default | Default timeout is 30s |
+| I6 | `persist timeout=10s eval` | Three modifiers compose: persist → timeout → eval |
+| I7 | `silent eval` | Silent wraps eval — both run, output empty |
+
+### Tier J — Eval and durableEval integration
+
+| # | Test | Verify |
+|---|------|--------|
+| J1 | `js eval` golden run | Block executes in-process, journal has eval entry |
+| J2 | `js eval` replay | Block not re-executed, stored exports restored to env |
+| J3 | Cross-block bindings | Block 1 exports `port`, block 2 reads `port` from env |
+| J4 | Non-serializable binding omitted from journal | Function in env → present in live env, absent from journal |
+| J5 | Eval produces no rendered output | Document output excludes eval block content |
+| J6 | Generator mode eval | Block with `yield* sleep(100)` executes as generator |
+| J7 | Sync mode eval | Block with `const x = 1` executes without yield/await |
+
+### Tier K — Binding environment
+
+| # | Test | Verify |
+|---|------|--------|
+| K1 | Fresh env per component | Each component expansion gets its own `EvalEnv` |
+| K2 | Env shared across blocks in same component | Block 1 and block 2 in same component share `env.values` |
+| K3 | `serializeExports` filters non-JSON | Functions, symbols, circular refs excluded |
+| K4 | `serializeExports` preserves JSON values | Numbers, strings, objects, arrays round-trip correctly |
+| K5 | Replay restores serializable bindings | After replay, `env.values` contains stored exports |
+
+### Tier L — Persist modifier
+
+| # | Test | Verify |
+|---|------|--------|
+| L1 | `persist eval` retains spawned resource | Resource spawned in block survives block completion |
+| L2 | Non-persist eval tears down resource | Resource spawned in block torn down at block end |
+| L3 | Persist resource lifetime matches component | Resource torn down when component expansion completes |
+| L4 | PersistFlagCtx scoped to chain | Flag is `true` only during the persist-wrapped chain |
+| L5 | Multiple persist blocks in one component | Each retains its own resources independently |
+| L6 | Persist during replay is no-op | On replay, no `evalScope.eval()` call, no resources retained |
+| L7 | Persist flag does not leak to sibling blocks | Non-persist block after persist block → flag is false |
+
+### Tier M — Timeout modifier
+
+| # | Test | Verify |
+|---|------|--------|
+| M1 | Block completes within timeout | Result returned normally |
+| M2 | Block exceeds timeout | Error thrown: "eval block timed out after 5s" |
+| M3 | `parseDuration` handles `ms` | `"500ms"` → 500 |
+| M4 | `parseDuration` handles `s` | `"30s"` → 30000 |
+| M5 | `parseDuration` handles `m` | `"2m"` → 120000 |
+| M6 | Default timeout is 30s | `timeoutFactory(undefined)` → 30000ms |
+
+### Tier N — Staleness (eval blocks)
+
+| # | Test | Verify |
+|---|------|--------|
+| N1 | Source hash mismatch triggers StaleInputError | Block source changed since last run → replay halts |
+| N2 | Bindings hash mismatch triggers StaleInputError | Input bindings changed → replay halts |
+| N3 | Unchanged source and bindings replay normally | Hashes match → stored result returned |
+| N4 | sourceHash computed from transformed code | Hash is of the post-transform source, not the raw block |
+| N5 | bindingsHash computed from serialized imports | Hash covers the JSON of imported env bindings |
+
+### Tier O — Eval scope hierarchy
+
+| # | Test | Verify |
+|---|------|--------|
+| O1 | Eval scope created before durableRun | `resource(useEvalScope())` runs in outer scope, not inside durable execution |
+| O2 | Eval scope destroyed on document completion | All retained resources cleaned up when expansion finishes |
+
 ---
 
-## 12. Walked example: crash recovery
+## 13. Walked example: crash recovery
 
 ### Initial state
 
@@ -2166,7 +2693,7 @@ A.md references <C />.
 
 ---
 
-## 13. Decisions
+## 14. Decisions
 
 | # | Decision | Rationale |
 |---|----------|-----------|
@@ -2195,4 +2722,13 @@ A.md references <C />.
 | 23 | Remend runs after scanning, before interpolation | Heals incomplete markdown in text segments; `htmlTags: false` required — boundary scanner owns JSX completeness, remend owns markdown completeness |
 | 24 | Healing is runtime, not durable | Pure function of text content — runs on both live and replay, no journal entry |
 | 25 | `CodeBlockContext` delivered via Effection Context, not handler parameter | `CodeBlockCtx.with()` scopes the context to the chain execution; handlers read via `useCodeBlock()`; keeps middleware signature clean `Middleware<[], ...>` |
-| 26 | Reusable `Middleware<TArgs, TReturn>` primitive in `src/middleware.ts` | Same type as Effection v4.1's Api middleware; `combine()` composes arrays; decoupled from modifier-specific types |
+| 26 | Reusable `Middleware<TArgs, TReturn>` primitive in `@effectionx/middleware` | Same type as Effection v4.1's Api middleware; `combine()` composes arrays; decoupled from modifier-specific types; originally `src/middleware.ts`, extracted to shared package |
+| 27 | `blockId` format: `eval:${componentName ?? "root"}:${index}` | Unique within a document run; component-scoped index ensures deterministic IDs for journal matching on replay |
+| 28 | Acorn + magic-string for source transform | Acorn provides reliable ES2024 parsing; magic-string preserves source positions for accurate source maps without rebuilding AST |
+| 29 | Execution mode auto-detected from AST | No modifier needed — `yield` in body → generator, `await` → async, neither → sync; mixed yield+await is a transform error |
+| 30 | Single shared VM context per document | `vm.createContext()` costs ~7–21ms; reusing one context across all eval blocks amortizes this; globals (Effection APIs, `console`) are set once |
+| 31 | `persist` uses a context flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` sets `PersistFlagCtx`, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
+| 32 | `evalScope` created before `durableRun` | The channel processor task and the sender inside `durableEval` must share an ancestor scope outside the durable execution boundary; creating inside `durableRun` would isolate the processor |
+| 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the journal; on replay they are not restored — this is by design, since non-serializable state can't survive process restart |
+| 34 | Eval blocks produce no rendered output | Eval blocks exist for bindings and side effects; their result is `{ output: "", exitCode: 0, stderr: "" }` — any user-facing output should come from interpolation of the bindings they create |
+| 35 | `@effectionx/middleware` replaces local `src/middleware.ts` | The middleware primitive was extracted to a shared package for reuse across the monorepo; import paths updated throughout |
