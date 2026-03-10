@@ -12,10 +12,11 @@
 import { ephemeral } from "@effectionx/durable-streams";
 import type { Json } from "@effectionx/durable-streams";
 import { durableEval } from "@effectionx/durable-effects";
+import { unbox } from "@effectionx/scope-eval";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
-import { EvalEnvCtx } from "./eval-env.ts";
+import { EvalEnvCtx, EvalScopeCtx, PersistFlagCtx } from "./eval-env.ts";
 import { EvalCtxKey } from "./eval-context.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
@@ -35,6 +36,11 @@ import { transformBlock, serializeExports } from "./eval-transform.ts";
  * to the shared env, then compiled and executed inside durableEval for
  * journaling support.
  *
+ * When PersistFlagCtx is true (set by the persist modifier), the compiled
+ * block executes inside evalScope.eval() — resources spawned during
+ * execution are retained in the persistent EvalScope until the component
+ * finishes expanding.
+ *
  * Eval blocks produce no rendered output — they exist for bindings
  * and side effects.
  */
@@ -44,6 +50,7 @@ export const evalFactory: ModifierFactory = (_params) =>
       const ctx = yield* useCodeBlock();
       const env = yield* ephemeral(EvalEnvCtx.expect());
       const evalCtx = yield* ephemeral(EvalCtxKey.expect());
+      const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
 
       const transformed = transformBlock(
         ctx.content,
@@ -60,7 +67,21 @@ export const evalFactory: ModifierFactory = (_params) =>
           // Merge incoming bindings snapshot into env before execution
           Object.assign(env.values, bindings);
           const fn = compileBlock(source, evalCtx.vmContext);
-          yield* fn(env.values) as unknown as Operation<void>;
+
+          if (persist) {
+            // Persist mode: run the compiled block inside evalScope.eval()
+            // so spawned resources are retained in the persistent EvalScope.
+            const evalScope = yield* EvalScopeCtx.expect();
+            const blockResult = yield* evalScope.eval(
+              () => fn(env.values) as unknown as Operation<void>,
+            );
+            unbox(blockResult);
+          } else {
+            // Normal mode: run the compiled block in the current scope.
+            // Resources are torn down when this operation completes.
+            yield* fn(env.values) as unknown as Operation<void>;
+          }
+
           return serializeExports(
             env.values,
             transformed.exports,

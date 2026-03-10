@@ -6,7 +6,11 @@
  */
 
 import { createContext as createEffectionContext } from "effection";
-import { sleep, spawn, call, resource, useScope } from "effection";
+import {
+  sleep, spawn, call, resource, useScope,
+  createChannel, each, suspend, createSignal,
+} from "effection";
+import { when } from "@effectionx/converge";
 import { createContext as vmCreateContext, runInContext } from "node:vm";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +49,12 @@ export function createEvalContext(
     call,
     resource,
     useScope,
+    createChannel,
+    each,
+    suspend,
+    createSignal,
+    // Convergence — poll and wait for conditions to be met
+    when,
     // Standard globals
     console,
     // Host-provided extras

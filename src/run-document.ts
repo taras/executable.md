@@ -9,7 +9,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { useScope } from "effection";
+import { useScope, resource } from "effection";
 import type { Operation } from "effection";
 import {
   DurableRuntimeCtx,
@@ -51,6 +51,7 @@ import { createEvalContext, EvalCtxKey } from "./eval-context.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
+import type { EvalScope } from "@effectionx/scope-eval";
 
 
 // Re-export gray-matter — we use it for YAML frontmatter extraction
@@ -294,8 +295,10 @@ function* documentWorkflow(
     runtime,
   );
 
-  // Create per-document eval scope and binding environment (spec §3.1–3.2)
-  const evalScope = yield* ephemeral(useEvalScope());
+  // Create per-document binding environment (spec §3.2).
+  // The EvalScope was already created in runDocument (before durableRun)
+  // and set on the scope via EvalScopeCtx — it's inherited by all child
+  // scopes including durableEval bodies.
   const env: EvalEnv = { values: {} };
 
   // Build the expansion context
@@ -317,14 +320,15 @@ function* documentWorkflow(
     },
   };
 
-  // Expand all segments within the eval scope and env context.
-  // EvalScopeCtx and EvalEnvCtx are scoped to the document expansion
-  // lifetime via Context.with() (spec §3.1). Resources spawned by
-  // `persist` blocks are retained in the eval scope until expansion
-  // completes, then torn down.
-  const scopedExpansion: Operation<Segment[]> = EvalScopeCtx.with(
-    evalScope,
-    () => EvalEnvCtx.with(env, function* () {
+  // Expand all segments within the eval env context.
+  // EvalScopeCtx is already set on the scope by runDocument.
+  // EvalEnvCtx is scoped to the document expansion lifetime via
+  // Context.with() (spec §3.1). Resources spawned by `persist` blocks
+  // are retained in the eval scope until expansion completes, then
+  // torn down.
+  const scopedExpansion: Operation<Segment[]> = EvalEnvCtx.with(
+    env,
+    function* () {
       const expandGen = expandSegments(
         root.bodySegments,
         root.meta,
@@ -333,7 +337,7 @@ function* documentWorkflow(
         ctx,
       );
       return yield* expandGen;
-    }),
+    },
   );
   const expanded = yield* ephemeral(scopedExpansion);
 
@@ -371,6 +375,19 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
   // Create shared EvalContext (one VM context per document run — spec §5.1)
   const evalContext = createEvalContext();
   scope.set(EvalCtxKey, evalContext);
+
+  // Create per-document eval scope (spec §3.1).
+  // Must be created BEFORE durableRun so the channel processor task lives
+  // in the outer Operation scope, not inside the durable execution scope.
+  // evalScope.eval() from within durableEval sends to a channel whose
+  // processor must be reachable by the Effection scheduler — this only
+  // works when both sender and processor share an ancestor scope outside
+  // the durable execution boundary.
+  const evalScope: EvalScope = yield* resource<EvalScope>(function* (provide) {
+    const es = yield* useEvalScope();
+    yield* provide(es);
+  });
+  scope.set(EvalScopeCtx, evalScope);
 
   // Build modifier registry with built-in + custom handlers
   const registry = createModifierRegistry();

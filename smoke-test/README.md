@@ -182,6 +182,25 @@ The binding from the persist block is available in later blocks:
 const endpoint = "ws://" + connectionString + "/ws";
 ```
 
+Resources spawned inside `persist eval` blocks survive across block boundaries.
+The background task below sets `status.ready` after a short delay. The next
+eval block converges on it using `when()`, proving the task stayed alive:
+
+```js persist eval
+const status = { ready: false };
+yield* spawn(function*() {
+  yield* sleep(10);
+  status.ready = true;
+});
+```
+
+```js eval
+yield* when(function*() {
+  if (!status.ready) throw new Error("not ready");
+});
+const serverReady = status.ready;
+```
+
 The `timeout` modifier cancels the block if it does not complete within
 the specified duration. Accepted units: `ms`, `s`, `m`. If the block
 times out, an error is recorded in the output and execution halts.
@@ -243,6 +262,7 @@ cat <<'EOF'
 | Durability               | Timestamp stable across reruns          |
 | eval modifier            | js eval blocks with shared bindings     |
 | persist modifier         | js persist eval block, resource lifetime|
+| persist resource survival| spawn in persist eval + when() converge |
 | timeout modifier         | js timeout=30s eval block               |
 | eval + exec coexistence  | Both modifier types in same document    |
 EOF

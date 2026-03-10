@@ -11,6 +11,17 @@ import { createContext } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 
 // ---------------------------------------------------------------------------
+// Persist flag (spec §7.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * When set to true on the scope, the eval handler will run the compiled
+ * block inside the EvalScope's persistent child scope. Set by the
+ * persist modifier, read by evalFactory.
+ */
+export const PersistFlagCtx = createContext<boolean>("persistFlag");
+
+// ---------------------------------------------------------------------------
 // Binding environment (spec §3.2)
 // ---------------------------------------------------------------------------
 

@@ -107,6 +107,11 @@ describe("smoke test", () => {
     expect(output).not.toContain("localhost:3000"); // persist block binding — no output
     expect(output).not.toContain("ws://localhost"); // downstream eval block — no output
 
+    // Resource survival — persist eval spawns a task, next block converges on it
+    // Both blocks produce no output; the prose about resource survival is visible
+    expect(output).toContain("Resources spawned inside");
+    expect(output).not.toContain("serverReady"); // eval binding — no output
+
     // timeout eval block — produces no output
     expect(output).not.toContain("startedAt");
 
@@ -116,6 +121,7 @@ describe("smoke test", () => {
     // Eval summary table entries
     expect(output).toContain("eval modifier");
     expect(output).toContain("persist modifier");
+    expect(output).toContain("persist resource survival");
     expect(output).toContain("timeout modifier");
     expect(output).toContain("eval + exec coexistence");
 

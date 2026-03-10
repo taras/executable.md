@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@effectionx/converge": "^0.1.3",
     "@effectionx/durable-effects": "https://pkg.pr.new/thefrontside/effectionx/@effectionx/durable-effects@180",
     "@effectionx/durable-streams": "https://pkg.pr.new/thefrontside/effectionx/@effectionx/durable-streams@179",
     "@effectionx/scope-eval": "^0.1.2",

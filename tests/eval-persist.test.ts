@@ -141,4 +141,39 @@ describe("Tier T6 — persist modifier", () => {
     }
     expect(threw).toBe(true);
   });
+
+  // T49b: persist eval retains spawned resource across blocks
+  // A background task spawned in a persist eval block sets status.ready
+  // after 10ms. The next eval block uses when() to converge on it.
+  it("T49b: persist eval retains spawned resource across blocks", function* () {
+    const stream = new InMemoryStream();
+    const runtime = makeRuntime({
+      "test.md": [
+        "```js persist eval",
+        "const status = { ready: false };",
+        "yield* spawn(function*() {",
+        "  yield* sleep(10);",
+        "  status.ready = true;",
+        "});",
+        "```",
+        "",
+        "```js eval",
+        'yield* when(function*() {',
+        '  if (!status.ready) throw new Error("not ready");',
+        "});",
+        "const serverReady = status.ready;",
+        "```",
+      ].join("\n"),
+    });
+
+    const output = yield* runDocument({
+      docPath: "test.md",
+      stream,
+      runtime,
+      freshness: false,
+    });
+
+    expect(output.trim()).toBe("");
+    expect(output).not.toContain("ERROR");
+  });
 });
