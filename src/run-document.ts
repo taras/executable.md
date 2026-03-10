@@ -40,8 +40,9 @@ import {
   composeModifierChain,
   buildCommand,
   createModifierRegistry,
+  useCodeBlock,
 } from "./modifiers.ts";
-import type { ModifierHandler, ModifierRegistry } from "./modifiers.ts";
+import type { ModifierFactory, ModifierRegistry } from "./modifiers.ts";
 
 // Re-export gray-matter — we use it for YAML frontmatter extraction
 import matter from "gray-matter";
@@ -66,11 +67,11 @@ export interface RunDocumentOptions {
   /** Install file content guard (default: true) */
   freshness?: boolean;
 
-  /** Custom modifier handlers to register */
-  modifiers?: Record<string, ModifierHandler>;
+  /** Custom modifier factories to register */
+  modifiers?: Record<string, ModifierFactory>;
 
-  /** Sample handler — if not provided, sample modifier will error */
-  sampleHandler?: ModifierHandler;
+  /** Sample factory — if not provided, sample modifier will error */
+  sampleHandler?: ModifierFactory;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,8 +229,9 @@ function* useImportComponentGuard(
 // handlers (exec) yield DurableEffects. See DEC-003 in specs/decisions.md.
 // ---------------------------------------------------------------------------
 
-function createExecHandler(runtime: DurableRuntime): ModifierHandler {
-  return function* execHandler(context, _params, _next) {
+function createExecFactory(runtime: DurableRuntime): ModifierFactory {
+  return (_params) => (_args, _next) => function* () {
+    const context = yield* useCodeBlock();
     const command = buildCommand(context.language, context.content);
     const result = (yield createDurableOperation<Json>(
       {
@@ -251,13 +253,14 @@ function createExecHandler(runtime: DurableRuntime): ModifierHandler {
       exitCode: result.exitCode,
       stderr: result.stderr,
     };
-  };
+  }();
 }
 
-const silentHandler: ModifierHandler = function* (_context, _params, next) {
-  yield* next(); // inner chain runs — exec journals its result
-  return { output: "", exitCode: 0, stderr: "" };
-};
+const silentFactory: ModifierFactory = (_params) =>
+  (_args, next) => function* () {
+    yield* next(); // inner chain runs — exec journals its result
+    return { output: "", exitCode: 0, stderr: "" };
+  }();
 
 // ---------------------------------------------------------------------------
 // Document workflow (spec §7.1)
@@ -301,11 +304,10 @@ function* documentWorkflow(
     },
   };
 
-  // Expand all segments — this generator yields durable effects
-  // through the import and modifier chain functions. The cast is
-  // safe because expandSegments only forwards DurableEffect yields
-  // from durableImportComponent and the modifier chain. The expansion
-  // engine itself does not yield any non-durable values.
+  // Expand all segments — returns Operation<Segment[]>. The narrowing
+  // cast to Workflow is safe because expandSegments only forwards
+  // DurableEffect yields from durableImportComponent and the modifier
+  // chain. The expansion engine itself does not yield any non-durable values.
   const expandGen = expandSegments(
     root.bodySegments,
     root.meta,
@@ -348,8 +350,8 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
 
   // Build modifier registry with built-in + custom handlers
   const registry = createModifierRegistry();
-  registry.set("exec", createExecHandler(runtime));
-  registry.set("silent", silentHandler);
+  registry.set("exec", createExecFactory(runtime));
+  registry.set("silent", silentFactory);
   if (sampleHandler) {
     registry.set("sample", sampleHandler);
   }

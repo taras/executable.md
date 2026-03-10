@@ -27,3 +27,13 @@ export type {
 } from "./src/types.ts";
 
 export { healSegment } from "./src/heal.ts";
+
+export type { Middleware } from "./src/middleware.ts";
+export { combine } from "./src/middleware.ts";
+
+export type {
+  ModifierFactory,
+  ModifierMiddleware,
+  CodeBlockWorkflow,
+} from "./src/modifiers.ts";
+export { useCodeBlock, CodeBlockCtx } from "./src/modifiers.ts";

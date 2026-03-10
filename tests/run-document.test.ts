@@ -715,14 +715,14 @@ describe("Tier D — code execution and modifiers", () => {
       runtime,
       freshness: false,
       modifiers: {
-        uppercase: function* (_context, _params, next) {
+        uppercase: (_params) => (_args, next) => function* () {
           const inner = yield* next();
           return {
             output: inner.output.toUpperCase(),
             exitCode: inner.exitCode,
             stderr: inner.stderr,
           };
-        },
+        }(),
       },
     });
 
@@ -750,9 +750,9 @@ describe("Tier D — code execution and modifiers", () => {
       runtime,
       freshness: false,
       modifiers: {
-        timeout: function* (_context, params, next) {
+        timeout: (params) => (_args, next) => {
           receivedParams = params;
-          return yield* next();
+          return next();
         },
       },
     });

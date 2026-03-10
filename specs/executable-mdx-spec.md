@@ -343,15 +343,33 @@ is always the language. All subsequent words are the middleware chain.
 A code block with no `exec` anywhere in the chain is passive text —
 not executable, not processed.
 
-### 3.3 Modifier handlers and registration
+### 3.3 Modifier middleware and registration
 
-Each modifier in the info string is a **middleware handler** that
-wraps the next handler in the chain. The rightmost modifier (`exec`
-or `eval`) is the terminal — it performs the actual I/O. Every other
-modifier calls `next()` to invoke the inner chain, then transforms
-the result.
+Each modifier in the info string is a **middleware** that wraps the
+next handler in the chain. The rightmost modifier (`exec` or `eval`)
+is the terminal — it performs the actual I/O. Every other modifier
+calls `next()` to invoke the inner chain, then transforms the result.
 
-#### Handler signature
+The modifier system uses the same `Middleware<TArgs, TReturn>` type
+as Effection v4.1's Api system, ensuring a single composable
+middleware primitive across the codebase.
+
+#### Middleware primitive
+
+```typescript
+/**
+ * Reusable middleware type — matches Effection v4.1 exactly.
+ *
+ * - `args`  — arguments to the function being surrounded
+ * - `next`  — delegate to the next link (accepts the same args shape)
+ */
+type Middleware<TArgs extends unknown[], TReturn> = (
+  args: TArgs,
+  next: (...args: TArgs) => TReturn,
+) => TReturn;
+```
+
+#### Code block context
 
 ```typescript
 interface CodeBlockContext {
@@ -365,66 +383,86 @@ interface CodeBlockResult {
   exitCode: number;
   stderr: string;
 }
-
-/**
- * Modifier handler — same shape as Effection middleware.
- *
- * - `context`: the code block being processed
- * - `params`: modifier params (e.g. "brief" from sample=brief), or undefined
- * - `next`: calls the next handler in the chain (the inner modifier)
- *
- * Terminal handlers (exec, eval) ignore `next`.
- * Wrapping handlers (silent, sample) call `next()` and transform the result.
- */
-type ModifierHandler = (
-  context: CodeBlockContext,
-  params: string | undefined,
-  next: () => Workflow<CodeBlockResult>,
-) => Workflow<CodeBlockResult>;
 ```
 
-#### Registration via `useModifier`
-
-Modifier handlers are registered on the scope via `useModifier`.
-Child scopes inherit parent registrations. A child scope can override
-a modifier by registering a new handler for the same name.
+The code block context is delivered via Effection's `Context` — set
+on the scope via `CodeBlockCtx.with()` before the modifier chain
+runs. Handlers that need it read via `useCodeBlock()`:
 
 ```typescript
-function* useModifier(
-  name: string,
-  handler: ModifierHandler,
-): Operation<void> {
-  const scope = yield* useScope();
-  const registry = getOrCreateRegistry(scope);
-  registry.set(name, handler);
+const CodeBlockCtx = createContext<CodeBlockContext>("codeBlock");
+
+function useCodeBlock(): Workflow<CodeBlockContext> {
+  return ephemeral(CodeBlockCtx.expect());
 }
 ```
 
-This follows the same scope-inheritance pattern as Effection's
-`scope.around()` — a handler registered on a parent scope is visible
-to all children, and a child can override it for its subtree.
+This follows the Effection convention: shared execution context
+lives on the scope and is accessed via context accessors, not
+threaded through function parameters.
+
+#### Modifier factory and middleware types
+
+Each modifier is registered as a **factory** — a function that
+receives the modifier's parsed params and returns a middleware.
+The middleware itself conforms to `Middleware<[], CodeBlockWorkflow>`
+— no arguments flow through `next` (params are captured in the
+factory closure, context is on the scope):
+
+```typescript
+type CodeBlockWorkflow = Workflow<CodeBlockResult>;
+type ModifierMiddleware = Middleware<[], CodeBlockWorkflow>;
+
+/**
+ * A modifier factory — takes per-modifier params and returns a middleware.
+ *
+ * Terminal factories (exec, eval) ignore `next`.
+ * Wrapping factories (silent, sample) call `next()` and transform the result.
+ */
+type ModifierFactory = (params: string | undefined) => ModifierMiddleware;
+```
+
+#### Registration
+
+Modifier factories are registered on a `ModifierRegistry`:
+
+```typescript
+type ModifierRegistry = Map<string, ModifierFactory>;
+```
+
+The host installs built-in factories before `durableRun`:
+
+```typescript
+registry.set("exec", createExecFactory(runtime));
+registry.set("silent", silentFactory);
+registry.set("sample", sampleFactory);
+```
+
+Custom factories can be provided via `RunDocumentOptions.modifiers`.
 
 #### Built-in terminal handlers
 
 **`exec`** — executes the code block as a shell command via
 `durableExec`. This is a terminal handler — it does not call `next()`.
+It reads the code block info from the Effection context via
+`useCodeBlock()`:
 
 ```typescript
-const execHandler: ModifierHandler = function* (context, params, _next) {
-  const result = yield* durableExec(
-    `exec:${truncate(context.content, 40)}`,
-    {
-      command: buildCommand(context.language, context.content),
-      timeout: 30_000,
-      throwOnError: false,
-    },
-  );
-  return {
-    output: result.stdout,
-    exitCode: result.exitCode,
-    stderr: result.stderr,
-  };
-};
+function createExecFactory(runtime: DurableRuntime): ModifierFactory {
+  return (_params) => (_args, _next) => function* () {
+    const context = yield* useCodeBlock();
+    const command = buildCommand(context.language, context.content);
+    const result = yield* durableExec(
+      `exec:${truncate(context.content, 40)}`,
+      { command, timeout: 30_000, throwOnError: false },
+    );
+    return {
+      output: result.stdout,
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+    };
+  }();
+}
 ```
 
 **`eval`** (future) — evaluates the code block in-process via
@@ -437,10 +475,11 @@ where subprocess execution is unnecessary.
 journaled), then returns empty output:
 
 ```typescript
-const silentHandler: ModifierHandler = function* (context, params, next) {
-  yield* next();   // inner chain runs — exec journals its result
-  return { output: "", exitCode: 0, stderr: "" };
-};
+const silentFactory: ModifierFactory = (_params) =>
+  (_args, next) => function* () {
+    yield* next();   // inner chain runs — exec journals its result
+    return { output: "", exitCode: 0, stderr: "" };
+  }();
 ```
 
 **`sample`** — calls `next()`, then sends the inner result's output
@@ -448,95 +487,93 @@ to an LLM via `durableSample`, which wraps the Sample Api (§3.4) in
 a durable effect:
 
 ```typescript
-const sampleHandler: ModifierHandler = function* (context, params, next) {
-  const inner = yield* next();
-  const sampled = yield* durableSample(context.content, {
-    stdout: inner.output,
-    stderr: inner.stderr,
-    exitCode: inner.exitCode,
-    command: context.content,
-    language: context.language,
-    params,
-    componentName: context.componentName,
-  });
-  return { ...inner, output: sampled };
-};
+const sampleFactory: ModifierFactory = (params) =>
+  (_args, next) => function* () {
+    const context = yield* useCodeBlock();
+    const inner = yield* next();
+    const sampled = yield* durableSample(context.content, {
+      stdout: inner.output,
+      stderr: inner.stderr,
+      exitCode: inner.exitCode,
+      command: context.content,
+      language: context.language,
+      params,
+      componentName: context.componentName,
+    });
+    return { ...inner, output: sampled };
+  }();
 ```
 
 #### Chain composition
 
 When a code block is encountered during expansion, the modifier chain
-is composed from the info string **right-to-left** (innermost first):
+is composed using the reusable `combine()` primitive. Each factory is
+called with its parsed params to produce a middleware, then all
+middlewares are combined into a single chain. `CodeBlockCtx.with()`
+sets the context on the scope for the duration of the chain:
 
 ```typescript
 function composeModifierChain(
   modifiers: Modifier[],
   context: CodeBlockContext,
   registry: ModifierRegistry,
-): () => Workflow<CodeBlockResult> {
-  let chain: () => Workflow<CodeBlockResult> = function* () {
+): () => CodeBlockWorkflow {
+  const terminal = function* () {
     throw new Error("No terminal modifier (exec/eval) in chain");
   };
 
-  // Build right-to-left: rightmost modifier is innermost
-  for (let i = modifiers.length - 1; i >= 0; i--) {
-    const mod = modifiers[i];
-    const handler = registry.get(mod.name);
-    if (!handler) {
-      throw new Error(`Unknown modifier: ${mod.name}`);
-    }
-    const inner = chain;
-    chain = function* () {
-      return yield* handler(context, mod.params, function* () {
-        return yield* inner();
-      });
-    };
-  }
+  const middlewares = modifiers.map((mod) => {
+    const factory = registry.get(mod.name);
+    if (!factory) throw new Error(`Unknown modifier: ${mod.name}`);
+    return factory(mod.params);
+  });
 
-  return chain;
+  const composed = combine(middlewares);
+
+  return function* () {
+    return yield* ephemeral(
+      CodeBlockCtx.with(context, function* () {
+        return yield* composed([], terminal);
+      }),
+    );
+  };
 }
 ```
 
 For ```` ```bash silent sample exec ````:
 
 ```
-chain = execHandler(ctx, _, _)                    // terminal
-chain = sampleHandler(ctx, _, () => execHandler)  // wraps exec
-chain = silentHandler(ctx, _, () => sampleHandler) // wraps sample
+exec    = execFactory(undefined)       // terminal middleware
+sample  = sampleFactory("brief")       // wraps exec
+silent  = silentFactory(undefined)     // wraps sample
+composed = combine([silent, sample, exec])
 ```
 
-Calling `chain()` runs silent → sample → exec. The exec handler
-journals the command result. The sample handler journals the LLM
-response. The silent handler discards the output.
-
-#### Default registration
-
-The host installs the built-in handlers before `durableRun`:
-
-```typescript
-function* useBuiltinModifiers(): Operation<void> {
-  yield* useModifier("exec", execHandler);
-  yield* useModifier("silent", silentHandler);
-  yield* useModifier("sample", sampleHandler);
-}
-```
+Calling `composed([], terminal)` runs silent → sample → exec. The
+exec handler journals the command result. The sample handler journals
+the LLM response. The silent handler discards the output.
 
 #### Overriding per-scope
 
-Because handlers are scope-inherited, a component's expansion can
-override modifier behavior for its subtree:
+Because factories are stored in a registry that can be extended,
+custom modifiers can be provided via `RunDocumentOptions`:
 
 ```typescript
-// In a custom expansion middleware:
-yield* useModifier("sample", function* (context, params, next) {
-  // Use a different model for this component's code blocks
-  const inner = yield* next();
-  return { ...inner, output: yield* myExpensiveModel(inner.output) };
+yield* runDocument({
+  docPath: "README.md",
+  stream,
+  runtime,
+  modifiers: {
+    uppercase: (_params) => (_args, next) => function* () {
+      const inner = yield* next();
+      return { ...inner, output: inner.output.toUpperCase() };
+    }(),
+  },
 });
 ```
 
 This follows the same mental model as `scope.around(Divergence, ...)`
-or `scope.around(Resolve, ...)` — scope-scoped behavioral override
+or `scope.around(Resolve, ...)` — composable behavioral override
 via middleware.
 
 ### 3.4 The Sample Api
@@ -2139,7 +2176,7 @@ A.md references <C />.
 | 4 | `durableImportComponent` is a single durable effect | Resolve + read + hash in one `createDurableOperation` — one journal entry per component, Api and filesystem untouched on replay |
 | 5 | Parsing is runtime | Deterministic from file content, no journal needed |
 | 6 | Info string modifiers are a middleware chain | `bash silent exec` — left-to-right wrapping, composable, extensible, compatible with all renderers |
-| 7 | Each modifier is a registered handler with middleware signature | `(context, params, next) => Workflow<CodeBlockResult>` — same shape as Effection middleware |
+| 7 | Each modifier is a factory that returns `Middleware<[], CodeBlockWorkflow>` | Factory captures params in closure; context on Effection scope via `CodeBlockCtx.with()` + `useCodeBlock()`; aligns with Effection v4.1's `Middleware<TArgs, TReturn>` |
 | 8 | `useModifier` registers handlers on the scope | Scope-inherited — child scopes can override parent handlers for their subtree |
 | 9 | `exec`/`eval` are terminal handlers, others are wrapping | Terminal handlers ignore `next`; wrapping handlers call `next()` and transform the result |
 | 10 | `sample` handler delegates to Sample Api via `durableSample` | Two layers: handler (part of modifier chain) and Api (LLM middleware) — each composable independently |
@@ -2157,3 +2194,5 @@ A.md references <C />.
 | 22 | Components are semantic boundaries for markdown constructs | Bold, italic, links, code spans cannot span across a component or exec block — each text segment is healed independently |
 | 23 | Remend runs after scanning, before interpolation | Heals incomplete markdown in text segments; `htmlTags: false` required — boundary scanner owns JSX completeness, remend owns markdown completeness |
 | 24 | Healing is runtime, not durable | Pure function of text content — runs on both live and replay, no journal entry |
+| 25 | `CodeBlockContext` delivered via Effection Context, not handler parameter | `CodeBlockCtx.with()` scopes the context to the chain execution; handlers read via `useCodeBlock()`; keeps middleware signature clean `Middleware<[], ...>` |
+| 26 | Reusable `Middleware<TArgs, TReturn>` primitive in `src/middleware.ts` | Same type as Effection v4.1's Api middleware; `combine()` composes arrays; decoupled from modifier-specific types |
