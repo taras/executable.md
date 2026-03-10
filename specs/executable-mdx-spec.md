@@ -410,7 +410,7 @@ The middleware itself conforms to `Middleware<[], CodeBlockWorkflow>`
 factory closure, context is on the scope):
 
 ```typescript
-type CodeBlockWorkflow = Generator<unknown, CodeBlockResult, unknown>;
+type CodeBlockWorkflow = Workflow<CodeBlockResult>;
 type ModifierMiddleware = Middleware<[], CodeBlockWorkflow>;
 
 /**

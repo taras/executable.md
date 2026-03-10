@@ -114,12 +114,11 @@ handlers (`silent`) call `next()` which runs the inner chain.
 
 Each modifier is a `ModifierFactory` that returns a
 `Middleware<[], CodeBlockWorkflow>`. The `CodeBlockWorkflow` type is
-`Generator<unknown, CodeBlockResult, unknown>`, which is compatible
-with `Workflow<CodeBlockResult>` since the chain ultimately yields
-durable effects.
+`Workflow<CodeBlockResult>` — a generator that yields `DurableEffect`
+values and returns a `CodeBlockResult`.
 
 ```typescript
-type CodeBlockWorkflow = Generator<unknown, CodeBlockResult, unknown>;
+type CodeBlockWorkflow = Workflow<CodeBlockResult>;
 type ModifierMiddleware = Middleware<[], CodeBlockWorkflow>;
 type ModifierFactory = (params: string | undefined) => ModifierMiddleware;
 ```
