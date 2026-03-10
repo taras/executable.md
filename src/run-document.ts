@@ -15,6 +15,7 @@ import {
   DurableRuntimeCtx,
   durableRun,
   createDurableOperation,
+  ephemeral,
   type DurableStream,
   type DurableRuntime,
   ReplayGuard,
@@ -43,6 +44,14 @@ import {
   useCodeBlock,
 } from "./modifiers.ts";
 import type { ModifierFactory, ModifierRegistry } from "./modifiers.ts";
+import { evalFactory } from "./eval-handler.ts";
+import { persistFactory } from "./modifiers/persist.ts";
+import { timeoutFactory } from "./modifiers/timeout.ts";
+import { createEvalContext, EvalCtxKey } from "./eval-context.ts";
+import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
+import type { EvalEnv } from "./eval-env.ts";
+import { useEvalScope } from "@effectionx/scope-eval";
+
 
 // Re-export gray-matter — we use it for YAML frontmatter extraction
 import matter from "gray-matter";
@@ -285,6 +294,10 @@ function* documentWorkflow(
     runtime,
   );
 
+  // Create per-document eval scope and binding environment (spec §3.1–3.2)
+  const evalScope = yield* ephemeral(useEvalScope());
+  const env: EvalEnv = { values: {} };
+
   // Build the expansion context
   const ctx: ExpansionContext = {
     importComponent: function* (name: string) {
@@ -304,18 +317,25 @@ function* documentWorkflow(
     },
   };
 
-  // Expand all segments — returns Operation<Segment[]>. The narrowing
-  // cast to Workflow is safe because expandSegments only forwards
-  // DurableEffect yields from durableImportComponent and the modifier
-  // chain. The expansion engine itself does not yield any non-durable values.
-  const expandGen = expandSegments(
-    root.bodySegments,
-    root.meta,
-    {},
-    new Set(),
-    ctx,
+  // Expand all segments within the eval scope and env context.
+  // EvalScopeCtx and EvalEnvCtx are scoped to the document expansion
+  // lifetime via Context.with() (spec §3.1). Resources spawned by
+  // `persist` blocks are retained in the eval scope until expansion
+  // completes, then torn down.
+  const scopedExpansion: Operation<Segment[]> = EvalScopeCtx.with(
+    evalScope,
+    () => EvalEnvCtx.with(env, function* () {
+      const expandGen = expandSegments(
+        root.bodySegments,
+        root.meta,
+        {},
+        new Set(),
+        ctx,
+      );
+      return yield* expandGen;
+    }),
   );
-  const expanded: Segment[] = yield* (expandGen as unknown as Workflow<Segment[]>);
+  const expanded = yield* ephemeral(scopedExpansion);
 
   // Render to output string
   return renderSegments(expanded);
@@ -343,15 +363,22 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
   const scope = yield* useScope();
   scope.set(DurableRuntimeCtx, runtime);
 
-  // Install replay guard
+  // Install replay guards
   if (freshness) {
     yield* useImportComponentGuard(runtime);
   }
+
+  // Create shared EvalContext (one VM context per document run — spec §5.1)
+  const evalContext = createEvalContext();
+  scope.set(EvalCtxKey, evalContext);
 
   // Build modifier registry with built-in + custom handlers
   const registry = createModifierRegistry();
   registry.set("exec", createExecFactory(runtime));
   registry.set("silent", silentFactory);
+  registry.set("eval", evalFactory);
+  registry.set("persist", persistFactory);
+  registry.set("timeout", timeoutFactory);
   if (sampleHandler) {
     registry.set("sample", sampleHandler);
   }

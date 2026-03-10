@@ -140,6 +140,38 @@ and continues after. Each segment is independently valid markdown.
 
 </Section>
 
+<Section title="In-Process Evaluation">
+
+Eval blocks run JavaScript **in-process** as Effection generator operations.
+Unlike `exec` blocks (which run shell commands in a subprocess), `eval`
+blocks execute in the same process, sharing a binding environment across
+blocks within a component.
+
+Bindings declared in one eval block are available in subsequent blocks:
+
+```js eval
+const greeting = "Hello from eval";
+const numbers = [1, 2, 3];
+```
+
+The bindings from the previous block are available here:
+
+```js eval
+const message = `${greeting} with ${numbers.length} numbers`;
+```
+
+Eval blocks produce **no rendered output** — they exist for bindings
+and side effects. The output from eval blocks is empty, so nothing
+appears between this text and the next section.
+
+Eval and exec blocks coexist independently in the same document:
+
+```bash exec
+echo "Exec blocks are independent of eval bindings"
+```
+
+</Section>
+
 <Section title="Durability">
 
 Every component import and code execution is recorded in a journal.
@@ -183,6 +215,8 @@ cat <<'EOF'
 | props interpolation      | {props.title}, {props.message}, etc.    |
 | Props passthrough        | <PropDemo greeting="Hey" subject="w">  |
 | Durability               | Timestamp stable across reruns          |
+| eval modifier            | js eval blocks with shared bindings     |
+| eval + exec coexistence  | Both modifier types in same document    |
 EOF
 ```
 

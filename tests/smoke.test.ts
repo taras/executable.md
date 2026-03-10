@@ -94,12 +94,26 @@ describe("smoke test", () => {
     expect(output).toContain("silent modifier");
     expect(output).toContain("Markdown healing");
 
+    // ----- In-Process Evaluation section -----
+    expect(output).toContain("§ In-Process Evaluation");
+
+    // Eval blocks produce no rendered output — their bindings are invisible
+    expect(output).not.toContain("Hello from eval");
+    expect(output).not.toContain("with 3 numbers");
+
+    // But exec blocks in the same document still produce output
+    expect(output).toContain("Exec blocks are independent of eval bindings");
+
+    // Eval summary table entries
+    expect(output).toContain("eval modifier");
+    expect(output).toContain("eval + exec coexistence");
+
     // ----- Durability section -----
     expect(output).toContain("Run at:");
 
     // ----- Journal should have events -----
     const events = stream.snapshot();
-    // At minimum: root import + Section(x8) + Note(x5 total) + Feature + Badge + Formatting + PropDemo + exec blocks
+    // At minimum: root import + Section(x9) + Note(x5 total) + Feature + Badge + Formatting + PropDemo + exec blocks + eval blocks
     expect(events.length).toBeGreaterThan(10);
   });
 
