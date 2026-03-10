@@ -165,26 +165,12 @@ and side effects. The output from eval blocks is empty, so nothing
 appears between this text and the next section.
 
 The `persist` modifier extends a block's resource lifetime from the
-block scope to the component scope. Resources spawned inside a `persist
-eval` block — such as Effection channels, servers, or database connections
-— remain alive for all subsequent blocks in the component, then are torn
-down when the component finishes expanding. Bindings are shared as usual:
+block scope to the component scope. Without `persist`, spawned tasks
+and resources are torn down when the eval block completes. With it,
+they survive for all subsequent blocks in the component.
 
-```js persist eval
-// Resources spawned here live until this component finishes expanding.
-const serverConfig = { host: "localhost", port: 3000 };
-const connectionString = `${serverConfig.host}:${serverConfig.port}`;
-```
-
-The binding from the persist block is available in later blocks:
-
-```js eval
-const endpoint = "ws://" + connectionString + "/ws";
-```
-
-Resources spawned inside `persist eval` blocks survive across block boundaries.
-The background task below sets `status.ready` after a short delay. The next
-eval block converges on it using `when()`, proving the task stayed alive:
+The block below spawns a background task that sets `status.ready`
+after a short delay. Because it uses `persist`, the task stays alive:
 
 ```js persist eval
 const status = { ready: false };
@@ -193,6 +179,10 @@ yield* spawn(function*() {
   status.ready = true;
 });
 ```
+
+The next block converges on the spawned task using `when()`. This
+only works because `persist` kept the task alive across the block
+boundary — without it, the task would have been torn down:
 
 ```js eval
 yield* when(function*() {
