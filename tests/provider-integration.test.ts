@@ -69,10 +69,10 @@ const NODE_HTTP_SERVER =
  * Uses findFreePort, daemon with the Node HTTP server, and when+fetch for readiness.
  */
 function providerComponent(): string {
-  // Note: eval binding interpolation substitutes bare {name} references
-  // in code block content before execution. Template literals like
-  // `${baseUrl}` would have {baseUrl} matched and substituted, producing
-  // `$<value>`. Use string concatenation instead in readiness blocks.
+  // Note: eval blocks skip {name} interpolation (handled by expand.ts guard),
+  // so template literals like `${baseUrl}` work correctly. Daemon/exec blocks
+  // still interpolate, so {port} in the daemon command is substituted.
+  // fetch().expect() throws HttpError on non-2xx; when() catches and retries.
   return [
     "---",
     "meta:",
@@ -90,8 +90,7 @@ function providerComponent(): string {
     "",
     "```js eval",
     "yield* when(function*() {",
-    "  const response = yield* fetch(baseUrl + '/health');",
-    "  if (!response.ok) throw new Error('Not ready: ' + response.status);",
+    "  yield* fetch(baseUrl + '/health').expect();",
     "}, { timeout: 5000, interval: 50 });",
     "```",
     "",
@@ -269,8 +268,7 @@ describe("Tier S — Provider component pattern", () => {
           "",
           "```js eval",
           "yield* when(function*() {",
-          "  const response = yield* fetch(baseUrl + '/health');",
-          "  if (!response.ok) throw new Error('not ready');",
+          "  yield* fetch(baseUrl + '/health').expect();",
           "}, { timeout: 500, interval: 50 });",
           "```",
           "",
@@ -328,8 +326,7 @@ describe("Tier S — Provider component pattern", () => {
           "",
           "```js eval",
           "yield* when(function*() {",
-          "  const response = yield* fetch(`${baseUrl}/health`);",
-          "  if (!response.ok) throw new Error('not ready');",
+          "  yield* fetch(`${baseUrl}/health`).expect();",
           "}, { timeout: 5000, interval: 50 });",
           "```",
           "",
