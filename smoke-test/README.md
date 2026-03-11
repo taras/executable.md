@@ -313,6 +313,29 @@ echo "routed to outer"
 
 </Section>
 
+<Section title="Sample Component">
+
+The `<Sample>` component captures its children's rendered output (or
+accepts a `prompt` prop) and routes it through the Sample Api for LLM
+processing. It uses `output()` to produce rendered output and
+`renderChildren()` to capture children.
+
+Self-closing mode — prompt sent directly to the provider:
+
+<StubProvider model="sample-stub">
+
+<Sample prompt="summarize this" model="sample-stub" />
+
+With children — children are rendered first, then sampled:
+
+<Sample model="sample-stub">
+This is child content to be processed.
+</Sample>
+
+</StubProvider>
+
+</Section>
+
 <Section title="Durability">
 
 Every component import and code execution is recorded in a journal.
@@ -371,6 +394,9 @@ cat <<'EOF'
 | nested providers          | Inner/outer providers, innermost wins   |
 | per-component eval scope  | Each provider gets isolated middleware   |
 | props in env.values       | model prop available in eval blocks     |
+| Sample component          | <Sample prompt>, <Sample> with children |
+| output() function         | Sample component calls output()         |
+| renderChildren() closure  | Sample component captures children      |
 EOF
 ```
 

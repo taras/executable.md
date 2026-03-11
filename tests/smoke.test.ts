@@ -26,7 +26,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test"],
+      componentDirs: ["smoke-test", "components"],
       freshness: false,
     });
 
@@ -148,6 +148,13 @@ describe("smoke test", () => {
     // Explicit model=outer-smoke → outer handles
     expect(output).toContain("[response-from-outer-smoke]");
 
+    // ----- Sample Component section -----
+    expect(output).toContain("§ Sample Component");
+    // Self-closing with prompt — StubProvider returns [response-from-sample-stub]
+    expect(output).toContain("[response-from-sample-stub]");
+    // With children — children rendered then sampled
+    // The children text should NOT appear raw (it's consumed by the Sample component)
+
     // ----- Smoke test summary table — new entries -----
     expect(output).toContain("daemon modifier");
     expect(output).toContain("sample modifier");
@@ -156,6 +163,9 @@ describe("smoke test", () => {
     expect(output).toContain("nested providers");
     expect(output).toContain("per-component eval scope");
     expect(output).toContain("props in env.values");
+    expect(output).toContain("Sample component");
+    expect(output).toContain("output() function");
+    expect(output).toContain("renderChildren() closure");
 
     // ----- Durability section -----
     expect(output).toContain("Run at:");
@@ -174,7 +184,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test"],
+      componentDirs: ["smoke-test", "components"],
       freshness: false,
     });
 
@@ -184,7 +194,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test"],
+      componentDirs: ["smoke-test", "components"],
       freshness: false,
     });
 
