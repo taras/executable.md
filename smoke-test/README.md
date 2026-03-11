@@ -199,6 +199,20 @@ times out, an error is recorded in the output and execution halts.
 const startedAt = Date.now();
 ```
 
+The `findFreePort` VM global finds an available TCP port using the OS:
+
+```js eval
+const port = yield* findFreePort();
+```
+
+Eval binding interpolation substitutes bare `{name}` references in code
+block content with values from the eval binding environment. The port
+allocated above flows into subsequent blocks via `{port}`:
+
+```bash exec
+echo "Server would start on port {port}"
+```
+
 Eval and exec blocks coexist independently in the same document:
 
 ```bash exec
@@ -255,6 +269,8 @@ cat <<'EOF'
 | persist resource survival| spawn in persist eval + when() converge |
 | timeout modifier         | js timeout=30s eval block               |
 | eval + exec coexistence  | Both modifier types in same document    |
+| findFreePort VM global   | yield* findFreePort() in eval block     |
+| eval binding interpolation| {port} in exec block from eval binding |
 EOF
 ```
 

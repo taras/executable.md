@@ -11,6 +11,7 @@ import {
   createChannel, each, suspend, createSignal,
 } from "effection";
 import { when } from "@effectionx/converge";
+import { findFreePort } from "./find-free-port.ts";
 import { createContext as vmCreateContext, runInContext } from "node:vm";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,8 @@ export function createEvalContext(
     createSignal,
     // Convergence — poll and wait for conditions to be met
     when,
+    // Port allocation — find available TCP port
+    findFreePort,
     // Standard globals
     console,
     // Host-provided extras

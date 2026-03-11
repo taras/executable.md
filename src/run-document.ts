@@ -47,6 +47,7 @@ import type { ModifierFactory, ModifierRegistry } from "./modifiers.ts";
 import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
+import { daemonFactory } from "./modifiers/daemon.ts";
 import { createEvalContext, EvalCtxKey } from "./eval-context.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
@@ -395,6 +396,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
   registry.set("eval", evalFactory);
   registry.set("persist", persistFactory);
   registry.set("timeout", timeoutFactory);
+  registry.set("daemon", daemonFactory);
   if (sampleHandler) {
     registry.set("sample", sampleHandler);
   }
