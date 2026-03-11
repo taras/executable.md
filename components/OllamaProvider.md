@@ -14,18 +14,21 @@ inputs:
 ---
 
 ```ts eval
-const port = yield* findFreePort();
-const baseUrl = `http://127.0.0.1:${port}`;
+const baseUrl = 'http://127.0.0.1:11434';
 ```
 
 ```bash daemon exec
-OLLAMA_HOST=127.0.0.1:{port} ollama serve
+ollama serve
 ```
 
 ```ts eval
 yield* when(function* () {
   yield* fetch(`${baseUrl}/api/tags`).expect();
-});
+}, { timeout: 30000, interval: 500 });
+```
+
+```bash silent exec
+ollama pull {model}
 ```
 
 ```ts persist eval

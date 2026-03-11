@@ -7,6 +7,7 @@
     ".": "./mod.ts"
   },
   "scripts": {
+    "run": "node --experimental-strip-types src/cli.ts",
     "test": "node --test --experimental-strip-types 'tests/**/*.test.ts'",
     "lint": "oxlint src/",
     "typecheck": "tsc --noEmit"

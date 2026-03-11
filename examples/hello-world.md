@@ -4,7 +4,8 @@ title: Hello World
 
 # {meta.title}
 
-A minimal example that starts Ollama, and asks it to say hello.
+A self-contained example that starts Ollama, pulls a model,
+and asks it to say hello.
 
 <OllamaProvider model="llama3.2">
 
