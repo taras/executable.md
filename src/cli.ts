@@ -3,76 +3,85 @@
  * CLI — run an executable markdown document.
  *
  * Usage:
- *   npm run run -- <document.md> [options]
+ *   ema run <document.md> [options]
+ *   ema <document.md> [options]        (run is the default command)
  *
- * Example:
- *   npm run run -- examples/hello-world.md
- *   npm run run -- examples/hello-world.md --verbose
- *   npm run run -- examples/hello-world.md --journal events.jsonl
+ * Examples:
+ *   ema run examples/hello-world.md
+ *   ema examples/hello-world.md --verbose
+ *   ema run examples/hello-world.md --journal events.jsonl
  */
 
-import { main } from "effection";
-import { InMemoryStream, type DurableEvent } from "@effectionx/durable-streams";
+import { main, exit, spawn, each, createSignal, type Operation } from "effection";
+import { InMemoryStream, type DurableEvent, type DurableStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { inspect } from "node:util";
+import { program, object, field, cli, commands, type Mods } from "@frontside/configliere";
+import { z } from "zod";
 import { runDocument } from "./run-document.ts";
+import { FileStream } from "./file-stream.ts";
+import { loadJournal } from "./load-journal.ts";
 
 // ---------------------------------------------------------------------------
-// Arg parsing
+// Workaround: field.default exists at runtime but is missing from the .d.ts
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2);
+const defaults = <T>(value: T) => (mods: Mods): Mods => ({ ...mods, default: value });
 
-if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-  console.log(`Usage: npm run run -- <document.md> [options]
+// ---------------------------------------------------------------------------
+// Program schema
+// ---------------------------------------------------------------------------
 
-Run an executable markdown document.
+const runConfig = object({
+  docPath: {
+    description: "markdown document to execute",
+    ...field(z.string(), cli.argument()),
+  },
+  componentDir: {
+    description: "component search directory",
+    ...field(z.array(z.string()), defaults(["components", "."]), field.array()),
+  },
+  verbose: {
+    description: "log journal events to stderr",
+    aliases: ["-V"],
+    ...field(z.boolean(), defaults(false)),
+  },
+  journal: {
+    description: "JSONL journal file (creates if missing, replays if exists, retries on failure)",
+    aliases: ["-j"],
+    ...field(z.string().optional()),
+  },
+});
 
-Options:
-  --component-dir <dir>   Add a component search directory (default: components, .)
-  --verbose               Log each journal event to stderr as it happens
-  --journal <file>        Write journal events as JSONL to a file
-  --help, -h              Show this help message
-
-Examples:
-  npm run run -- examples/hello-world.md
-  npm run run -- examples/hello-world.md --verbose
-  npm run run -- examples/hello-world.md --journal events.jsonl`);
-  process.exit(0);
-}
-
-let docPath: string | undefined;
-const componentDirs: string[] = [];
-let verbose = false;
-let journalFile: string | undefined;
-
-for (let i = 0; i < args.length; i++) {
-  const arg = args[i] as string;
-  if (arg === "--component-dir" && i + 1 < args.length) {
-    componentDirs.push(args[i + 1] as string);
-    i++;
-  } else if (arg === "--verbose") {
-    verbose = true;
-  } else if (arg === "--journal" && i + 1 < args.length) {
-    journalFile = args[i + 1] as string;
-    i++;
-  } else if (!arg.startsWith("--")) {
-    docPath = arg;
-  }
-}
-
-if (!docPath) {
-  console.error("Error: no document path provided");
-  process.exit(1);
-}
-
-if (componentDirs.length === 0) {
-  componentDirs.push("components", ".");
-}
+const ema = program({
+  name: "ema",
+  version: "0.1.0",
+  config: commands({ run: runConfig }, { default: "run" }),
+});
 
 // ---------------------------------------------------------------------------
 // Journal event formatting
 // ---------------------------------------------------------------------------
+
+const pretty = (value: unknown): string =>
+  inspect(value, { colors: true, compact: true, breakLength: Infinity, depth: 2, maxStringLength: 60 });
+
+function formatYieldResult(event: DurableEvent & { type: "yield" }): string {
+  const { result, description } = event;
+  if (result.status !== "ok" || result.value === undefined) return "";
+
+  const v = result.value as Record<string, unknown>;
+  switch (description.type) {
+    case "import_component":
+      return " " + pretty({ path: v.path });
+    case "eval":
+      return " " + pretty(v.value ?? {});
+    case "exec":
+      return " " + pretty({ exitCode: v.exitCode, stdout: v.stdout, stderr: v.stderr });
+    default:
+      return " " + pretty(v);
+  }
+}
 
 function summarizeEvent(event: DurableEvent): string {
   if (event.type === "yield") {
@@ -80,7 +89,7 @@ function summarizeEvent(event: DurableEvent): string {
     const status = event.result.status;
     const detail = status === "err" && "error" in event.result
       ? ` (${event.result.error.message})`
-      : "";
+      : formatYieldResult(event);
     return `[yield] ${desc.type}:${desc.name} → ${status}${detail}`;
   }
   const status = event.result.status;
@@ -91,36 +100,107 @@ function summarizeEvent(event: DurableEvent): string {
 }
 
 // ---------------------------------------------------------------------------
-// Run
+// Document runner
 // ---------------------------------------------------------------------------
 
-// Truncate journal file if specified
-if (journalFile) {
-  writeFileSync(journalFile, "");
-}
+function* run(config: {
+  docPath: string;
+  componentDir: string[];
+  verbose: boolean;
+  journal: string | undefined;
+}): Operation<void> {
+  const { docPath, componentDir, verbose, journal } = config;
 
-await main(function* () {
-  const stream = new InMemoryStream();
+  // Build the durable stream:
+  // - With --journal: file-backed stream that persists events as JSONL.
+  //   If the file exists, events are loaded for replay. If the previous
+  //   run failed, the Close(err) is stripped so we retry from the last
+  //   successful point.
+  // - Without --journal: ephemeral in-memory stream (no persistence).
+  let stream: DurableStream;
 
-  // Hook into journal events for observability
-  if (verbose || journalFile) {
-    stream.onAppend = (event: DurableEvent) => {
-      if (verbose) {
-        console.error(summarizeEvent(event));
-      }
-      if (journalFile) {
-        appendFileSync(journalFile, JSON.stringify(event) + "\n");
-      }
-    };
+  if (journal) {
+    const events = yield* loadJournal(journal);
+    stream = new FileStream(journal, events);
+  } else {
+    stream = new InMemoryStream();
   }
 
-  const output = yield* runDocument({
-    docPath,
-    stream,
-    runtime: nodeRuntime(),
-    componentDirs,
-    freshness: false,
-  });
+  // Wire --verbose observability via Signal.
+  // FileStream.onAppend fires after each persist; the signal fans out
+  // to the stderr writer below. Persistence is handled by FileStream
+  // itself — the signal is purely for observability.
+  const signal = verbose
+    ? createSignal<DurableEvent, void>()
+    : undefined;
 
-  console.log(output);
+  if (signal && stream instanceof FileStream) {
+    stream.onAppend = (event: DurableEvent) => signal.send(event);
+  } else if (signal && stream instanceof InMemoryStream) {
+    stream.onAppend = (event: DurableEvent) => signal.send(event);
+  }
+
+  // Spawn verbose stderr writer
+  const writer = signal
+    ? yield* spawn(function* () {
+        for (const event of yield* each(signal)) {
+          console.error(summarizeEvent(event));
+          yield* each.next();
+        }
+      })
+    : undefined;
+
+  try {
+    const output = yield* runDocument({
+      docPath,
+      stream,
+      runtime: nodeRuntime(),
+      componentDirs: componentDir,
+      freshness: false,
+    });
+
+    console.log(output);
+  } finally {
+    // Close the signal so the writer drains remaining events and exits.
+    if (signal) {
+      signal.close();
+    }
+
+    // Wait for the writer to finish flushing all events
+    if (writer) {
+      yield* writer;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+await main(function* (args) {
+  const parser = ema.createParser({ args });
+
+  switch (parser.type) {
+    case "help":
+      console.log(parser.print());
+      yield* exit(0);
+      break;
+    case "version":
+      console.log(parser.print());
+      yield* exit(0);
+      break;
+    case "main": {
+      const parsed = parser.parse();
+      if (!parsed.ok) {
+        console.error(parsed.error.message);
+        yield* exit(1);
+        break;
+      }
+      switch (parsed.value.name) {
+        case "run":
+          yield* run(parsed.value.config);
+          break;
+      }
+    }
+  }
 });
