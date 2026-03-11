@@ -85,6 +85,7 @@ export interface Modifier {
 export interface CodeBlockContext {
   language: string;
   content: string;
+  blockId: string;
   componentName?: string;
 }
 

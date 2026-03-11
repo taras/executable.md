@@ -100,6 +100,7 @@ export function* expandSegments(
         const context: CodeBlockContext = {
           language: segment.language,
           content: segment.content,
+          blockId: `eval:${parentMeta["componentName"] ?? "root"}:${result.length}`,
         };
 
         try {
