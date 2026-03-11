@@ -680,8 +680,11 @@ the eval sandbox globals map in `src/run-document.ts`:
 | File | Contents |
 |---|---|
 | `src/modifiers/daemon.ts` | `daemonFactory` — terminal modifier for long-running subprocesses |
+| `src/modifiers/sample.ts` | `sampleFactory` — wrapping modifier for LLM sampling |
 | `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` |
+| `src/sample/durable-sample.ts` | `durableSample()` — shared Workflow helper for journaled Sample Api calls via EvalScope |
 | `components/LlamafileProvider.md` | Standard library provider component |
+| `components/Sample.md` | Standard library Sample component — routes content through Sample Api |
 | `packages/process/src/daemon.ts` | `daemon()` generator, `DaemonExitError` |
 | `packages/process/src/mod.ts` | Public API barrel for `@effectionx/process` |
 

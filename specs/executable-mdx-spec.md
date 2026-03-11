@@ -485,8 +485,8 @@ process, enabling direct access to live in-memory objects, native
 `yield*` of Effection operations, and shared state across blocks
 within a component via a binding environment (see §4).
 
-Eval blocks produce **no rendered output** — they exist for bindings
-and side effects.
+Eval blocks produce **no rendered output by default**. They can
+optionally produce output via the `output()` function (see §4.7).
 
 ```typescript
 export const evalFactory: ModifierFactory = (_params) =>
@@ -495,6 +495,14 @@ export const evalFactory: ModifierFactory = (_params) =>
     const env = yield* ephemeral(EvalEnvCtx.expect());
     const evalCtx = yield* ephemeral(EvalCtxKey.expect());
     const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
+
+    // Inject output() function into env so eval blocks can produce
+    // rendered output. The mutable ref is block-local; serializeExports
+    // silently omits non-JSON values (functions), so output won't
+    // pollute the journal. The output text itself is journaled alongside
+    // exports as __output.
+    const outputRef = { text: "" };
+    env.values.output = (text: string) => { outputRef.text = String(text); };
 
     const transformed = transformBlock(
       ctx.content,
@@ -509,7 +517,6 @@ export const evalFactory: ModifierFactory = (_params) =>
         const fn = compileBlock(source, evalCtx.vmContext);
 
         if (persist) {
-          // Run inside evalScope.eval() to retain spawned resources
           const evalScope = yield* EvalScopeCtx.expect();
           const blockResult = yield* evalScope.eval(
             () => fn(env.values) as unknown as Operation<void>,
@@ -519,7 +526,14 @@ export const evalFactory: ModifierFactory = (_params) =>
           yield* fn(env.values) as unknown as Operation<void>;
         }
 
-        return serializeExports(env.values, transformed.exports);
+        const exports = serializeExports(env.values, transformed.exports);
+
+        // Journal output text alongside exports so replay restores it
+        if (outputRef.text) {
+          (exports as Record<string, unknown>).__output = outputRef.text;
+        }
+
+        return exports as unknown as Json;
       },
       {
         source: transformed.code,
@@ -530,10 +544,16 @@ export const evalFactory: ModifierFactory = (_params) =>
 
     // On replay, restore serializable exports from the journal
     if (result.value && typeof result.value === "object") {
-      Object.assign(env.values, result.value);
+      const restored = result.value as Record<string, unknown>;
+      // Extract __output before merging into env
+      if (typeof restored.__output === "string") {
+        outputRef.text = restored.__output;
+      }
+      const { __output: _, ...exports } = restored;
+      Object.assign(env.values, exports);
     }
 
-    return { output: "", exitCode: 0, stderr: "" };
+    return { output: outputRef.text, exitCode: 0, stderr: "" };
   })();
 ```
 
@@ -637,23 +657,33 @@ const silentFactory: ModifierFactory = (_params) =>
 ```
 
 **`sample`** — calls `next()`, then sends the inner result's output
-to an LLM via `durableSample`, which wraps the Sample Api (§3.4) in
-a durable effect:
+to an LLM via `durableSample` (§3.4), which wraps the Sample Api in
+a durable effect. The modifier parses optional bracket params
+(`sample[model=phi3-mini]`) to extract model and text params:
 
 ```typescript
 const sampleFactory: ModifierFactory = (params) =>
   (_args, next) => function* () {
-    const context = yield* useCodeBlock();
+    const ctx = yield* useCodeBlock();
     const inner = yield* next();
-    const sampled = yield* durableSample(context.content, {
+    const { model, textParams } = parseSampleParams(params);
+
+    const sampleContext: SampleContext = {
       stdout: inner.output,
       stderr: inner.stderr,
       exitCode: inner.exitCode,
-      command: context.content,
-      language: context.language,
-      params,
-      componentName: context.componentName,
-    });
+      command: ctx.content,
+      language: ctx.language,
+      params: textParams,
+      componentName: ctx.componentName,
+      model,
+    };
+
+    const commandPreview = ctx.content.slice(0, 30).replace(/\n/g, " ");
+    const sampled = yield* durableSample(
+      sampleContext,
+      `sample:${commandPreview}`,
+    );
     return { ...inner, output: sampled };
   }();
 ```
@@ -813,19 +843,31 @@ const Sample = createApi<SampleApi>("Sample", {
 });
 ```
 
-**`durableSample`** wraps the Api call in `createDurableOperation`:
+**`durableSample`** is a shared helper (`src/sample/durable-sample.ts`)
+that wraps the Sample Api call in `createDurableOperation`. It routes
+through the `EvalScope` so that middleware installed by `persist eval`
+blocks (e.g., `LlamafileProvider`'s `Sample.around()`) is visible:
 
 ```typescript
+// src/sample/durable-sample.ts
 function* durableSample(
-  command: string,
   context: SampleContext,
+  name: string,
 ): Workflow<string> {
-  return (yield createDurableOperation<string>(
-    { type: "sample", name: `sample:${truncate(command, 30)}` },
-    function* () {
-      return yield* Sample.operations.sample(context);
+  return (yield createDurableOperation<Json>(
+    { type: "sample", name },
+    function* (): Operation<Json> {
+      // Route through EvalScope so middleware installed by
+      // persist-eval blocks is visible. evalScope.eval() runs
+      // the operation in the same spawned task where
+      // Sample.around() installed middleware.
+      const evalScope = yield* EvalScopeCtx.expect();
+      const boxedResult = yield* evalScope.eval(
+        () => Sample.operations.sample(context),
+      );
+      return unbox(boxedResult) as unknown as Json;
     },
-  )) as string;
+  )) as unknown as string;
 }
 ```
 
@@ -1302,11 +1344,114 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
+| `src/modifiers/sample.ts` | `sampleFactory` — wrapping modifier for LLM sampling |
+| `src/sample/durable-sample.ts` | `durableSample()` — shared Workflow helper for journaled Sample Api calls |
 | `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
 `acorn`, `magic-string`.
+
+### 4.7 The `output()` function
+
+Eval blocks produce no rendered output by default. The `output()`
+function allows an eval block to set its rendered output explicitly.
+It is a plain synchronous function call (not `yield*`):
+
+```typescript
+output("This text appears in the rendered document");
+```
+
+#### Injection
+
+`output()` is injected into `env.values` before `transformBlock` is
+called, so the auto-detect mechanism sees it as an available binding
+and includes it in the preamble. It is a regular function, not a
+generator — no `yield*` needed.
+
+The mutable `outputRef` captures the output text. `serializeExports`
+silently omits non-JSON values (functions), so the `output` function
+itself won't pollute the journal.
+
+#### Journaling
+
+The output text is journaled alongside exports as `__output` in the
+`durableEval` result. On replay, `__output` is extracted before
+merging exports into `env.values`, and `outputRef.text` is restored:
+
+```json
+{ "type": "eval", "name": "eval:root:0", "language": "js" }
+{ "status": "ok", "value": {
+    "value": {
+      "port": 4321,
+      "__output": "This text appears in the document"
+    },
+    "sourceHash": "sha256:abc123...",
+    "bindingsHash": "sha256:def456..."
+  }
+}
+```
+
+#### Interaction with the modifier chain
+
+When `outputRef.text` is non-empty, `evalFactory` returns
+`{ output: outputRef.text, exitCode: 0, stderr: "" }` instead of
+empty output. This means the expansion engine treats the block like an
+`exec` block that produced output — an `ExecOutputSegment` is created
+and rendered in the document.
+
+#### Non-string values
+
+`output()` calls `String(text)` on its argument, so non-string values
+are coerced. `output(42)` produces `"42"`.
+
+### 4.8 Render closures: `renderChildren()` and `render()`
+
+Every component's binding environment (`env.values`) is pre-populated
+with two closure functions that eval blocks can `yield*` to render
+content within the current expansion context:
+
+**`renderChildren()`** — expands and renders the component's children
+segments. Returns the rendered string. For self-closing components
+(no children), returns an empty string.
+
+```typescript
+const childrenOutput = yield* renderChildren();
+// childrenOutput contains the fully expanded + rendered children text
+```
+
+**`render(markdown)`** — scans, expands, and renders an arbitrary
+markdown string within the current component's context. Useful for
+dynamically constructing content:
+
+```typescript
+const rendered = yield* render("# Dynamic heading\n\n<Note message='hello' />");
+```
+
+#### Injection point
+
+Both closures are injected in `expandComponent()` (in `src/expand.ts`)
+after the component's `EvalEnv` is created but before `expandSegments`
+processes the component body. They capture the expansion context
+(meta, validated props, hide set, eval scope) at injection time.
+
+Both wrap their `expandSegments` calls in `EvalEnvCtx.with()` and
+`EvalScopeCtx.with()` so the full expansion context is available
+regardless of which task the closure runs in (e.g., inside
+`evalScope.eval()`).
+
+#### Non-serializable
+
+Both functions are non-JSON values. `isJson()` returns `false` for
+functions, so `serializeExports` silently omits them from the journal.
+They exist only as live references during the current run.
+
+#### `transformBlock` auto-detection
+
+Because `renderChildren` and `render` are in `env.values` before
+`transformBlock` is called, the transform sees them as available
+bindings and injects `const { renderChildren, render } = env;` in
+the preamble automatically (§4.1).
 
 ---
 
@@ -1957,8 +2102,18 @@ function* expandComponent(
   // into parent or sibling components. This is critical for the
   // provider pattern (§6.6) where each provider has isolated
   // port/URL bindings.
+  //
+  // Props are pre-populated into env.values (DEC-EX-09) so they
+  // are available as bare bindings in eval blocks.
   const newHideSet = new Set([...hideSet, name]);
-  const componentEnv: EvalEnv = { values: {} };
+  const componentEnv: EvalEnv = { values: { ...validatedProps } };
+
+  // Inject renderChildren() and render() closures (§4.8).
+  // These capture the expansion context so they work correctly
+  // when called from within evalScope.eval().
+  componentEnv.values.renderChildren = function* () { /* ... */ };
+  componentEnv.values.render = function* (markdown) { /* ... */ };
+
   return yield* EvalEnvCtx.with(
     componentEnv,
     function* () {
@@ -2374,6 +2529,97 @@ scope boundary:
 
 Both providers' scopes are nested — the inner provider is torn down
 before the outer, in standard structured concurrency order.
+
+### 6.8 Sample component
+
+The `<Sample>` component (`components/Sample.md`) is a standard library
+component that routes content through the Sample Api for LLM processing.
+It uses `output()` (§4.7) to produce rendered output and
+`renderChildren()` (§4.8) to capture children.
+
+#### Two modes
+
+**With children:** Expand children → capture rendered output →
+send to Sample Api → output LLM response.
+
+```markdown
+<Sample model="phi3-mini">
+This content is rendered first, then sampled by the LLM.
+</Sample>
+```
+
+**Self-closing with prompt:** Send prompt directly to the Sample Api →
+output LLM response.
+
+```markdown
+<Sample prompt="summarize the test results" model="phi3-mini" />
+```
+
+#### Component file
+
+````markdown
+---
+meta:
+  componentName: Sample
+
+inputs:
+  prompt:
+    type: string
+    required: false
+    default: ""
+  model:
+    type: string
+    required: false
+    default: ""
+  params:
+    type: string
+    required: false
+    default: ""
+---
+
+```js persist eval
+const childrenOutput = yield* renderChildren();
+const content = childrenOutput || prompt || '';
+
+const sampleResult = yield* Sample.operations.sample({
+  stdout: content,
+  stderr: '',
+  exitCode: 0,
+  command: content,
+  language: 'markdown',
+  params: params || undefined,
+  componentName: 'Sample',
+  model: model || undefined,
+});
+
+output(sampleResult);
+```
+````
+
+#### How it works
+
+1. `renderChildren()` expands and renders the component's children.
+   For self-closing invocations, this returns an empty string.
+2. `content` falls back to the `prompt` prop if children are empty.
+3. `Sample.operations.sample()` is called directly from the eval
+   block — the eval block runs inside `durableEval`'s evaluator, and
+   `durableSample` is NOT used here because it yields `DurableEffect`s
+   which are incompatible with the eval block's `Operation` context.
+   Instead, the entire eval block (including its output) is journaled
+   by `durableEval`'s mechanism.
+4. `output(sampleResult)` sets the block's rendered output to the
+   LLM response.
+
+#### Props
+
+All three props are optional with empty-string defaults:
+
+- **`prompt`** — Text to send when no children are provided.
+- **`model`** — Model routing key. Empty string is converted to
+  `undefined` so provider routing treats it as "no model specified"
+  (innermost provider wins).
+- **`params`** — Additional instruction params for the Sample Api
+  middleware.
 
 #### Replay behavior of the provider pattern
 
@@ -3087,9 +3333,42 @@ instead of all under `root`).
 | S5 | Provider crash during `when` | Daemon exits before ready → `when` fails → `ErrorSegment` |
 | S6 | Provider crash during children | Daemon exits mid-child-expansion → error propagated |
 | S7 | Nested providers | Outer + inner provider → both start, inner tears down first |
-| S8 | Full replay of provider component | All eval and sample entries replayed; daemon starts and stops; no live HTTP calls |
-| S9 | Partial replay (children not yet journaled) | eval+daemon+when replayed; children run live with daemon available |
-| S10 | Multiple provider instances in parallel | Two provider siblings → two processes, different ports |
+| S8 | Nested providers, no model | Innermost provider handles sample call |
+| S9 | Nested providers, explicit model matching outer | Inner passes through, outer handles |
+| S10 | Nested providers, explicit model matching inner | Inner handles regardless of nesting depth |
+| S11 | Unmatched model | Chain exhausted → descriptive error naming the model |
+| S12 | Full replay of provider component | All eval and sample entries replayed; daemon starts and stops; no live HTTP calls |
+| S13 | Partial replay (children not yet journaled) | eval+daemon+when replayed; children run live with daemon available |
+| S14 | Multiple provider instances | Two provider siblings → two processes, different ports |
+
+### Tier EO — eval output() function
+
+| # | Test | Verify |
+|---|------|--------|
+| EO1 | `output()` produces eval block output | Block calling `output("text")` → rendered output contains "text" |
+| EO2 | `output()` replayed from journal | `__output` stored in journal; replay restores output without re-execution |
+| EO3 | eval block without `output()` produces no output | Standard eval block → empty output unchanged |
+| EO4 | `output()` with multiline content | Multiline string preserved through journal round-trip |
+| EO5 | `output()` converts non-string to string | `output(42)` → `"42"` via `String()` coercion |
+
+### Tier RC — renderChildren and render closures
+
+| # | Test | Verify |
+|---|------|--------|
+| RC1 | `renderChildren()` returns empty for self-closing | Self-closing component → empty string |
+| RC2 | `renderChildren()` captures children text | Block component children → rendered text string |
+| RC3 | `render()` expands arbitrary markdown | `render("# Hello")` → rendered heading |
+
+### Tier SC — Sample component (integration)
+
+| # | Test | Verify |
+|---|------|--------|
+| SC1 | Self-closing with prompt | `<Sample prompt="hello" />` → provider response in output |
+| SC2 | With children | `<Sample>children</Sample>` → children rendered then sampled |
+| SC3 | Model routing | `<Sample model="X">` → targets specific provider |
+| SC4 | No provider | `<Sample>` outside provider → descriptive error |
+| SC5 | Replay returns stored response | Journal entry replayed; no re-execution |
+| SC6 | Self-closing renderChildren returns empty | `<Sample prompt="X" />` → `renderChildren()` returns empty, prompt used |
 
 ---
 
@@ -3173,7 +3452,7 @@ A.md references <C />.
 | 31 | `persist` uses a context flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` sets `PersistFlagCtx`, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
 | 32 | `evalScope` created before `durableRun` | The channel processor task and the sender inside `durableEval` must share an ancestor scope outside the durable execution boundary; creating inside `durableRun` would isolate the processor |
 | 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the journal; on replay they are not restored — this is by design, since non-serializable state can't survive process restart |
-| 34 | Eval blocks produce no rendered output | Eval blocks exist for bindings and side effects; their result is `{ output: "", exitCode: 0, stderr: "" }` — any user-facing output should come from interpolation of the bindings they create |
+| 34 | Eval blocks produce no rendered output by default | Eval blocks primarily exist for bindings and side effects. The `output()` function (§4.7) optionally produces rendered output; without it, result is `{ output: "", exitCode: 0, stderr: "" }` |
 | 35 | `@effectionx/middleware` replaces local `src/middleware.ts` | The middleware primitive was extracted to a shared package for reuse across the monorepo; import paths updated throughout |
 | 36 | `daemon` is a terminal modifier that ignores `next` | Process lifetime ≠ command result; `exec` in the chain satisfies the §3.2 detection rule without invoking `durableExec` |
 | 37 | `daemon` uses `evalScope`, not the durable run scope | Lifetime matches component expansion — daemon lives for `<children />` and dies with the component, not the whole document run |
@@ -3187,3 +3466,10 @@ A.md references <C />.
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
 | 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; `EvalEnvCtx` is already the shared state carrier for within-component coordination; scope-correct because `EvalEnvCtx` is set per component expansion |
 | 47 | Each component gets a fresh `EvalEnv` | `EvalEnvCtx.with()` wraps component expansion so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
+| 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
+| 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry for output text; naturally replays when `durableEval` restores the result; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
+| 50 | `renderChildren`/`render` are closures in `env.values`, not an Api | A Render Api would require middleware installation per component; closures are simpler and capture the expansion context at the injection point; they are non-serializable and silently omitted from the journal |
+| 51 | `renderChildren`/`render` wrap in `EvalEnvCtx.with()` + `EvalScopeCtx.with()` | The closures may be called from inside `evalScope.eval()` where the context is different; wrapping ensures the correct expansion environment is visible regardless of the calling task |
+| 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
+| 53 | Sample component calls `Sample.operations.sample()` directly, not `durableSample()` | `durableSample` yields `DurableEffect`s (Workflow-level), but eval blocks run inside `durableEval`'s evaluator which expects `Operation<Json>` yields; the entire eval block including output is already journaled by `durableEval` |
+| 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |

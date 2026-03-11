@@ -325,3 +325,130 @@ yield* when(function* () {
 `fetch().expect()` rather than manual `response.ok` checks. This
 keeps the pattern concise (one line instead of three) while preserving
 identical behavior.
+
+---
+
+## DEC-008: `output()` is a synchronous function, not `yield*`
+
+**Status:** Decided  
+**Date:** 2026-03-11
+
+### Context
+
+Eval blocks needed a way to produce rendered output (for the Sample
+component pattern). Two approaches were considered:
+
+1. `yield* output("text")` — an Effection operation
+2. `output("text")` — a plain function call
+
+### Decision
+
+`output()` is a plain synchronous function. It mutates a block-local
+`outputRef` object. The output text is journaled alongside exports as
+`__output` in the `durableEval` result.
+
+**Why plain function:** Output is a synchronous side effect (setting a
+string value), not an async operation. Making it a generator would
+require the block to be in generator mode just to set output, which is
+unnecessarily restrictive. A plain function keeps the API simple.
+
+**Why `__output` in exports:** Avoids a separate journal entry type for
+output text. The output naturally replays when `durableEval` restores
+the stored result. `__output` is extracted before merging into
+`env.values` to prevent namespace pollution.
+
+---
+
+## DEC-009: `renderChildren`/`render` are closures, not an Api
+
+**Status:** Decided  
+**Date:** 2026-03-11
+
+### Context
+
+Components needed a way to capture their children's rendered output
+(for the Sample component). Two patterns were considered:
+
+1. A Render Api with middleware installation
+2. Closure functions injected into `env.values`
+
+### Decision
+
+Closures injected into `env.values` at component expansion time. They
+capture the expansion context (meta, props, hide set, eval scope) and
+wrap their `expandSegments` calls in `EvalEnvCtx.with()` and
+`EvalScopeCtx.with()`.
+
+**Why closures, not an Api:** A Render Api would require middleware
+installation per component and add a new Api type to the system.
+Closures are simpler — they're injected once during `expandComponent`
+and naturally capture all needed context. They're non-serializable,
+so `serializeExports` silently omits them from the journal.
+
+**Why context wrapping:** The closures may be called from inside
+`evalScope.eval()`, where the Effection context is different from
+the expansion context. Wrapping ensures `EvalEnvCtx` and `EvalScopeCtx`
+are correctly set regardless of the calling task.
+
+---
+
+## DEC-010: `durableSample` extracted as shared helper
+
+**Status:** Decided  
+**Date:** 2026-03-11
+
+### Context
+
+The sample modifier and the Sample component both need to make
+journaled calls to the Sample Api. The original implementation
+inlined the `createDurableOperation` + `evalScope.eval()` logic in
+the sample modifier.
+
+### Decision
+
+Extracted `durableSample()` to `src/sample/durable-sample.ts` as a
+shared `Workflow<string>` helper. Both the sample modifier and future
+callers use this single implementation.
+
+`durableSample` returns `Workflow<string>` (not `Operation<string>`)
+because it yields `DurableEffect` via `createDurableOperation`.
+
+**Why the Sample component does NOT use `durableSample`:** The Sample
+component's eval block runs inside `durableEval`'s evaluator, which
+expects `Operation<Json>` yields. `durableSample` yields
+`DurableEffect`s which are incompatible. Instead, the Sample component
+calls `Sample.operations.sample()` directly — the entire eval block
+(including its output) is journaled by `durableEval`'s mechanism.
+
+---
+
+## DEC-011: Sample component props use empty-string defaults
+
+**Status:** Decided  
+**Date:** 2026-03-11
+
+### Context
+
+The Sample component has three optional props: `prompt`, `model`,
+`params`. When a prop is optional with no default and not provided,
+`validateProps` does not include it in `env.values` (line 81:
+"Optional with no default and not provided → not in validated").
+This means the variable is not defined in the eval block scope,
+causing `ReferenceError`.
+
+### Decision
+
+All three props use `default: ""` in the frontmatter. The eval block
+converts empty strings to `undefined` for routing semantics:
+`model || undefined`, `params || undefined`.
+
+**Why not `required: false` alone:** Without a default value, the
+variable simply doesn't exist in `env.values`, so `transformBlock`
+doesn't include it in the preamble. The eval block would get
+`ReferenceError: params is not defined`.
+
+**Why empty string, not undefined:** YAML `null` with `required: false`
+still doesn't add the key to validated props. Empty string is a
+legitimate default that ensures the key exists. The `|| undefined`
+conversion preserves the distinction between "not provided" and "empty"
+for provider routing (providers check `context.model !== undefined`).
