@@ -52,6 +52,16 @@ export const evalFactory: ModifierFactory = (_params) =>
       const evalCtx = yield* ephemeral(EvalCtxKey.expect());
       const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
 
+      // Inject output() function into env so eval blocks can produce
+      // rendered output. The function is a plain synchronous call:
+      //   output("some text")
+      // The mutable ref is block-local; serializeExports silently
+      // omits non-JSON values (functions), so output won't pollute
+      // the journal. The output text itself is journaled alongside
+      // exports as __output.
+      const outputRef = { text: "" };
+      env.values.output = (text: string) => { outputRef.text = String(text); };
+
       const transformed = transformBlock(
         ctx.content,
         ctx.blockId,
@@ -82,10 +92,17 @@ export const evalFactory: ModifierFactory = (_params) =>
             yield* fn(env.values) as unknown as Operation<void>;
           }
 
-          return serializeExports(
+          const exports = serializeExports(
             env.values,
             transformed.exports,
-          ) as unknown as Json;
+          );
+
+          // Journal output text alongside exports so replay restores it
+          if (outputRef.text) {
+            (exports as Record<string, unknown>).__output = outputRef.text;
+          }
+
+          return exports as unknown as Json;
         },
         {
           source: transformed.code,
@@ -96,8 +113,15 @@ export const evalFactory: ModifierFactory = (_params) =>
 
       // On replay, restore serializable exports from the journal
       if (result.value && typeof result.value === "object") {
-        Object.assign(env.values, result.value);
+        const restored = result.value as Record<string, unknown>;
+        // Extract __output before merging into env
+        if (typeof restored.__output === "string") {
+          outputRef.text = restored.__output;
+        }
+        // Remove __output from exports before assigning to env
+        const { __output: _, ...exports } = restored;
+        Object.assign(env.values, exports);
       }
 
-      return { output: "", exitCode: 0, stderr: "" };
+      return { output: outputRef.text, exitCode: 0, stderr: "" };
     })();

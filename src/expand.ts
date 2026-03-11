@@ -21,10 +21,14 @@ import type {
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
-import { EvalEnvCtx } from "./eval-env.ts";
+import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
+import { useEvalScope, unbox } from "@effectionx/scope-eval";
+import type { EvalScope } from "@effectionx/scope-eval";
 import { validateProps } from "./validate.ts";
 import { healSegment } from "./heal.ts";
+import { scanSegments } from "./scanner.ts";
+import { renderSegments } from "./render.ts";
 
 // ---------------------------------------------------------------------------
 // Types for the expansion context
@@ -228,19 +232,13 @@ function* expandComponent(
     ];
   }
 
-  // Expand children first (bottom-up)
-  const expandedChildren = yield* expandSegments(
-    children,
-    definition.meta,
-    validatedProps,
-    hideSet,
-    ctx,
-  );
-
-  // Substitute <Content /> and interpolate {meta.key} / {props.key}
+  // Substitute raw children into <Content /> positions. Children are NOT
+  // pre-expanded — they expand in document order when the component body
+  // is expanded. This ensures eval blocks before <Content /> (e.g.,
+  // provider middleware installation) run before children's code blocks.
   const substituted = substituteContent(
     definition.bodySegments,
-    expandedChildren,
+    children,
     definition.meta,
     validatedProps,
   );
@@ -250,11 +248,99 @@ function* expandComponent(
   // eval blocks within a component share bindings but don't leak
   // into parent or sibling components. This is critical for the
   // provider pattern where each provider has isolated port/URL bindings.
+  //
+  // Each component also gets its own EvalScope, created as a child of
+  // the parent component's eval scope. This ensures that middleware
+  // installed via `persist eval` blocks (e.g., Sample.around()) is
+  // scoped to the component. Nested providers produce a scope chain
+  // where innermost middleware runs first (innermost-wins), and
+  // next() delegates to the parent scope's middleware.
   const newHideSet = new Set([...hideSet, name]);
-  const componentEnv: EvalEnv = { values: {} };
+  const componentEnv: EvalEnv = { values: { ...validatedProps } };
+
+  // Create per-component eval scope as a child of the parent eval scope.
+  // By creating it via parentEvalScope.eval(), the child's spawned task
+  // lives inside the parent's scope — Effection's scope prototype chain
+  // ensures scope.reduce() walks child → parent when resolving middleware.
+  const parentEvalScope = yield* EvalScopeCtx.get();
+  let childEvalScope: EvalScope | undefined = undefined;
+  if (parentEvalScope) {
+    const result = yield* parentEvalScope.eval(() =>
+      useEvalScope(),
+    );
+    childEvalScope = unbox(result) as EvalScope;
+  }
+
+  // Inject render closures into the component's binding environment.
+  // These are generator functions that eval blocks can yield* to render
+  // content within the current expansion context.
+  //
+  // renderChildren() — expands and renders this component's children.
+  // render(markdown) — scans, expands, and renders arbitrary markdown.
+  //
+  // Both wrap their expandSegments call in EvalEnvCtx.with() and
+  // EvalScopeCtx.with() so the full expansion context is available
+  // regardless of which task the closure runs in (e.g., evalScope.eval).
+  //
+  // These are non-serializable (functions) so serializeExports silently
+  // omits them from the journal.
+  const capturedMeta = definition.meta;
+  const capturedProps = validatedProps;
+  const capturedHideSet = newHideSet;
+  const capturedCtx = ctx;
+
+  componentEnv.values.renderChildren = function* () {
+    return yield* EvalEnvCtx.with(componentEnv, function* () {
+      if (childEvalScope) {
+        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+          const expanded = yield* expandSegments(
+            children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+          );
+          return renderSegments(expanded);
+        });
+      }
+      const expanded = yield* expandSegments(
+        children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+      );
+      return renderSegments(expanded);
+    });
+  };
+
+  componentEnv.values.render = function* (markdown: string) {
+    const segments = scanSegments(markdown);
+    return yield* EvalEnvCtx.with(componentEnv, function* () {
+      if (childEvalScope) {
+        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+          const expanded = yield* expandSegments(
+            segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+          );
+          return renderSegments(expanded);
+        });
+      }
+      const expanded = yield* expandSegments(
+        segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+      );
+      return renderSegments(expanded);
+    });
+  };
+
   return yield* EvalEnvCtx.with(
     componentEnv,
     function* () {
+      if (childEvalScope) {
+        return yield* EvalScopeCtx.with(
+          childEvalScope,
+          function* () {
+            return yield* expandSegments(
+              substituted,
+              definition.meta,
+              validatedProps,
+              newHideSet,
+              ctx,
+            );
+          },
+        );
+      }
       return yield* expandSegments(
         substituted,
         definition.meta,

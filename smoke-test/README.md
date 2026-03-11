@@ -221,6 +221,121 @@ echo "Exec blocks are independent of eval bindings"
 
 </Section>
 
+<Section title="Background Processes">
+
+The `daemon` modifier starts a long-running process that survives across
+subsequent blocks. Combined with `when()` for readiness polling, this
+implements the provider pattern: start a service, wait until it's ready,
+then run children against it.
+
+The eval block below allocates a port, the daemon block starts a Node
+HTTP server on it, and the readiness block polls until the server
+responds:
+
+```js eval
+const daemonPort = yield* findFreePort();
+const daemonUrl = 'http://127.0.0.1:' + daemonPort;
+```
+
+```bash daemon exec
+node -e "require('http').createServer((q,s)=>{s.writeHead(200);s.end('daemon-ok')}).listen({daemonPort},'127.0.0.1')"
+```
+
+```js eval
+yield* when(function*() {
+  yield* fetch(daemonUrl + '/health').expect();
+}, { timeout: 5000, interval: 50 });
+```
+
+The daemon is alive — let's verify by hitting it:
+
+```bash exec
+curl -s http://127.0.0.1:{daemonPort}
+```
+
+When this section ends, the daemon process is terminated by structured
+concurrency — no manual cleanup needed.
+
+</Section>
+
+<Section title="Sample Modifier and Provider Pattern">
+
+The `sample` modifier wraps `exec` in the modifier chain. After the
+inner command runs, `sample` delegates to the Sample Api for processing.
+Provider components install middleware via `Sample.around()` to handle
+sample calls.
+
+<StubProvider model="smoke-model">
+
+With a provider active, sample blocks route through its middleware.
+The stub provider returns a canned response containing the model name:
+
+```bash sample exec
+echo "this output is replaced by the sample middleware"
+```
+
+Bracket params allow targeting a specific model:
+
+```bash sample[model=smoke-model] exec
+echo "explicitly targeting smoke-model"
+```
+
+</StubProvider>
+
+</Section>
+
+<Section title="Nested Providers">
+
+Nested providers compose via Effection's middleware chain. The innermost
+provider handles sample calls by default (no model specified). When an
+explicit model is requested, the call routes through the chain until a
+matching provider is found.
+
+<StubProvider model="outer-smoke">
+
+<InnerStubProvider model="inner-smoke">
+
+No model — innermost provider handles:
+
+```bash sample exec
+echo "routed to inner"
+```
+
+Explicit model targeting the outer provider — inner passes through:
+
+```bash sample[model=outer-smoke] exec
+echo "routed to outer"
+```
+
+</InnerStubProvider>
+
+</StubProvider>
+
+</Section>
+
+<Section title="Sample Component">
+
+The `<Sample>` component captures its children's rendered output (or
+accepts a `prompt` prop) and routes it through the Sample Api for LLM
+processing. It uses `output()` to produce rendered output and
+`renderChildren()` to capture children.
+
+Self-closing mode — prompt sent directly to the provider:
+
+<StubProvider model="sample-stub">
+
+<Sample prompt="summarize this" model="sample-stub" />
+
+With children — children are rendered first, then sampled:
+
+<Sample model="sample-stub">
+This is child content to be processed.
+</Sample>
+
+</StubProvider>
+
+</Section>
+
 <Section title="Durability">
 
 Every component import and code execution is recorded in a journal.
@@ -246,31 +361,42 @@ This document exercises every feature of the system:
 
 ```bash exec
 cat <<'EOF'
-| Feature                  | Exercised by                            |
-|--------------------------|-----------------------------------------|
-| Root frontmatter         | Title and version in opening paragraph  |
-| Component with props     | <Section title>, <Note message>         |
-| Required props           | <Note message> (message is required)    |
-| Default props            | <Note> uses level=info by default       |
-| Content slot             | <Section> wraps children via <Content/> |
-| Nested expansion         | Section > Feature > Note (3 levels)     |
-| Dotted component name    | <Tips.Formatting />                     |
-| exec modifier            | Multiple bash exec blocks               |
-| silent modifier          | bash silent exec block                  |
-| Non-executable code      | yaml block (passthrough)                |
-| Markdown healing         | Unclosed bold before <Badge />          |
-| No-inputs component      | <Badge /> accepts zero props            |
-| meta interpolation       | {meta.emoji} in Section and Note        |
-| props interpolation      | {props.title}, {props.message}, etc.    |
-| Props passthrough        | <PropDemo greeting="Hey" subject="w">  |
-| Durability               | Timestamp stable across reruns          |
-| eval modifier            | js eval blocks with shared bindings     |
-| persist modifier         | js persist eval block, resource lifetime|
-| persist resource survival| spawn in persist eval + when() converge |
-| timeout modifier         | js timeout=30s eval block               |
-| eval + exec coexistence  | Both modifier types in same document    |
-| findFreePort VM global   | yield* findFreePort() in eval block     |
-| eval binding interpolation| {port} in exec block from eval binding |
+| Feature                   | Exercised by                            |
+|---------------------------|-----------------------------------------|
+| Root frontmatter          | Title and version in opening paragraph  |
+| Component with props      | <Section title>, <Note message>         |
+| Required props            | <Note message> (message is required)    |
+| Default props             | <Note> uses level=info by default       |
+| Content slot              | <Section> wraps children via <Content/> |
+| Nested expansion          | Section > Feature > Note (3 levels)     |
+| Dotted component name     | <Tips.Formatting />                     |
+| exec modifier             | Multiple bash exec blocks               |
+| silent modifier           | bash silent exec block                  |
+| Non-executable code       | yaml block (passthrough)                |
+| Markdown healing          | Unclosed bold before <Badge />          |
+| No-inputs component       | <Badge /> accepts zero props            |
+| meta interpolation        | {meta.emoji} in Section and Note        |
+| props interpolation       | {props.title}, {props.message}, etc.    |
+| Props passthrough         | <PropDemo greeting="Hey" subject="w">  |
+| Durability                | Timestamp stable across reruns          |
+| eval modifier             | js eval blocks with shared bindings     |
+| persist modifier          | js persist eval block, resource lifetime|
+| persist resource survival | spawn in persist eval + when() converge |
+| timeout modifier          | js timeout=30s eval block               |
+| eval + exec coexistence   | Both modifier types in same document    |
+| findFreePort VM global    | yield* findFreePort() in eval block     |
+| eval binding interpolation| {port} in exec block from eval binding  |
+| daemon modifier           | bash daemon exec starts background proc |
+| daemon + when readiness   | Daemon server polled until ready        |
+| sample modifier           | bash sample exec delegates to Sample Api|
+| bracket params            | sample[model=X] targets specific model  |
+| provider pattern          | StubProvider installs Sample middleware  |
+| nested providers          | Inner/outer providers, innermost wins   |
+| per-component eval scope  | Each provider gets isolated middleware   |
+| props in env.values       | model prop available in eval blocks     |
+| Sample component          | <Sample prompt>, <Sample> with children |
+| output() function         | Sample component calls output()         |
+| renderChildren() closure  | Sample component captures children      |
 EOF
 ```
 

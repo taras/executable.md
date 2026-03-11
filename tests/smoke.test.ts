@@ -5,7 +5,8 @@
  * interpolation, component expansion, nested components, dotted names,
  * executable code blocks, silent modifier, props, Content slot, markdown
  * healing, non-executable passthrough, eval blocks with shared bindings,
- * persist modifier, and timeout modifier.
+ * persist modifier, timeout modifier, daemon modifier, sample modifier,
+ * bracket params, provider pattern, and nested providers.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
@@ -25,7 +26,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test"],
+      componentDirs: ["smoke-test", "components"],
       freshness: false,
     });
 
@@ -128,6 +129,44 @@ describe("smoke test", () => {
     expect(output).toContain("findFreePort VM global");
     expect(output).toContain("eval binding interpolation");
 
+    // ----- Background Processes section (daemon) -----
+    expect(output).toContain("§ Background Processes");
+    // The daemon server responds with "daemon-ok"
+    expect(output).toContain("daemon-ok");
+
+    // ----- Sample Modifier section -----
+    expect(output).toContain("§ Sample Modifier and Provider Pattern");
+    // StubProvider returns "[response-from-smoke-model]"
+    expect(output).toContain("[response-from-smoke-model]");
+    // The raw exec output should be replaced by the sample middleware
+    expect(output).not.toContain("this output is replaced by the sample middleware");
+
+    // ----- Nested Providers section -----
+    expect(output).toContain("§ Nested Providers");
+    // No model → innermost handles
+    expect(output).toContain("[response-from-inner-smoke]");
+    // Explicit model=outer-smoke → outer handles
+    expect(output).toContain("[response-from-outer-smoke]");
+
+    // ----- Sample Component section -----
+    expect(output).toContain("§ Sample Component");
+    // Self-closing with prompt — StubProvider returns [response-from-sample-stub]
+    expect(output).toContain("[response-from-sample-stub]");
+    // With children — children rendered then sampled
+    // The children text should NOT appear raw (it's consumed by the Sample component)
+
+    // ----- Smoke test summary table — new entries -----
+    expect(output).toContain("daemon modifier");
+    expect(output).toContain("sample modifier");
+    expect(output).toContain("bracket params");
+    expect(output).toContain("provider pattern");
+    expect(output).toContain("nested providers");
+    expect(output).toContain("per-component eval scope");
+    expect(output).toContain("props in env.values");
+    expect(output).toContain("Sample component");
+    expect(output).toContain("output() function");
+    expect(output).toContain("renderChildren() closure");
+
     // ----- Durability section -----
     expect(output).toContain("Run at:");
 
@@ -145,7 +184,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test"],
+      componentDirs: ["smoke-test", "components"],
       freshness: false,
     });
 
@@ -155,7 +194,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test"],
+      componentDirs: ["smoke-test", "components"],
       freshness: false,
     });
 

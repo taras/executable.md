@@ -349,4 +349,37 @@ describe("parseInfoString", () => {
       executable: false,
     });
   });
+
+  // Bracket param tests
+  it("parses bracket params: sample[model=phi3-mini]", function*() {
+    const result = parseInfoString("bash sample[model=phi3-mini] exec");
+    expect(result).toMatchObject({
+      language: "bash",
+      modifiers: [
+        { name: "sample", params: "model=phi3-mini" },
+        { name: "exec" },
+      ],
+      executable: true,
+    });
+  });
+
+  it("parses bracket params with different key", function*() {
+    const result = parseInfoString("bash sample[temperature=0.7] exec");
+    expect(result).toMatchObject({
+      modifiers: [
+        { name: "sample", params: "temperature=0.7" },
+        { name: "exec" },
+      ],
+    });
+  });
+
+  it("bracket params without value treated as params", function*() {
+    const result = parseInfoString("bash sample[brief] exec");
+    expect(result).toMatchObject({
+      modifiers: [
+        { name: "sample", params: "brief" },
+        { name: "exec" },
+      ],
+    });
+  });
 });

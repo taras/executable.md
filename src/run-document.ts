@@ -48,6 +48,7 @@ import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
+import { sampleFactory } from "./modifiers/sample.ts";
 import { createEvalContext, EvalCtxKey } from "./eval-context.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
@@ -79,9 +80,6 @@ export interface RunDocumentOptions {
 
   /** Custom modifier factories to register */
   modifiers?: Record<string, ModifierFactory>;
-
-  /** Sample factory — if not provided, sample modifier will error */
-  sampleHandler?: ModifierFactory;
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +358,6 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
     componentDirs = ["components", "."],
     freshness = true,
     modifiers: customModifiers = {},
-    sampleHandler,
   } = options;
 
   // Install runtime context
@@ -397,9 +394,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
   registry.set("persist", persistFactory);
   registry.set("timeout", timeoutFactory);
   registry.set("daemon", daemonFactory);
-  if (sampleHandler) {
-    registry.set("sample", sampleHandler);
-  }
+  registry.set("sample", sampleFactory);
   for (const [name, handler] of Object.entries(customModifiers)) {
     registry.set(name, handler);
   }
