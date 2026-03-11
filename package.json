@@ -12,11 +12,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@effectionx/converge": "^0.1.3",
     "@effectionx/durable-effects": "https://pkg.pr.new/thefrontside/effectionx/@effectionx/durable-effects@180",
     "@effectionx/durable-streams": "https://pkg.pr.new/thefrontside/effectionx/@effectionx/durable-streams@179",
     "@effectionx/middleware": "0.1.0",
+    "@effectionx/scope-eval": "^0.1.2",
+    "@effectionx/timebox": "^0.4.2",
+    "acorn": "^8.16.0",
     "effection": "4.1.0-alpha.7",
     "gray-matter": "^4.0.3",
+    "magic-string": "^0.30.21",
     "remend": "^1.2.2"
   },
   "devDependencies": {

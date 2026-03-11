@@ -37,3 +37,24 @@ export type {
   CodeBlockWorkflow,
 } from "./src/modifiers.ts";
 export { useCodeBlock, CodeBlockCtx } from "./src/modifiers.ts";
+
+// ---------------------------------------------------------------------------
+// Eval system (generator eval blocks)
+// ---------------------------------------------------------------------------
+
+export type { EvalEnv } from "./src/eval-env.ts";
+export { EvalEnvCtx, EvalScopeCtx } from "./src/eval-env.ts";
+
+export type { EvalContext } from "./src/eval-context.ts";
+export { EvalCtxKey, createEvalContext, compileBlock } from "./src/eval-context.ts";
+
+export { evalFactory } from "./src/eval-handler.ts";
+export { persistFactory } from "./src/modifiers/persist.ts";
+export { timeoutFactory, parseDuration } from "./src/modifiers/timeout.ts";
+
+export type { TransformResult } from "./src/eval-transform.ts";
+export {
+  transformBlock,
+  serializeExports,
+  isJson,
+} from "./src/eval-transform.ts";
