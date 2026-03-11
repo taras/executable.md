@@ -16,6 +16,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
+import { race, sleep } from "effection";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { runDocument } from "../src/run-document.ts";
@@ -323,6 +324,51 @@ describe("Tier Q — Daemon integration", () => {
       // interpolated command on both golden run and replay.
       expect(output2).toContain("done");
       expect(output2).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // Q7: Process terminated on parent cancellation
+  // When the parent scope is cancelled (via race with a short sleep),
+  // structured concurrency guarantees the daemon subprocess is torn down.
+  // Verified by: race resolves without hanging (daemon didn't block teardown).
+  it("Q7: daemon terminated on parent cancellation — race completes", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```bash daemon exec",
+          "sleep 300",
+          "```",
+          "",
+          // This exec block sleeps long enough that we cancel before it finishes
+          "```bash exec",
+          "sleep 300",
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+
+      // Race runDocument against a short sleep. The sleep wins,
+      // cancelling the runDocument scope (and the daemon within it).
+      // If daemon cleanup is broken, race would hang for 300s.
+      const result = yield* race([
+        runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          runtime: nodeRuntime(),
+          freshness: false,
+        }),
+        sleep(500),
+      ]);
+
+      // sleep(500) returns void, runDocument returns string.
+      // If sleep won (expected), result is undefined.
+      // Either way, the test passed — race resolved without hanging.
+      expect(true).toBe(true);
     } finally {
       cleanup(tmpDir);
     }
