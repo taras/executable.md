@@ -14,7 +14,7 @@
 import { ephemeral } from "@effectionx/durable-streams";
 import { daemon } from "@effectionx/process";
 import type { ModifierFactory } from "../modifiers.ts";
-import { useCodeBlock, buildCommand } from "../modifiers.ts";
+import { useCodeBlock } from "../modifiers.ts";
 import { EvalScopeCtx } from "../eval-env.ts";
 
 // ---------------------------------------------------------------------------
@@ -49,15 +49,13 @@ export const daemonFactory: ModifierFactory = (_params) =>
         *[Symbol.iterator]() {
           const evalScope = yield* EvalScopeCtx.expect();
 
-          // Build command array and join for daemon() which takes a string
-          const commandParts = buildCommand(ctx.language, ctx.content);
-          const commandStr = commandParts.join(" ");
-
-          // Fork into eval scope — lifetime tied to component expansion.
-          // daemon() never resolves. If the process exits prematurely,
-          // daemon() throws, propagating the error to the eval scope.
+          // The block content is a raw shell command (e.g. the body of a
+          // ```bash daemon exec``` block). Pass it directly to daemon()
+          // with shell:true so @effectionx/process invokes the system
+          // shell instead of splitting with shellwords — which would
+          // mangle commands containing nested quotes.
           yield* evalScope.eval(function* () {
-            yield* daemon(commandStr);
+            yield* daemon(ctx.content, { shell: true });
           });
         },
       };

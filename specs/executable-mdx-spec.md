@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Implementing agent
-**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (protocol-specification, effection-integration, DECISIONS), `@effectionx/durable-effects` (effect-types, guards), Divergence API (`lib/divergence.ts`)
+**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (protocol-specification, effection-integration, DECISIONS), `@effectionx/durable-effects` (effect-types, guards), Divergence API (`lib/divergence.ts`), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`)
 
 ---
 
@@ -13,10 +13,11 @@ component invocations and annotated code blocks. The system treats each
 document as a durable workflow: text is emitted immediately, component
 references are resolved from the file system and expanded recursively,
 and code blocks marked as executable are either run as subprocess
-commands via `durableExec` or evaluated in-process as Effection
-generator operations via `durableEval`. The journal records every I/O
-operation so that execution survives crashes and replays from the
-journal on restart.
+commands via `durableExec`, evaluated in-process as Effection
+generator operations via `durableEval`, or spawned as long-running
+background processes via the `daemon` modifier. The journal records
+every I/O operation so that execution survives crashes and replays
+from the journal on restart.
 
 The system is built entirely on the existing durable execution
 infrastructure — `createDurableOperation`, `durableExec`, `durableEval`,
@@ -24,9 +25,11 @@ infrastructure — `createDurableOperation`, `durableExec`, `durableEval`,
 additions are `durableImportComponent` (a durable effect that wraps
 the Resolve Api and `DurableRuntime` file read into a single journaled
 operation, with a custom `useImportComponentGuard` for staleness
-detection) and the in-process evaluation system (source transform,
+detection), the in-process evaluation system (source transform,
 shared VM context, binding environment, and eval scope for resource
-lifetime management — see §4).
+lifetime management — see §4), and daemon process management (the
+`daemon` terminal modifier, eval binding interpolation, and the
+provider component pattern — see §3.3 and §6.6–6.7).
 
 ### 1.1 Example
 
@@ -445,6 +448,7 @@ registry.set("sample", sampleFactory);
 registry.set("eval", evalFactory);
 registry.set("persist", persistFactory);
 registry.set("timeout", timeoutFactory);
+registry.set("daemon", daemonFactory);
 ```
 
 Custom factories can be provided via `RunDocumentOptions.modifiers`.
@@ -532,6 +536,92 @@ export const evalFactory: ModifierFactory = (_params) =>
     return { output: "", exitCode: 0, stderr: "" };
   })();
 ```
+
+**`daemon`** — spawns a long-running subprocess and immediately
+returns control to the document. The process is alive for the
+duration of component expansion and killed when the component scope
+closes. Unlike `exec`, it produces no journal entry and never waits
+for the process to exit.
+
+`daemon` is a **terminal modifier** — it ignores `next()` and does
+not call the inner chain. Because the detection rule (§3.2) requires
+`exec` or `eval` as a word in the info string, `daemon` blocks are
+written with `exec` present:
+
+````markdown
+```bash daemon exec
+./server --port {port} --nobrowser
+```
+````
+
+The `exec` modifier appears in the chain but is never invoked —
+`daemon` is outermost and ignores `next`. The presence of `exec` in
+the info string is purely syntactic: it satisfies the detection rule
+and signals to readers that this block runs a command.
+
+| Property | `exec` | `daemon` |
+|---|---|---|
+| Waits for exit | Yes | No |
+| Journal entry | Yes — stdout/stderr/exitCode | No |
+| Crash detection | Via non-zero exit code in result | Via `daemon()` from `@effectionx/process` throwing |
+| Lifetime | Until command exits | Until component scope closes |
+| Replay behavior | Returns stored result, no subprocess | Spawns fresh subprocess every run |
+
+```typescript
+import { daemon } from "@effectionx/process";
+
+export const daemonFactory: ModifierFactory = (_params) =>
+  (_args, _next) => (function* () {
+    const ctx = yield* useCodeBlock();
+
+    // Bridge from Workflow (durable) to Operation (ephemeral) —
+    // daemon produces no journal entry, so all its effects are ephemeral.
+    const launchDaemon = {
+      *[Symbol.iterator]() {
+        const evalScope = yield* EvalScopeCtx.expect();
+
+        // ctx.content is already interpolated by the expansion engine
+        // before the modifier chain runs — no interpolation needed here.
+        const commandParts = buildCommand(ctx.language, ctx.content);
+        const commandStr = commandParts.join(" ");
+
+        // Fork into eval scope — lifetime tied to component expansion.
+        // daemon() never resolves. If the process exits prematurely,
+        // daemon() throws DaemonExitError, propagating to the eval scope.
+        yield* evalScope.eval(function* () {
+          yield* daemon(commandStr);
+        });
+      },
+    };
+    yield* ephemeral(launchDaemon);
+
+    // Control returns here immediately after the fork.
+    return { output: "", exitCode: 0, stderr: "" };
+  })();
+```
+
+**Process lifetime.** The forked task calls `daemon(command)` from
+`@effectionx/process`. `daemon` spawns the process and suspends
+indefinitely. When the eval scope closes (component expansion
+completes), the forked task is cancelled, which tears down the daemon
+and terminates the subprocess. No explicit teardown, no finalizer
+registration, no lifecycle hooks are required — Effection's structured
+concurrency handles it.
+
+**Crash propagation.** If the process exits prematurely, `daemon()`
+throws with a descriptive error. This error propagates to the
+`evalScope`, which tears it down. The eval scope teardown propagates
+to the component expansion, failing it before any child blocks are
+attempted. The error surfaces as an `ErrorSegment`.
+
+**Replay behavior.** `daemon` is not durable. It runs on every
+document execution, including full replay runs. On a full replay,
+all `sample` journal entries are present and returned directly — the
+daemon's endpoint is never called. The process starts, runs for the
+duration of expansion, and is terminated when the component scope
+closes — without serving a single request. This is harmless overhead;
+the alternative (conditional daemon startup based on journal state)
+would couple the modifier to the durable protocol.
 
 #### Built-in wrapping handlers
 
@@ -852,6 +942,11 @@ Both journal entries are written; the document gets nothing. The
 LLM call still happens because `silent` wraps `sample` — it calls
 `next()` which runs the entire inner chain before discarding.
 
+**`daemon exec`** — `daemon` is the outermost terminal modifier. It
+ignores `next` entirely — `exec` is never invoked. `daemon` forks the
+command as a background process into the eval scope. No journal entry.
+The process lives until the component scope closes.
+
 Future modifiers (not yet specified):
 
 | Modifier | Type | Behavior |
@@ -1006,6 +1101,8 @@ export function createEvalContext(
     createChannel, each, suspend, createSignal,
     // Convergence — poll and wait for conditions
     when,
+    // Port allocation — find available TCP port
+    findFreePort,
     // Standard globals
     console,
     // Host-provided extras
@@ -1017,6 +1114,72 @@ export function createEvalContext(
 
 Set on the root document scope so all eval blocks share the same VM
 context. Handlers access it via `ephemeral(EvalCtxKey.expect())`.
+
+#### `findFreePort`
+
+`findFreePort` is exposed in the eval VM sandbox as a standalone
+Effection `Operation<number>`. It binds a `node:net` TCP server to
+port 0 (OS-assigned), reads the port number, and closes the server.
+It uses Effection's structured concurrency primitives (`once` from
+`@effectionx/node` for event bridging, `race` for error handling):
+
+```typescript
+import { race } from "effection";
+import { once } from "@effectionx/node";
+import { createServer } from "node:net";
+
+export function* findFreePort(): Operation<number> {
+  const server = createServer();
+
+  const listening = once(server, "listening");
+  const error = once<[Error]>(server, "error");
+
+  server.listen(0);
+
+  try {
+    const rethrowError: Operation<never> = {
+      *[Symbol.iterator]() {
+        const [err] = yield* error;
+        throw err;
+      },
+    } as Operation<never>;
+
+    yield* race([listening, rethrowError]);
+
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") {
+      throw new Error("findFreePort: unexpected address format");
+    }
+    return addr.port;
+  } finally {
+    server.close();
+  }
+}
+```
+
+The returned port number is a JSON-serializable primitive. When used
+in an eval block, it is exported to `env.values` and journaled as
+part of the `durableEval` result. On replay, the stored value is
+restored to `env.values` without calling `findFreePort()` again.
+
+There is a small race window between closing the server and the
+caller binding the port — acceptable in practice, since daemon
+processes are expected to bind immediately after allocation.
+
+#### `when`
+
+`when` from `@effectionx/converge` retries an inner operation with
+backoff until it completes without throwing. It is the idiomatic way
+to poll a readiness endpoint:
+
+```typescript
+yield* when(function* () {
+  const response = yield* fetch(`http://127.0.0.1:${port}/health`);
+  if (!response.ok) throw new Error(`Not ready: ${response.status}`);
+});
+```
+
+`when` handles the retry loop, backoff, and timeout internally.
 
 #### Compiling blocks
 
@@ -1133,11 +1296,15 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | `src/eval-context.ts` | `createEvalContext()`, `compileBlock()`, `EvalCtxKey`, `EvalContext` |
 | `src/eval-env.ts` | `EvalEnv`, `EvalEnvCtx`, `EvalScopeCtx`, `PersistFlagCtx` |
 | `src/eval-handler.ts` | `evalFactory` |
+| `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
+| `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
+| `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
-`@effectionx/converge`, `acorn`, `magic-string`.
+`@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
+`acorn`, `magic-string`.
 
 ---
 
@@ -1679,10 +1846,18 @@ function* expandSegments(
       }
 
       case "codeBlock": {
+        // Interpolate eval bindings into content before the modifier chain.
+        // EvalEnvCtx may not be set (e.g., blocks outside component expansion),
+        // so we use .get() and fall back to the original content.
+        const evalEnv = yield* EvalEnvCtx.get();
+        const interpolatedContent = evalEnv
+          ? interpolateEvalBindings(segment.content, evalEnv.values)
+          : segment.content;
+
         // Compose modifier chain from info string and run it
         const context: CodeBlockContext = {
           language: segment.language,
-          content: segment.content,
+          content: interpolatedContent,
           // componentName threaded from expansion context
         };
         const chain = composeModifierChain(
@@ -1774,13 +1949,24 @@ function* expandComponent(
     validatedProps,
   );
 
-  // Recurse with augmented hide set
+  // Recurse with augmented hide set.
+  // Each component gets its own fresh binding environment so that
+  // eval blocks within a component share bindings but don't leak
+  // into parent or sibling components. This is critical for the
+  // provider pattern (§6.6) where each provider has isolated
+  // port/URL bindings.
   const newHideSet = new Set([...hideSet, name]);
-  return yield* expandSegments(
-    substituted,
-    definition.meta,
-    validatedProps,
-    newHideSet,
+  const componentEnv: EvalEnv = { values: {} };
+  return yield* EvalEnvCtx.with(
+    componentEnv,
+    function* () {
+      return yield* expandSegments(
+        substituted,
+        definition.meta,
+        validatedProps,
+        newHideSet,
+      );
+    },
   );
 }
 ```
@@ -2005,6 +2191,205 @@ color: blue
 <!-- Error: Unknown prop "size" passed to <Badge /> -->
 <Badge size="lg" />
 ```
+
+### 6.6 Eval binding interpolation
+
+Inside any executable code block's **content**, bare `{name}`
+references (no namespace prefix) resolve against `env.values` — the
+eval binding environment populated by preceding `eval` blocks within
+the same component:
+
+````markdown
+```ts eval
+const port = yield* findFreePort();
+```
+
+```bash daemon exec
+./server --port {port}
+```
+````
+
+`{port}` resolves to the number exported by the first block. The
+substituted content is used to build the subprocess command.
+
+#### Interpolation syntax and precedence
+
+Bare `{name}` references use JavaScript identifier syntax:
+
+```
+\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}
+```
+
+Namespaced references (`{meta.*}`, `{props.*}`) contain a `.` and
+are excluded — they are handled by the existing interpolation pass
+for text segments. Bare references only match against `env.values`.
+If `env.values` has no key `name`, the reference `{name}` is left
+verbatim. Non-string values are converted via `String()`.
+
+Note: `{meta.*}` and `{props.*}` interpolation applies only to
+**text segments**, not to code block content. Code blocks receive
+only eval binding interpolation. To use a prop value in a code block,
+capture it into a binding via an `eval` block first.
+
+#### Where interpolation runs
+
+Eval binding interpolation runs **once in the expansion engine**, in
+`expandSegments`, immediately before the modifier chain is composed
+for a `codeBlock` segment. By the time any modifier factory receives
+`ctx.content`, the content is already fully interpolated — modifiers
+are not responsible for text preparation and do not need to know
+interpolation exists.
+
+```typescript
+function interpolateEvalBindings(
+  content: string,
+  bindings: Record<string, unknown>,
+): string {
+  return content.replace(
+    /\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g,
+    (match, key) => key in bindings ? String(bindings[key]) : match,
+  );
+}
+```
+
+This is a runtime operation — deterministic from `env.values` and
+the block source. It produces no journal entry. On replay,
+`env.values` is populated from the stored `durableEval` result (§4.5)
+before any subsequent blocks execute, so interpolation produces the
+same substitutions as the original run.
+
+#### Serialization constraint
+
+Only JSON-serializable values in `env.values` are stored in the
+journal (§4.1). Non-serializable values (functions, class instances)
+remain in `env.values` as live references during the current run but
+are absent on replay. For eval binding interpolation purposes this is
+acceptable: values used in `{name}` substitutions are almost always
+primitives (port numbers, URLs, strings) which are JSON-serializable
+and round-trip correctly through the journal.
+
+### 6.7 Provider component pattern
+
+A **provider component** is a regular markdown component whose body
+follows a structured pattern that manages background process lifecycle
+for its subtree. It composes `eval` + `daemon` + `eval` (readiness)
++ `<children />` into a reusable component — no framework-level
+configuration, no `RunDocumentOptions` changes.
+
+#### Structure
+
+1. An `eval` block that allocates resources and exports bindings
+   (port, URLs).
+2. A `daemon` block that starts the background process using those
+   bindings.
+3. An `eval` block that polls for readiness using `when`.
+4. `<children />` — the subtree that uses the running process.
+
+````markdown
+---
+inputs:
+  command:
+    type: string
+    required: true
+---
+
+```ts eval
+const port = yield* findFreePort();
+const baseUrl = `http://127.0.0.1:${port}`;
+```
+
+```bash daemon exec
+./server --port {port} --nobrowser
+```
+
+```ts eval
+yield* when(function* () {
+  const response = yield* fetch(`${baseUrl}/health`);
+  if (!response.ok) throw new Error(`Not ready: ${response.status}`);
+});
+```
+
+<children />
+````
+
+#### Execution sequence
+
+**Block 1 — resource allocation:**
+`findFreePort()` is available as a VM global. The eval block exports
+`port` and `baseUrl` to `env.values`. `durableEval` journals the
+result.
+
+**Block 2 — daemon spawn:**
+`{port}` is substituted from `env.values` into the command content
+before `buildCommand` runs. The resulting command is forked into the
+eval scope. Control returns immediately. No journal entry.
+
+**Block 3 — readiness:**
+`when` polls with retries until the server responds. `durableEval`
+journals the result.
+
+**`<children />`:**
+Child expansion runs with the server alive and ready. `sample` calls
+in children reach the server at `baseUrl`.
+
+**Component scope closes:**
+The eval scope closes. The daemon task is cancelled. The subprocess
+is terminated.
+
+#### How `sample` middleware accesses the server
+
+The `sample` modifier delegates to the Sample Api (§3.4). A
+middleware layer reads the server URL from `env.values`, which is on
+the scope and accessible to all middleware running within the
+component's expansion:
+
+```typescript
+scope.around(Sample, {
+  *sample([context], next): Operation<string> {
+    const env = yield* ephemeral(EvalEnvCtx.expect());
+    const baseUrl = env.values.baseUrl as string;
+    return yield* callLLM(baseUrl, context);
+  },
+});
+```
+
+Because `EvalEnvCtx` is set on the component's scope via
+`Context.with()`, this middleware correctly reads the `baseUrl` that
+belongs to the enclosing provider component — not a sibling or
+parent provider's value.
+
+#### Nesting providers
+
+Provider components nest naturally — each establishes its own eval
+scope boundary:
+
+```markdown
+<LlamafileProvider command="./phi3-mini.llamafile">
+  <DatabaseProvider command="./db-server">
+    <MyReport />
+  </DatabaseProvider>
+</LlamafileProvider>
+```
+
+Both providers' scopes are nested — the inner provider is torn down
+before the outer, in standard structured concurrency order.
+
+#### Replay behavior of the provider pattern
+
+On full replay (all `eval` and `sample` journal entries present):
+
+- Block 1 (`findFreePort`): `durableEval` returns the stored result.
+  `port` and `baseUrl` are restored to `env.values`.
+  `findFreePort()` is not called.
+- Block 2 (`daemon exec`): `daemon` runs regardless — the process
+  starts and binds to the stored port. No journal entry.
+- Block 3 (`when`): `durableEval` returns the stored result
+  immediately. No polling.
+- `<children />`: all durable effects replay from the journal.
+- Component closes: daemon terminated.
+
+Total overhead on full replay: one daemon process started and
+terminated after children finish replaying.
 
 ---
 
@@ -2648,6 +3033,63 @@ instead of all under `root`).
 | O1 | Eval scope created before durableRun | `resource(useEvalScope())` runs in outer scope, not inside durable execution |
 | O2 | Eval scope destroyed on document completion | All retained resources cleaned up when expansion finishes |
 
+### Tier P — Eval binding interpolation
+
+| # | Test | Verify |
+|---|------|--------|
+| P1 | Bare binding resolves from `env.values` | `{port}` with `env.values.port = 49821` → `"49821"` in content |
+| P2 | Bare binding with no env entry left verbatim | `{port}` with no `port` in `env.values` → `"{port}"` unchanged |
+| P3 | Bare binding does not match namespaced refs | `{meta.title}` and `{props.name}` not affected by eval binding pass |
+| P4 | Multiple bindings in one content | `{host}:{port}` → both substituted |
+| P5 | Non-string binding converted via `String()` | `env.values.port = 49821` (number) → `"49821"` |
+| P6 | Binding interpolation runs before modifier chain | Resulting `ctx.content` in modifier contains substituted value |
+| P7 | On replay, env restored before interpolation | `durableEval` result restores `port`; subsequent block interpolates correctly |
+| P8 | Non-serializable binding not restored on replay | Function in `env.values` not present after replay; bare `{fn}` left verbatim |
+
+### Tier Q — `daemon` modifier
+
+| # | Test | Verify |
+|---|------|--------|
+| Q1 | `daemon` ignores `next` | `exec` in chain never called — no `durableExec` invocation |
+| Q2 | `daemon` produces no journal entry | Journal has no entry for `daemon` block |
+| Q3 | `daemon` returns empty output | `result.output === ""`, `exitCode === 0` |
+| Q4 | Process forked into eval scope | Process alive during `<children />` expansion |
+| Q5 | Process terminated when component scope closes | After expansion, process is not running |
+| Q6 | Process terminated on component error | If child expansion throws, process still terminated |
+| Q7 | Process terminated on parent cancellation | If parent scope cancelled, process terminated |
+| Q8 | Premature exit propagates as error | Process exits during expansion → `daemon()` throws → `ErrorSegment` in output |
+| Q9 | `{port}` interpolation in daemon content | Binding from preceding `eval` block substituted into command |
+| Q10 | `daemon` without eval scope | Missing `EvalScopeCtx` → clear error |
+| Q11 | Modifier chain: `bash daemon exec` | `daemon` is outermost terminal; `exec` present but never called |
+| Q12 | Replay: daemon starts and stops | On full replay, process spawned and terminated; no live `sample` calls made |
+| Q13 | Replay: stored port used | `env.values.port` restored from journal; daemon binds same port |
+
+### Tier R — VM globals
+
+| # | Test | Verify |
+|---|------|--------|
+| R1 | `findFreePort` accessible in eval block | `yield* findFreePort()` succeeds, returns a number |
+| R2 | `findFreePort` returns usable port | Returned port is bindable (no EADDRINUSE) |
+| R3 | `findFreePort` not called on replay | `durableEval` returns stored port; function not invoked |
+| R4 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
+| R5 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
+| R6 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
+
+### Tier S — Provider component pattern (integration)
+
+| # | Test | Verify |
+|---|------|--------|
+| S1 | Full provider golden run | eval → daemon → when → children → cleanup |
+| S2 | Port flows from eval to daemon | `{port}` in daemon content matches `findFreePort()` result |
+| S3 | Children can call sample after daemon ready | `sample` calls in children reach daemon endpoint |
+| S4 | Daemon terminated after children expand | After `runDocument` completes, process not running |
+| S5 | Provider crash during `when` | Daemon exits before ready → `when` fails → `ErrorSegment` |
+| S6 | Provider crash during children | Daemon exits mid-child-expansion → error propagated |
+| S7 | Nested providers | Outer + inner provider → both start, inner tears down first |
+| S8 | Full replay of provider component | All eval and sample entries replayed; daemon starts and stops; no live HTTP calls |
+| S9 | Partial replay (children not yet journaled) | eval+daemon+when replayed; children run live with daemon available |
+| S10 | Multiple provider instances in parallel | Two provider siblings → two processes, different ports |
+
 ---
 
 ## 13. Walked example: crash recovery
@@ -2732,3 +3174,15 @@ A.md references <C />.
 | 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the journal; on replay they are not restored — this is by design, since non-serializable state can't survive process restart |
 | 34 | Eval blocks produce no rendered output | Eval blocks exist for bindings and side effects; their result is `{ output: "", exitCode: 0, stderr: "" }` — any user-facing output should come from interpolation of the bindings they create |
 | 35 | `@effectionx/middleware` replaces local `src/middleware.ts` | The middleware primitive was extracted to a shared package for reuse across the monorepo; import paths updated throughout |
+| 36 | `daemon` is a terminal modifier that ignores `next` | Process lifetime ≠ command result; `exec` in the chain satisfies the §3.2 detection rule without invoking `durableExec` |
+| 37 | `daemon` uses `evalScope`, not the durable run scope | Lifetime matches component expansion — daemon lives for `<children />` and dies with the component, not the whole document run |
+| 38 | `daemon` produces no journal entry | The process is an ephemeral resource; restarting it on every run including replay is correct since replayed `sample` calls never reach the server |
+| 39 | Eval binding interpolation uses bare `{name}` syntax | Distinct from `{meta.key}` and `{props.key}` namespaces; local eval bindings are local variables, not namespaced data; regex excludes names containing `.` to avoid conflicts |
+| 40 | Eval binding interpolation runs in the expansion engine, not inside modifier factories | Modifiers transform execution results — they are not responsible for preparing source text; one interpolation site in `expandSegments` is consistent with how text segment interpolation already works, and keeps modifier factories free of knowledge about the binding environment |
+| 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
+| 42 | `findFreePort` result journaled via `durableEval`, not as its own durable effect | The port number is a scalar export from the eval block; it round-trips through the journal as part of `durableEval`'s `value.value`; no separate effect type or journal entry needed |
+| 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
+| 44 | Provider lifecycle expressed as a component, not a `RunDocumentOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
+| 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
+| 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; `EvalEnvCtx` is already the shared state carrier for within-component coordination; scope-correct because `EvalEnvCtx` is set per component expansion |
+| 47 | Each component gets a fresh `EvalEnv` | `EvalEnvCtx.with()` wraps component expansion so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |

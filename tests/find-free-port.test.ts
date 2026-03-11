@@ -2,7 +2,7 @@
  * Tier R — findFreePort and VM globals tests.
  *
  * Verifies findFreePort returns a usable port and that VM sandbox
- * globals are accessible.
+ * globals are accessible — both standalone and inside eval blocks.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
@@ -10,8 +10,35 @@ import { race } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";
 import { createServer } from "node:net";
+import { InMemoryStream } from "@effectionx/durable-streams";
+import { nodeRuntime } from "@effectionx/durable-effects";
 import { findFreePort } from "../src/find-free-port.ts";
 import { createEvalContext } from "../src/eval-context.ts";
+import { runDocument } from "../src/run-document.ts";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+
+// ---------------------------------------------------------------------------
+// Helpers for integration tests
+// ---------------------------------------------------------------------------
+
+function makeTempDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ema-r-test-"));
+}
+
+function cleanup(dir: string): void {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function writeFiles(dir: string, files: Record<string, string>): void {
+  for (const [filePath, content] of Object.entries(files)) {
+    const fullPath = path.join(dir, filePath);
+    const fileDir = path.dirname(fullPath);
+    fs.mkdirSync(fileDir, { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  }
+}
 
 describe("Tier R — findFreePort", () => {
   // R1: findFreePort returns a number > 0
@@ -89,6 +116,245 @@ describe("Tier R — VM sandbox globals", () => {
     ];
     for (const name of expected) {
       expect(name in sandbox).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier R — Behavioral integration tests (via runDocument + nodeRuntime)
+// ---------------------------------------------------------------------------
+
+describe("Tier R — findFreePort in eval blocks", () => {
+  // R1 (integration): findFreePort accessible and returns a port inside eval
+  it("R1: findFreePort in eval block returns a port number", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          "const port = yield* findFreePort();",
+          "```",
+          "",
+          "```bash exec",
+          "echo port-found",
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        freshness: false,
+      });
+
+      // Eval block ran without error, exec block produced output
+      expect(output).toContain("port-found");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // R2: Port from findFreePort is usable (bindable) inside eval
+  // Verified by: daemon binding to the port doesn't error
+  it("R2: port from findFreePort is usable — daemon binds to it", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          "const port = yield* findFreePort();",
+          "```",
+          "",
+          // Daemon binds a Node HTTP server to the allocated port
+          "```bash daemon exec",
+          'node -e "require(\'http\').createServer((q,s)=>s.end(\'ok\')).listen({port})"',
+          "```",
+          "",
+          "done",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        freshness: false,
+      });
+
+      // If the port was in use, the daemon would error and we'd see it
+      expect(output).toContain("done");
+      expect(output).not.toContain("EADDRINUSE");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // R3: findFreePort not called on replay — same port restored from journal
+  it("R3: findFreePort not called on replay — stored port reused", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          "const port = yield* findFreePort();",
+          "```",
+          "",
+          "```bash exec",
+          "echo port-is-{port}",
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const runtime = nodeRuntime();
+
+      // Golden run
+      const output1 = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime,
+        freshness: false,
+      });
+
+      // Replay — durableEval returns stored port, findFreePort not invoked
+      const output2 = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime,
+        freshness: false,
+      });
+
+      // Both runs produce the same port (replayed from journal)
+      expect(output1).toContain("port-is-");
+      expect(output2).toContain("port-is-");
+      // Extract port values — they should be identical
+      const port1 = output1.match(/port-is-(\d+)/)?.[1];
+      const port2 = output2.match(/port-is-(\d+)/)?.[1];
+      expect(port1).toBeTruthy();
+      expect(port2).toBeTruthy();
+      expect(port1).toBe(port2);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+describe("Tier R — when in eval blocks", () => {
+  // R4: when accessible in eval block — retries until condition met
+  it("R4: when accessible in eval block — converges on condition", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          "let count = 0;",
+          "yield* when(function*() {",
+          "  count++;",
+          "  if (count < 3) throw new Error('not yet');",
+          "  return count;",
+          "});",
+          "const result = count;",
+          "```",
+          "",
+          "```bash exec",
+          "echo when-passed",
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        freshness: false,
+      });
+
+      // when() converged after 3 retries, block completed
+      expect(output).toContain("when-passed");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // R5: when retries on throw — inner function throws twice, then succeeds
+  it("R5: when retries on throw then succeeds", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          "let attempts = 0;",
+          "const stats = yield* when(function*() {",
+          "  attempts++;",
+          "  if (attempts <= 2) throw new Error('retry');",
+          "  return 'converged';",
+          "});",
+          "const converged = stats.value;",
+          "```",
+          "",
+          "```bash exec",
+          "echo result-{converged}",
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        freshness: false,
+      });
+
+      // when() retried and converged, binding is available
+      expect(output).toContain("result-converged");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // R6: when propagates timeout — assertion never succeeds → error
+  it("R6: when propagates timeout as error", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          "yield* when(function*() {",
+          "  throw new Error('never-ready');",
+          "}, { timeout: 200 });",
+          "```",
+          "",
+          "done",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        freshness: false,
+      });
+
+      // when() timed out — the error should appear in output
+      expect(output).toContain("never-ready");
+    } finally {
+      cleanup(tmpDir);
     }
   });
 });

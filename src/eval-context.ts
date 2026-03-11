@@ -11,6 +11,7 @@ import {
   createChannel, each, suspend, createSignal,
 } from "effection";
 import { when } from "@effectionx/converge";
+import { fetch } from "@effectionx/fetch";
 import { findFreePort } from "./find-free-port.ts";
 import { createContext as vmCreateContext, runInContext } from "node:vm";
 
@@ -58,6 +59,8 @@ export function createEvalContext(
     when,
     // Port allocation — find available TCP port
     findFreePort,
+    // HTTP — Effection-compatible fetch
+    fetch,
     // Standard globals
     console,
     // Host-provided extras

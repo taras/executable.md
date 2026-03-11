@@ -8,7 +8,9 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { daemonFactory } from "../src/modifiers/daemon.ts";
 import { combine } from "@effectionx/middleware";
+import { CodeBlockCtx } from "../src/modifiers.ts";
 import type { ModifierFactory, ModifierMiddleware } from "../src/modifiers.ts";
+import type { Operation } from "effection";
 
 describe("Tier Q — Daemon modifier", () => {
   // Q1: daemonFactory satisfies ModifierFactory type
@@ -59,5 +61,41 @@ describe("Tier Q — Daemon modifier", () => {
     const factory = daemonFactory(undefined);
     // The function arity indicates it accepts (args, next)
     expect(factory.length).toBe(2);
+  });
+
+  // Q10b: daemon without EvalScopeCtx throws a clear error
+  // When the daemon middleware runs in a scope where EvalScopeCtx
+  // is not set, EvalScopeCtx.expect() should throw.
+  it("Q10b: daemon without EvalScopeCtx throws clear error", function* () {
+    const middleware = daemonFactory(undefined);
+    const terminal = function* () {
+      return { output: "", exitCode: 0, stderr: "" };
+    };
+
+    // Provide CodeBlockCtx (required by useCodeBlock) but NOT EvalScopeCtx
+    const fakeContext = {
+      language: "bash",
+      content: "echo hello",
+      blockId: "test:root:0",
+    };
+
+    let threw = false;
+    let errorMessage = "";
+
+    try {
+      yield* CodeBlockCtx.with(fakeContext, function* () {
+        // The daemon middleware generator yields ephemeral operations.
+        // When it reaches EvalScopeCtx.expect() without the context set,
+        // it should throw.
+        yield* middleware([], terminal) as unknown as Operation<unknown>;
+      });
+    } catch (e) {
+      threw = true;
+      errorMessage = e instanceof Error ? e.message : String(e);
+    }
+
+    expect(threw).toBe(true);
+    // The error should mention the missing context
+    expect(errorMessage.toLowerCase()).toMatch(/evalscope|context/);
   });
 });

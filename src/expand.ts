@@ -22,6 +22,7 @@ import type {
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import { EvalEnvCtx } from "./eval-env.ts";
+import type { EvalEnv } from "./eval-env.ts";
 import { validateProps } from "./validate.ts";
 import { healSegment } from "./heal.ts";
 
@@ -101,8 +102,15 @@ export function* expandSegments(
         // Interpolate eval bindings into content before the modifier chain.
         // EvalEnvCtx may not be set (e.g., blocks outside component expansion),
         // so we use .get() and fall back to the original content.
+        //
+        // Skip interpolation for eval blocks — they access bindings directly
+        // via the env preamble (const { name } = env;). Interpolating would
+        // mangle JS template literals like `${name}` into `$<value>`.
         const evalEnv = yield* EvalEnvCtx.get();
-        const interpolatedContent = evalEnv
+        const lastModifier = segment.modifiers[segment.modifiers.length - 1];
+        const isEvalTerminal = lastModifier !== undefined &&
+          lastModifier.name === "eval";
+        const interpolatedContent = evalEnv && !isEvalTerminal
           ? interpolateEvalBindings(segment.content, evalEnv.values)
           : segment.content;
 
@@ -237,14 +245,24 @@ function* expandComponent(
     validatedProps,
   );
 
-  // Recurse with augmented hide set
+  // Recurse with augmented hide set.
+  // Each component gets its own fresh binding environment so that
+  // eval blocks within a component share bindings but don't leak
+  // into parent or sibling components. This is critical for the
+  // provider pattern where each provider has isolated port/URL bindings.
   const newHideSet = new Set([...hideSet, name]);
-  return yield* expandSegments(
-    substituted,
-    definition.meta,
-    validatedProps,
-    newHideSet,
-    ctx,
+  const componentEnv: EvalEnv = { values: {} };
+  return yield* EvalEnvCtx.with(
+    componentEnv,
+    function* () {
+      return yield* expandSegments(
+        substituted,
+        definition.meta,
+        validatedProps,
+        newHideSet,
+        ctx,
+      );
+    },
   );
 }
 
