@@ -6,7 +6,9 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { call } from "effection";
+import { race } from "effection";
+import type { Operation } from "effection";
+import { once } from "@effectionx/node";
 import { createServer } from "node:net";
 import { findFreePort } from "../src/find-free-port.ts";
 import { createEvalContext } from "../src/eval-context.ts";
@@ -23,21 +25,27 @@ describe("Tier R — findFreePort", () => {
   // R3: Returned port is bindable (open a server on it)
   it("R3: returned port is bindable", function* () {
     const port = yield* findFreePort();
-    // Try to bind a server on the returned port
-    const bound = yield* call(function () {
-      return new Promise<boolean>((resolve, reject) => {
-        const server = createServer();
-        server.unref();
-        server.on("error", () => resolve(false));
-        server.listen(port, () => {
-          server.close((err) => {
-            if (err) reject(err);
-            else resolve(true);
-          });
-        });
-      });
-    });
-    expect(bound).toBe(true);
+
+    const server = createServer();
+    const listening = once(server, "listening");
+    const error = once<[Error]>(server, "error");
+
+    server.listen(port);
+
+    try {
+      yield* race([
+        listening,
+        {
+          *[Symbol.iterator]() {
+            const [err] = yield* error;
+            throw err;
+          },
+        } as Operation<never>,
+      ]);
+      // If we reach here, the server bound successfully
+    } finally {
+      server.close();
+    }
   });
 
   // R1b: Two consecutive calls return different ports
