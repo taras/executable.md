@@ -27,6 +27,8 @@ import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { validateProps } from "./validate.ts";
 import { healSegment } from "./heal.ts";
+import { scanSegments } from "./scanner.ts";
+import { renderSegments } from "./render.ts";
 
 // ---------------------------------------------------------------------------
 // Types for the expansion context
@@ -268,6 +270,59 @@ function* expandComponent(
     );
     childEvalScope = unbox(result) as EvalScope;
   }
+
+  // Inject render closures into the component's binding environment.
+  // These are generator functions that eval blocks can yield* to render
+  // content within the current expansion context.
+  //
+  // renderChildren() — expands and renders this component's children.
+  // render(markdown) — scans, expands, and renders arbitrary markdown.
+  //
+  // Both wrap their expandSegments call in EvalEnvCtx.with() and
+  // EvalScopeCtx.with() so the full expansion context is available
+  // regardless of which task the closure runs in (e.g., evalScope.eval).
+  //
+  // These are non-serializable (functions) so serializeExports silently
+  // omits them from the journal.
+  const capturedMeta = definition.meta;
+  const capturedProps = validatedProps;
+  const capturedHideSet = newHideSet;
+  const capturedCtx = ctx;
+
+  componentEnv.values.renderChildren = function* () {
+    return yield* EvalEnvCtx.with(componentEnv, function* () {
+      if (childEvalScope) {
+        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+          const expanded = yield* expandSegments(
+            children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+          );
+          return renderSegments(expanded);
+        });
+      }
+      const expanded = yield* expandSegments(
+        children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+      );
+      return renderSegments(expanded);
+    });
+  };
+
+  componentEnv.values.render = function* (markdown: string) {
+    const segments = scanSegments(markdown);
+    return yield* EvalEnvCtx.with(componentEnv, function* () {
+      if (childEvalScope) {
+        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+          const expanded = yield* expandSegments(
+            segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+          );
+          return renderSegments(expanded);
+        });
+      }
+      const expanded = yield* expandSegments(
+        segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+      );
+      return renderSegments(expanded);
+    });
+  };
 
   return yield* EvalEnvCtx.with(
     componentEnv,

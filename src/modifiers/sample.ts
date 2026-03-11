@@ -15,17 +15,10 @@
  * `SampleContext.params` and `SampleContext.model`.
  */
 
-import {
-  createDurableOperation,
-  type Json,
-} from "@effectionx/durable-streams";
-import { unbox } from "@effectionx/scope-eval";
-import type { Operation } from "effection";
 import type { ModifierFactory } from "../modifiers.ts";
 import { useCodeBlock } from "../modifiers.ts";
-import { EvalScopeCtx } from "../eval-env.ts";
-import { Sample } from "../sample-api.ts";
 import type { SampleContext } from "../types.ts";
+import { durableSample } from "../sample/durable-sample.ts";
 
 // ---------------------------------------------------------------------------
 // Param parsing — extract model and text params from info string
@@ -87,31 +80,17 @@ export const sampleFactory: ModifierFactory = (params) =>
         model,
       };
 
-      // Journal the LLM call via createDurableOperation.
+      // Journal the LLM call via durableSample (shared helper).
       // On replay, the stored response is returned without re-calling
       // the inference server.
       const commandPreview = ctx.content
         .slice(0, 30)
         .replace(/\n/g, " ");
 
-      const sampledOutput = (yield createDurableOperation<Json>(
-        {
-          type: "sample",
-          name: `sample:${commandPreview}`,
-        },
-        function* (): Operation<Json> {
-          // Route through the EvalScope so middleware installed by
-          // persist-eval blocks (e.g., LlamafileProvider) is visible.
-          // evalScope.eval() runs the operation in the same spawned task
-          // where Sample.around() installed middleware — GetScope returns
-          // that scope, so the middleware chain is found.
-          const evalScope = yield* EvalScopeCtx.expect();
-          const boxedResult = yield* evalScope.eval(
-            () => Sample.operations.sample(sampleContext),
-          );
-          return unbox(boxedResult) as unknown as Json;
-        },
-      )) as unknown as string;
+      const sampledOutput = yield* durableSample(
+        sampleContext,
+        `sample:${commandPreview}`,
+      );
 
       return {
         output: sampledOutput,

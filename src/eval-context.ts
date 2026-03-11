@@ -15,6 +15,9 @@ import { fetch } from "@effectionx/fetch";
 import { findFreePort } from "./find-free-port.ts";
 import { Sample } from "./sample-api.ts";
 import { callLlamafile } from "./sample/llamafile.ts";
+// durableSample is a Workflow-level helper used by the sample modifier,
+// not needed in the VM sandbox — eval blocks call Sample.operations.sample()
+// directly since they run inside evalScope.eval() where middleware is visible.
 import { createContext as vmCreateContext, runInContext } from "node:vm";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +70,7 @@ export function createEvalContext(
     Sample,
     // Llamafile — HTTP utility for local LLM inference
     callLlamafile,
+
     // Standard globals
     console,
     // Host-provided extras
