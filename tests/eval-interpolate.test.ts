@@ -104,4 +104,21 @@ describe("Tier P — Eval binding interpolation", () => {
     );
     expect(result).toBe("null");
   });
+
+  // P12: Regression — template literal ${name} is mangled by interpolation
+  // The regex matches {name} inside JS template literals like `${name}`,
+  // producing `$<value>`. Eval blocks must skip interpolation entirely
+  // (handled by expand.ts guard). This test documents the collision so
+  // the interpolation function itself is never applied to eval content.
+  it("P12: regression — template literal ${name} would be mangled", function* () {
+    // Demonstrates the collision: if interpolation runs on eval block content
+    // containing `${port}`, the result is `$49821` instead of `${port}`.
+    const result = interpolateEvalBindings(
+      "const url = `http://127.0.0.1:${port}/health`;",
+      { port: 49821 },
+    );
+    // This is the WRONG result — proves why eval blocks must skip interpolation
+    expect(result).toBe("const url = `http://127.0.0.1:$49821/health`;");
+    expect(result).not.toContain("${port}");
+  });
 });
