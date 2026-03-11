@@ -138,4 +138,10 @@ export interface SampleContext {
   language: string;
   params?: string;
   componentName?: string;
+  /**
+   * Model identifier requested by the sample call. Undefined if the author
+   * did not specify a model — in which case the innermost active provider wins.
+   * Set from the sample modifier's bracket params: ```bash sample[model=phi3-mini] exec
+   */
+  model?: string;
 }

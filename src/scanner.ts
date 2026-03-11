@@ -30,6 +30,21 @@ export function parseInfoString(infoString: string): ParsedInfoString {
 
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i]!;
+
+    // Bracket params: sample[model=phi3-mini]
+    const bracketIdx = token.indexOf("[");
+    if (bracketIdx >= 0) {
+      const closeBracket = token.indexOf("]", bracketIdx);
+      if (closeBracket >= 0) {
+        modifiers.push({
+          name: token.slice(0, bracketIdx),
+          params: token.slice(bracketIdx + 1, closeBracket),
+        });
+        continue;
+      }
+    }
+
+    // Plain params: timeout=30s
     const eqIdx = token.indexOf("=");
     if (eqIdx >= 0) {
       modifiers.push({
