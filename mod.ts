@@ -51,6 +51,19 @@ export { EvalCtxKey, createEvalContext, compileBlock } from "./src/eval-context.
 export { evalFactory } from "./src/eval-handler.ts";
 export { persistFactory } from "./src/modifiers/persist.ts";
 export { timeoutFactory, parseDuration } from "./src/modifiers/timeout.ts";
+export { daemonFactory } from "./src/modifiers/daemon.ts";
+
+// ---------------------------------------------------------------------------
+// Eval binding interpolation
+// ---------------------------------------------------------------------------
+
+export { interpolateEvalBindings } from "./src/eval-interpolate.ts";
+
+// ---------------------------------------------------------------------------
+// Port allocation
+// ---------------------------------------------------------------------------
+
+export { findFreePort } from "./src/find-free-port.ts";
 
 export type { TransformResult } from "./src/eval-transform.ts";
 export {

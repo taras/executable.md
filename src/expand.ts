@@ -20,6 +20,8 @@ import type {
   Modifier,
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
+import { interpolateEvalBindings } from "./eval-interpolate.ts";
+import { EvalEnvCtx } from "./eval-env.ts";
 import { validateProps } from "./validate.ts";
 import { healSegment } from "./heal.ts";
 
@@ -96,10 +98,18 @@ export function* expandSegments(
       }
 
       case "codeBlock": {
+        // Interpolate eval bindings into content before the modifier chain.
+        // EvalEnvCtx may not be set (e.g., blocks outside component expansion),
+        // so we use .get() and fall back to the original content.
+        const evalEnv = yield* EvalEnvCtx.get();
+        const interpolatedContent = evalEnv
+          ? interpolateEvalBindings(segment.content, evalEnv.values)
+          : segment.content;
+
         // Compose modifier chain from info string and run it
         const context: CodeBlockContext = {
           language: segment.language,
-          content: segment.content,
+          content: interpolatedContent,
           blockId: `eval:${parentMeta["componentName"] ?? "root"}:${result.length}`,
         };
 

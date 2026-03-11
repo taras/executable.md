@@ -111,6 +111,11 @@ describe("smoke test", () => {
     // timeout eval block — produces no output
     expect(output).not.toContain("startedAt");
 
+    // findFreePort + eval binding interpolation
+    // The eval block allocates a port; the exec block uses {port} syntax.
+    // The output should contain "Server would start on port <number>"
+    expect(output).toMatch(/Server would start on port \d+/);
+
     // But exec blocks in the same document still produce output
     expect(output).toContain("Exec blocks are independent of eval bindings");
 
@@ -120,6 +125,8 @@ describe("smoke test", () => {
     expect(output).toContain("persist resource survival");
     expect(output).toContain("timeout modifier");
     expect(output).toContain("eval + exec coexistence");
+    expect(output).toContain("findFreePort VM global");
+    expect(output).toContain("eval binding interpolation");
 
     // ----- Durability section -----
     expect(output).toContain("Run at:");
