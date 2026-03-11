@@ -53,6 +53,32 @@ export interface ChatMessage {
 // ---------------------------------------------------------------------------
 
 export function buildDefaultMessages(context: SampleContext): ChatMessage[] {
+  // Direct prompt mode: when stdout === command and there's no real exec
+  // context (exitCode 0, no stderr), the caller is passing a plain text
+  // prompt rather than command output to analyze.
+  const isDirectPrompt =
+    context.stdout === context.command &&
+    context.exitCode === 0 &&
+    !context.stderr;
+
+  if (isDirectPrompt) {
+    const systemLines: string[] = [
+      "You are a helpful assistant embedded in a document workflow.",
+      "Respond directly to the user's request.",
+      "Be concise. Output only what is requested — no preamble, no explanation unless asked.",
+    ];
+
+    if (context.params) {
+      systemLines.push(`Instruction: ${context.params}`);
+    }
+
+    return [
+      { role: "system", content: systemLines.join("\n") },
+      { role: "user", content: context.stdout },
+    ];
+  }
+
+  // Exec analysis mode: the context contains real command output to analyze.
   const systemLines: string[] = [
     "You are a precise technical assistant embedded in a durable document workflow.",
     "Analyze the provided command output and respond according to the instructions.",

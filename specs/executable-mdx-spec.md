@@ -827,6 +827,12 @@ interface SampleContext {
   language: string;
   params?: string;
   componentName?: string;
+  /**
+   * Model identifier requested by the sample call. Undefined if the author
+   * did not specify a model — in which case the innermost active provider wins.
+   * Set from the sample modifier's bracket params: ```bash sample[model=phi3-mini] exec
+   */
+  model?: string;
 }
 
 interface SampleApi {
@@ -907,7 +913,139 @@ scope.around(Sample, {
 });
 ```
 
-### 3.5 Modifier parsing
+### 3.5 `callLlamafile()` — inference HTTP utility
+
+**File:** `src/sample/llamafile.ts`
+
+`callLlamafile` is a plain utility function — not user-facing middleware. It is
+called from provider component eval blocks (e.g., `LlamafileProvider.md`)
+with `baseUrl` and `model` closed over at middleware install time. It makes a
+single `/v1/chat/completions` request via `@effectionx/fetch` and returns the
+response content as a string.
+
+It must be available as a VM sandbox global so that eval blocks in provider
+components can reference it without imports. It is added to the eval sandbox
+globals map alongside `Sample`, `useScope`, `findFreePort`, `when`, and `fetch`.
+
+#### Signature
+
+```typescript
+import type { Operation } from "effection";
+import type { SampleContext } from "../types.ts";
+
+export interface LlamafileOptions {
+  /** Temperature for generation. Default: 0 */
+  temperature?: number;
+  /** Maximum tokens to generate. Default: 2048 */
+  maxTokens?: number;
+  /** Build the message array from the SampleContext. Default: buildDefaultMessages */
+  buildMessages?: (context: SampleContext) => ChatMessage[];
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export function* callLlamafile(
+  baseUrl: string,
+  model: string,
+  context: SampleContext,
+  opts?: LlamafileOptions,
+): Operation<string>;
+```
+
+#### Implementation
+
+```typescript
+export function* callLlamafile(
+  baseUrl: string,
+  model: string,
+  context: SampleContext,
+  opts: LlamafileOptions = {},
+): Operation<string> {
+  const {
+    temperature = 0,
+    maxTokens = 2048,
+    buildMessages = buildDefaultMessages,
+  } = opts;
+
+  const messages = buildMessages(context);
+
+  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      temperature,
+      max_tokens: maxTokens,
+      messages,
+    }),
+  })
+    .expect()
+    .json<{ choices: Array<{ message: { content: string } }> }>();
+
+  const content = result.choices?.[0]?.message?.content;
+  if (typeof content !== "string") {
+    throw new Error(
+      `Llamafile server returned unexpected response shape: ${JSON.stringify(result)}`,
+    );
+  }
+
+  return content;
+}
+```
+
+**Why `@effectionx/fetch`:** `fetch` from `@effectionx/fetch` returns an
+Effection-native `Response` — `response.json()` is `Operation<T>`, not
+`Promise<T>`. The entire request/response chain composes with `yield*` and
+cancellation flows through structured concurrency automatically.
+
+**Why not `durableFetch`:** `durableFetch` journals its result. The HTTP
+request to the inference server must not be journaled — `durableSample` already
+journals the complete LLM response. Double-journaling would cause divergence on
+replay.
+
+#### Default message builder
+
+`buildDefaultMessages` supports two modes:
+
+**Direct prompt mode** — when `stdout === command` and `exitCode === 0` with no
+stderr, the caller is passing a plain text prompt (e.g., `<Sample prompt="..."/>`):
+
+```typescript
+function buildDefaultMessages(context: SampleContext): ChatMessage[] {
+  // Direct prompt mode
+  if (context.stdout === context.command && context.exitCode === 0 && !context.stderr) {
+    return [
+      { role: "system", content: "You are a helpful assistant..." },
+      { role: "user", content: context.stdout },
+    ];
+  }
+
+  // Exec analysis mode — real command output to analyze
+  const systemLines = [
+    "You are a precise technical assistant embedded in a durable document workflow.",
+    "Analyze the provided command output and respond according to the instructions.",
+    "Be concise. Output only what is requested.",
+  ];
+  if (context.componentName) systemLines.push(`Context: assisting ${context.componentName}`);
+  if (context.params) systemLines.push(`Instruction: ${context.params}`);
+
+  const userLines: string[] = [];
+  if (context.command) userLines.push(`Command: \`${context.language} -c '${context.command}'\``);
+  if (context.exitCode !== 0) userLines.push(`Exit code: ${context.exitCode}`);
+  if (context.stderr) userLines.push(`Stderr:\n\`\`\`\n${context.stderr}\n\`\`\``);
+  if (context.stdout) userLines.push(`Output:\n\`\`\`\n${context.stdout}\n\`\`\``);
+
+  return [
+    { role: "system", content: systemLines.join("\n") },
+    { role: "user", content: userLines.join("\n\n") },
+  ];
+}
+```
+
+### 3.6 Modifier parsing
 
 The info string is split on whitespace. The first token is the
 language. The remaining tokens are the modifier chain:
@@ -949,7 +1087,7 @@ function parseInfoString(infoString: string): ParsedInfoString {
 }
 ```
 
-### 3.6 What is the command?
+### 3.7 What is the command?
 
 The content of the code block is the command. The language determines
 how it is invoked:
@@ -963,7 +1101,7 @@ how it is invoked:
 
 Multi-line code blocks are passed as a single string to the `-c` flag.
 
-### 3.7 Examples of modifier chain execution
+### 3.8 Examples of modifier chain execution
 
 **`exec` alone** — `exec` runs the command via `durableExec`
 (one journal entry). stdout becomes the output.
@@ -1346,7 +1484,12 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/modifiers/sample.ts` | `sampleFactory` — wrapping modifier for LLM sampling |
 | `src/sample/durable-sample.ts` | `durableSample()` — shared Workflow helper for journaled Sample Api calls |
+| `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` — inference HTTP utility |
+| `src/sample/ollama.ts` | `callOllama()` — Ollama inference HTTP utility |
 | `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
+| `src/cli.ts` | CLI entrypoint with `--verbose` and `--journal` flags |
+| `src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
+| `src/load-journal.ts` | `loadJournal()` — reads/sanitizes JSONL journal for replay |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
@@ -2430,8 +2573,9 @@ and round-trip correctly through the journal.
 A **provider component** is a regular markdown component whose body
 follows a structured pattern that manages background process lifecycle
 for its subtree. It composes `eval` + `daemon` + `eval` (readiness)
-+ `<children />` into a reusable component — no framework-level
-configuration, no `RunDocumentOptions` changes.
++ `eval` (middleware install) + `<children />` into a reusable
+component — no framework-level configuration, no `RunDocumentOptions`
+changes.
 
 #### Structure
 
@@ -2440,14 +2584,37 @@ configuration, no `RunDocumentOptions` changes.
 2. A `daemon` block that starts the background process using those
    bindings.
 3. An `eval` block that polls for readiness using `when`.
-4. `<children />` — the subtree that uses the running process.
+4. An `eval` block that installs Sample Api middleware, closing over
+   `baseUrl` and `model`.
+5. `<children />` — the subtree that uses the running process.
+
+#### `LlamafileProvider.md` — standard library component
+
+**File:** `components/LlamafileProvider.md`
+
+This file is part of the EMA standard library and is distributed
+alongside the EMA package. It is a regular markdown component — no
+code changes to the EMA runtime are required to add it.
 
 ````markdown
 ---
 inputs:
+  model:
+    type: string
+    required: true
+    description: >
+      Model identifier. Serves two purposes: it is passed as the `model` field
+      in every /v1/chat/completions request, and it is the routing key that
+      sample calls use to target this provider. Must be unique among all
+      LlamafileProvider instances active simultaneously in the same document run.
+      Example: "phi3-mini", "qwen3-0.6b"
   command:
     type: string
     required: true
+    description: >
+      Shell command to start the llamafile or llama.cpp server.
+      {port} is substituted with the allocated port number before execution.
+      Example: "./phi3-mini.llamafile --nobrowser"
 ---
 
 ```ts eval
@@ -2456,17 +2623,52 @@ const baseUrl = `http://127.0.0.1:${port}`;
 ```
 
 ```bash daemon exec
-./server --port {port} --nobrowser
+{command} --port {port}
 ```
 
 ```ts eval
 yield* when(function* () {
-  yield* fetch(`${baseUrl}/health`).expect();
+  yield* (yield* fetch(`${baseUrl}/health`)).expect();
+});
+```
+
+```ts eval
+// Install Sample Api middleware on the current component scope.
+// baseUrl and model are closed over here — no context lookup at call time.
+// Routing: if context.model matches our model (or is unspecified), handle it.
+// Otherwise pass through to the next handler (an outer provider or the default).
+const scope = yield* useScope();
+scope.around(Sample, function* ([context], next) {
+  if (context.model !== undefined && context.model !== model) {
+    return yield* next(context);
+  }
+  return yield* callLlamafile(baseUrl, model, context);
 });
 ```
 
 <children />
 ````
+
+#### Prop-to-binding requirement (DEC-EX-09)
+
+Code block content uses bare `{name}` binding interpolation from
+`env.values` (§6.6). `{command}` in the daemon block and `model` in
+the middleware eval block must be present in `env.values` when those
+blocks run.
+
+Both are declared props, not eval results — so they are not
+automatically in `env.values`. The expansion engine must pre-populate
+`env.values` with all declared prop values at component invocation
+time, before any block executes:
+
+```typescript
+// In expandComponent(), before block execution:
+const componentEnv: EvalEnv = { values: { ...validatedProps } };
+```
+
+This makes all props available as bare bindings without any explicit
+capture step in the component body. It is consistent with how
+`findFreePort()` results enter `env.values`.
 
 #### Execution sequence
 
@@ -2477,12 +2679,20 @@ result.
 
 **Block 2 — daemon spawn:**
 `{port}` is substituted from `env.values` into the command content
-before `buildCommand` runs. The resulting command is forked into the
-eval scope. Control returns immediately. No journal entry.
+before `buildCommand` runs. `{command}` is also substituted from
+`env.values` (populated from props via DEC-EX-09). The resulting
+command is forked into the eval scope. Control returns immediately.
+No journal entry.
 
 **Block 3 — readiness:**
 `when` polls with retries until the server responds. `durableEval`
 journals the result.
+
+**Block 4 — middleware install:**
+`callLlamafile` and `Sample` are VM sandbox globals (§3.5). The
+middleware closes over `baseUrl` and `model` at install time. Routing:
+if `context.model` matches the provider's model (or is unspecified),
+handle it; otherwise pass through via `next()`.
 
 **`<children />`:**
 Child expansion runs with the server alive and ready. `sample` calls
@@ -2492,27 +2702,71 @@ in children reach the server at `baseUrl`.
 The eval scope closes. The daemon task is cancelled. The subprocess
 is terminated.
 
-#### How `sample` middleware accesses the server
+#### Usage examples
 
-The `sample` modifier delegates to the Sample Api (§3.4). A
-middleware layer reads the server URL from `env.values`, which is on
-the scope and accessible to all middleware running within the
-component's expansion:
+**Single provider:**
 
-```typescript
-scope.around(Sample, {
-  *sample([context], next): Operation<string> {
-    const env = yield* ephemeral(EvalEnvCtx.expect());
-    const baseUrl = env.values.baseUrl as string;
-    return yield* callLLM(baseUrl, context);
-  },
-});
+```markdown
+<LlamafileProvider model="phi3-mini" command="./phi3-mini.llamafile --nobrowser">
+  <AnalyzeTestFailures />
+</LlamafileProvider>
 ```
 
-Because `EvalEnvCtx` is set on the component's scope via
-`Context.with()`, this middleware correctly reads the `baseUrl` that
-belongs to the enclosing provider component — not a sibling or
-parent provider's value.
+**Multiple models, sequential:**
+
+```markdown
+<LlamafileProvider model="qwen3-0.6b" command="./qwen3-0.6b.llamafile --nobrowser">
+  <ClassifyLogLevel />
+  <ExtractStructuredData />
+</LlamafileProvider>
+
+<LlamafileProvider model="phi3-mini" command="./phi3-mini.llamafile --nobrowser">
+  <InterpretTestFailures />
+</LlamafileProvider>
+```
+
+Each provider spawns its own process on its own port and executes
+sequentially — the second provider's process is not started until the
+first provider's scope closes.
+
+**Multiple models, simultaneous (nested):**
+
+```markdown
+<LlamafileProvider model="qwen3-0.6b" command="./qwen3-0.6b.llamafile --nobrowser">
+  <LlamafileProvider model="phi3-mini" command="./phi3-mini.llamafile --nobrowser">
+    <HybridAnalysis />
+  </LlamafileProvider>
+</LlamafileProvider>
+```
+
+Both processes are alive simultaneously during `<HybridAnalysis />`
+expansion. Sample calls route by `model`:
+
+````markdown
+<!-- inside HybridAnalysis.md -->
+
+```bash sample exec
+classify this output
+```
+<!-- no model → innermost provider wins (phi3-mini) -->
+
+```bash sample[model=phi3-mini] exec
+summarize this
+```
+<!-- explicit model → always phi3-mini regardless of nesting depth -->
+
+```bash sample[model=qwen3-0.6b] exec
+extract entities
+```
+<!-- explicit model → passes through phi3-mini handler, handled by qwen3-0.6b -->
+````
+
+Routing works because the inner provider's middleware is installed
+later and therefore sits higher in the middleware chain (traversed
+first). When `context.model` is `"phi3-mini"`, the inner handler
+accepts it. When `context.model` is `"qwen3-0.6b"`, the inner handler
+calls `next()` and the outer handler accepts it. When `context.model`
+is undefined, the innermost accepting handler wins.
 
 #### Nesting providers
 
@@ -3341,6 +3595,24 @@ instead of all under `root`).
 | S13 | Partial replay (children not yet journaled) | eval+daemon+when replayed; children run live with daemon available |
 | S14 | Multiple provider instances | Two provider siblings → two processes, different ports |
 
+### Tier U — `callLlamafile()` utility
+
+| # | Test | Verify |
+|---|------|--------|
+| U1 | Request sent to correct URL | `POST ${baseUrl}/v1/chat/completions` |
+| U2 | model in request body | Request JSON `model` field matches argument |
+| U3 | temperature and maxTokens in request body | Request JSON matches opts |
+| U4 | Default temperature is 0 | No opts → request body has `temperature: 0` |
+| U5 | Custom buildMessages used | Custom function's output appears in request messages |
+| U6 | Non-ok response throws via expect() | 500 from server → `response.expect()` throws with status in message |
+| U7 | Unexpected response shape throws | Missing `choices[0].message.content` → descriptive error |
+| U8 | Response content returned as string | Return value matches `choices[0].message.content` |
+| U9 | buildDefaultMessages includes command | Context.command appears in user message |
+| U10 | buildDefaultMessages includes stderr | Context.stderr appears in user message when non-empty |
+| U11 | buildDefaultMessages includes params | Context.params appears as "Instruction:" in system prompt |
+| U12 | buildDefaultMessages includes componentName | Context.componentName appears in system prompt |
+| U13 | Direct prompt mode | `stdout === command`, exitCode 0, no stderr → simplified prompt without exec analysis |
+
 ### Tier EO — eval output() function
 
 | # | Test | Verify |
@@ -3473,3 +3745,12 @@ A.md references <C />.
 | 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
 | 53 | Sample component calls `Sample.operations.sample()` directly, not `durableSample()` | `durableSample` yields `DurableEffect`s (Workflow-level), but eval blocks run inside `durableEval`'s evaluator which expects `Operation<Json>` yields; the entire eval block including output is already journaled by `durableEval` |
 | 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |
+| 55 | `daemon()` uses `shell: true` | Matches `bash exec` block semantics — the same command string passed to `bash -c` is passed to the shell; handles shell expansions and PATH lookups correctly |
+| 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where `EvalEnvCtx` has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
+| 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
+| 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
+| 59 | `callLlamafile()` is a sandbox global, not imported | Provider components are markdown files — they cannot have TypeScript imports; all code in eval blocks runs in the VM sandbox; functions needed by provider components must be provided as sandbox globals alongside `findFreePort`, `when`, and `fetch` |
+| 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
+| 61 | `callLlamafile()` uses `@effectionx/fetch` not `durableFetch` | `durableFetch` journals its result; the HTTP call to the inference server must not be journaled — `durableSample` already journals the complete LLM response; double-journaling would cause divergence on replay |
+| 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; configurability would require a `healthPath` prop; deferred — the hardcoded path covers all current targets |
+| 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the EMA `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
