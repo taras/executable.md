@@ -1174,12 +1174,14 @@ to poll a readiness endpoint:
 
 ```typescript
 yield* when(function* () {
-  const response = yield* fetch(`http://127.0.0.1:${port}/health`);
-  if (!response.ok) throw new Error(`Not ready: ${response.status}`);
+  yield* fetch(`http://127.0.0.1:${port}/health`).expect();
 });
 ```
 
-`when` handles the retry loop, backoff, and timeout internally.
+`fetch().expect()` from `@effectionx/fetch` throws `HttpError` on
+non-2xx responses. Network-level errors (connection refused before the
+daemon is listening) throw natively. `when` catches both and retries
+until the assertion passes or the timeout expires.
 
 #### Compiling blocks
 
@@ -2304,8 +2306,7 @@ const baseUrl = `http://127.0.0.1:${port}`;
 
 ```ts eval
 yield* when(function* () {
-  const response = yield* fetch(`${baseUrl}/health`);
-  if (!response.ok) throw new Error(`Not ready: ${response.status}`);
+  yield* fetch(`${baseUrl}/health`).expect();
 });
 ```
 

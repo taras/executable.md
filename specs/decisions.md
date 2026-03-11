@@ -276,3 +276,52 @@ When building middleware systems, start from the target middleware type
 from it — not the other way around. The original design started from
 the domain (what does a modifier handler need?) and ended up with a
 custom shape that didn't compose with the rest of the framework.
+
+---
+
+## DEC-007: Provider readiness uses `fetch().expect()`
+
+**Status:** Decided  
+**Date:** 2026-03-10
+
+### Context
+
+The provider component pattern (spec §6.7) uses `when()` from
+`@effectionx/converge` to poll a daemon's readiness endpoint. The
+original readiness check was:
+
+```typescript
+yield* when(function* () {
+  const response = yield* fetch(baseUrl + '/health');
+  if (!response.ok) throw new Error('Not ready: ' + response.status);
+}, { timeout: 5000, interval: 50 });
+```
+
+`@effectionx/fetch` provides a `.expect()` method that throws
+`HttpError` on non-2xx responses, making the manual `response.ok`
+check redundant.
+
+### Decision
+
+Use `fetch(url).expect()` inside `when()` for readiness polling:
+
+```typescript
+yield* when(function* () {
+  yield* fetch(baseUrl + '/health').expect();
+}, { timeout: 5000, interval: 50 });
+```
+
+**Why this works:**
+
+1. `.expect()` throws `HttpError` on non-2xx status codes
+2. Network-level errors (connection refused before daemon is listening)
+   throw natively from the underlying `globalThis.fetch`
+3. `when()` in non-always mode catches any thrown error and retries at
+   the configured interval until the assertion passes or timeout expires
+4. `.expect()` returns a fresh `FetchOperation` per iteration — no
+   leftover state or dangling resources between retries
+
+**Convention:** All provider readiness checks should use
+`fetch().expect()` rather than manual `response.ok` checks. This
+keeps the pattern concise (one line instead of three) while preserving
+identical behavior.
