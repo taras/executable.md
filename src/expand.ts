@@ -22,6 +22,7 @@ import type {
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import { EvalEnvCtx } from "./eval-env.ts";
+import type { EvalEnv } from "./eval-env.ts";
 import { validateProps } from "./validate.ts";
 import { healSegment } from "./heal.ts";
 
@@ -237,14 +238,24 @@ function* expandComponent(
     validatedProps,
   );
 
-  // Recurse with augmented hide set
+  // Recurse with augmented hide set.
+  // Each component gets its own fresh binding environment so that
+  // eval blocks within a component share bindings but don't leak
+  // into parent or sibling components. This is critical for the
+  // provider pattern where each provider has isolated port/URL bindings.
   const newHideSet = new Set([...hideSet, name]);
-  return yield* expandSegments(
-    substituted,
-    definition.meta,
-    validatedProps,
-    newHideSet,
-    ctx,
+  const componentEnv: EvalEnv = { values: {} };
+  return yield* EvalEnvCtx.with(
+    componentEnv,
+    function* () {
+      return yield* expandSegments(
+        substituted,
+        definition.meta,
+        validatedProps,
+        newHideSet,
+        ctx,
+      );
+    },
   );
 }
 
