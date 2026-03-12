@@ -164,6 +164,7 @@ function* run(config: {
     // Close the signal so the writer drains remaining events and exits.
     if (signal) {
       signal.close();
+      yield* writer;
     }
   }
 }
