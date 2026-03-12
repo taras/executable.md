@@ -286,7 +286,12 @@ function* expandComponent(
   // omits them from the journal.
   const capturedMeta = definition.meta;
   const capturedProps = validatedProps;
-  const capturedHideSet = newHideSet;
+  // Children are caller-provided content, not the component's own body.
+  // Use the parent's hide set (without the current component name) so
+  // that caller-provided children can reference the same component name
+  // without triggering false cycle detection. True cycles in a component's
+  // body are still caught because body expansion uses newHideSet.
+  const capturedChildrenHideSet = hideSet;
   const capturedCtx = ctx;
 
   componentEnv.values.renderChildren = function* () {
@@ -294,13 +299,13 @@ function* expandComponent(
       if (childEvalScope) {
         return yield* EvalScopeCtx.with(childEvalScope, function* () {
           const expanded = yield* expandSegments(
-            children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+            children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+        children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
       );
       return renderSegments(expanded);
     });
@@ -312,13 +317,13 @@ function* expandComponent(
       if (childEvalScope) {
         return yield* EvalScopeCtx.with(childEvalScope, function* () {
           const expanded = yield* expandSegments(
-            segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+            segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+        segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
       );
       return renderSegments(expanded);
     });
