@@ -282,6 +282,16 @@ function* expandComponent(
   // EvalScopeCtx.with() so the full expansion context is available
   // regardless of which task the closure runs in (e.g., evalScope.eval).
   //
+  // IMPORTANT: Both closures use parentEvalScope (not childEvalScope)
+  // for EvalScopeCtx. This prevents a deadlock when children contain
+  // components that need their own eval scopes. The deadlock occurs
+  // because persist eval blocks run inside childEvalScope.eval(), which
+  // blocks the scope's sequential channel — any nested .eval() call on
+  // the same scope (triggered by child component expansion) would wait
+  // forever. Using parentEvalScope avoids re-entrant .eval() calls.
+  // Children are caller-provided content and should see the caller's
+  // scope chain, not the component's internal scope.
+  //
   // These are non-serializable (functions) so serializeExports silently
   // omits them from the journal.
   const capturedMeta = definition.meta;
@@ -293,11 +303,12 @@ function* expandComponent(
   // body are still caught because body expansion uses newHideSet.
   const capturedChildrenHideSet = hideSet;
   const capturedCtx = ctx;
+  const capturedParentEvalScope = parentEvalScope;
 
   componentEnv.values.renderChildren = function* () {
     return yield* EvalEnvCtx.with(componentEnv, function* () {
-      if (childEvalScope) {
-        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+      if (capturedParentEvalScope) {
+        return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
             children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
           );
@@ -314,8 +325,8 @@ function* expandComponent(
   componentEnv.values.render = function* (markdown: string) {
     const segments = scanSegments(markdown);
     return yield* EvalEnvCtx.with(componentEnv, function* () {
-      if (childEvalScope) {
-        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+      if (capturedParentEvalScope) {
+        return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
             segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
           );

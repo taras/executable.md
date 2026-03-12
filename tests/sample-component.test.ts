@@ -354,6 +354,106 @@ describe("Tier SC — Sample component", () => {
       cleanup(tmpDir);
     }
   });
+
+  // SC7: Nested <Sample> inside <Sample> — children contain components
+  // This tests the fix for the EvalScope deadlock: when a Sample's
+  // renderChildren() expands children that themselves contain <Sample>
+  // components, the inner Samples must create their eval scopes from
+  // the parent scope (not the current component's blocked scope).
+  it("SC7: nested Sample inside Sample — no deadlock", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/TestProvider.md": stubProvider("TestProvider"),
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          "",
+          '<Sample model="test-model">',
+          '<Sample prompt="inner-prompt" model="test-model" />',
+          "extra text to combine",
+          "</Sample>",
+          "",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      // The inner Sample should resolve first (via renderChildren),
+      // producing [sampled-by-test-model:inner-prompt].
+      // Then the outer Sample sends that rendered output + extra text
+      // to the provider for sampling.
+      expect(output).toContain("[sampled-by-test-model:");
+      expect(output).not.toContain("ERROR");
+      expect(output).not.toContain("Cycle detected");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // SC8: Nested Sample with multiple providers — model routing works
+  // Tests that nested Samples inside renderChildren() correctly route
+  // to different providers via the middleware chain.
+  it("SC8: nested Sample with multi-provider routing", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/OuterProv.md": stubProvider("OuterProv"),
+        "components/InnerProv.md": stubProvider("InnerProv"),
+        "doc.md": [
+          '<OuterProv model="outer">',
+          '<InnerProv model="inner">',
+          "",
+          '<Sample model="inner">',
+          '<Sample prompt="routed-to-outer" model="outer" />',
+          '<Sample prompt="routed-to-inner" model="inner" />',
+          "combine these results",
+          "</Sample>",
+          "",
+          "</InnerProv>",
+          "</OuterProv>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      // Inner Samples should route to their respective providers
+      // The rendered children output contains both provider responses
+      expect(output).toContain("[sampled-by-outer:routed-to-outer]");
+      expect(output).toContain("[sampled-by-inner:routed-to-inner]");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
