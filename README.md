@@ -2,7 +2,7 @@
 
 Executable Markdown Agents (EMA) treats markdown documents as durable workflows. A document can expand markdown components, execute annotated code blocks, evaluate in-process Effection operations, and replay prior work from a journal after a crash or restart.
 
-This project is an implementation of the draft spec in `specs/executable-mdx-spec.md`.
+This project is an implementation of the draft spec in [`specs/executable-mdx-spec.md`](specs/executable-mdx-spec.md).
 
 ## What it does
 
@@ -58,7 +58,7 @@ utils.ts
 ## Install
 
 ```bash
-make install
+pnpm install
 ```
 
 ## Run a document
@@ -66,19 +66,13 @@ make install
 Use the CLI directly:
 
 ```bash
-make run DOC=examples/hello-world.md
+pnpm ema examples/hello-world.md
 ```
 
 Or keep a persistent journal for replay:
 
 ```bash
-make run DOC=examples/hello-world.md JOURNAL=.ema/events.jsonl
-```
-
-There is also a shortcut for the bundled example:
-
-```bash
-make example
+pnpm ema examples/hello-world.md --journal .ema/events.jsonl
 ```
 
 Useful flags:
@@ -177,7 +171,9 @@ Journals store workspace-relative paths so they remain portable across machines 
 ## Development
 
 ```bash
-make check
+pnpm test
+pnpm lint
+pnpm typecheck
 ```
 
 ## Status
