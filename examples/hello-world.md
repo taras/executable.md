@@ -2,17 +2,14 @@
 title: Hello World
 ---
 
-# {meta.title}
+# {meta.title} from EMA
 
-A self-contained example that starts Ollama, pulls a model,
-and asks it to say hello.
-
-<AnthropicProvider model="claude-sonnet-4-5">
+<AnthropicProvider model="claude-opus-4-5">
   <OllamaProvider model="llama3.2">
     <Sample model="llama3.2">
-      Smart: <Sample prompt="Say something smart" model="claude-sonnet-4-5" />
-      Fart Joke: <Sample prompt="Tell me a fart joke" model="llama3.2" />
-      Combine Smart and Fart Joke to create one smart fart joke
+      Smart: <Sample prompt="Say something smart" model="claude-opus-4-5" />
+      Joke: <Sample prompt="Tell me a joke" model="llama3.2" />
+      Combine Smart and Joke to create one smart joke
     </Sample>
   </OllamaProvider>
 </AnthropicProvider>
