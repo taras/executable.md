@@ -42,6 +42,7 @@ function* runCli(args: string[]) {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
     const proc = yield* exec(CLI_CMD, {
       arguments: [...CLI_ARGS, ...args],
+      env: process.env as Record<string, string>,
     });
 
     const stdoutChunks: string[] = [];
