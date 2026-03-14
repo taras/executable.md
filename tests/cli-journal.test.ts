@@ -9,8 +9,9 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { exec } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
+import { spawn, each } from "effection";
+import { exec } from "@effectionx/process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -19,7 +20,7 @@ import * as os from "node:os";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const CLI_CMD = "node";
+const CLI_CMD = process.execPath;
 const CLI_ARGS = ["--experimental-strip-types", "src/cli.ts", "run"];
 const TIMEOUT = 15_000;
 
@@ -27,16 +28,59 @@ function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ema-cli-test-"));
 }
 
+interface CliResult {
+  code: number | undefined;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run the CLI as a subprocess and collect stdout/stderr regardless
+ * of exit code. This avoids ExecError swallowing diagnostic output.
+ */
 function* runCli(args: string[]) {
-  const result = yield* timebox(TIMEOUT, () =>
-    exec(CLI_CMD, {
+  const result = yield* timebox<CliResult>(TIMEOUT, function* () {
+    const proc = yield* exec(CLI_CMD, {
       arguments: [...CLI_ARGS, ...args],
-    }).expect(),
-  );
+    });
+
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+
+    const readStdout = yield* spawn(function* () {
+      for (const chunk of yield* each(proc.stdout)) {
+        stdoutChunks.push(new TextDecoder().decode(chunk));
+        yield* each.next();
+      }
+    });
+
+    const readStderr = yield* spawn(function* () {
+      for (const chunk of yield* each(proc.stderr)) {
+        stderrChunks.push(new TextDecoder().decode(chunk));
+        yield* each.next();
+      }
+    });
+
+    const status = yield* proc.join();
+    yield* readStdout;
+    yield* readStderr;
+
+    return {
+      code: status.code,
+      stdout: stdoutChunks.join(""),
+      stderr: stderrChunks.join(""),
+    };
+  });
   if (result.timeout) {
     throw new Error(`CLI timed out after ${TIMEOUT}ms`);
   }
-  return result.value;
+  const { value } = result;
+  if (value.code !== 0) {
+    throw new Error(
+      `CLI exited with code ${value.code}\nstderr: ${value.stderr}\nstdout: ${value.stdout}`,
+    );
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
