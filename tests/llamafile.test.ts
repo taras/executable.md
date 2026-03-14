@@ -256,4 +256,51 @@ describe("Tier U — buildDefaultMessages()", () => {
     const sysMsg = messages.find((m) => m.role === "system");
     expect(sysMsg!.content).toContain("TestAnalyzer");
   });
+
+  // U13: instructions present replaces default system prompt (exec mode)
+  it("U13: instructions replaces default system prompt", function* () {
+    const messages = buildDefaultMessages(
+      makeSampleContext({ instructions: "You are a pirate. Respond in pirate speak." }),
+    );
+    const sysMsg = messages.find((m) => m.role === "system");
+    expect(sysMsg!.content).toContain("You are a pirate.");
+    expect(sysMsg!.content).not.toContain("precise technical assistant");
+  });
+
+  // U14: no instructions — default system prompt unchanged
+  it("U14: no instructions — default system prompt unchanged", function* () {
+    const messages = buildDefaultMessages(makeSampleContext());
+    const sysMsg = messages.find((m) => m.role === "system");
+    expect(sysMsg!.content).toContain("precise technical assistant");
+  });
+
+  // U15: instructions + params — both appear in system prompt
+  it("U15: instructions + params — both in system prompt", function* () {
+    const messages = buildDefaultMessages(
+      makeSampleContext({
+        instructions: "You are a code reviewer.",
+        params: "be brief",
+      }),
+    );
+    const sysMsg = messages.find((m) => m.role === "system");
+    expect(sysMsg!.content).toContain("You are a code reviewer.");
+    expect(sysMsg!.content).toContain("Instruction: be brief");
+    expect(sysMsg!.content).not.toContain("precise technical assistant");
+  });
+
+  // U16: instructions in direct prompt mode
+  it("U16: instructions in direct prompt mode", function* () {
+    const messages = buildDefaultMessages(
+      makeSampleContext({
+        stdout: "hello",
+        command: "hello",
+        exitCode: 0,
+        stderr: "",
+        instructions: "You are a pirate.",
+      }),
+    );
+    const sysMsg = messages.find((m) => m.role === "system");
+    expect(sysMsg!.content).toContain("You are a pirate.");
+    expect(sysMsg!.content).not.toContain("helpful assistant");
+  });
 });

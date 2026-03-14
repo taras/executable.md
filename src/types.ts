@@ -144,4 +144,11 @@ export interface SampleContext {
    * Set from the sample modifier's bracket params: ```bash sample[model=phi3-mini] exec
    */
   model?: string;
+  /**
+   * Accumulated instructions from enclosing `<Instruction>` components.
+   * When present, replaces the default system prompt in buildDefaultMessages.
+   * Accumulated by Instruction middleware — outer instructions appear first,
+   * inner instructions are appended with newline separators.
+   */
+  instructions?: string;
 }

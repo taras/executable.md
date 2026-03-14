@@ -336,6 +336,31 @@ This is child content to be processed.
 
 </Section>
 
+<Section title="Instruction Component">
+
+The `<Instruction>` component surfaces the system prompt as visible,
+composable document content. Instead of hiding the LLM's instructions
+inside provider internals, authors wrap Sample calls with
+`<Instruction text="...">` to define what the LLM is told.
+
+Without an instruction, the provider uses a hardcoded default system
+prompt. With `<Instruction>`, the author's text replaces that default:
+
+<StubProvider model="instruction-stub">
+
+<Instruction text="You are a helpful pirate.">
+<Sample prompt="ahoy" model="instruction-stub" />
+</Instruction>
+
+</StubProvider>
+
+Instructions accumulate through nesting. Agent components install
+instruction middleware via `persist eval` blocks that enrich the
+`SampleContext.instructions` field. When present, instructions replace
+the default system prompt in the provider's message builder.
+
+</Section>
+
 <Section title="Durability">
 
 Every component import and code execution is recorded in a journal.
@@ -397,6 +422,8 @@ cat <<'EOF'
 | Sample component          | <Sample prompt>, <Sample> with children |
 | output() function         | Sample component calls output()         |
 | renderChildren() closure  | Sample component captures children      |
+| Instruction component     | <Instruction text> wraps Sample calls   |
+| composable instructions   | Instructions enrich SampleContext        |
 EOF
 ```
 
