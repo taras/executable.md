@@ -24,7 +24,16 @@ export function parseFrontmatter(
   const rawInputs = (raw["inputs"] ?? {}) as Record<string, unknown>;
   const inputs: Record<string, InputDefinition> = {};
 
+  // Reserved input names — consumed by the expansion engine, not
+  // available as component inputs. See spec §6.3 (named slots).
+  const RESERVED_INPUT_NAMES = new Set(["slot"]);
+
   for (const [key, value] of Object.entries(rawInputs)) {
+    if (RESERVED_INPUT_NAMES.has(key)) {
+      throw new Error(
+        `"${key}" is a reserved prop name and cannot be declared as a component input`,
+      );
+    }
     inputs[key] = normalizeInputDef(value);
   }
 
