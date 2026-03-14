@@ -12,7 +12,7 @@
  *   ema run examples/hello-world.md --journal events.jsonl
  */
 
-import { main, exit, spawn, each, createSignal, type Operation } from "effection";
+import { main, exit, spawn, each, createSignal, createChannel, useScope, type Operation } from "effection";
 import { InMemoryStream, type DurableEvent, type DurableStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { inspect } from "node:util";
@@ -21,6 +21,8 @@ import { z } from "zod";
 import { runDocument } from "./run-document.ts";
 import { FileStream } from "./file-stream.ts";
 import { loadJournal } from "./load-journal.ts";
+import { EMA } from "./ema-api.ts";
+import { useNormalizedOutput, useTerminalOutput } from "./output/mod.ts";
 
 // ---------------------------------------------------------------------------
 // Workaround: field.default exists at runtime but is missing from the .d.ts
@@ -50,6 +52,10 @@ const runConfig = object({
     description: "JSONL journal file (creates if missing, replays if exists, retries on failure)",
     aliases: ["-j"],
     ...field(z.string().optional()),
+  },
+  raw: {
+    description: "output raw markdown without normalization or terminal formatting",
+    ...field(z.boolean(), defaults(false)),
   },
 });
 
@@ -108,8 +114,9 @@ function* run(config: {
   componentDir: string[];
   verbose: boolean;
   journal: string | undefined;
+  raw: boolean;
 }): Operation<void> {
-  const { docPath, componentDir, verbose, journal } = config;
+  const { docPath, componentDir, verbose, journal, raw } = config;
 
   // Build the durable stream:
   // - With --journal: file-backed stream that persists events as JSONL.
@@ -150,22 +157,81 @@ function* run(config: {
       })
     : spawn(function *() {});
 
+  // ---------------------------------------------------------------------------
+  // EMA Output Api wiring (spec §9.6)
+  //
+  // scope.around semantics: first-installed runs first (outermost).
+  // Its next() delegates to the second-installed handler, and so on
+  // down to the core no-op.
+  //
+  // Install order: normalize → terminal → channel delivery.
+  // Execution order: normalize → terminal → channel (same order).
+  // ---------------------------------------------------------------------------
+
+  const scope = yield* useScope();
+
+  // Channel type: string chunks, void close value.
+  const channel = createChannel<string, void>();
+
+  // 1. Normalization first (runs first — outermost transform).
+  if (!raw) {
+    yield* useNormalizedOutput();
+  }
+
+  // 2. Terminal formatting second (runs after normalization).
+  if (process.stdout.isTTY && !raw) {
+    yield* useTerminalOutput();
+  }
+
+  // 3. Channel delivery last (runs last — closest to core).
+  // channel.send() is yield*'d for backpressure and cancellation safety.
+  scope.around(EMA, {
+    *output([text]) {
+      yield* channel.send(text);
+    },
+  });
+
+  // Spawn the stream consumer — subscribes before any output flows.
+  const consumer = yield* spawn(function* () {
+    const chunks: string[] = [];
+
+    for (const chunk of yield* each(channel)) {
+      if (process.stdout.isTTY) {
+        process.stdout.write(chunk);
+      }
+      chunks.push(chunk);
+      yield* each.next();
+    }
+
+    return chunks.join("");
+  });
+
   try {
-    const output = yield* runDocument({
+    yield* runDocument({
       docPath,
       stream,
       runtime: nodeRuntime(),
       componentDirs: componentDir,
       freshness: false,
     });
-
-    console.log(output);
   } finally {
+    // Close the channel so the consumer's each() loop exits cleanly.
+    // channel.close() returns Operation<void> — yield* is valid in finally.
+    yield* channel.close();
+
     // Close the signal so the writer drains remaining events and exits.
     if (signal) {
       signal.close();
       yield* writer;
     }
+  }
+
+  // Collect the full output from the consumer.
+  const fullOutput = yield* consumer;
+
+  // When piped (not TTY), write the full output at the end.
+  if (!process.stdout.isTTY) {
+    process.stdout.write(fullOutput);
   }
 }
 

@@ -26,7 +26,6 @@ import {
 } from "@effectionx/durable-effects";
 import type { Workflow, Json } from "@effectionx/durable-streams";
 import type {
-  Segment,
   ComponentDefinition,
   ImportResult,
   Modifier,
@@ -34,9 +33,10 @@ import type {
 } from "./types.ts";
 import { scanSegments } from "./scanner.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { expandSegments } from "./expand.ts";
+import { expandSegments, createBlockCounter } from "./expand.ts";
 import type { ExpansionContext } from "./expand.ts";
-import { renderSegments } from "./render.ts";
+import { renderSegment } from "./render.ts";
+import { EMA } from "./ema-api.ts";
 import {
   composeModifierChain,
   buildCommand,
@@ -318,29 +318,52 @@ function* documentWorkflow(
     },
   };
 
-  // Expand all segments within the eval env context.
+  // Per-root-segment emission loop (spec §9).
+  // Mutable counter preserves deterministic blockIds across
+  // per-segment expansion calls (see spec §6.1).
+  const counter = createBlockCounter();
+
   // EvalScopeCtx is already set on the scope by runDocument.
   // EvalEnvCtx is scoped to the document expansion lifetime via
   // Context.with() (spec §3.1). Resources spawned by `persist` blocks
   // are retained in the eval scope until expansion completes, then
   // torn down.
-  const scopedExpansion: Operation<Segment[]> = EvalEnvCtx.with(
+  //
+  // The EvalEnvCtx.with() wraps the entire loop so all segments share
+  // the same binding environment.
+  const scopedExpansion: Operation<string> = EvalEnvCtx.with(
     env,
     function* () {
-      const expandGen = expandSegments(
-        root.bodySegments,
-        root.meta,
-        {},
-        new Set(),
-        ctx,
-      );
-      return yield* expandGen;
+      const chunks: string[] = [];
+
+      for (const segment of root.bodySegments) {
+        const expanded = yield* expandSegments(
+          [segment],
+          root.meta,
+          {},
+          new Set(),
+          ctx,
+          counter,
+        );
+
+        for (const resolved of expanded) {
+          const text = renderSegment(resolved);
+          if (text) {
+            // Emit through the EMA Output Api (spec §9).
+            // ephemeral() bridges from Workflow (durable) to Operation
+            // (non-durable) — output emission is a derived side effect,
+            // not journaled.
+            yield* ephemeral(EMA.operations.output(text));
+            chunks.push(text);
+          }
+        }
+      }
+
+      return chunks.join("");
     },
   );
-  const expanded = yield* ephemeral(scopedExpansion);
 
-  // Render to output string
-  return renderSegments(expanded);
+  return yield* ephemeral(scopedExpansion);
 }
 
 // ---------------------------------------------------------------------------

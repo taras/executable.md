@@ -31,6 +31,8 @@
     "effection": "4.1.0-alpha.7",
     "gray-matter": "^4.0.3",
     "magic-string": "^0.30.21",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
     "remend": "^1.2.2"
   },
   "devDependencies": {
