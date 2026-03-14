@@ -33,6 +33,24 @@ import { scanSegments } from "./scanner.ts";
 import { renderSegments } from "./render.ts";
 
 // ---------------------------------------------------------------------------
+// Block ID counter (spec §6.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mutable counter for generating unique, deterministic blockId values.
+ * Threaded through the expansion context to ensure stable IDs across
+ * per-segment expansion calls.
+ */
+export interface BlockCounter {
+  next(): number;
+}
+
+export function createBlockCounter(): BlockCounter {
+  let id = 0;
+  return { next: () => id++ };
+}
+
+// ---------------------------------------------------------------------------
 // Types for the expansion context
 // ---------------------------------------------------------------------------
 
@@ -66,6 +84,10 @@ const MAX_EXPANSION_DEPTH = 64;
 
 /**
  * Expand an array of segments, resolving components and executing code blocks.
+ *
+ * @param counter - Optional block ID counter. If omitted, a local counter
+ *   is created. For per-segment emission (§9), pass a shared counter so
+ *   IDs are stable across calls.
  */
 export function* expandSegments(
   segments: Segment[],
@@ -73,6 +95,7 @@ export function* expandSegments(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   ctx: ExpansionContext,
+  counter: BlockCounter = createBlockCounter(),
 ): Operation<Segment[]> {
   const result: Segment[] = [];
 
@@ -99,6 +122,7 @@ export function* expandSegments(
           segment.children,
           hideSet,
           ctx,
+          counter,
         );
         result.push(...expanded);
         break;
@@ -120,11 +144,14 @@ export function* expandSegments(
           ? interpolateEvalBindings(segment.content, evalEnv.values)
           : segment.content;
 
-        // Compose modifier chain from info string and run it
+        // Compose modifier chain from info string and run it.
+        // blockId uses counter.next() for deterministic IDs that
+        // survive per-segment expansion (see spec §6.1 Block ID counter).
         const context: CodeBlockContext = {
           language: segment.language,
           content: interpolatedContent,
-          blockId: `eval:${parentMeta["componentName"] ?? "root"}:${result.length}`,
+          blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
+          componentName: parentMeta["componentName"] as string | undefined,
         };
 
         try {
@@ -180,6 +207,7 @@ function* expandComponent(
   children: Segment[],
   hideSet: Set<string>,
   ctx: ExpansionContext,
+  counter: BlockCounter,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -316,13 +344,13 @@ function* expandComponent(
       if (capturedParentEvalScope) {
         return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
-            children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
+            children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
+        children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
       );
       return renderSegments(expanded);
     });
@@ -334,13 +362,13 @@ function* expandComponent(
       if (capturedParentEvalScope) {
         return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
-            segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
+            segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
+        segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
       );
       return renderSegments(expanded);
     });
@@ -359,6 +387,7 @@ function* expandComponent(
               validatedProps,
               newHideSet,
               ctx,
+              counter,
             );
           },
         );
@@ -369,6 +398,7 @@ function* expandComponent(
         validatedProps,
         newHideSet,
         ctx,
+        counter,
       );
     },
   );

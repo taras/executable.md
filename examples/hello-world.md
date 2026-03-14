@@ -4,6 +4,8 @@ title: Hello World
 
 # {meta.title} from EMA
 
+This program uses Opus 4.5 and open-source llama3.2 model to tell jokes.
+
 <AnthropicProvider model="claude-opus-4-5">
   <OllamaProvider model="llama3.2">
     <Instruction text="You are a creative comedian who combines wisdom with humor. Be concise.">

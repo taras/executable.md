@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Implementing agent
-**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (protocol-specification, effection-integration, DECISIONS), `@effectionx/durable-effects` (effect-types, guards), Divergence API (`lib/divergence.ts`), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`)
+**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (protocol-specification, effection-integration, DECISIONS), `@effectionx/durable-effects` (effect-types, guards), Divergence API (`lib/divergence.ts`), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
 
 ---
 
@@ -27,9 +27,11 @@ the Resolve Api and `DurableRuntime` file read into a single journaled
 operation, with a custom `useImportComponentGuard` for staleness
 detection), the in-process evaluation system (source transform,
 shared VM context, binding environment, and eval scope for resource
-lifetime management — see §4), and daemon process management (the
+lifetime management — see §4), daemon process management (the
 `daemon` terminal modifier, eval binding interpolation, and the
-provider component pattern — see §3.3 and §6.6–6.7).
+provider component pattern — see §3.3 and §6.6–6.7), and the
+EMA Output Api (an Effection Api with composable middleware for
+streaming, whitespace-normalized, ANSI-formatted output — see §9).
 
 ### 1.1 Example
 
@@ -1487,13 +1489,18 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` — inference HTTP utility |
 | `src/sample/ollama.ts` | `callOllama()` — Ollama inference HTTP utility |
 | `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
-| `src/cli.ts` | CLI entrypoint with `--verbose` and `--journal` flags |
+| `src/cli.ts` | CLI entrypoint with `--verbose`, `--journal`, and `--raw` flags; Output Api channel wiring (§9.6) |
 | `src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
+| `src/ema-api.ts` | EMA Output Api definition, exports `output` (§9.2) |
+| `src/output/mod.ts` | Barrel export for output middleware |
+| `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
+| `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
 | `src/load-journal.ts` | `loadJournal()` — reads/sanitizes JSONL journal for replay |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
-`acorn`, `magic-string`.
+`@effectionx/stream-helpers`, `acorn`, `magic-string`, `marked`,
+`marked-terminal`.
 
 ### 4.7 The `output()` function
 
@@ -2089,16 +2096,35 @@ function* documentWorkflow(docPath: string): Workflow<string> {
   // The host installs Resolve middleware that maps "__root__" → docPath
   const root = yield* durableImportComponent("__root__");
 
-  // Expand all segments
-  const expanded = yield* expandSegments(
-    root.bodySegments,
-    root.meta,
-    {},              // No props for root
-    new Set(),       // Empty hide set
-  );
+  // Mutable counter preserves deterministic blockIds across
+  // per-segment expansion calls (see §6.1 for details).
+  const counter = createBlockCounter();
 
-  // Render to output string
-  return renderSegments(expanded);
+  // Per-root-segment emission loop — each root segment is expanded
+  // independently and its output emitted through the EMA Output Api (§9).
+  // Root segments are sequential and independent in document order.
+  // Component-internal expansion remains recursive and buffered.
+  for (const segment of root.bodySegments) {
+    const expanded = yield* expandSegments(
+      [segment],
+      root.meta,
+      {},              // No props for root
+      new Set(),       // Empty hide set
+      ctx,
+      counter,
+    );
+
+    for (const resolved of expanded) {
+      const text = renderSegment(resolved);
+      if (text) {
+        yield* ephemeral(output(text));
+      }
+    }
+  }
+
+  // Return value is empty — output has already been emitted
+  // incrementally via the Output Api.
+  return "";
 }
 ```
 
@@ -2116,12 +2142,43 @@ Expansion is **top-down with bottom-up child processing**: children
 are expanded first, then substituted into the component body, then the
 substituted body is expanded recursively.
 
+#### Block ID counter
+
+`expandSegments` accepts a `BlockCounter` to generate unique, deterministic
+`blockId` values for executable code blocks. The counter is threaded
+through the expansion context to ensure stable IDs across per-segment
+expansion calls (§5.4, §9.10).
+
+Previously, `result.length` was used as the `blockId` index. With
+per-root-segment emission, each `expandSegments` call would reset the
+counter, breaking journal replay matching. The mutable counter fixes
+this:
+
+```typescript
+interface BlockCounter {
+  next(): number;
+}
+
+function createBlockCounter(): BlockCounter {
+  let id = 0;
+  return { next: () => id++ };
+}
+```
+
+The counter increment is guarded by the same scope and cancellation
+that protects the expansion — if the scope is cancelled, no further
+increments occur, preventing state leaks on abort.
+
+#### Algorithm
+
 ```typescript
 function* expandSegments(
   segments: Segment[],
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
+  ctx: ExpansionContext,
+  counter: BlockCounter,
 ): Workflow<Segment[]> {
   const result: Segment[] = [];
 
@@ -2156,11 +2213,14 @@ function* expandSegments(
           ? interpolateEvalBindings(segment.content, evalEnv.values)
           : segment.content;
 
-        // Compose modifier chain from info string and run it
+        // Compose modifier chain from info string and run it.
+        // blockId uses counter.next() for deterministic IDs that
+        // survive per-segment expansion (see §6.1 Block ID counter).
         const context: CodeBlockContext = {
           language: segment.language,
           content: interpolatedContent,
-          // componentName threaded from expansion context
+          blockId: `eval:${ctx.componentName ?? "root"}:${counter.next()}`,
+          componentName: ctx.componentName,
         };
         const chain = composeModifierChain(
           segment.modifiers, context, registry,
@@ -3062,7 +3122,11 @@ function* runDocument(options: RunDocumentOptions): Operation<string> {
     registry.set(name, factory);
   }
 
-  // Run the durable workflow
+  // Run the durable workflow.
+  // documentWorkflow emits output incrementally via the EMA Output Api (§9).
+  // The caller (e.g., CLI's runCommand) must install EMA middleware and
+  // a channel delivery handler before calling runDocument — see §9.6
+  // for the full host wiring pattern.
   return yield* durableRun(
     () => documentWorkflow(docPath),
     { stream },
@@ -3090,9 +3154,375 @@ await run(function* () {
 
 ---
 
-## 9. Journal shape
+## 9. EMA Output Api
 
-### 9.1 Effect vocabulary for MDX execution
+### 9.1 Problem
+
+The output pipeline has three UX issues:
+
+1. **Fully buffered output.** `documentWorkflow` collects all expanded
+   segments into a string and returns it. The CLI calls `console.log(output)`
+   only after the entire workflow completes. The user sees nothing during
+   long expansions — provider startup, sample calls, teardown. `--verbose`
+   shows journal events on stderr, but rendered output is all-or-nothing.
+
+2. **Whitespace accumulation.** The scanner preserves raw text with newlines.
+   Component substitution adds more. `renderSegments` joins with empty string,
+   producing doubled blank lines at component boundaries. `remend` does not
+   fix this — it heals incomplete markdown constructs, not whitespace.
+
+3. **No terminal formatting.** Output is raw markdown text. No ANSI colors,
+   no heading emphasis, no syntax highlighting.
+
+### 9.2 The EMA Api
+
+A single Effection Api named `EMA` with one operation: `output`. The Api
+is the system's public surface — extensible to progress, diagnostics, etc.
+as needs grow.
+
+```typescript
+// src/ema-api.ts
+
+import type { Operation } from "effection";
+import { createApi } from "./api.ts";
+
+export interface EMAApi {
+  output(text: string): Operation<void>;
+}
+
+export const EMA = createApi<EMAApi>("EMA", {
+  *output(_text: string): Operation<void> {},
+});
+
+export const { output } = EMA.operations;
+```
+
+Core handler is a no-op. Behavior comes from two sources:
+
+- **Middleware** installed via `scope.around(EMA, ...)` — intercepts and
+  transforms text.
+- **Channel delivery** — the terminal handler sends transformed text into
+  a `createChannel`.
+
+Call sites import `output` directly:
+
+```typescript
+import { output } from "./ema-api.ts";
+
+yield* ephemeral(output(text));
+```
+
+### 9.3 Architecture
+
+Three concerns, three mechanisms:
+
+| Concern | Mechanism | Where |
+|---|---|---|
+| **Transformation** | Middleware (`scope.around`) | `output/normalize.ts`, `output/terminal.ts` |
+| **Delivery** | Channel (`createChannel`) | `cli.ts` terminal handler |
+| **Consumption** | Stream (`forEach` from `@effectionx/stream-helpers`) | `cli.ts` spawned consumer |
+
+Middleware only intercepts and transforms. Buffering and streaming are not
+middleware — they are natural consequences of using a channel with `forEach`.
+
+**Middleware installation order.** `scope.around` installs follow
+inner-to-outer order: the handler installed first becomes the innermost
+(channel delivery), and handlers installed later wrap it. Execution flows
+outer → inner: normalize → terminal format → channel send. This ordering
+must be preserved — future edits must not reorder the installations.
+
+### 9.4 Whitespace normalization middleware
+
+**File:** `src/output/normalize.ts`
+
+Stateful middleware that tracks trailing newlines across `output()` calls.
+Collapses doubled blank lines at segment boundaries without needing the
+full document.
+
+```typescript
+import type { Operation } from "effection";
+import { useScope } from "effection";
+import { EMA } from "../ema-api.ts";
+
+export function* useNormalizedOutput(): Operation<void> {
+  let trailingNewlines = 0;
+  const scope = yield* useScope();
+
+  scope.around(EMA, {
+    *output([text], next) {
+      let normalized = text;
+
+      // Strip trailing whitespace on each line
+      normalized = normalized.replace(/[ \t]+\n/g, "\n");
+
+      // Collapse leading newlines if previous write already ended
+      // with enough to form a blank line
+      if (trailingNewlines >= 2) {
+        normalized = normalized.replace(/^\n+/, "\n");
+      }
+
+      // Collapse runs of 3+ newlines within a single write
+      normalized = normalized.replace(/\n{3,}/g, "\n\n");
+
+      // Track trailing newlines for next call
+      const match = normalized.match(/\n+$/);
+      trailingNewlines = match ? match[0].length : 0;
+
+      yield* next(normalized);
+    },
+  });
+}
+```
+
+Mutable closure state (`trailingNewlines`) is safe because the middleware
+is scoped per `useNormalizedOutput()` call — one instance per document
+run, not shared across concurrent scopes.
+
+### 9.5 Terminal ANSI formatting middleware
+
+**File:** `src/output/terminal.ts`
+
+Converts markdown to ANSI-colored terminal text using `marked-terminal`.
+Synchronous only — `async: false`, no promises.
+
+```typescript
+import type { Operation } from "effection";
+import { useScope } from "effection";
+import { Marked } from "marked";
+import TerminalRenderer from "marked-terminal";
+import { EMA } from "../ema-api.ts";
+
+export function* useTerminalOutput(): Operation<void> {
+  const marked = new Marked({ renderer: new TerminalRenderer() });
+  const scope = yield* useScope();
+
+  scope.around(EMA, {
+    *output([text], next) {
+      const formatted = marked.parse(text, { async: false }) as string;
+      yield* next(formatted);
+    },
+  });
+}
+```
+
+### 9.6 Host wiring
+
+**File:** `src/cli.ts` (modified)
+
+The CLI creates a channel, installs the terminal handler and middleware,
+spawns a consumer, runs the document, then collects the full output.
+
+The channel type `createChannel<string, void>` uses `string` for chunk
+values and `void` for the close value — `channel.close()` signals end
+of stream with no payload.
+
+```typescript
+import { createChannel, spawn, useScope } from "effection";
+import { forEach } from "@effectionx/stream-helpers";
+import { EMA } from "./ema-api.ts";
+import { useNormalizedOutput, useTerminalOutput } from "./output/mod.ts";
+
+function* runCommand(/* ... existing params including `raw` flag ... */) {
+  const scope = yield* useScope();
+
+  // 1. Create the output channel.
+  //    Point-to-point: one producer, one consumer. Each chunk consumed once.
+  const channel = createChannel<string, void>();
+
+  // 2. Install channel delivery (innermost — install first).
+  //    Does not call next() — this is the end of the chain.
+  //    channel.send() is yield*'d to ensure backpressure and
+  //    cancellation safety — no text "in flight" when scope tears down.
+  scope.around(EMA, {
+    *output([text]) {
+      yield* channel.send(text);
+    },
+  });
+
+  // 3. Install interception middleware.
+  //    Install order: inner → outer. Execution order: outer → inner.
+  if (process.stdout.isTTY && !raw) {
+    yield* useTerminalOutput();
+  }
+
+  if (!raw) {
+    yield* useNormalizedOutput();
+  }
+
+  // 4. Spawn the stream consumer.
+  //    Subscribes before any output flows.
+  const consumer = yield* spawn(function* () {
+    const chunks: string[] = [];
+
+    yield* forEach(function* (chunk) {
+      if (process.stdout.isTTY) {
+        process.stdout.write(chunk);
+      }
+      chunks.push(chunk);
+    }, channel);
+
+    return chunks.join("");
+  });
+
+  // 5. Run the document — channel.close() in finally block
+  //    guarantees the consumer exits cleanly even if runDocument throws.
+  try {
+    yield* runDocument({ /* ... existing options ... */ });
+  } finally {
+    channel.close();
+  }
+
+  // 6. Collect the full output.
+  const fullOutput = yield* consumer;
+
+  // When piped, write the full output at the end.
+  if (!process.stdout.isTTY) {
+    process.stdout.write(fullOutput);
+  }
+
+  // Journal gets fullOutput for the close event.
+  return fullOutput;
+}
+```
+
+**Important:** `channel.close()` is in a `finally` block to guarantee
+the consumer's `forEach` loop exits cleanly regardless of whether
+`runDocument` succeeds or throws. Without this, a `runDocument` failure
+would leave the spawned consumer hanging until scope teardown cancels it.
+Explicit closure keeps channel resources deterministic.
+
+### 9.7 Execution flows
+
+**Interactive TTY:**
+
+```
+output(text)
+  → normalize (middleware, transforms text)
+  → terminal format (middleware, adds ANSI)
+  → channel.send(text) (delivery)
+  → forEach consumer writes to stdout + collects
+```
+
+User sees cleaned, colorized text streaming segment-by-segment.
+
+**Piped (not TTY):**
+
+```
+output(text)
+  → normalize (middleware)
+  → channel.send(text) (delivery)
+  → forEach consumer collects only
+  → fullOutput written to stdout at end
+```
+
+User gets cleaned raw markdown dumped at end.
+
+**`--raw` flag:**
+
+```
+output(text)
+  → channel.send(text) (delivery, no transformation)
+  → forEach consumer writes/collects
+```
+
+Unmodified text as emitted by the expansion engine.
+
+### 9.8 Streaming behavior
+
+Given a document:
+
+```markdown
+# Title
+
+<LlamafileProvider ...>
+  <AnalyzeTests />
+</LlamafileProvider>
+
+## Footer
+```
+
+1. `# Title\n\n` streams immediately.
+2. The provider blocks for however long it takes. Nothing streams during
+   this time.
+3. Provider output streams when expansion completes.
+4. `## Footer` streams after.
+
+The user sees progress incrementally at root-segment granularity.
+
+### 9.9 Durable/ephemeral boundary
+
+`output()` calls are wrapped in `ephemeral()` inside `documentWorkflow`:
+
+```typescript
+yield* ephemeral(output(text));
+```
+
+This bridges from the `Workflow` (durable) context to plain `Operation`
+(non-durable) context. Output emission is a derived side effect — the
+text comes from already-journaled expansion results. Journaling `output()`
+calls would cause double-journaling and replay divergence.
+
+All middleware and side effects triggered by `output()` (normalization,
+formatting, channel send) execute on the ephemeral side. No durable state
+capture occurs in the output pipeline.
+
+The channel and consumer live **outside** the durable boundary (in
+`runCommand`), while `output()` is called **inside** (in
+`documentWorkflow`). This cross-boundary communication is safe because
+the channel's scope encloses the durable workflow — scope teardown
+cancels both senders and consumer together, preserving structured
+concurrency.
+
+### 9.10 Known issues
+
+#### `blockId` counter
+
+`expandSegments` uses `result.length` as the `blockId` index. Calling
+it once per root segment resets the counter, breaking journal replay
+matching. See §6.1 for the fix: a mutable counter threaded through the
+expansion context.
+
+#### Sub-segment streaming
+
+If a single component takes 30 seconds, nothing streams during that
+time. True sub-segment streaming requires `expandSegments` to emit
+through the Api during recursive expansion with depth tracking (emit
+only at root level). The architecture supports this — the emission
+points just move deeper into the expansion engine.
+
+#### Partial markdown formatting
+
+Streaming `**bold` in one write and `text**` in another confuses the
+per-write ANSI formatter. The normalize middleware could buffer until
+a segment boundary (blank line) before formatting. This is a matter
+of middleware granularity, not an architectural issue.
+
+### 9.11 File layout
+
+```
+src/
+  ema-api.ts              Api definition, exports `output`
+  output/
+    mod.ts                Barrel export
+    normalize.ts          Whitespace normalization middleware
+    terminal.ts           Terminal ANSI formatting middleware
+  cli.ts                  Channel + consumer + middleware wiring (modified)
+  run-document.ts         Emission loop (modified)
+```
+
+### 9.12 Dependencies
+
+One new external package: `marked-terminal` (and its peer `marked`).
+
+Everything else uses existing infrastructure: `createApi`/`scope.around`
+for the Api, `createChannel` from Effection, `forEach` from
+`@effectionx/stream-helpers`.
+
+---
+
+## 10. Journal shape
+
+### 10.1 Effect vocabulary for MDX execution
 
 All effects use existing durable effect types from
 `@effectionx/durable-effects` except `import_component`, which is
@@ -3106,7 +3536,7 @@ new to the MDX execution layer.
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 
-### 9.2 Example journal for a multi-component document
+### 10.2 Example journal for a multi-component document
 
 With the default directory resolver:
 
@@ -3144,7 +3574,7 @@ The glob entry is protected by `useGlobContentGuard` — if files are
 added to or removed from the components directory between runs,
 replay halts with `StaleInputError`.
 
-### 9.3 Sequential coroutine IDs
+### 10.3 Sequential coroutine IDs
 
 In the basic sequential model, all effects run under the `root`
 coroutine ID. When parallel expansion is introduced (via `durableAll`
@@ -3153,11 +3583,20 @@ standard scheme: `root.0`, `root.1`, etc.
 
 ---
 
-## 10. Rendering
+## 11. Rendering
 
-### 10.1 Segment → output
+### 11.1 Segment → output
 
-After expansion, the segment stream is flattened into a string:
+With the EMA Output Api (§9), segments are no longer batch-rendered
+into a single string. Instead, `renderSegment` (singular) is called
+per-segment in the emission loop (§5.4), and each rendered string
+flows through the Output Api via `yield* ephemeral(output(text))`.
+
+The batch function `renderSegments` remains available for contexts
+that need a complete string (e.g., tests, non-streaming callers),
+but the primary rendering pathway is per-segment emission.
+
+After expansion, each segment is converted to a string:
 
 ```typescript
 function renderSegments(segments: Segment[]): string {
@@ -3189,7 +3628,7 @@ function renderSegment(segment: Segment): string {
 }
 ```
 
-### 10.2 Error rendering
+### 11.2 Error rendering
 
 Errors are rendered as HTML comments by default. This keeps the output
 valid markdown while making errors visible. An error rendering strategy
@@ -3198,7 +3637,7 @@ visible warning blocks, collect into a separate error report).
 
 ---
 
-## 11. Parallel expansion (future)
+## 12. Parallel expansion (future)
 
 When a document contains multiple independent component invocations at
 the same level, they can be expanded concurrently via `durableAll`:
@@ -3238,7 +3677,7 @@ instead of all under `root`).
 
 ---
 
-## 12. Test plan
+## 13. Test plan
 
 ### Tier A — Boundary scanner
 
@@ -3650,9 +4089,70 @@ instead of all under `root`).
 | SC5 | Replay returns stored response | Journal entry replayed; no re-execution |
 | SC6 | Self-closing renderChildren returns empty | `<Sample prompt="X" />` → `renderChildren()` returns empty, prompt used |
 
+### Tier OA — EMA Output Api
+
+| # | Test | Verify |
+|---|------|--------|
+| OA1 | Api creation | `EMA` Api created with `output` operation |
+| OA2 | Core handler is no-op | `output("text")` with no middleware installed → no error, no visible effect |
+| OA3 | Middleware intercepts output | `scope.around(EMA, ...)` receives text in middleware handler |
+| OA4 | Middleware transforms text | Middleware modifies text, `next()` receives modified text |
+| OA5 | Channel delivery | Channel delivery handler sends text via `yield* channel.send()` |
+| OA6 | Consumer collects all chunks | `forEach` consumer collects all emitted chunks in order |
+| OA7 | Channel close ends consumer | `channel.close()` causes `forEach` to complete |
+| OA8 | Multiple middleware compose | Normalize → terminal → channel: all three run in order |
+| OA9 | `ephemeral()` wrapper | `output()` inside durable context produces no journal entry |
+| OA10 | Channel close on runDocument failure | `runDocument` throws → `finally` block closes channel → consumer exits |
+
+### Tier WN — Whitespace normalization
+
+| # | Test | Verify |
+|---|------|--------|
+| WN1 | Trailing whitespace stripped | `"hello \n"` → `"hello\n"` |
+| WN2 | Leading newlines collapsed after blank line | Previous write ended with `\n\n`, next starts with `\n\n` → collapsed to `\n` |
+| WN3 | Run of 3+ newlines collapsed | `"a\n\n\nb"` → `"a\n\nb"` |
+| WN4 | Cross-write tracking | Write 1: `"text\n\n"`, Write 2: `"\n\nmore"` → Write 2 leading newlines collapsed |
+| WN5 | Single newline preserved | `"a\nb"` → unchanged |
+| WN6 | Empty write | `""` → unchanged, trailing count preserved |
+| WN7 | Tab trailing whitespace | `"text\t\n"` → `"text\n"` |
+
+### Tier TF — Terminal ANSI formatting
+
+| # | Test | Verify |
+|---|------|--------|
+| TF1 | Heading formatted | `"# Title"` → ANSI bold/colored output |
+| TF2 | Bold formatted | `"**bold**"` → ANSI bold markers present |
+| TF3 | Code block formatted | Fenced code block → syntax-highlighted output |
+| TF4 | `async: false` | `marked.parse()` called with `{ async: false }` — no promises |
+| TF5 | Middleware composes with normalize | Normalized text passes through terminal formatter |
+
+### Tier SE — Streaming emission
+
+| # | Test | Verify |
+|---|------|--------|
+| SE1 | Per-segment emission order | Segments emitted in document order |
+| SE2 | blockId stability | Per-segment expansion produces same blockIds as batch expansion |
+| SE3 | TTY: immediate write | TTY consumer calls `process.stdout.write()` per chunk |
+| SE4 | Piped: buffered write | Non-TTY consumer collects chunks, writes at end |
+| SE5 | `--raw` flag | No middleware installed — raw text passes through |
+| SE6 | Channel close triggers forEach exit | `channel.close()` → consumer's `forEach` completes |
+| SE7 | Cancel mid-emission | Scope cancelled between segments → consumer cancelled, no hanging |
+| SE8 | Middleware crash | Middleware throws → consumer not orphaned, channel closed |
+| SE9 | Cross-boundary communication | `output()` inside durable workflow → channel outside → consumer receives text |
+| SE10 | Empty segment | `renderSegment` returns `""` → no `output()` call |
+
+### Tier BC — Block ID counter
+
+| # | Test | Verify |
+|---|------|--------|
+| BC1 | Counter increments across segments | Block 0 in segment 1, block 1 in segment 2 — IDs are 0, 1 |
+| BC2 | Counter stable on replay | Same blockIds produced during replay as during live run |
+| BC3 | Counter threaded through expansion | Nested component expansion uses same counter |
+| BC4 | Counter not reset per root segment | Per-segment expansion does not reset counter |
+
 ---
 
-## 13. Walked example: crash recovery
+## 14. Walked example: crash recovery
 
 ### Initial state
 
@@ -3695,7 +4195,7 @@ A.md references <C />.
 
 ---
 
-## 14. Decisions
+## 15. Decisions
 
 | # | Decision | Rationale |
 |---|----------|-----------|
@@ -3762,3 +4262,13 @@ A.md references <C />.
 | 61 | `callLlamafile()` uses `@effectionx/fetch` not `durableFetch` | `durableFetch` journals its result; the HTTP call to the inference server must not be journaled — `durableSample` already journals the complete LLM response; double-journaling would cause divergence on replay |
 | 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; configurability would require a `healthPath` prop; deferred — the hardcoded path covers all current targets |
 | 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the EMA `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
+| 64 | `EMA` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
+| 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
+| 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
+| 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |
+| 68 | Per-root-segment emission, not full-document batch | Enables streaming UX; root segments are sequential and independent; component-internal expansion remains recursive and buffered; `documentWorkflow` returns `""` — output already emitted via Api |
+| 69 | `blockId` counter threaded through expansion context | Per-segment expansion resets `result.length`; mutable counter preserves deterministic IDs for journal replay; counter guarded by expansion scope cancellation |
+| 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
+| 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |
+| 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
+| 73 | Channel close in `finally` block | Guarantees `forEach` consumer exits cleanly regardless of `runDocument` success or failure; explicit closure keeps channel resources deterministic |
