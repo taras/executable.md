@@ -1578,6 +1578,18 @@ after the component's `EvalEnv` is created but before `expandSegments`
 processes the component body. They capture the expansion context
 (meta, validated props, hide set, eval scope) at injection time.
 
+Both use `parentEvalScope`, not `childEvalScope`. Children are
+caller-provided content and expand in the caller's scope context.
+The component's `childEvalScope` and its sequential channel are for
+the component's own `persist eval` blocks (middleware installation,
+etc.), not for expanding caller content. Children may contain
+operations that create resources (nested components, `persist eval`
+blocks, daemons), but those resources are scoped to the expansion —
+their lifecycle is bound by their place in the structured concurrency
+tree. Inner components create their own child scopes off
+`parentEvalScope`, and ancestor middleware is visible through
+Effection's scope prototype chain.
+
 Both wrap their `expandSegments` calls in `EvalEnvCtx.with()` and
 `EvalScopeCtx.with()` so the full expansion context is available
 regardless of which task the closure runs in (e.g., inside
@@ -2223,18 +2235,14 @@ function* expandComponent(
   // Validate props against declared inputs
   const validatedProps = validateProps(name, props, definition.inputs);
 
-  // Expand children first (bottom-up)
-  const expandedChildren = yield* expandSegments(
-    children,
-    definition.meta,
-    validatedProps,
-    hideSet,
-  );
-
-  // Substitute <Content /> and interpolate {meta.key} / {props.key}
+  // Substitute raw children into <Content /> positions.
+  // Children are NOT pre-expanded — they expand in document order
+  // when the substituted body is expanded. This ensures code blocks
+  // before <Content /> (e.g., provider middleware installation) run
+  // before children's code blocks.
   const substituted = substituteContent(
     definition.bodySegments,
-    expandedChildren,
+    children,
     definition.meta,
     validatedProps,
   );
@@ -3741,7 +3749,7 @@ A.md references <C />.
 | 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
 | 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry for output text; naturally replays when `durableEval` restores the result; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
 | 50 | `renderChildren`/`render` are closures in `env.values`, not an Api | A Render Api would require middleware installation per component; closures are simpler and capture the expansion context at the injection point; they are non-serializable and silently omitted from the journal |
-| 51 | `renderChildren`/`render` wrap in `EvalEnvCtx.with()` + `EvalScopeCtx.with()` | The closures may be called from inside `evalScope.eval()` where the context is different; wrapping ensures the correct expansion environment is visible regardless of the calling task |
+| 51 | `renderChildren`/`render` use `parentEvalScope` wrapped in `EvalEnvCtx.with()` + `EvalScopeCtx.with()` | Children are caller-provided content and expand in the caller's scope context; the component's `childEvalScope` sequential channel is for its own `persist eval` blocks, not for expanding caller content; children may create resources (nested components, daemons) but their lifecycle is bound by their place in the expansion tree; wrapping ensures the correct scope is visible regardless of which task the closure runs in |
 | 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
 | 53 | Sample component calls `Sample.operations.sample()` directly, not `durableSample()` | `durableSample` yields `DurableEffect`s (Workflow-level), but eval blocks run inside `durableEval`'s evaluator which expects `Operation<Json>` yields; the entire eval block including output is already journaled by `durableEval` |
 | 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |

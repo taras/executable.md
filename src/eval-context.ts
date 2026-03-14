@@ -16,6 +16,7 @@ import { findFreePort } from "./find-free-port.ts";
 import { Sample } from "./sample-api.ts";
 import { callLlamafile } from "./sample/llamafile.ts";
 import { callOllama } from "./sample/ollama.ts";
+import { callAnthropic } from "./sample/anthropic.ts";
 // durableSample is a Workflow-level helper used by the sample modifier,
 // not needed in the VM sandbox — eval blocks call Sample.operations.sample()
 // directly since they run inside evalScope.eval() where middleware is visible.
@@ -73,6 +74,8 @@ export function createEvalContext(
     callLlamafile,
     // Ollama — HTTP utility for Ollama inference
     callOllama,
+    // Anthropic — HTTP utility for Anthropic Messages API inference
+    callAnthropic,
 
     // Standard globals
     console,

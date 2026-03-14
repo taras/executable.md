@@ -148,7 +148,7 @@ function* run(config: {
           yield* each.next();
         }
       })
-    : undefined;
+    : spawn(function *() {});
 
   try {
     const output = yield* runDocument({
@@ -164,10 +164,6 @@ function* run(config: {
     // Close the signal so the writer drains remaining events and exits.
     if (signal) {
       signal.close();
-    }
-
-    // Wait for the writer to finish flushing all events
-    if (writer) {
       yield* writer;
     }
   }

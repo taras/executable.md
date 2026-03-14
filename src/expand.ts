@@ -5,9 +5,11 @@
  * component's body, with <Content /> substituted by the invocation's
  * children and {meta.key}/{props.key} resolved.
  *
- * Top-down with bottom-up child processing: children are expanded first,
- * then substituted into the component body, then the substituted body is
- * expanded recursively.
+ * Top-down expansion with raw child substitution: children are
+ * substituted into the component body as raw (unexpanded) segments,
+ * then the entire substituted body is expanded in document order.
+ * This ensures code blocks before <Content /> (e.g., provider
+ * middleware installation) execute before children's code blocks.
  */
 
 import type { Operation } from "effection";
@@ -278,29 +280,49 @@ function* expandComponent(
   // renderChildren() — expands and renders this component's children.
   // render(markdown) — scans, expands, and renders arbitrary markdown.
   //
+  // Both use parentEvalScope, not childEvalScope. Children are
+  // caller-provided content — they expand in the caller's scope
+  // context. The component's childEvalScope and its sequential
+  // channel are for the component's own persist eval blocks
+  // (middleware installation, etc.), not for expanding caller content.
+  //
+  // Children may contain operations that create resources (nested
+  // components, persist eval blocks, daemons), but those resources
+  // are scoped to the expansion — their lifecycle is bound by their
+  // place in the structured concurrency tree. Inner components create
+  // their own child scopes off parentEvalScope, and ancestor
+  // middleware is visible through Effection's scope prototype chain.
+  //
   // Both wrap their expandSegments call in EvalEnvCtx.with() and
   // EvalScopeCtx.with() so the full expansion context is available
-  // regardless of which task the closure runs in (e.g., evalScope.eval).
+  // regardless of which task the closure runs in (e.g., inside
+  // evalScope.eval()).
   //
   // These are non-serializable (functions) so serializeExports silently
   // omits them from the journal.
   const capturedMeta = definition.meta;
   const capturedProps = validatedProps;
-  const capturedHideSet = newHideSet;
+  // Children are caller-provided content, not the component's own body.
+  // Use the parent's hide set (without the current component name) so
+  // that caller-provided children can reference the same component name
+  // without triggering false cycle detection. True cycles in a component's
+  // body are still caught because body expansion uses newHideSet.
+  const capturedChildrenHideSet = hideSet;
   const capturedCtx = ctx;
+  const capturedParentEvalScope = parentEvalScope;
 
   componentEnv.values.renderChildren = function* () {
     return yield* EvalEnvCtx.with(componentEnv, function* () {
-      if (childEvalScope) {
-        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+      if (capturedParentEvalScope) {
+        return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
-            children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+            children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        children, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+        children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
       );
       return renderSegments(expanded);
     });
@@ -309,16 +331,16 @@ function* expandComponent(
   componentEnv.values.render = function* (markdown: string) {
     const segments = scanSegments(markdown);
     return yield* EvalEnvCtx.with(componentEnv, function* () {
-      if (childEvalScope) {
-        return yield* EvalScopeCtx.with(childEvalScope, function* () {
+      if (capturedParentEvalScope) {
+        return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
-            segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+            segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        segments, capturedMeta, capturedProps, capturedHideSet, capturedCtx,
+        segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx,
       );
       return renderSegments(expanded);
     });
