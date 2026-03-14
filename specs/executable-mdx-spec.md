@@ -2344,25 +2344,94 @@ entries. They are deterministic from the component dependency graph,
 which is reconstructed identically during replay because the same
 components are imported in the same order.
 
-### 6.3 Content slot: `<Content />`
+### 6.3 Content slots: `<Content />` and `<Content slot="name" />`
 
 When the boundary scanner encounters `<Content />` inside a component
 body, it produces a `ComponentInvocation` with `name: "Content"`.
 During expansion, this is a special case — it is not resolved from the
-file system. Instead, it is replaced by the expanded children passed
-from the invocation site.
+file system. Instead, it is replaced by the caller's children,
+partitioned by slot assignment.
+
+#### 6.3.1 Named slots
+
+Components can render caller-provided content in multiple distinct
+regions using the `slot` prop — the same pattern used by Web
+Components, Astro, and Svelte.
+
+**Caller side:**
+
+```markdown
+<Report>
+  <Section slot="header">
+    ## Title
+  </Section>
+  <Section slot="body">
+    Body content.
+  </Section>
+  Default content (no slot).
+</Report>
+```
+
+**Component side (Report.md):**
+
+```markdown
+<Content slot="header" />
+---
+<Content slot="body" />
+---
+<Content />
+```
+
+#### 6.3.2 Slot assignment rules
+
+A direct child of a component invocation is assigned to a named slot
+if and only if it is a `ComponentInvocation` segment with a `slot`
+prop. All other children — text segments, executable code blocks, and
+component invocations without a `slot` prop — are assigned to the
+**default slot**.
+
+The `slot` prop is **consumed** during slot partitioning — it is not
+passed through to the child component as a regular prop.
+
+#### 6.3.3 Slot partitioning
+
+Before content substitution, children are partitioned into slot
+buckets:
+
+```typescript
+interface SlotMap {
+  default: Segment[];
+  named: Map<string, Segment[]>;
+  errors: ErrorSegment[];
+}
+
+function partitionBySlot(children: Segment[]): SlotMap;
+```
+
+Invalid slot names (empty strings or names not matching
+`[a-zA-Z][a-zA-Z0-9_-]*`) produce `ErrorSegment` entries in the
+`errors` array. These are emitted at the first `<Content />` or
+`<Content slot="..." />` projection point.
+
+#### 6.3.4 Updated `substituteContent`
 
 ```typescript
 function substituteContent(
   bodySegments: Segment[],
-  expandedChildren: Segment[],
+  children: Segment[],
   meta: Record<string, unknown>,
   props: Record<string, Json>,
 ): Segment[] {
+  const slots = partitionBySlot(children);
   return bodySegments.flatMap((segment) => {
     if (segment.type === "component" && segment.name === "Content") {
-      // Replace <Content /> with the caller's expanded children
-      return expandedChildren;
+      const targetSlot = segment.props.slot as string | undefined;
+      if (targetSlot !== undefined) {
+        // Named slot projection — strip slot prop from each child
+        return (slots.named.get(targetSlot) ?? []).map(stripSlotProp);
+      }
+      // Default slot projection
+      return slots.default;
     }
     if (segment.type === "text") {
       return [{
@@ -2375,10 +2444,25 @@ function substituteContent(
 }
 ```
 
+#### 6.3.5 Reserved prop name
+
+The name `slot` is reserved. Declaring it in a component's `inputs`
+frontmatter is a validation error. On caller-side child components,
+`slot` is stripped before prop validation — the child component never
+sees `slot` in its `validatedProps`.
+
+#### 6.3.6 Interaction with `renderChildren()`
+
+`renderChildren()` renders **all** children (all slots combined), not
+just the default slot. This preserves backward compatibility — existing
+components that use `renderChildren()` continue to receive all content.
+
+#### 6.3.7 Multiple projections
+
 If the component body does not contain `<Content />`, children from the
 invocation site are silently discarded. If the component body contains
-multiple `<Content />`, each is replaced independently (all receive the
-same children).
+multiple `<Content />` or multiple `<Content slot="X" />`, each is
+replaced independently (all receive the same children for that slot).
 
 ### 6.4 Frontmatter interpolation: `{meta.key}` and `{props.key}`
 

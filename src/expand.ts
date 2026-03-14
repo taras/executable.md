@@ -2,8 +2,9 @@
  * Expansion engine (spec §5).
  *
  * Term-rewriting process: each component invocation is replaced by the
- * component's body, with <Content /> substituted by the invocation's
- * children and {meta.key}/{props.key} resolved.
+ * component's body, with <Content /> (and <Content slot="name" />)
+ * substituted by the invocation's children and {meta.key}/{props.key}
+ * resolved.
  *
  * Top-down expansion with raw child substitution: children are
  * substituted into the component body as raw (unexpanded) segments,
@@ -15,6 +16,7 @@
 import type { Operation } from "effection";
 import type {
   Segment,
+  ErrorSegment,
   ComponentDefinition,
   Json,
   CodeBlockContext,
@@ -247,10 +249,13 @@ function* expandComponent(
     ];
   }
 
-  // Validate props against declared inputs
+  // Validate props against declared inputs.
+  // Strip the `slot` prop before validation — it is consumed by the
+  // expansion engine for slot assignment, not forwarded to the child.
   let validatedProps: Record<string, Json>;
   try {
-    validatedProps = validateProps(name, props, definition.inputs);
+    const { slot: _slot, ...propsForValidation } = props;
+    validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
     return [
       {
@@ -405,23 +410,149 @@ function* expandComponent(
 }
 
 // ---------------------------------------------------------------------------
-// Content slot substitution (spec §5.3)
+// Named slot support (spec §6.3)
 // ---------------------------------------------------------------------------
 
 /**
- * Replace `<Content />` invocations with the caller's expanded children.
+ * Slot name validation pattern: must start with a letter, followed by
+ * letters, digits, underscores, or hyphens.
+ */
+const SLOT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+/**
+ * Validate a slot name. Returns an ErrorSegment if invalid, undefined if ok.
+ */
+function validateSlotName(
+  name: string,
+  source: string,
+): ErrorSegment | undefined {
+  if (name === "") {
+    return {
+      type: "error",
+      message: "Invalid slot name: slot name must not be empty",
+      source,
+    };
+  }
+  if (!SLOT_NAME_RE.test(name)) {
+    return {
+      type: "error",
+      message: `Invalid slot name "${name}": must match [a-zA-Z][a-zA-Z0-9_-]*`,
+      source,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Slot assignment: returns the slot name if the segment is a component
+ * invocation with a `slot` prop, undefined otherwise.
+ *
+ * Only ComponentInvocation segments can carry a `slot` prop. Text
+ * segments and code blocks are always default-slot content.
+ */
+function getSlotAssignment(segment: Segment): string | undefined {
+  if (segment.type === "component" && segment.props.slot !== undefined) {
+    return String(segment.props.slot);
+  }
+  return undefined;
+}
+
+/**
+ * Slot map produced by partitionBySlot.
+ */
+export interface SlotMap {
+  /** Children without a `slot` prop. */
+  default: Segment[];
+  /** Children keyed by slot name. */
+  named: Map<string, Segment[]>;
+  /** Validation errors from invalid slot names. */
+  errors: ErrorSegment[];
+}
+
+/**
+ * Partition children into slot buckets. Only ComponentInvocation segments
+ * with a `slot` prop are assigned to named slots. Everything else goes
+ * to the default slot.
+ *
+ * Invalid slot names produce ErrorSegments in the `errors` array.
+ */
+export function partitionBySlot(children: Segment[]): SlotMap {
+  const named = new Map<string, Segment[]>();
+  const defaultSlot: Segment[] = [];
+  const errors: ErrorSegment[] = [];
+
+  for (const child of children) {
+    const slotName = getSlotAssignment(child);
+    if (slotName !== undefined) {
+      const error = validateSlotName(slotName, `slot="${slotName}"`);
+      if (error) {
+        errors.push(error);
+        continue;
+      }
+      let bucket = named.get(slotName);
+      if (!bucket) {
+        bucket = [];
+        named.set(slotName, bucket);
+      }
+      bucket.push(child);
+    } else {
+      defaultSlot.push(child);
+    }
+  }
+
+  return { default: defaultSlot, named, errors };
+}
+
+/**
+ * Strip the `slot` prop from a segment. Returns a shallow clone with
+ * `slot` removed from props. Non-component segments pass through unchanged.
+ */
+export function stripSlotProp(segment: Segment): Segment {
+  if (segment.type === "component" && "slot" in segment.props) {
+    const { slot: _, ...rest } = segment.props;
+    return { ...segment, props: rest };
+  }
+  return segment;
+}
+
+// ---------------------------------------------------------------------------
+// Content slot substitution (spec §6.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Replace `<Content />` and `<Content slot="X" />` invocations with the
+ * caller's children, partitioned by slot assignment.
  * Also interpolates {meta.key} and {props.key} in text segments.
+ *
+ * When no `slot` props are present anywhere, this behaves identically
+ * to the original single-slot substituteContent.
  */
 function substituteContent(
   bodySegments: Segment[],
-  expandedChildren: Segment[],
+  children: Segment[],
   meta: Record<string, unknown>,
   props: Record<string, Json>,
 ): Segment[] {
+  const slots = partitionBySlot(children);
+  // Track whether errors have been emitted (only emit once)
+  let errorsEmitted = false;
+
   return bodySegments.flatMap((segment) => {
     if (segment.type === "component" && segment.name === "Content") {
-      // Replace <Content /> with the caller's expanded children
-      return expandedChildren;
+      const targetSlot = segment.props.slot as string | undefined;
+      // Emit slot validation errors at the first Content projection point
+      const pendingErrors = !errorsEmitted ? slots.errors : [];
+      if (pendingErrors.length > 0) errorsEmitted = true;
+
+      if (targetSlot !== undefined) {
+        // Named slot projection — strip slot prop from each child
+        return [
+          ...pendingErrors,
+          ...(slots.named.get(targetSlot) ?? []).map(stripSlotProp),
+        ];
+      }
+      // Default slot projection
+      return [...pendingErrors, ...slots.default];
     }
     if (segment.type === "text") {
       return [

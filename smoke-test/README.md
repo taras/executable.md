@@ -134,7 +134,7 @@ For example, if bold is opened before a component but not closed,
 remend closes it before expansion proceeds. This prevents unclosed
 markers from bleeding into component output.
 
-The text below opens **bold before the component
+The text below opens \*\*bold before the component
 <Badge />
 and continues after. Each segment is independently valid markdown.
 
@@ -174,10 +174,11 @@ after a short delay. Because it uses `persist`, the task stays alive:
 
 ```js persist eval
 const status = { ready: false };
-yield* spawn(function*() {
-  yield* sleep(10);
-  status.ready = true;
-});
+yield *
+  spawn(function* () {
+    yield* sleep(10);
+    status.ready = true;
+  });
 ```
 
 The next block converges on the spawned task using `when()`. This
@@ -185,9 +186,10 @@ only works because `persist` kept the task alive across the block
 boundary — without it, the task would have been torn down:
 
 ```js eval
-yield* when(function*() {
-  if (!status.ready) throw new Error("not ready");
-});
+yield *
+  when(function* () {
+    if (!status.ready) throw new Error("not ready");
+  });
 const serverReady = status.ready;
 ```
 
@@ -202,7 +204,7 @@ const startedAt = Date.now();
 The `findFreePort` VM global finds an available TCP port using the OS:
 
 ```js eval
-const port = yield* findFreePort();
+const port = yield * findFreePort();
 ```
 
 Eval binding interpolation substitutes bare `{name}` references in code
@@ -233,8 +235,8 @@ HTTP server on it, and the readiness block polls until the server
 responds:
 
 ```js eval
-const daemonPort = yield* findFreePort();
-const daemonUrl = 'http://127.0.0.1:' + daemonPort;
+const daemonPort = yield * findFreePort();
+const daemonUrl = "http://127.0.0.1:" + daemonPort;
 ```
 
 ```bash daemon exec
@@ -242,9 +244,13 @@ node -e "require('http').createServer((q,s)=>{s.writeHead(200);s.end('daemon-ok'
 ```
 
 ```js eval
-yield* when(function*() {
-  yield* fetch(daemonUrl + '/health').expect();
-}, { timeout: 5000, interval: 50 });
+yield *
+  when(
+    function* () {
+      yield* fetch(daemonUrl + "/health").expect();
+    },
+    { timeout: 5000, interval: 50 },
+  );
 ```
 
 The daemon is alive — let's verify by hitting it:
@@ -336,6 +342,32 @@ This is child content to be processed.
 
 </Section>
 
+<Section title="Named Slots">
+
+Components can render caller-provided content in multiple distinct
+regions using named slots. The `slot` prop on child components directs
+content to matching `<Content slot="name" />` positions in the
+component body.
+
+<TwoColumn>
+  <Fragment slot="left">
+    **Left column** content via named slot.
+  </Fragment>
+  <Fragment slot="right">
+    **Right column** content via named slot.
+  </Fragment>
+</TwoColumn>
+
+Named slots compose with the existing content slot. Children without
+a `slot` prop go to the default slot:
+
+<TwoColumn>
+  <Note slot="left" message="This note is in the left column." />
+  <Note slot="right" message="This note is in the right column." />
+</TwoColumn>
+
+</Section>
+
 <Section title="Instruction Component">
 
 The `<Instruction>` component surfaces the system prompt as visible,
@@ -422,6 +454,8 @@ cat <<'EOF'
 | Sample component          | <Sample prompt>, <Sample> with children |
 | output() function         | Sample component calls output()         |
 | renderChildren() closure  | Sample component captures children      |
+| Named slots               | <TwoColumn> with slot="left"/slot="right" |
+| Fragment passthrough      | <Fragment slot="..."> wraps raw text       |
 | Instruction component     | <Instruction text> wraps Sample calls   |
 | composable instructions   | Instructions enrich SampleContext        |
 EOF
