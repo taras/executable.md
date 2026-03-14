@@ -62,11 +62,15 @@ export function buildDefaultMessages(context: SampleContext): ChatMessage[] {
     !context.stderr;
 
   if (isDirectPrompt) {
-    const systemLines: string[] = [
-      "You are a helpful assistant embedded in a document workflow.",
-      "Respond directly to the user's request.",
-      "Be concise. Output only what is requested — no preamble, no explanation unless asked.",
-    ];
+    // When instructions are provided (by <Instruction> components),
+    // use them as the system prompt. Otherwise fall back to the default.
+    const systemLines: string[] = context.instructions
+      ? [context.instructions]
+      : [
+          "You are a helpful assistant embedded in a document workflow.",
+          "Respond directly to the user's request.",
+          "Be concise. Output only what is requested — no preamble, no explanation unless asked.",
+        ];
 
     if (context.params) {
       systemLines.push(`Instruction: ${context.params}`);
@@ -79,11 +83,14 @@ export function buildDefaultMessages(context: SampleContext): ChatMessage[] {
   }
 
   // Exec analysis mode: the context contains real command output to analyze.
-  const systemLines: string[] = [
-    "You are a precise technical assistant embedded in a durable document workflow.",
-    "Analyze the provided command output and respond according to the instructions.",
-    "Be concise. Output only what is requested — no preamble, no explanation unless asked.",
-  ];
+  // When instructions are provided, use them. Otherwise use the default persona.
+  const systemLines: string[] = context.instructions
+    ? [context.instructions]
+    : [
+        "You are a precise technical assistant embedded in a durable document workflow.",
+        "Analyze the provided command output and respond according to the instructions.",
+        "Be concise. Output only what is requested — no preamble, no explanation unless asked.",
+      ];
 
   if (context.componentName) {
     systemLines.push(

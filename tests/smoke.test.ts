@@ -166,6 +166,13 @@ describe("smoke test", () => {
     expect(output).toContain("Sample component");
     expect(output).toContain("output() function");
     expect(output).toContain("renderChildren() closure");
+    expect(output).toContain("Instruction component");
+    expect(output).toContain("composable instructions");
+
+    // ----- Instruction Component section -----
+    expect(output).toContain("§ Instruction Component");
+    // Instruction wraps Sample — response includes instruction text
+    expect(output).toContain("[response-from-instruction-stub|instructions:You are a helpful pirate.]");
 
     // ----- Durability section -----
     expect(output).toContain("Run at:");

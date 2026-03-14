@@ -14,7 +14,8 @@ yield* Sample.around({
     if (context.model !== undefined && context.model !== model) {
       return yield* next(context);
     }
-    return '[response-from-' + model + ']';
+    const instr = context.instructions ? '|instructions:' + context.instructions : '';
+    return '[response-from-' + model + instr + ']';
   },
 }, { at: 'min' });
 ```

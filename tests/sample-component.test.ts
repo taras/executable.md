@@ -45,6 +45,33 @@ function writeFiles(dir: string, files: Record<string, string>): void {
   }
 }
 
+/** Stub provider that echoes context.instructions alongside model and stdout. */
+function stubProviderWithInstructions(componentName: string): string {
+  return [
+    "---",
+    "meta:",
+    `  componentName: ${componentName}`,
+    "inputs:",
+    "  model:",
+    "    type: string",
+    "    required: true",
+    "---",
+    "",
+    "```js persist eval",
+    "yield* Sample.around({",
+    "  *sample([context], next) {",
+    "    if (context.model !== undefined && context.model !== model) {",
+    "      return yield* next(context);",
+    "    }",
+    "    return '[sampled-by-' + model + ':' + context.stdout.trim() + '|instructions:' + (context.instructions || 'none') + ']';",
+    "  },",
+    "}, { at: 'min' });",
+    "```",
+    "",
+    "<Content />",
+  ].join("\n");
+}
+
 /** Stub provider that returns canned responses with the model name. */
 function stubProvider(componentName: string): string {
   return [
@@ -628,7 +655,7 @@ describe("Tier RC — renderChildren and render closures", () => {
     expect(output).toContain("children:[hello from children]");
   });
 
-  // RC3: render() expands arbitrary markdown
+  // RC3: render() expands arbitrary markdown string
   it("RC3: render() expands arbitrary markdown string", function* () {
     const stream = new InMemoryStream();
     const runtime = makeRuntime({
@@ -654,5 +681,332 @@ describe("Tier RC — renderChildren and render closures", () => {
     });
 
     expect(output).toContain("rendered:[arbitrary **markdown** content]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier IN — Instruction component tests
+// ---------------------------------------------------------------------------
+
+describe("Tier IN — Instruction component", () => {
+  // IN1: Instruction enriches Sample context with instructions
+  it("IN1: Instruction enriches Sample context", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+      const instructionMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Instruction.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/Instruction.md": instructionMd,
+        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          "",
+          '<Instruction text="You are a pirate. Respond in pirate speak.">',
+          '<Sample prompt="hello" model="test-model" />',
+          "</Instruction>",
+          "",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      expect(output).toContain("instructions:You are a pirate. Respond in pirate speak.");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // IN2: No Instruction — backward compatible, instructions is none
+  it("IN2: no Instruction — instructions is none", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          "",
+          '<Sample prompt="hello" model="test-model" />',
+          "",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      expect(output).toContain("instructions:none");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // IN3: Instruction passes non-Sample children through via Content
+  it("IN3: Instruction passes text children through", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+      const instructionMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Instruction.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/Instruction.md": instructionMd,
+        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          "",
+          '<Instruction text="Be a pirate.">',
+          "",
+          "Some visible text before the sample.",
+          "",
+          '<Sample prompt="hello" model="test-model" />',
+          "</Instruction>",
+          "",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      expect(output).toContain("Some visible text before the sample.");
+      expect(output).toContain("instructions:Be a pirate.");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // IN4: Instruction with no Sample children — no error
+  it("IN4: Instruction with no Sample — no error", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const instructionMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Instruction.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Instruction.md": instructionMd,
+        "doc.md": [
+          '<Instruction text="Be concise.">',
+          "",
+          "Just some text, no Sample here.",
+          "</Instruction>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      expect(output).toContain("Just some text");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier AG — Agent component pattern tests
+// ---------------------------------------------------------------------------
+
+describe("Tier AG — Agent component pattern", () => {
+  // AG1: Agent component installs instruction middleware + Content
+  it("AG1: agent component with instruction middleware", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+        "components/CodeReviewer.md": [
+          "---",
+          "meta:",
+          "  componentName: CodeReviewer",
+          "---",
+          "",
+          "```js persist eval",
+          "yield* Sample.around({",
+          "  *sample([context], next) {",
+          "    const existing = context.instructions || '';",
+          "    const instruction = 'You are a code reviewer. Be concise.';",
+          "    return yield* next({",
+          "      ...context,",
+          "      instructions: existing ? existing + '\\n' + instruction : instruction,",
+          "    });",
+          "  },",
+          "}, { at: 'min' });",
+          "```",
+          "",
+          "<Content />",
+        ].join("\n"),
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          "",
+          "<CodeReviewer>",
+          '<Sample prompt="def add(a, b): return a - b" model="test-model" />',
+          "</CodeReviewer>",
+          "",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      expect(output).toContain("instructions:You are a code reviewer. Be concise.");
+      expect(output).toContain("def add(a, b): return a - b");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // AG2: Nested agents compose instructions
+  it("AG2: nested agents compose instructions", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const sampleMd = fs.readFileSync(
+        path.join(process.cwd(), "components/Sample.md"),
+        "utf-8",
+      );
+
+      writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+        "components/CodeReviewer.md": [
+          "---",
+          "meta:",
+          "  componentName: CodeReviewer",
+          "---",
+          "",
+          "```js persist eval",
+          "yield* Sample.around({",
+          "  *sample([context], next) {",
+          "    const existing = context.instructions || '';",
+          "    const instruction = 'You are a code reviewer.';",
+          "    return yield* next({",
+          "      ...context,",
+          "      instructions: existing ? existing + '\\n' + instruction : instruction,",
+          "    });",
+          "  },",
+          "}, { at: 'min' });",
+          "```",
+          "",
+          "<Content />",
+        ].join("\n"),
+        "components/SecurityAuditor.md": [
+          "---",
+          "meta:",
+          "  componentName: SecurityAuditor",
+          "---",
+          "",
+          "```js persist eval",
+          "yield* Sample.around({",
+          "  *sample([context], next) {",
+          "    const existing = context.instructions || '';",
+          "    const instruction = 'Focus on security vulnerabilities.';",
+          "    return yield* next({",
+          "      ...context,",
+          "      instructions: existing ? existing + '\\n' + instruction : instruction,",
+          "    });",
+          "  },",
+          "}, { at: 'min' });",
+          "```",
+          "",
+          "<Content />",
+        ].join("\n"),
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          "",
+          "<CodeReviewer>",
+          "<SecurityAuditor>",
+          '<Sample prompt="check this" model="test-model" />',
+          "</SecurityAuditor>",
+          "</CodeReviewer>",
+          "",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      });
+
+      expect(output).toContain("You are a code reviewer.");
+      expect(output).toContain("Focus on security vulnerabilities.");
+      expect(output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
   });
 });
