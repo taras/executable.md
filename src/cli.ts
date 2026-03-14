@@ -23,6 +23,7 @@ import { FileStream } from "./file-stream.ts";
 import { loadJournal } from "./load-journal.ts";
 import { EMA } from "./ema-api.ts";
 import { useNormalizedOutput, useTerminalOutput } from "./output/mod.ts";
+import { subscribe } from "./subscribe.ts";
 
 // ---------------------------------------------------------------------------
 // Workaround: field.default exists at runtime but is missing from the .d.ts
@@ -191,23 +192,27 @@ function* run(config: {
     },
   });
 
-  // Spawn the stream consumer — subscribes before any output flows.
-  const consumer = yield* spawn(function* () {
-    const chunks: string[] = [];
-
-    for (const chunk of yield* each(channel)) {
+  // Subscribe to the output channel with deterministic handshake.
+  // yield* ready blocks until the subscription is established,
+  // preventing the replay hang where durableRun returns synchronously
+  // and channel.close() fires before the consumer subscribes.
+  const { ready, task: consumer } = yield* subscribe<string>(
+    channel,
+    (chunk) => {
       if (process.stdout.isTTY) {
         process.stdout.write(chunk);
       }
-      chunks.push(chunk);
-      yield* each.next();
-    }
+    },
+  );
+  yield* ready;
 
-    return chunks.join("");
-  });
-
+  // runDocument returns the full output string. On a fresh run this
+  // matches the collected chunks; on replay (durableRun short-circuits)
+  // the workflow body never runs so no output() calls are made — the
+  // consumer collects nothing and we fall back to the stored result.
+  let storedOutput = "";
   try {
-    yield* runDocument({
+    storedOutput = yield* runDocument({
       docPath,
       stream,
       runtime: nodeRuntime(),
@@ -215,7 +220,7 @@ function* run(config: {
       freshness: false,
     });
   } finally {
-    // Close the channel so the consumer's each() loop exits cleanly.
+    // Close the channel so the consumer's subscription loop exits cleanly.
     // channel.close() returns Operation<void> — yield* is valid in finally.
     yield* channel.close();
 
@@ -226,8 +231,10 @@ function* run(config: {
     }
   }
 
-  // Collect the full output from the consumer.
-  const fullOutput = yield* consumer;
+  // Collect streamed output from the consumer.
+  const chunks = yield* consumer;
+  // On replay, chunks is empty — use the stored result from durableRun.
+  const fullOutput = chunks.length > 0 ? chunks.join("") : storedOutput;
 
   // When piped (not TTY), write the full output at the end.
   if (!process.stdout.isTTY) {

@@ -8,9 +8,10 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel, spawn, each, sleep, type Operation } from "effection";
+import { useScope, createChannel, type Operation } from "effection";
 import { EMA } from "../src/ema-api.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
+import { subscribe } from "../src/subscribe.ts";
 
 /**
  * Helper: install terminal middleware + capture handler, emit text, collect.
@@ -29,16 +30,8 @@ function* collectTerminal(texts: string[]): Operation<string[]> {
     },
   });
 
-  const consumer = yield* spawn(function* () {
-    const chunks: string[] = [];
-    for (const chunk of yield* each(channel)) {
-      chunks.push(chunk);
-      yield* each.next();
-    }
-    return chunks;
-  });
-
-  yield* sleep(0);
+  const { ready, task: consumer } = yield* subscribe<string>(channel);
+  yield* ready;
 
   for (const text of texts) {
     yield* EMA.operations.output(text);

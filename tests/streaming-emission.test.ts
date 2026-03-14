@@ -6,12 +6,13 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel, spawn, each, sleep } from "effection";
+import { useScope, createChannel } from "effection";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { EMA } from "../src/ema-api.ts";
 import { createBlockCounter } from "../src/expand.ts";
 import { runDocument } from "../src/run-document.ts";
+import { subscribe } from "../src/subscribe.ts";
 
 describe("Tier BC — Block ID counter", () => {
   // BC1: Counter increments across calls
@@ -93,17 +94,8 @@ describe("Tier SE — Streaming emission", () => {
       },
     });
 
-    const consumer = yield* spawn(function* () {
-      const chunks: string[] = [];
-      for (const chunk of yield* each(channel)) {
-        chunks.push(chunk);
-        yield* each.next();
-      }
-      return chunks;
-    });
-
-    // Let consumer subscribe before runDocument sends
-    yield* sleep(0);
+    const { ready, task: consumer } = yield* subscribe<string>(channel);
+    yield* ready;
 
     try {
       yield* runDocument({

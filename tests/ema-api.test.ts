@@ -8,8 +8,9 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel, spawn, each, sleep } from "effection";
+import { useScope, createChannel } from "effection";
 import { EMA } from "../src/ema-api.ts";
+import { subscribe } from "../src/subscribe.ts";
 
 describe("Tier OA — EMA Output Api", () => {
   // OA1: Api creation
@@ -79,17 +80,8 @@ describe("Tier OA — EMA Output Api", () => {
       },
     });
 
-    const consumer = yield* spawn(function* () {
-      const chunks: string[] = [];
-      for (const chunk of yield* each(channel)) {
-        chunks.push(chunk);
-        yield* each.next();
-      }
-      return chunks;
-    });
-
-    // Yield to let consumer's each() subscribe
-    yield* sleep(0);
+    const { ready, task: consumer } = yield* subscribe<string>(channel);
+    yield* ready;
 
     yield* EMA.operations.output("hello");
     yield* EMA.operations.output("world");
@@ -110,16 +102,8 @@ describe("Tier OA — EMA Output Api", () => {
       },
     });
 
-    const consumer = yield* spawn(function* () {
-      const chunks: string[] = [];
-      for (const chunk of yield* each(channel)) {
-        chunks.push(chunk);
-        yield* each.next();
-      }
-      return chunks.join("");
-    });
-
-    yield* sleep(0);
+    const { ready, task: consumer } = yield* subscribe<string>(channel);
+    yield* ready;
 
     yield* EMA.operations.output("# Title\n\n");
     yield* EMA.operations.output("Body text\n");
@@ -127,25 +111,23 @@ describe("Tier OA — EMA Output Api", () => {
     yield* channel.close();
 
     const result = yield* consumer;
-    expect(result).toBe("# Title\n\nBody text\n## Footer\n");
+    expect(result.join("")).toBe("# Title\n\nBody text\n## Footer\n");
   });
 
   // OA7: Channel close ends consumer
-  it("OA7: channel.close() causes each() loop to complete", function* () {
+  it("OA7: channel.close() causes subscription loop to complete", function* () {
     const channel = createChannel<string, void>();
 
     let consumerDone = false;
-    const consumer = yield* spawn(function* () {
-      for (const _ of yield* each(channel)) {
-        yield* each.next();
-      }
-      consumerDone = true;
+    const { ready, task: consumer } = yield* subscribe<string>(channel, () => {
+      // no-op callback
     });
+    yield* ready;
 
-    yield* sleep(0);
     yield* channel.close();
     yield* consumer;
 
+    consumerDone = true;
     expect(consumerDone).toBe(true);
   });
 
@@ -175,16 +157,8 @@ describe("Tier OA — EMA Output Api", () => {
       },
     });
 
-    const consumer = yield* spawn(function* () {
-      const chunks: string[] = [];
-      for (const chunk of yield* each(channel)) {
-        chunks.push(chunk);
-        yield* each.next();
-      }
-      return chunks;
-    });
-
-    yield* sleep(0);
+    const { ready, task: consumer } = yield* subscribe<string>(channel);
+    yield* ready;
 
     yield* EMA.operations.output("hello");
     yield* channel.close();
