@@ -355,11 +355,11 @@ describe("Tier SC — Sample component", () => {
     }
   });
 
-  // SC7: Nested <Sample> inside <Sample> — children contain components
-  // This tests the fix for the EvalScope deadlock: when a Sample's
-  // renderChildren() expands children that themselves contain <Sample>
-  // components, the inner Samples must create their eval scopes from
-  // the parent scope (not the current component's blocked scope).
+  // SC7: Nested <Sample> inside <Sample> — children contain components.
+  // renderChildren() expands caller-provided children in the parent
+  // scope context. Inner <Sample> components create their own child
+  // scopes off the parent chain, and ancestor middleware (installed by
+  // the provider) is visible through Effection's scope prototype chain.
   it("SC7: nested Sample inside Sample — no deadlock", function* () {
     const tmpDir = makeTempDir();
 

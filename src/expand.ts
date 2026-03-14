@@ -5,9 +5,11 @@
  * component's body, with <Content /> substituted by the invocation's
  * children and {meta.key}/{props.key} resolved.
  *
- * Top-down with bottom-up child processing: children are expanded first,
- * then substituted into the component body, then the substituted body is
- * expanded recursively.
+ * Top-down expansion with raw child substitution: children are
+ * substituted into the component body as raw (unexpanded) segments,
+ * then the entire substituted body is expanded in document order.
+ * This ensures code blocks before <Content /> (e.g., provider
+ * middleware installation) execute before children's code blocks.
  */
 
 import type { Operation } from "effection";
@@ -278,19 +280,23 @@ function* expandComponent(
   // renderChildren() — expands and renders this component's children.
   // render(markdown) — scans, expands, and renders arbitrary markdown.
   //
+  // Both use parentEvalScope, not childEvalScope. Children are
+  // caller-provided content — they expand in the caller's scope
+  // context. The component's childEvalScope and its sequential
+  // channel are for the component's own persist eval blocks
+  // (middleware installation, etc.), not for expanding caller content.
+  //
+  // Children may contain operations that create resources (nested
+  // components, persist eval blocks, daemons), but those resources
+  // are scoped to the expansion — their lifecycle is bound by their
+  // place in the structured concurrency tree. Inner components create
+  // their own child scopes off parentEvalScope, and ancestor
+  // middleware is visible through Effection's scope prototype chain.
+  //
   // Both wrap their expandSegments call in EvalEnvCtx.with() and
   // EvalScopeCtx.with() so the full expansion context is available
-  // regardless of which task the closure runs in (e.g., evalScope.eval).
-  //
-  // IMPORTANT: Both closures use parentEvalScope (not childEvalScope)
-  // for EvalScopeCtx. This prevents a deadlock when children contain
-  // components that need their own eval scopes. The deadlock occurs
-  // because persist eval blocks run inside childEvalScope.eval(), which
-  // blocks the scope's sequential channel — any nested .eval() call on
-  // the same scope (triggered by child component expansion) would wait
-  // forever. Using parentEvalScope avoids re-entrant .eval() calls.
-  // Children are caller-provided content and should see the caller's
-  // scope chain, not the component's internal scope.
+  // regardless of which task the closure runs in (e.g., inside
+  // evalScope.eval()).
   //
   // These are non-serializable (functions) so serializeExports silently
   // omits them from the journal.
