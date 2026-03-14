@@ -186,8 +186,11 @@ function* run(config: {
 
   // 3. Channel delivery last (runs last — closest to core).
   // channel.send() is yield*'d for backpressure and cancellation safety.
+  // The emitted flag tracks whether the workflow produced streaming output.
+  let emitted = false;
   scope.around(EMA, {
     *output([text]) {
+      emitted = true;
       yield* channel.send(text);
     },
   });
@@ -206,10 +209,6 @@ function* run(config: {
   );
   yield* ready;
 
-  // runDocument returns the full output string. On a fresh run this
-  // matches the collected chunks; on replay (durableRun short-circuits)
-  // the workflow body never runs so no output() calls are made — the
-  // consumer collects nothing and we fall back to the stored result.
   let storedOutput = "";
   try {
     storedOutput = yield* runDocument({
@@ -219,6 +218,14 @@ function* run(config: {
       componentDirs: componentDir,
       freshness: false,
     });
+
+    // On replay, durableRun short-circuits and the workflow body never
+    // runs — no output() calls are made. Emit the stored result through
+    // the full Output Api pipeline (normalize, terminal format, channel)
+    // so replay output is consistent with fresh runs.
+    if (!emitted && storedOutput) {
+      yield* EMA.operations.output(storedOutput);
+    }
   } finally {
     // Close the channel so the consumer's subscription loop exits cleanly.
     // channel.close() returns Operation<void> — yield* is valid in finally.
@@ -233,8 +240,7 @@ function* run(config: {
 
   // Collect streamed output from the consumer.
   const chunks = yield* consumer;
-  // On replay, chunks is empty — use the stored result from durableRun.
-  const fullOutput = chunks.length > 0 ? chunks.join("") : storedOutput;
+  const fullOutput = chunks.join("");
 
   // When piped (not TTY), write the full output at the end.
   if (!process.stdout.isTTY) {
