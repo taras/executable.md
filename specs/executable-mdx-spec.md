@@ -136,7 +136,8 @@ interface TextSegment {
 interface ComponentInvocation {
   type: "component";
   name: string;                          // PascalCase, e.g. "Greeting", "Ns.Sub"
-  props: Record<string, Json>;           // JSX props from the invocation site
+  props: Record<string, Json>;           // JSX props resolved at scan time
+  expressions: Record<string, string>;   // Eval expression props — raw text, resolved at expansion time
   children: Segment[];                   // Segments between opening and closing tags
   selfClosing: boolean;
 }
@@ -2584,6 +2585,35 @@ function checkType(value: Json, type: InputDefinition["type"]): boolean {
 Validation is a runtime operation — deterministic from the component
 definition and the caller's props. It runs after import but before
 expansion. Errors are thrown immediately, not deferred.
+
+#### Expression props
+
+Expression props pass runtime values from eval blocks to child
+components. The scanner distinguishes between **resolved props**
+(JSON literals known at scan time) and **eval expressions** (raw
+expression text to evaluate at expansion time).
+
+The `ComponentInvocation` segment has an `expressions` field that
+holds raw expression text for eval expression props. At expansion
+time, `expandComponent` evaluates these against `env.values` using
+the shared VM context via `runInContext`.
+
+| Expression | Scan time | Expansion time |
+|---|---|---|
+| `count={42}` | `props.count = 42` | — |
+| `verbose={true}` | `props.verbose = true` | — |
+| `data={{ key: "val" }}` | `props.data = { key: "val" }` | — |
+| `pr={pr}` | `expressions.pr = "pr"` | eval → `props.pr = env.values.pr` |
+| `total={a + b}` | `expressions.total = "a + b"` | eval → `props.total = 3` |
+
+Expression evaluation happens **before** `validateProps` so that
+resolved values can be type-checked. Results must be JSON-serializable
+(validated via JSON round-trip). Evaluation errors are thrown, not
+rendered as ErrorSegments — consistent with PropValidationError.
+
+The `expressions` field is always present on `ComponentInvocation`
+(empty `{}` when no eval expressions exist). A prop name appears in
+either `props` or `expressions`, never both.
 
 #### Props at the invocation site
 

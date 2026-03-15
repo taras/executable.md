@@ -300,7 +300,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
   if (!name) return null;
 
   // Parse attributes
-  const { props, end: attrEnd } = parseAttributes(text, pos);
+  const { props, expressions, end: attrEnd } = parseAttributes(text, pos);
   if (attrEnd === -1) return null;
   pos = attrEnd;
 
@@ -318,6 +318,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
         type: "component",
         name,
         props,
+        expressions,
         children: [],
         selfClosing: true,
       },
@@ -338,6 +339,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
       type: "component",
       name,
       props,
+      expressions,
       children,
       selfClosing: false,
     },
@@ -351,6 +353,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
 
 interface ParsedAttributes {
   props: Record<string, Json>;
+  expressions: Record<string, string>;
   end: number; // position after last attribute, before /> or >
 }
 
@@ -359,21 +362,22 @@ function parseAttributes(
   pos: number,
 ): ParsedAttributes {
   const props: Record<string, Json> = {};
+  const expressions: Record<string, string> = {};
 
   while (pos < text.length) {
     pos = skipWhitespace(text, pos);
-    if (pos >= text.length) return { props, end: -1 };
+    if (pos >= text.length) return { props, expressions, end: -1 };
 
     // End of attributes?
     if (text[pos] === "/" || text[pos] === ">") {
-      return { props, end: pos };
+      return { props, expressions, end: pos };
     }
 
     // Spread props: {...expr}
     if (text[pos] === "{" && pos + 2 < text.length && text[pos + 1] === "." && text[pos + 2] === ".") {
       // Skip spread — consume the expression
       const exprEnd = findMatchingBrace(text, pos);
-      if (exprEnd === -1) return { props, end: -1 };
+      if (exprEnd === -1) return { props, expressions, end: -1 };
       // We don't evaluate spread props — just skip them
       pos = exprEnd + 1;
       continue;
@@ -388,7 +392,7 @@ function parseAttributes(
       pos++;
     }
     const attrName = text.slice(attrNameStart, pos);
-    if (!attrName) return { props, end: -1 };
+    if (!attrName) return { props, expressions, end: -1 };
 
     pos = skipWhitespace(text, pos);
 
@@ -416,33 +420,38 @@ function parseAttributes(
     pos = skipWhitespace(text, pos);
 
     // Attribute value
-    if (pos >= text.length) return { props, end: -1 };
+    if (pos >= text.length) return { props, expressions, end: -1 };
 
     if (text[pos] === '"') {
       // String attribute: "value"
       const strEnd = findClosingQuote(text, pos + 1, '"');
-      if (strEnd === -1) return { props, end: -1 };
+      if (strEnd === -1) return { props, expressions, end: -1 };
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
     } else if (text[pos] === "'") {
       // String attribute: 'value'
       const strEnd = findClosingQuote(text, pos + 1, "'");
-      if (strEnd === -1) return { props, end: -1 };
+      if (strEnd === -1) return { props, expressions, end: -1 };
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
     } else if (text[pos] === "{") {
       // Expression attribute: {expr}
       const exprEnd = findMatchingBrace(text, pos);
-      if (exprEnd === -1) return { props, end: -1 };
+      if (exprEnd === -1) return { props, expressions, end: -1 };
       const exprText = text.slice(pos + 1, exprEnd).trim();
-      props[attrName] = parseExpressionValue(exprText);
+      const result = parseExpressionValue(exprText);
+      if (result.kind === "resolved") {
+        props[attrName] = result.value;
+      } else {
+        expressions[attrName] = result.expression;
+      }
       pos = exprEnd + 1;
     } else {
-      return { props, end: -1 };
+      return { props, expressions, end: -1 };
     }
   }
 
-  return { props, end: -1 };
+  return { props, expressions, end: -1 };
 }
 
 /**
@@ -520,14 +529,36 @@ function findClosingQuote(text: string, start: number, quote: string): number {
   return -1;
 }
 
+// ---------------------------------------------------------------------------
+// Expression value parsing — discriminated union result
+// ---------------------------------------------------------------------------
+
+/** A value fully resolved at scan time (JSON literal). */
+export interface ResolvedValue {
+  kind: "resolved";
+  value: Json;
+}
+
+/** An expression that must be evaluated at expansion time against env.values. */
+export interface EvalExpression {
+  kind: "eval";
+  expression: string;
+}
+
+/** Result of parsing an expression attribute value. */
+export type ExpressionResult = ResolvedValue | EvalExpression;
+
 /**
- * Parse a JSX expression value to a JSON value.
- * Handles numbers, booleans, null, objects, arrays, and strings.
+ * Parse a JSX expression value.
+ *
+ * JSON-compatible literals (numbers, booleans, null, objects, arrays) are
+ * resolved at scan time. Everything else is an eval expression — raw
+ * expression text to be evaluated against env.values at expansion time.
  */
-function parseExpressionValue(expr: string): Json {
+export function parseExpressionValue(expr: string): ExpressionResult {
   const trimmed = expr.trim();
 
-  // Try JSON-compatible parse for objects, arrays, numbers, booleans, null
+  // Try JSON-compatible parse for objects, arrays
   try {
     // Handle some JSX expression patterns
     // Convert single-quoted strings to double-quoted for JSON
@@ -538,25 +569,27 @@ function parseExpressionValue(expr: string): Json {
       .replace(/:\s*'([^']*)'/g, ': "$1"');
 
     const parsed = JSON.parse(jsonCandidate) as Json;
-    return parsed;
+    return { kind: "resolved", value: parsed };
   } catch {
     // Fall through
   }
 
   // Number
   if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    return Number(trimmed);
+    return { kind: "resolved", value: Number(trimmed) };
   }
 
   // Boolean
-  if (trimmed === "true") return true;
-  if (trimmed === "false") return false;
+  if (trimmed === "true") return { kind: "resolved", value: true };
+  if (trimmed === "false") return { kind: "resolved", value: false };
 
   // null/undefined
-  if (trimmed === "null" || trimmed === "undefined") return null;
+  if (trimmed === "null" || trimmed === "undefined") {
+    return { kind: "resolved", value: null };
+  }
 
-  // String fallback — return the raw expression text
-  return trimmed;
+  // Everything else is an eval expression — evaluate at expansion time
+  return { kind: "eval", expression: trimmed };
 }
 
 // ---------------------------------------------------------------------------

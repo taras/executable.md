@@ -90,6 +90,7 @@ function compSeg(
     type: "component",
     name,
     props,
+    expressions: {},
     children,
     selfClosing: children.length === 0,
   };

@@ -37,6 +37,11 @@ export interface ComponentInvocation {
   type: "component";
   name: string;
   props: Record<string, Json>;
+  /** Raw expression text for props that need eval at expansion time.
+   *  Keyed by prop name. Evaluated against env.values at expansion time.
+   *  Always present — empty object {} when no eval expressions exist.
+   *  A prop name appears in either props or expressions, never both. */
+  expressions: Record<string, string>;
   children: Segment[];
   selfClosing: boolean;
 }
