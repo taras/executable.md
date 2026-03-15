@@ -26,7 +26,7 @@ additions are `durableImportComponent` (a durable effect that wraps
 the Resolve Api and `DurableRuntime` file read into a single journaled
 operation, with a custom `useImportComponentGuard` for staleness
 detection), the in-process evaluation system (source transform,
-shared VM context, binding environment, and eval scope for resource
+module compilation, binding environment, and eval scope for resource
 lifetime management — see §4), daemon process management (the
 `daemon` terminal modifier, eval binding interpolation, and the
 provider component pattern — see §3.3 and §6.6–6.7), and the
@@ -496,7 +496,6 @@ export const evalFactory: ModifierFactory = (_params) =>
   (_args, _next) => (function* () {
     const ctx = yield* useCodeBlock();
     const env = yield* ephemeral(EvalEnvCtx.expect());
-    const evalCtx = yield* ephemeral(EvalCtxKey.expect());
     const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
 
     // Inject output() function into env so eval blocks can produce
@@ -517,7 +516,7 @@ export const evalFactory: ModifierFactory = (_params) =>
       `eval:${ctx.blockId}`,
       function* (source, bindings) {
         Object.assign(env.values, bindings);
-        const fn = compileBlock(source, evalCtx.vmContext);
+        const fn = yield* compileBlock(source, transformed.userImports ?? []);
 
         if (persist) {
           const evalScope = yield* EvalScopeCtx.expect();
@@ -926,9 +925,9 @@ with `baseUrl` and `model` closed over at middleware install time. It makes a
 single `/v1/chat/completions` request via `@effectionx/fetch` and returns the
 response content as a string.
 
-It must be available as a VM sandbox global so that eval blocks in provider
-components can reference it without imports. It is added to the eval sandbox
-globals map alongside `Sample`, `useScope`, `findFreePort`, `when`, and `fetch`.
+It is available in eval blocks as a standard import via
+`executable-markdown-agents/globals`, alongside `Sample`, `findFreePort`,
+`callOllama`, `callAnthropic`, and `useContent`.
 
 #### Signature
 
@@ -1145,8 +1144,8 @@ Future modifiers (not yet specified):
 Eval blocks run JavaScript **in-process** as Effection generator operations.
 Unlike `exec` blocks (which run shell commands in a subprocess), `eval`
 blocks execute in the same Effection process. This section describes the
-architecture: source transform, VM context, binding environment, eval
-scope, and durable replay.
+architecture: source transform, module compilation, binding environment,
+eval scope, and durable replay.
 
 ### 4.1 Source transform
 
@@ -1258,50 +1257,67 @@ function serializeExports(
 }
 ```
 
-### 4.2 VM context
+### 4.2 Module compilation via data: URI
 
-A single `vm.Context` is created at document run start and reused for all
-eval blocks across the entire document. Context creation is expensive
-(~7–21ms).
+Eval blocks are compiled into `data:` URI TypeScript modules and
+dynamically imported. Eval blocks can use standard `import`
+statements, resolved through Deno's import map.
 
 ```typescript
 // src/eval-context.ts
-import { createContext as createEffectionContext } from "effection";
-import { createContext as vmCreateContext } from "node:vm";
+import { createContext as createEffectionContext, call } from "effection";
+import type { Operation } from "effection";
 
 export interface EvalContext {
-  vmContext: object;
+  initialized: true;
 }
 
 export const EvalCtxKey = createEffectionContext<EvalContext>("evalContext");
 
-export function createEvalContext(
-  globals: Record<string, unknown> = {},
-): EvalContext {
-  const sandbox = {
-    // Effection APIs available in blocks without import
-    sleep, spawn, call, resource, useScope,
-    createChannel, each, suspend, createSignal,
-    // Convergence — poll and wait for conditions
-    when,
-    // Port allocation — find available TCP port
-    findFreePort,
-    // Standard globals
-    console,
-    // Host-provided extras
-    ...globals,
-  };
-  return { vmContext: vmCreateContext(sandbox) };
+export function createEvalContext(): EvalContext {
+  return { initialized: true };
 }
 ```
 
-Set on the root document scope so all eval blocks share the same VM
-context. Handlers access it via `ephemeral(EvalCtxKey.expect())`.
+The `EvalContext` is a lightweight marker that the eval system has
+been initialized. APIs are provided as standard `import` statements
+in the generated module.
+
+#### Standard imports
+
+Every generated eval module is prepended with standard imports:
+
+```typescript
+import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";
+import { when } from "@effectionx/converge";
+import { fetch } from "@effectionx/fetch";
+import { useContent, findFreePort, Sample, callLlamafile, callOllama, callAnthropic } from "executable-markdown-agents/globals";
+```
+
+These imports resolve through Deno's import map (`deno.json`). The
+`executable-markdown-agents/globals` path is an export from the
+package that re-exports EMA-specific APIs.
+
+#### `globals.ts`
+
+EMA-specific APIs are re-exported from `globals.ts` for use in
+generated eval modules and function components:
+
+```typescript
+// globals.ts
+export { useContent } from "./src/content-context.ts";
+export { findFreePort } from "./src/find-free-port.ts";
+export { Sample } from "./src/sample-api.ts";
+export { callLlamafile } from "./src/sample/llamafile.ts";
+export { callOllama } from "./src/sample/ollama.ts";
+export { callAnthropic } from "./src/sample/anthropic.ts";
+```
 
 #### `findFreePort`
 
-`findFreePort` is exposed in the eval VM sandbox as a standalone
-Effection `Operation<number>`. It binds a `node:net` TCP server to
+`findFreePort` is available in eval blocks as a standard import
+(`executable-markdown-agents/globals`). It is an Effection
+`Operation<number>`. It binds a `node:net` TCP server to
 port 0 (OS-assigned), reads the port number, and closes the server.
 It uses Effection's structured concurrency primitives (`once` from
 `@effectionx/node` for event bridging, `race` for error handling):
@@ -1368,23 +1384,42 @@ until the assertion passes or the timeout expires.
 
 #### Compiling blocks
 
-```typescript
-import { runInContext } from "node:vm";
+`compileBlock` generates a `data:` URI TypeScript module, dynamically
+imports it, and returns the default-exported generator function.
+It is an async operation (`Operation<GeneratorFunction>`) because
+`import()` is asynchronous.
 
-function compileBlock(
+```typescript
+export function* compileBlock(
   transformedBodyCode: string,
-  vmContext: object,
-): (env: Record<string, unknown>) => Generator<unknown, void, unknown> {
-  return runInContext(
-    `(function*(env) {\n${transformedBodyCode}\n})`,
-    vmContext,
-  );
+  userImports: string[],
+): Operation<(env: Record<string, unknown>) => Generator<unknown, void, unknown>> {
+  const userImportLines = userImports.length > 0
+    ? userImports.join("\n") + "\n"
+    : "";
+
+  const moduleSource = [
+    STANDARD_IMPORTS,
+    userImportLines,
+    `export default function*(env) {`,
+    transformedBodyCode,
+    `}`,
+  ].join("\n");
+
+  const dataUri = `data:application/typescript,${encodeURIComponent(moduleSource)}`;
+  const mod = yield* call(() => import(dataUri));
+
+  return mod.default;
 }
 ```
 
-The trailing newline before `})` is critical — the transformed code ends
-with a `//# sourceURL` comment, and without the newline the closing `})`
-would be swallowed by the comment.
+The env preamble (`const { x, y } = env;`) is already in the
+`transformedBodyCode` — generated by `transformBlock()`.
+`compileBlock` does NOT add a second preamble.
+
+On replay, `durableEval` returns the stored result directly — the
+`compileBlock` call inside the callback is never reached. The
+dynamic import only happens during live execution.
 
 ### 4.3 Binding environment
 
@@ -1478,7 +1513,10 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()`, `EvalCtxKey`, `EvalContext` |
+| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()` (data: URI), `EvalCtxKey`, `EvalContext`, `STANDARD_IMPORTS` |
+| `src/content-context.ts` | `ContentCtx`, `ContentHandle`, `useContent()` — content slot access for function components |
+| `globals.ts` | Re-exports EMA globals (`useContent`, `findFreePort`, `Sample`, `callLlamafile`, `callOllama`, `callAnthropic`) for generated eval modules and function components |
+| `test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
 | `src/eval-env.ts` | `EvalEnv`, `EvalEnvCtx`, `EvalScopeCtx`, `PersistFlagCtx` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
@@ -1620,12 +1658,17 @@ the preamble automatically (§4.1).
 
 ## 5. Component model
 
-### 5.1 Components are markdown files with a declared interface
+### 5.1 Components are markdown or TypeScript files
 
-A component is a markdown file with YAML frontmatter that declares
-both the component's own metadata and its input interface. The file
-name (without extension) is the component name. PascalCase naming is
-a convention, not enforced.
+A component is either a **markdown file** (`.md`) with YAML frontmatter
+or a **TypeScript file** (`.ts`) that exports a generator function.
+The file name (without extension) is the component name. PascalCase
+naming is a convention, not enforced.
+
+#### 5.1.1 Markdown components
+
+Markdown components have YAML frontmatter that declares
+both the component's own metadata and its input interface.
 
 ```markdown
 <!-- components/Greeting.md -->
@@ -1751,6 +1794,94 @@ all top-level keys except `inputs` are meta values (the simple case).
 This dual syntax allows components to range from minimal (just
 key-value pairs) to fully typed (every field constrained).
 
+#### 5.1.2 Function components
+
+Function components are TypeScript files (`.ts`) that export an
+Effection generator function as their default export. They receive
+validated props directly and return rendered output as a string.
+
+```typescript
+// components/Greeting.ts
+import type { Json } from "executable-markdown-agents";
+
+export const inputs = {
+  name: { type: "string" as const, required: true },
+  greeting: { type: "string" as const, default: "Hello" },
+};
+
+export default function*(props: Record<string, Json>) {
+  return `${props.greeting}, ${props.name}!`;
+}
+```
+
+**Contract:**
+
+```typescript
+export interface FunctionComponent {
+  (props: Record<string, Json>): Operation<string>;
+}
+
+export interface FunctionComponentDefinition {
+  kind: "function";
+  name: string;
+  path: string;
+  inputs: Record<string, InputDefinition>;
+  fn: FunctionComponent;
+  contentHash: string;
+}
+```
+
+**Input declaration.** Function components declare their inputs via
+a named `export const inputs = { ... }`. This is equivalent to the
+`inputs:` key in markdown component frontmatter. If no `inputs`
+export exists, the component accepts no props.
+
+**Children via `useContent()`.** Function components access children
+from the Effection scope, not from props. The expansion engine sets
+`ContentCtx` on the scope before calling the function. Components
+that need rendered children call `yield* useContent()`:
+
+```typescript
+// components/Card.ts
+import { useContent } from "executable-markdown-agents/globals";
+
+export default function*(props: Record<string, Json>) {
+  const content = yield* useContent();
+  return `<div class="card">\n${content}\n</div>`;
+}
+```
+
+Named slots are supported — `useContent("header")` returns the
+content for a specific slot, matching `<Content slot="header" />`
+in markdown components:
+
+```typescript
+const header = yield* useContent("header");
+const body = yield* useContent();  // default slot
+```
+
+**`ContentHandle` on the scope:**
+
+```typescript
+export interface ContentHandle {
+  renderDefault: () => Operation<string>;
+  renderSlot: (name: string) => Operation<string>;
+  segments: Segment[];
+}
+
+export const ContentCtx = createContext<ContentHandle>("content");
+```
+
+**Resolution priority.** When both `Name.md` and `Name.ts` exist,
+the `.md` file wins. This ensures backward compatibility — existing
+markdown components are not shadowed by TypeScript files.
+
+**Journaling.** Function components are imported via
+`durableImportComponent`, which reads the file content and hashes it.
+On replay, the stored content hash is checked for staleness. The
+function component is re-imported via `import()` on every run
+(including replay) because the function itself is not serializable.
+
 ### 5.2 Resolution (Resolve Api)
 
 Resolution maps a component name to a file system path. It is an
@@ -1778,11 +1909,17 @@ const Resolve = createApi<ResolveApi>("Resolve", {
 The default middleware checks a search path in order:
 
 1. `./components/{Name}.md`
-2. `./components/{Name}/index.md`
-3. `./{Name}.md`
+2. `./components/{Name}.ts`
+3. `./components/{Name}/index.md`
+4. `./components/{Name}/index.ts`
+5. `./{Name}.md`
+
+`.md` is checked before `.ts` at each level to ensure backward
+compatibility — existing markdown components are not shadowed by
+TypeScript files added later.
 
 For dotted names like `Ns.Sub`, the dot maps to a directory separator:
-`./components/Ns/Sub.md`.
+`./components/Ns/Sub.md` (then `./components/Ns/Sub.ts`, etc.).
 
 ```typescript
 function* useDirectoryResolver(
@@ -1892,7 +2029,21 @@ function* durableImportComponent(
     },
   )) as ImportResult;
 
-  // Parse at runtime — deterministic from content, not journaled
+  // Function component: .ts file — import() the module
+  if (result.path.endsWith(".ts")) {
+    const absolutePath = `${process.cwd()}/${result.path}`;
+    const mod = yield* call(() => import(`file://${absolutePath}`));
+    return {
+      kind: "function" as const,
+      name,
+      path: result.path,
+      inputs: mod.inputs ?? {},
+      fn: mod.default,
+      contentHash: result.contentHash,
+    };
+  }
+
+  // Markdown component: parse at runtime — deterministic from content
   const { data: frontmatter, content: body } = grayMatter(result.content);
   const { meta, inputs } = parseFrontmatter(frontmatter);
   const bodySegments = scanSegments(body);
@@ -2596,7 +2747,8 @@ expression text to evaluate at expansion time).
 The `ComponentInvocation` segment has an `expressions` field that
 holds raw expression text for eval expression props. At expansion
 time, `expandComponent` evaluates these against `env.values` using
-the shared VM context via `runInContext`.
+`new Function()` with env values destructured into scope parameters.
+Results are validated via JSON round-trip for serialization safety.
 
 | Expression | Scan time | Expansion time |
 |---|---|---|
@@ -2871,7 +3023,8 @@ No journal entry.
 journals the result.
 
 **Block 4 — middleware install:**
-`callLlamafile` and `Sample` are VM sandbox globals (§3.5). The
+`callLlamafile` and `Sample` are standard imports in the generated
+eval module (via `executable-markdown-agents/globals`, §4.2). The
 middleware closes over `baseUrl` and `model` at install time. Routing:
 if `context.model` matches the provider's model (or is unspecified),
 handle it; otherwise pass through via `next()`.
@@ -3218,7 +3371,7 @@ function* runDocument(options: RunDocumentOptions): Operation<string> {
   });
   yield* useDirectoryResolver(componentDirs);
 
-  // Create shared VM context for all eval blocks (§4.2)
+  // Create eval context marker (§4.2)
   const evalCtx = createEvalContext();
   yield* EvalCtxKey.set(evalCtx);
 
@@ -4008,18 +4161,17 @@ instead of all under `root`).
 | G15 | `sourceURL` comment appended | Transformed code ends with `//# sourceURL=eval:blockId` |
 | G16 | Empty block | Empty source → valid transform with no exports/imports |
 
-### Tier H — VM context (`eval-context`)
+### Tier H — Module compilation (`eval-context`)
 
 | # | Test | Verify |
 |---|------|--------|
-| H1 | VM context creation | `createEvalContext()` returns `EvalContext` with `vmContext` |
-| H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block |
-| H3 | `console` available | `console.log` callable without error |
-| H4 | Custom globals | `createEvalContext({ fetch })` → `fetch` accessible in block |
-| H5 | `compileBlock` returns generator function | Return value is callable, returns a generator |
-| H6 | Context reuse across blocks | Same `vmContext` used for two blocks — shared globals |
-| H7 | Trailing newline in `compileBlock` | `//# sourceURL` comment doesn't swallow closing `})` |
-| H8 | Isolation from host | Block cannot access host module scope (e.g., `require`) |
+| H1 | Eval context creation | `createEvalContext()` returns `EvalContext` with `initialized: true` |
+| H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block via standard imports |
+| H3 | EMA globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `executable-markdown-agents/globals` |
+| H5 | `compileBlock` returns generator function | `yield* compileBlock(code, [])` returns a callable generator function |
+| H6 | Distinct modules per block | Each `compileBlock` call produces a separate module — no shared state between blocks |
+| H7 | `data:` URI encoding | Module source with special characters is correctly URI-encoded |
+| H8 | User imports hoisted | User `import` declarations from eval block source appear in generated module |
 
 ### Tier I — Middleware conformance (eval modifiers)
 
@@ -4342,7 +4494,7 @@ A.md references <C />.
 | 27 | `blockId` format: `eval:${componentName ?? "root"}:${index}` | Unique within a document run; component-scoped index ensures deterministic IDs for journal matching on replay |
 | 28 | Acorn + magic-string for source transform | Acorn provides reliable ES2024 parsing; magic-string preserves source positions for accurate source maps without rebuilding AST |
 | 29 | Execution mode auto-detected from AST | No modifier needed — `yield` in body → generator, `await` → async, neither → sync; mixed yield+await is a transform error |
-| 30 | Single shared VM context per document | `vm.createContext()` costs ~7–21ms; reusing one context across all eval blocks amortizes this; globals (Effection APIs, `console`) are set once |
+| 30 | `data:` URI module compilation for eval blocks | Eval blocks are compiled into `data:application/typescript,...` URI modules and dynamically imported via `yield* call(() => import(dataUri))`. APIs are standard `import` statements in the generated module, resolved through Deno's import map. `new Function()` is used for expression props (simpler than `data:` URI for single expressions, no module imports needed) |
 | 31 | `persist` uses a context flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` sets `PersistFlagCtx`, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
 | 32 | `evalScope` created before `durableRun` | The channel processor task and the sender inside `durableEval` must share an ancestor scope outside the durable execution boundary; creating inside `durableRun` would isolate the processor |
 | 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the journal; on replay they are not restored — this is by design, since non-serializable state can't survive process restart |
@@ -4371,7 +4523,7 @@ A.md references <C />.
 | 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where `EvalEnvCtx` has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
 | 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
-| 59 | `callLlamafile()` is a sandbox global, not imported | Provider components are markdown files — they cannot have TypeScript imports; all code in eval blocks runs in the VM sandbox; functions needed by provider components must be provided as sandbox globals alongside `findFreePort`, `when`, and `fetch` |
+| 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import EMA globals from `executable-markdown-agents/globals`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
 | 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
 | 61 | `callLlamafile()` uses `@effectionx/fetch` not `durableFetch` | `durableFetch` journals its result; the HTTP call to the inference server must not be journaled — `durableSample` already journals the complete LLM response; double-journaling would cause divergence on replay |
 | 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; configurability would require a `healthPath` prop; deferred — the hardcoded path covers all current targets |
@@ -4386,3 +4538,8 @@ A.md references <C />.
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
 | 73 | Channel close in `finally` block | Guarantees `forEach` consumer exits cleanly regardless of `runDocument` success or failure; explicit closure keeps channel resources deterministic |
+| 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
+| 75 | `useContent()` on Effection scope, not in function args | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same pattern as `EvalEnvCtx`, `EvalScopeCtx`; supports named slots via `useContent("header")` |
+| 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
+| 77 | Function component re-imported on replay | `import()` runs on every execution including replay because the function itself is not serializable; the file content hash in the journal detects staleness; the import is fast (local file) |
+| 78 | Vendored tarballs for pkg.pr.new packages | `@effectionx/durable-streams` and `@effectionx/durable-effects` are pre-release builds not published to npm/JSR; vendored as `.tgz` tarballs in `.vendor/`, extracted at install time via `deno task setup`; temporary until packages are published |

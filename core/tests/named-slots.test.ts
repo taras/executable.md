@@ -670,7 +670,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
     const tmpDir = makeTempDir();
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
       writeFiles(tmpDir, {
@@ -706,7 +706,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
     const tmpDir = makeTempDir();
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
       writeFiles(tmpDir, {
@@ -743,7 +743,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
     const tmpDir = makeTempDir();
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
       writeFiles(tmpDir, {

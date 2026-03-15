@@ -21,7 +21,7 @@ import * as os from "node:os";
 // ---------------------------------------------------------------------------
 
 const CLI_CMD = process.execPath;
-const CLI_ARGS = ["--experimental-strip-types", "src/cli.ts", "run"];
+const CLI_ARGS = ["--experimental-strip-types", "core/src/cli.ts", "run"];
 const TIMEOUT = 15_000;
 
 function makeTmpDir(): string {
@@ -92,7 +92,7 @@ describe("CLI journal integration", () => {
   // CJ1: Run without journal (raw)
   it("CJ1: runs document without journal --raw", function* () {
     const result = yield* runCli([
-      "tests/fixtures/streaming/simple.md",
+      "core/tests/fixtures/streaming/simple.md",
       "--raw",
     ]);
 
@@ -103,7 +103,7 @@ describe("CLI journal integration", () => {
   // CJ2: Run without journal (normalized)
   it("CJ2: runs document without journal (normalized)", function* () {
     const result = yield* runCli([
-      "tests/fixtures/streaming/simple.md",
+      "core/tests/fixtures/streaming/simple.md",
     ]);
 
     expect(result.code).toBe(0);
@@ -117,7 +117,7 @@ describe("CLI journal integration", () => {
 
     try {
       const firstRun = yield* runCli([
-        "tests/fixtures/streaming/simple.md",
+        "core/tests/fixtures/streaming/simple.md",
         `--journal=${journalPath}`,
         "--raw",
       ]);
@@ -125,7 +125,7 @@ describe("CLI journal integration", () => {
       expect(fs.existsSync(journalPath)).toBe(true);
 
       const secondRun = yield* runCli([
-        "tests/fixtures/streaming/simple.md",
+        "core/tests/fixtures/streaming/simple.md",
         `--journal=${journalPath}`,
         "--raw",
       ]);
@@ -143,13 +143,13 @@ describe("CLI journal integration", () => {
 
     try {
       const firstRun = yield* runCli([
-        "tests/fixtures/streaming/simple.md",
+        "core/tests/fixtures/streaming/simple.md",
         `--journal=${journalPath}`,
       ]);
       expect(firstRun.code).toBe(0);
 
       const secondRun = yield* runCli([
-        "tests/fixtures/streaming/simple.md",
+        "core/tests/fixtures/streaming/simple.md",
         `--journal=${journalPath}`,
       ]);
       expect(secondRun.code).toBe(0);
@@ -166,7 +166,7 @@ describe("CLI journal integration", () => {
 
     try {
       const firstRun = yield* runCli([
-        "tests/fixtures/streaming/with-exec.md",
+        "core/tests/fixtures/streaming/with-exec.md",
         `--journal=${journalPath}`,
         "--raw",
       ]);
@@ -174,7 +174,7 @@ describe("CLI journal integration", () => {
       expect(firstRun.stdout).toContain("hello from exec");
 
       const secondRun = yield* runCli([
-        "tests/fixtures/streaming/with-exec.md",
+        "core/tests/fixtures/streaming/with-exec.md",
         `--journal=${journalPath}`,
         "--raw",
       ]);
@@ -192,13 +192,13 @@ describe("CLI journal integration", () => {
 
     try {
       const firstRun = yield* runCli([
-        "tests/fixtures/streaming/with-exec.md",
+        "core/tests/fixtures/streaming/with-exec.md",
         `--journal=${journalPath}`,
       ]);
       expect(firstRun.code).toBe(0);
 
       const secondRun = yield* runCli([
-        "tests/fixtures/streaming/with-exec.md",
+        "core/tests/fixtures/streaming/with-exec.md",
         `--journal=${journalPath}`,
       ]);
       expect(secondRun.code).toBe(0);

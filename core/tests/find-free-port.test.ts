@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { findFreePort } from "../src/find-free-port.ts";
-import { createEvalContext } from "../src/eval-context.ts";
+import { compileBlock } from "../src/eval-context.ts";
 import { runDocument } from "../src/run-document.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -88,34 +88,44 @@ describe("Tier R — findFreePort", () => {
   });
 });
 
-describe("Tier R — VM sandbox globals", () => {
-  // R6: when is accessible in the VM sandbox
+describe("Tier R — Eval module globals", () => {
+  // R6: when is accessible via generated module imports
   it("R6: when is accessible in eval sandbox", function* () {
-    const ctx = createEvalContext();
-    expect(ctx.vmContext).toBeTruthy();
-    // The sandbox should have 'when' defined
-    const hasWhen = "when" in (ctx.vmContext as Record<string, unknown>);
-    expect(hasWhen).toBe(true);
+    // Verify that a compiled block can reference 'when' — it's imported
+    // in the generated module via standard imports
+    const fn = yield* compileBlock("env.hasWhen = typeof when === 'function';", []);
+    const env: Record<string, unknown> = {};
+    const gen = fn(env);
+    let r = gen.next();
+    while (!r.done) r = gen.next();
+    expect(env["hasWhen"]).toBe(true);
   });
 
-  // R1c: findFreePort is accessible in the VM sandbox
+  // R1c: findFreePort is accessible via generated module imports
   it("R1c: findFreePort is accessible in eval sandbox", function* () {
-    const ctx = createEvalContext();
-    const hasFindFreePort = "findFreePort" in (ctx.vmContext as Record<string, unknown>);
-    expect(hasFindFreePort).toBe(true);
+    const fn = yield* compileBlock("env.hasFindFreePort = typeof findFreePort === 'function';", []);
+    const env: Record<string, unknown> = {};
+    const gen = fn(env);
+    let r = gen.next();
+    while (!r.done) r = gen.next();
+    expect(env["hasFindFreePort"]).toBe(true);
   });
 
-  // R6b: All expected Effection globals are in the sandbox
+  // R6b: All expected Effection globals are available in compiled block
   it("R6b: expected Effection globals are in sandbox", function* () {
-    const ctx = createEvalContext();
-    const sandbox = ctx.vmContext as Record<string, unknown>;
-    const expected = [
+    const checks = [
       "sleep", "spawn", "call", "resource", "useScope",
       "createChannel", "each", "suspend", "createSignal",
-      "when", "findFreePort", "console",
+      "when", "findFreePort",
     ];
-    for (const name of expected) {
-      expect(name in sandbox).toBe(true);
+    const checkCode = checks.map(name => `env["has_${name}"] = typeof ${name} === "function";`).join("\n");
+    const fn = yield* compileBlock(checkCode, []);
+    const env: Record<string, unknown> = {};
+    const gen = fn(env);
+    let r = gen.next();
+    while (!r.done) r = gen.next();
+    for (const name of checks) {
+      expect(env[`has_${name}`]).toBe(true);
     }
   });
 });

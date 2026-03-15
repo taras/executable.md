@@ -17,7 +17,6 @@ import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { EvalEnvCtx, EvalScopeCtx, PersistFlagCtx } from "./eval-env.ts";
-import { EvalCtxKey } from "./eval-context.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
 
@@ -49,7 +48,6 @@ export const evalFactory: ModifierFactory = (_params) =>
     (function* () {
       const ctx = yield* useCodeBlock();
       const env = yield* ephemeral(EvalEnvCtx.expect());
-      const evalCtx = yield* ephemeral(EvalCtxKey.expect());
       const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
 
       // Inject output() function into env so eval blocks can produce
@@ -76,7 +74,14 @@ export const evalFactory: ModifierFactory = (_params) =>
         ): Operation<Json> {
           // Merge incoming bindings snapshot into env before execution
           Object.assign(env.values, bindings);
-          const fn = compileBlock(source, evalCtx.vmContext);
+
+          // Compile the eval block via data: URI module import.
+          // compileBlock is async (returns Operation) — it generates a
+          // TypeScript module and imports it via data: URI.
+          const fn = yield* compileBlock(
+            source,
+            transformed.userImports ?? [],
+          );
 
           if (persist) {
             // Persist mode: run the compiled block inside evalScope.eval()

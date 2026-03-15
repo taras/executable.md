@@ -1,20 +1,21 @@
 /**
- * Tier T2 — VM context and compiled generator tests (spec §11).
+ * Tier T2 — Eval block compilation tests (spec §11).
  *
- * Tests the VM context system (createEvalContext, compileBlock) and
+ * Tests the data: URI module compilation system (compileBlock) and
  * verifies that compiled generators can interact with Effection APIs,
  * write to env, and propagate errors correctly.
+ *
+ * After the Deno migration, compileBlock is async (returns Operation)
+ * and generates data: URI modules instead of using node:vm.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { createEvalContext, compileBlock } from "../src/eval-context.ts";
-import { main, sleep } from "effection";
+import { compileBlock } from "../src/eval-context.ts";
 
 describe("Tier T2 — VM context and compiled generator", () => {
-  // T17: Compiled generator can yield* Effection globals from sandbox
+  // T17: Compiled generator can yield* Effection globals from imports
   it("T17: compiled generator can use Effection globals from sandbox", function* () {
-    const ctx = createEvalContext();
-    const fn = compileBlock("yield* sleep(0);", ctx.vmContext);
+    const fn = yield* compileBlock("yield* sleep(0);", []);
     const gen = fn({});
     // The generator should produce a value — it yields sleep(0)
     const first = gen.next();
@@ -23,10 +24,8 @@ describe("Tier T2 — VM context and compiled generator", () => {
 
   // T18: Value written to env.x inside block is readable by host
   it("T18: value written to env is readable by host", function* () {
-    const ctx = createEvalContext();
-    const fn = compileBlock("env.x = 42;", ctx.vmContext);
+    const fn = yield* compileBlock("env.x = 42;", []);
     const env: Record<string, unknown> = {};
-    // Run the generator to completion (sync block, no yields)
     const gen = fn(env);
     let result = gen.next();
     while (!result.done) {
@@ -37,10 +36,9 @@ describe("Tier T2 — VM context and compiled generator", () => {
 
   // T19: Live object reference survives in env without cloning
   it("T19: live object reference survives without cloning", function* () {
-    const ctx = createEvalContext();
     const liveObj = { key: "value", nested: { deep: true } };
     const env: Record<string, unknown> = { liveObj };
-    const fn = compileBlock("env.ref = env.liveObj;", ctx.vmContext);
+    const fn = yield* compileBlock("env.ref = env.liveObj;", []);
     const gen = fn(env);
     let result = gen.next();
     while (!result.done) {
@@ -50,18 +48,17 @@ describe("Tier T2 — VM context and compiled generator", () => {
     expect(env["ref"]).toBe(liveObj);
   });
 
-  // T20: Block re-executed after code change — no SyntaxError from const re-declaration
+  // T20: Block re-executed after code change — no error from re-declaration
   it("T20: re-execution without const re-declaration error", function* () {
-    const ctx = createEvalContext();
     // First execution
-    const fn1 = compileBlock("env.x = 1;", ctx.vmContext);
+    const fn1 = yield* compileBlock("env.x = 1;", []);
     const env1: Record<string, unknown> = {};
     const gen1 = fn1(env1);
     let r1 = gen1.next();
     while (!r1.done) r1 = gen1.next();
 
-    // Second execution — same const declaration, different code
-    const fn2 = compileBlock("env.x = 2;", ctx.vmContext);
+    // Second execution — different code
+    const fn2 = yield* compileBlock("env.x = 2;", []);
     const env2: Record<string, unknown> = {};
     const gen2 = fn2(env2);
     let r2 = gen2.next();
@@ -73,8 +70,7 @@ describe("Tier T2 — VM context and compiled generator", () => {
 
   // T21: Block that throws propagates error
   it("T21: block that throws propagates error", function* () {
-    const ctx = createEvalContext();
-    const fn = compileBlock('throw new Error("test error");', ctx.vmContext);
+    const fn = yield* compileBlock('throw new Error("test error");', []);
     const gen = fn({});
     let threw = false;
     try {
@@ -86,14 +82,11 @@ describe("Tier T2 — VM context and compiled generator", () => {
     expect(threw).toBe(true);
   });
 
-  // T22: Async-mode block bridges via call() — result in env
-  // Note: This tests the compileBlock function directly; the async bridging
-  // via call() is handled by the transform layer, not the VM context.
+  // T22: Sync computation writes result to env
   it("T22: sync computation writes result to env", function* () {
-    const ctx = createEvalContext();
-    const fn = compileBlock(
+    const fn = yield* compileBlock(
       "const result = 40 + 2; env.result = result;",
-      ctx.vmContext,
+      [],
     );
     const env: Record<string, unknown> = {};
     const gen = fn(env);
@@ -105,10 +98,9 @@ describe("Tier T2 — VM context and compiled generator", () => {
 
 describe("compileBlock edge cases", () => {
   it("throws on syntax error in code", function* () {
-    const ctx = createEvalContext();
     let threw = false;
     try {
-      compileBlock("const x = ;", ctx.vmContext);
+      yield* compileBlock("const x = ;", []);
     } catch {
       threw = true;
     }
@@ -116,8 +108,7 @@ describe("compileBlock edge cases", () => {
   });
 
   it("creates distinct generator instances per call", function* () {
-    const ctx = createEvalContext();
-    const fn = compileBlock("env.count = (env.count || 0) + 1;", ctx.vmContext);
+    const fn = yield* compileBlock("env.count = (env.count || 0) + 1;", []);
 
     const env1: Record<string, unknown> = {};
     const gen1 = fn(env1);

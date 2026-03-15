@@ -1,0 +1,30 @@
+{
+  "workspace": ["core"],
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
+    "@effectionx/bdd/node": "./test-support/bdd.ts",
+    "@effectionx/test-adapter": "npm:@effectionx/test-adapter@^0.7.3",
+    "effection": "npm:effection@4.1.0-alpha.7",
+    "effection/experimental": "npm:effection@4.1.0-alpha.7/experimental",
+    "@effectionx/durable-streams": "./.vendor/extracted/durable-streams/dist/mod.js",
+    "@effectionx/durable-effects": "./.vendor/extracted/durable-effects/dist/mod.js",
+    "@effectionx/converge": "npm:@effectionx/converge@^0.1.3",
+    "@effectionx/fetch": "npm:@effectionx/fetch@^0.1.2",
+    "@effectionx/fs": "npm:@effectionx/fs@0.2.2",
+    "@effectionx/middleware": "npm:@effectionx/middleware@0.1.0",
+    "@effectionx/node": "npm:@effectionx/node@^0.2.2",
+    "@effectionx/process": "npm:@effectionx/process@^0.7.3",
+    "@effectionx/scope-eval": "npm:@effectionx/scope-eval@^0.1.2",
+    "@effectionx/timebox": "npm:@effectionx/timebox@^0.4.2",
+    "@frontside/configliere": "npm:@jsr/frontside__configliere@^0.2.3",
+    "@std/expect": "jsr:@std/expect@^1",
+    "@std/testing/bdd": "jsr:@std/testing@^1/bdd"
+  },
+  "tasks": {
+    "setup": "mkdir -p .vendor/extracted/durable-streams .vendor/extracted/durable-effects && tar xzf .vendor/durable-streams-e909b25.tgz --strip-components=1 -C .vendor/extracted/durable-streams && tar xzf .vendor/durable-effects-46a6855.tgz --strip-components=1 -C .vendor/extracted/durable-effects",
+    "test": "deno task setup && deno test --no-check --allow-all core/tests/",
+    "check": "deno check core/mod.ts",
+    "lint": "deno lint core/src/"
+  }
+}

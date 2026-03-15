@@ -127,6 +127,42 @@ export interface ImportResult {
   contentHash: string;
 }
 
+// ---------------------------------------------------------------------------
+// Function components (spec §5.3)
+// ---------------------------------------------------------------------------
+
+import type { Operation } from "effection";
+
+/**
+ * A TypeScript function component — a generator function that receives
+ * validated props directly and returns rendered output as a string.
+ *
+ * Children are available via `useContent()` on the Effection scope:
+ * ```ts
+ * import { useContent } from "@executablemd/core/globals";
+ * export default function*(props) {
+ *   const content = yield* useContent();
+ *   return `<div>${content}</div>`;
+ * }
+ * ```
+ */
+export interface FunctionComponent {
+  (props: Record<string, Json>): Operation<string>;
+}
+
+/**
+ * Definition for a function component (.ts file).
+ * Distinguished from ComponentDefinition by the `kind` field.
+ */
+export interface FunctionComponentDefinition {
+  kind: "function";
+  name: string;
+  path: string;
+  inputs: Record<string, InputDefinition>;
+  fn: FunctionComponent;
+  contentHash: string;
+}
+
 export interface ResolveResult {
   path: string;
 }

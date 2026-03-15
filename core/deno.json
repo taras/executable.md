@@ -1,0 +1,17 @@
+{
+  "name": "@executablemd/core",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./globals": "./globals.ts"
+  },
+  "imports": {
+    "acorn": "npm:acorn@^8.16.0",
+    "gray-matter": "npm:gray-matter@^4.0.3",
+    "magic-string": "npm:magic-string@^0.30.21",
+    "marked": "npm:marked@^17.0.4",
+    "marked-terminal": "npm:marked-terminal@^7.3.0",
+    "remend": "npm:remend@^1.2.2",
+    "zod": "npm:zod@^4.3.6"
+  }
+}
