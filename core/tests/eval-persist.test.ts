@@ -13,7 +13,8 @@ import { InMemoryStream } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
-import { unbox } from "@effectionx/scope-eval";
+import { collect } from "../src/collect.ts";
+import { unbox } from "effection";
 import type { Result } from "effection";
 
 // ---------------------------------------------------------------------------
@@ -51,12 +52,12 @@ describe("Tier T6 — persist modifier", () => {
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toBe("");
     expect(output).not.toContain("ERROR");
@@ -69,12 +70,12 @@ describe("Tier T6 — persist modifier", () => {
       "test.md": "```js persist eval\nconst server = 'running';\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toBe("");
     expect(output).not.toContain("ERROR");
@@ -88,12 +89,12 @@ describe("Tier T6 — persist modifier", () => {
         "```js persist eval\nconst server = 'started';\n```\n\n```js eval\nconst status = server;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output.trim()).toBe("");
     expect(output).not.toContain("ERROR");
@@ -106,19 +107,19 @@ describe("Tier T6 — persist modifier", () => {
       "test.md": "```js persist eval\nconst x = 42;\n```\n",
     });
 
-    const output1 = yield* runDocument({
+    const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
-    const output2 = yield* runDocument({
+    const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output2).toBe(output1);
   });
@@ -166,12 +167,12 @@ describe("Tier T6 — persist modifier", () => {
       ].join("\n"),
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output.trim()).toBe("");
     expect(output).not.toContain("ERROR");

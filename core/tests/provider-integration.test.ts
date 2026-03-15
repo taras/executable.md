@@ -16,6 +16,7 @@ import { expect } from "@std/expect";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 import { Sample } from "../src/sample-api.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -88,7 +89,7 @@ function providerComponent(name = "TestProvider"): string {
   ].join("\n");
 }
 
-describe("Tier S — Provider component pattern", () => {
+describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitizeResources: false }, () => {
   // S1: Full provider golden run
   // eval → daemon → when → children → cleanup
   it("S1: full provider golden run — children rendered after daemon ready", function* () {
@@ -107,13 +108,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       expect(output).toContain("children-rendered");
       expect(output).not.toContain("ERROR");
@@ -142,13 +143,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // Readiness check passed → port was correctly interpolated
       expect(output).toContain("port-flowed");
@@ -186,13 +187,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // The stub sample middleware replaces exec output with "[sampled]"
       expect(output).toContain("[sampled]");
@@ -222,13 +223,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // runDocument returned — daemon was cleaned up by structured concurrency.
       // If daemon wasn't terminated, the process would hang indefinitely.
@@ -280,13 +281,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // when() should timeout or get connection errors — error in output
       // Children may or may not appear depending on error handling
@@ -341,13 +342,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // The daemon crashed during children expansion.
       // The output should contain some indication of the error
@@ -386,13 +387,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // Both providers started and tore down correctly.
       // Inner content appeared between outer content.
@@ -460,13 +461,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // No model specified → innermost provider handles
       expect(output).toContain("[handled-by-inner-model]");
@@ -526,13 +527,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // Explicit model=outer-model → inner passes through, outer handles
       expect(output).toContain("[handled-by-outer-model]");
@@ -592,13 +593,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // Explicit model=inner-model → inner handles directly
       expect(output).toContain("[handled-by-inner-model]");
@@ -654,13 +655,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // Chain exhausted → core handler throws → error in output
       expect(output).toMatch(/error|Error|sample/i);
@@ -693,25 +694,25 @@ describe("Tier S — Provider component pattern", () => {
       const componentDirs = [path.join(tmpDir, "components"), tmpDir];
 
       // Golden run
-      const output1 = yield* runDocument({
+      const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime,
         componentDirs,
         freshness: false,
-      });
+      }));
 
       expect(output1).toContain("replay-test");
       expect(output1).not.toContain("ERROR");
 
       // Replay — eval blocks replay from journal, daemon spawns fresh
-      const output2 = yield* runDocument({
+      const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime,
         componentDirs,
         freshness: false,
-      });
+      }));
 
       // Replay produces same output
       expect(output2).toContain("replay-test");
@@ -745,13 +746,13 @@ describe("Tier S — Provider component pattern", () => {
 
       // Golden run
       const stream1 = new InMemoryStream();
-      const output1 = yield* runDocument({
+      const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream: stream1,
         runtime,
         componentDirs,
         freshness: false,
-      });
+      }));
 
       expect(output1).toContain("original-child");
 
@@ -772,13 +773,13 @@ describe("Tier S — Provider component pattern", () => {
 
       // Fresh stream — provider starts a new daemon, new child runs live
       const stream2 = new InMemoryStream();
-      const output2 = yield* runDocument({
+      const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream: stream2,
         runtime,
         componentDirs,
         freshness: false,
-      });
+      }));
 
       // Both original text and new exec block output appear
       expect(output2).toContain("original-child");
@@ -811,13 +812,13 @@ describe("Tier S — Provider component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
 
       // Both providers expanded successfully with different ports
       expect(output).toContain("first-provider");

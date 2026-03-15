@@ -16,6 +16,7 @@ import { renderSegments } from "../src/render.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { validateProps } from "../src/validate.ts";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { stubRuntime } from "@effectionx/durable-effects";
@@ -687,13 +688,13 @@ describe("Tier NS-E — renderChildren interaction", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       // renderChildren() should capture both the slotted Header and body content
       expect(output).toContain("[sampled-by-test-model:");
       expect(output).not.toContain("ERROR");
@@ -724,13 +725,13 @@ describe("Tier NS-E — renderChildren interaction", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       // Both X and Y should be included in renderChildren output
       expect(output).toContain("[sampled-by-test-model:");
       expect(output).not.toContain("ERROR");
@@ -762,13 +763,13 @@ describe("Tier NS-E — renderChildren interaction", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       // renderChildren renders ALL children in source order
       expect(output).toContain("[sampled-by-test-model:");
       expect(output).not.toContain("ERROR");
@@ -883,13 +884,13 @@ describe("Tier NS-F — Edge cases", () => {
         "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
       });
       const stream = new InMemoryStream();
-      yield* runDocument({
+      yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       const events = yield* stream.readAll();
       // Should have import_component events and a close — no new event types
       for (const event of events) {
@@ -919,21 +920,21 @@ describe("Tier NS-F — Edge cases", () => {
         "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
       });
       const stream = new InMemoryStream();
-      const output1 = yield* runDocument({
+      const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       // Replay — same stream, same output
-      const output2 = yield* runDocument({
+      const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output2).toBe(output1);
     } finally {
       cleanup(tmpDir);

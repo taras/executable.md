@@ -13,22 +13,23 @@ import { expect } from "@std/expect";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Smoke test
 // ---------------------------------------------------------------------------
 
-describe("smoke test", () => {
+describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("runs the full smoke-test document and produces expected output", function* () {
     const stream = new InMemoryStream();
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
       componentDirs: ["smoke-test", "core/components"],
       freshness: false,
-    });
+    }));
 
     // ----- Root frontmatter interpolation -----
     expect(output).toContain("# Executable MDX");
@@ -187,23 +188,23 @@ describe("smoke test", () => {
     const stream = new InMemoryStream();
 
     // Golden run
-    const firstOutput = yield* runDocument({
+    const firstOutput = yield* collect(yield* runDocument({
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
       componentDirs: ["smoke-test", "core/components"],
       freshness: false,
-    });
+    }));
 
     // Replay — durableRun short-circuits on the Close event in the
     // journal, returning the stored result without any I/O calls.
-    const secondOutput = yield* runDocument({
+    const secondOutput = yield* collect(yield* runDocument({
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
       componentDirs: ["smoke-test", "core/components"],
       freshness: false,
-    });
+    }));
 
     expect(secondOutput).toBe(firstOutput);
   });

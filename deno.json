@@ -1,5 +1,5 @@
 {
-  "workspace": ["core"],
+  "workspace": ["core", "cli"],
   "nodeModulesDir": "auto",
   "imports": {
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
@@ -16,6 +16,7 @@
     "@effectionx/node": "npm:@effectionx/node@^0.2.2",
     "@effectionx/process": "npm:@effectionx/process@^0.7.3",
     "@effectionx/scope-eval": "npm:@effectionx/scope-eval@^0.1.2",
+    "@effectionx/stream-helpers": "npm:@effectionx/stream-helpers@^0.8.1",
     "@effectionx/timebox": "npm:@effectionx/timebox@^0.4.2",
     "@frontside/configliere": "npm:@jsr/frontside__configliere@^0.2.3",
     "@std/expect": "jsr:@std/expect@^1",
@@ -23,8 +24,9 @@
   },
   "tasks": {
     "setup": "mkdir -p .vendor/extracted/durable-streams .vendor/extracted/durable-effects && tar xzf .vendor/durable-streams-e909b25.tgz --strip-components=1 -C .vendor/extracted/durable-streams && tar xzf .vendor/durable-effects-46a6855.tgz --strip-components=1 -C .vendor/extracted/durable-effects",
+    "ema": "deno run --allow-all cli/src/cli.ts",
     "test": "deno task setup && deno test --no-check --allow-all core/tests/",
     "check": "deno check core/mod.ts",
-    "lint": "deno lint core/src/"
+    "lint": "deno lint core/src/ cli/src/"
   }
 }

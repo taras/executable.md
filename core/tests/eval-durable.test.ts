@@ -12,6 +12,7 @@ import { InMemoryStream } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Helper — create a runtime with eval-capable file system
@@ -52,12 +53,12 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     const events = stream.snapshot();
     // Should have root import + eval entry
@@ -72,20 +73,20 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     });
 
     // Golden run
-    const output1 = yield* runDocument({
+    const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Replay
-    const output2 = yield* runDocument({
+    const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output2).toBe(output1);
   });
@@ -98,20 +99,20 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
         "```js eval\nconst a = 10;\n```\n\n```js eval\nconst b = a + 5;\n```\n",
     });
 
-    const output1 = yield* runDocument({
+    const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Replay
-    const output2 = yield* runDocument({
+    const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output2).toBe(output1);
   });
@@ -123,12 +124,12 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       "test.md": '```js eval\nthrow new Error("eval failure");\n```\n',
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toContain("ERROR");
     expect(output).toContain("eval failure");
@@ -141,12 +142,12 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       "test.md": '```js eval\nconst port = 3000;\nconst host = "localhost";\n```\n',
     });
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     const events = stream.snapshot();
     expect(events.length).toBeGreaterThan(1);
@@ -159,12 +160,12 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       "test.md": "```js eval\nconst fn = () => 42;\nconst x = 1;\n```\n",
     });
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // The eval should succeed even with non-serializable values
     const events = stream.snapshot();

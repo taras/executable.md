@@ -12,7 +12,7 @@
 
 import type { Operation } from "effection";
 import { useScope } from "effection";
-import { EMA } from "../ema-api.ts";
+import { EMA } from "../api.ts";
 
 export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
