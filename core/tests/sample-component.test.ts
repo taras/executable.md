@@ -139,7 +139,7 @@ describe("Tier SC — Sample component", () => {
     try {
       // Read the real Sample.md component
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -178,7 +178,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -224,7 +224,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -269,7 +269,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -301,7 +301,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -351,7 +351,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -392,7 +392,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -440,7 +440,7 @@ describe("Tier SC — Sample component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -695,11 +695,11 @@ describe("Tier IN — Instruction component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
       const instructionMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Instruction.md"),
+        path.join(process.cwd(), "core/components/Instruction.md"),
         "utf-8",
       );
 
@@ -740,7 +740,7 @@ describe("Tier IN — Instruction component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -778,11 +778,11 @@ describe("Tier IN — Instruction component", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
       const instructionMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Instruction.md"),
+        path.join(process.cwd(), "core/components/Instruction.md"),
         "utf-8",
       );
 
@@ -827,7 +827,7 @@ describe("Tier IN — Instruction component", () => {
 
     try {
       const instructionMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Instruction.md"),
+        path.join(process.cwd(), "core/components/Instruction.md"),
         "utf-8",
       );
 
@@ -869,7 +869,7 @@ describe("Tier AG — Agent component pattern", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 
@@ -931,7 +931,7 @@ describe("Tier AG — Agent component pattern", () => {
 
     try {
       const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "components/Sample.md"),
+        path.join(process.cwd(), "core/components/Sample.md"),
         "utf-8",
       );
 

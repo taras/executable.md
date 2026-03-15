@@ -25,8 +25,10 @@ import {
   computeSHA256,
 } from "@effectionx/durable-effects";
 import type { Workflow, Json } from "@effectionx/durable-streams";
+import { call } from "effection";
 import type {
   ComponentDefinition,
+  FunctionComponentDefinition,
   ImportResult,
   Modifier,
   CodeBlockContext,
@@ -96,7 +98,7 @@ function* durableImportComponent(
   rootDocPath: string | undefined,
   searchPaths: string[],
   runtime: DurableRuntime,
-): Workflow<ComponentDefinition> {
+): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Single durable effect: resolve + read + hash
   const result = (yield createDurableOperation<Json>(
     { type: "import_component", name },
@@ -118,7 +120,34 @@ function* durableImportComponent(
     },
   )) as unknown as ImportResult;
 
-  // Parse at runtime — deterministic from content, not journaled
+  // Function component: .ts file — import() the module
+  if (result.path.endsWith(".ts")) {
+    // Resolve to absolute path for dynamic import
+    const absolutePath = result.path.startsWith("/")
+      ? result.path
+      : `${process.cwd()}/${result.path}`;
+    const mod = yield* call(() => import(`file://${absolutePath}`));
+
+    const fn = mod.default;
+    if (typeof fn !== "function") {
+      throw new Error(
+        `Function component "${name}" at ${result.path} must have a default export that is a generator function`,
+      );
+    }
+
+    const inputs = mod.inputs ?? {};
+
+    return {
+      kind: "function" as const,
+      name,
+      path: result.path,
+      inputs,
+      fn,
+      contentHash: result.contentHash,
+    };
+  }
+
+  // Markdown component: parse at runtime — deterministic from content
   const parsed = matter(result.content);
   const { meta, inputs } = parseFrontmatter(
     parsed.data as Record<string, unknown>,
@@ -144,26 +173,43 @@ function* resolveComponentPath(
   searchPaths: string[],
   runtime: DurableRuntime,
 ): Operation<string> {
-  const fileName = name.replace(/\./g, "/") + ".md";
+  const baseName = name.replace(/\./g, "/");
 
   for (const dir of searchPaths) {
-    // Try {dir}/{Name}.md
-    const candidate = normalizePath(
-      dir === "." ? fileName : `${dir}/${fileName}`,
+    // Try {dir}/{Name}.md (backward compat — .md wins over .ts)
+    const mdCandidate = normalizePath(
+      dir === "." ? `${baseName}.md` : `${dir}/${baseName}.md`,
     );
-    const stat = yield* runtime.stat(candidate);
-    if (stat.exists && stat.isFile) {
-      return candidate;
+    const mdStat = yield* runtime.stat(mdCandidate);
+    if (mdStat.exists && mdStat.isFile) {
+      return mdCandidate;
+    }
+
+    // Try {dir}/{Name}.ts (function component)
+    const tsCandidate = normalizePath(
+      dir === "." ? `${baseName}.ts` : `${dir}/${baseName}.ts`,
+    );
+    const tsStat = yield* runtime.stat(tsCandidate);
+    if (tsStat.exists && tsStat.isFile) {
+      return tsCandidate;
     }
 
     // Try {dir}/{Name}/index.md
-    const indexName = name.replace(/\./g, "/") + "/index.md";
-    const indexCandidate = normalizePath(
-      dir === "." ? indexName : `${dir}/${indexName}`,
+    const indexMdCandidate = normalizePath(
+      dir === "." ? `${baseName}/index.md` : `${dir}/${baseName}/index.md`,
     );
-    const indexStat = yield* runtime.stat(indexCandidate);
-    if (indexStat.exists && indexStat.isFile) {
-      return indexCandidate;
+    const indexMdStat = yield* runtime.stat(indexMdCandidate);
+    if (indexMdStat.exists && indexMdStat.isFile) {
+      return indexMdCandidate;
+    }
+
+    // Try {dir}/{Name}/index.ts
+    const indexTsCandidate = normalizePath(
+      dir === "." ? `${baseName}/index.ts` : `${dir}/${baseName}/index.ts`,
+    );
+    const indexTsStat = yield* runtime.stat(indexTsCandidate);
+    if (indexTsStat.exists && indexTsStat.isFile) {
+      return indexTsCandidate;
     }
   }
 
@@ -392,7 +438,9 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
     yield* useImportComponentGuard(runtime);
   }
 
-  // Create shared EvalContext (one VM context per document run — spec §5.1)
+  // Create EvalContext — marks that the eval system is initialized.
+  // In the Deno model, there's no VM context — eval blocks are compiled
+  // into data: URI modules. The context exists as a marker.
   const evalContext = createEvalContext();
   scope.set(EvalCtxKey, evalContext);
 

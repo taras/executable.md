@@ -27,6 +27,10 @@ export interface TransformResult {
   imports: string[];
   /** Execution mode detected from AST */
   mode: "generator" | "async" | "sync";
+  /** User import declarations extracted from the eval block source.
+   *  These are hoisted to the generated module's top level.
+   *  Currently always empty — import extraction is Phase 1 future work. */
+  userImports: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,7 @@ export function transformBlock(
     exports,
     imports,
     mode,
+    userImports: [],
   };
 }
 

@@ -26,7 +26,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test", "components"],
+      componentDirs: ["smoke-test", "core/components"],
       freshness: false,
     });
 
@@ -191,7 +191,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test", "components"],
+      componentDirs: ["smoke-test", "core/components"],
       freshness: false,
     });
 
@@ -201,7 +201,7 @@ describe("smoke test", () => {
       docPath: "smoke-test/README.md",
       stream,
       runtime: nodeRuntime(),
-      componentDirs: ["smoke-test", "components"],
+      componentDirs: ["smoke-test", "core/components"],
       freshness: false,
     });
 
