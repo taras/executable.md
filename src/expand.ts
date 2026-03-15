@@ -23,10 +23,12 @@ import type {
   CodeBlockResult,
   Modifier,
 } from "./types.ts";
+import { runInContext } from "node:vm";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
+import { EvalCtxKey } from "./eval-context.ts";
 import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { validateProps } from "./validate.ts";
@@ -121,6 +123,7 @@ export function* expandSegments(
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
+          segment.expressions,
           segment.children,
           hideSet,
           ctx,
@@ -206,6 +209,7 @@ export function* expandSegments(
 function* expandComponent(
   name: string,
   props: Record<string, Json>,
+  expressions: Record<string, string>,
   children: Segment[],
   hideSet: Set<string>,
   ctx: ExpansionContext,
@@ -249,12 +253,29 @@ function* expandComponent(
     ];
   }
 
+  // Resolve eval expression props against env.values using the shared
+  // VM context. This must happen before validation so that resolved
+  // values can be type-checked. See spec §5.1 (expression prop evaluation).
+  let resolvedProps: Record<string, Json>;
+  try {
+    resolvedProps = yield* resolveExpressionProps(props, expressions, name);
+  } catch (error) {
+    return [
+      {
+        type: "error",
+        message:
+          error instanceof Error ? error.message : String(error),
+        source: name,
+      },
+    ];
+  }
+
   // Validate props against declared inputs.
   // Strip the `slot` prop before validation — it is consumed by the
   // expansion engine for slot assignment, not forwarded to the child.
   let validatedProps: Record<string, Json>;
   try {
-    const { slot: _slot, ...propsForValidation } = props;
+    const { slot: _slot, ...propsForValidation } = resolvedProps;
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
     return [
@@ -407,6 +428,112 @@ function* expandComponent(
       );
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Expression prop evaluation (spec §5.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve eval expression props against env.values using the shared VM
+ * context. Merges resolved values into the props record.
+ *
+ * Expression props are stored as raw expression text in the
+ * `expressions` field of `ComponentInvocation`. At expansion time,
+ * they are evaluated as JavaScript in the same VM context used by eval
+ * blocks, with `env.values` destructured into scope.
+ *
+ * Results must be JSON-serializable — props must survive replay.
+ * Errors are thrown (not ErrorSegments), consistent with PropValidationError.
+ */
+function* resolveExpressionProps(
+  props: Record<string, Json>,
+  expressions: Record<string, string>,
+  componentName: string,
+): Operation<Record<string, Json>> {
+  // Start with already-resolved props
+  const resolved = { ...props };
+
+  // Nothing to evaluate
+  if (Object.keys(expressions).length === 0) {
+    return resolved;
+  }
+
+  // Get the eval environment and VM context
+  const evalEnv = yield* EvalEnvCtx.get();
+  const evalCtx = yield* EvalCtxKey.get();
+
+  if (!evalEnv || !evalCtx) {
+    const names = Object.keys(expressions).join(", ");
+    throw new Error(
+      `Expression props (${names}) on <${componentName} /> cannot be ` +
+      `resolved: no eval context available. Expression props require ` +
+      `a preceding eval block that defines the referenced bindings.`,
+    );
+  }
+
+  // Temporarily inject __env into the VM context for expression evaluation.
+  // Safe under cooperative scheduling — runInContext is synchronous, no
+  // yield point between set and cleanup.
+  const vmCtx = evalCtx.vmContext as Record<string, unknown>;
+  const hadEnv = "__env" in vmCtx;
+  const prevEnv = vmCtx["__env"];
+
+  for (const [propName, expression] of Object.entries(expressions)) {
+    try {
+      vmCtx["__env"] = evalEnv.values;
+      try {
+        const envKeys = Object.keys(evalEnv.values);
+        const preamble = envKeys.length > 0
+          ? `const { ${envKeys.join(", ")} } = __env;\n`
+          : "";
+        const code = `${preamble}(${expression})`;
+        const result = runInContext(code, evalCtx.vmContext);
+
+        // Results from runInContext may have a different Object.prototype
+        // (VM context sandbox). Use JSON round-trip to validate serialization
+        // and normalize to host-realm objects.
+        let serialized: Json;
+        try {
+          serialized = JSON.parse(JSON.stringify(result)) as Json;
+        } catch {
+          throw new Error(
+            `Expression prop "${propName}" on <${componentName} /> evaluated ` +
+            `to a non-serializable value (${typeof result}). Props must be ` +
+            `JSON-serializable.`,
+          );
+        }
+        if (typeof result === "function" || typeof result === "undefined") {
+          throw new Error(
+            `Expression prop "${propName}" on <${componentName} /> evaluated ` +
+            `to a non-serializable value (${typeof result}). Props must be ` +
+            `JSON-serializable.`,
+          );
+        }
+
+        resolved[propName] = serialized;
+      } finally {
+        if (hadEnv) {
+          vmCtx["__env"] = prevEnv;
+        } else {
+          delete vmCtx["__env"];
+        }
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("non-serializable")
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Failed to evaluate expression prop "${propName}={${expression}}" ` +
+        `on <${componentName} />: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------

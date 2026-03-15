@@ -124,6 +124,28 @@ the caller-provided text.
 
 </Section>
 
+<Section title="Expression Props">
+
+Expression props pass runtime values from eval blocks to child
+components. Unlike string attributes, expression props resolve
+at expansion time against the eval binding environment.
+
+```js eval
+const dynamicGreeting = "Howdy";
+const dynamicSubject = "expression props";
+const itemCount = 3;
+```
+
+The values computed above flow into PropDemo via expression props:
+
+<PropDemo greeting={dynamicGreeting} subject={dynamicSubject} />
+
+JSON literals resolve at scan time — no eval block needed:
+
+<Note message="JSON props: count={42}, verbose={true}" />
+
+</Section>
+
 <Section title="Markdown Healing">
 
 Components and executable code blocks are **semantic boundaries**.
@@ -435,6 +457,7 @@ cat <<'EOF'
 | meta interpolation        | {meta.emoji} in Section and Note        |
 | props interpolation       | {props.title}, {props.message}, etc.    |
 | Props passthrough         | <PropDemo greeting="Hey" subject="w">  |
+| Expression props          | <PropDemo greeting={dynamic} subject={dynamic}> |
 | Durability                | Timestamp stable across reruns          |
 | eval modifier             | js eval blocks with shared bindings     |
 | persist modifier          | js persist eval block, resource lifetime|
