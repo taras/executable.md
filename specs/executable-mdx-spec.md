@@ -33,6 +33,12 @@ provider component pattern — see §3.3 and §6.6–6.7), and the
 EMA Output Api (an Effection Api with composable middleware for
 streaming, whitespace-normalized, ANSI-formatted output — see §9).
 
+Expansion also supports binding capture: component invocations may
+declare `as="name"` to route rendered output into `env.values` instead
+of the document, and the built-in `<Capture as="name">...</Capture>`
+directive captures inline rendered content into `env.values` without
+creating a new component boundary (see §6.5).
+
 ### 1.1 Example
 
 Given three files:
@@ -1133,7 +1139,6 @@ Future modifiers (not yet specified):
 
 | Modifier | Type | Behavior |
 |----------|------|----------|
-| `capture=varname` | Wrapping | Stores output into a named binding |
 | `stderr` | Wrapping | Includes stderr in output |
 | `ignore-error` | Wrapping | Converts non-zero exit codes to success |
 
@@ -2347,6 +2352,48 @@ function* expandSegments(
       }
 
       case "component": {
+        if (segment.name === "Capture") {
+          const asBinding = segment.props.as;
+          if (typeof asBinding !== "string" || asBinding.length === 0) {
+            result.push({
+              type: "error",
+              message: '<Capture> requires an "as" prop (non-empty string).',
+              source: "Capture",
+            });
+            break;
+          }
+          if (!isValidIdentifier(asBinding)) {
+            result.push({
+              type: "error",
+              message: `<Capture as="${asBinding}">: as must be a valid JavaScript identifier.`,
+              source: "Capture",
+            });
+            break;
+          }
+          if (segment.selfClosing || segment.children.length === 0) {
+            result.push({
+              type: "error",
+              message: '<Capture> must have children. Use <Capture as="x">...</Capture>.',
+              source: "Capture",
+            });
+            break;
+          }
+
+          // Capture expands in the current env/scope (no fresh boundary).
+          const expandedChildren = yield* expandSegments(
+            segment.children,
+            parentMeta,
+            parentProps,
+            hideSet,
+            ctx,
+            counter,
+          );
+          const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
+          const env = yield* ephemeral(EvalEnvCtx.expect());
+          env.values[asBinding] = rendered;
+          break;
+        }
+
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -2445,8 +2492,13 @@ function* expandComponent(
   // Import — single durable effect (resolve + read + hash)
   const definition = yield* durableImportComponent(name);
 
+  // Extract reserved props before validation.
+  // `slot` and `as` are consumed by the expansion engine.
+  const asBinding = props.as;
+  const { slot: _slot, as: _as, ...propsForValidation } = props;
+
   // Validate props against declared inputs
-  const validatedProps = validateProps(name, props, definition.inputs);
+  const validatedProps = validateProps(name, propsForValidation, definition.inputs);
 
   // Substitute raw children into <Content /> positions.
   // Children are NOT pre-expanded — they expand in document order
@@ -2478,7 +2530,7 @@ function* expandComponent(
   componentEnv.values.renderChildren = function* () { /* ... */ };
   componentEnv.values.render = function* (markdown) { /* ... */ };
 
-  return yield* EvalEnvCtx.with(
+  const expanded = yield* EvalEnvCtx.with(
     componentEnv,
     function* () {
       return yield* expandSegments(
@@ -2489,6 +2541,27 @@ function* expandComponent(
       );
     },
   );
+
+  // Binding capture: route rendered output to parent env and suppress
+  // document output at the invocation site.
+  if (asBinding !== undefined) {
+    if (typeof asBinding !== "string" || asBinding.length === 0) {
+      throw new PropValidationError(name, [
+        'Prop "as" on <' + name + ' /> must be a non-empty string literal',
+      ]);
+    }
+    if (!isValidIdentifier(asBinding)) {
+      throw new PropValidationError(name, [
+        `Prop "as" on <${name} /> must be a valid JavaScript identifier`,
+      ]);
+    }
+
+    const parentEnv = yield* ephemeral(EvalEnvCtx.expect());
+    parentEnv.values[asBinding] = renderSegments(expanded);
+    return [];
+  }
+
+  return expanded;
 }
 ```
 
@@ -2597,12 +2670,18 @@ function substituteContent(
 }
 ```
 
-#### 6.3.5 Reserved prop name
+#### 6.3.5 Reserved prop names
 
-The name `slot` is reserved. Declaring it in a component's `inputs`
-frontmatter is a validation error. On caller-side child components,
-`slot` is stripped before prop validation — the child component never
-sees `slot` in its `validatedProps`.
+The names `slot` and `as` are reserved. Declaring either in a
+component's `inputs` frontmatter is a validation error.
+
+- `slot` is consumed during slot partitioning and stripped before prop
+  validation.
+- `as` is consumed by binding capture and stripped before prop
+  validation.
+
+In both cases, the child component never sees the reserved prop in its
+`validatedProps`.
 
 #### 6.3.6 Interaction with `renderChildren()`
 
@@ -2737,6 +2816,59 @@ function checkType(value: Json, type: InputDefinition["type"]): boolean {
 Validation is a runtime operation — deterministic from the component
 definition and the caller's props. It runs after import but before
 expansion. Errors are thrown immediately, not deferred.
+
+#### Binding capture: `as` and `<Capture>`
+
+Two expansion-level mechanisms capture rendered output into
+`env.values` instead of the document:
+
+- Component invocation capture: `<Comp as="binding" />`
+- Inline capture directive: `<Capture as="binding">...</Capture>`
+
+Both write a string to `env.values[binding]` and produce no output at
+the capture site.
+
+##### Component `as`
+
+When a component invocation has `as="name"`:
+
+1. `as` is stripped before prop validation.
+2. The component expands normally.
+3. Expanded segments are rendered to a string.
+4. The string is stored in the invocation site's `EvalEnv`.
+5. The invocation contributes zero output segments.
+
+`as` must be a string literal and a valid JavaScript identifier:
+
+```
+/^[a-zA-Z_$][a-zA-Z0-9_$]*$/
+```
+
+Invalid values produce `PropValidationError`.
+
+##### `<Capture as="name">...</Capture>`
+
+`<Capture>` is a built-in directive handled by the expansion engine.
+It is not imported from the filesystem.
+
+Rules:
+
+- `as` is required and must be a valid identifier.
+- `<Capture />` (self-closing) is invalid.
+- `<Capture>` must have children.
+- `<Capture>` accepts no props other than `as`.
+- `as={expr}` is invalid (must be string literal).
+
+Behavior:
+
+1. Expand children in the **current env/scope** (no new `EvalEnv`, no
+   new `EvalScope`).
+2. Render children to string.
+3. Trim trailing whitespace (`/\s+$/`).
+4. Store the string in `env.values[as]`.
+5. Produce no output segment.
+
+Overwrites are allowed for both mechanisms: last writer wins.
 
 #### Expression props
 
@@ -4017,6 +4149,12 @@ instead of all under `root`).
 | C20 | **No inputs, no props** | Component with no `inputs`, invoked with no props → valid |
 | C21 | **No inputs, some props** | Component with no `inputs`, invoked with props → PropValidationError |
 | C22 | **Optional with no default, not passed** | Input not in validated props, `{props.key}` → empty string |
+| C23 | Component `as` capture | `<Comp as="x" />` stores rendered output in `env.values.x`, invocation emits no segments |
+| C24 | `<Capture>` inline capture | `<Capture as="x">text</Capture>` stores `"text"` in `env.values.x`, emits no segments |
+| C25 | `<Capture>` trailing-whitespace trim | Captured output `"hello\n"` stored as `"hello"` |
+| C26 | Reserved prop `as` in inputs | Declaring `as` in component `inputs` fails frontmatter validation |
+| C27 | Invalid capture names | `as=""`, `as="123bad"`, or `as={expr}` produce validation errors |
+| C28 | `<Capture />` invalid | Self-closing Capture produces ErrorSegment |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -4199,6 +4337,8 @@ instead of all under `root`).
 | K3 | `serializeExports` filters non-JSON | Functions, symbols, circular refs excluded |
 | K4 | `serializeExports` preserves JSON values | Numbers, strings, objects, arrays round-trip correctly |
 | K5 | Replay restores serializable bindings | After replay, `env.values` contains stored exports |
+| K6 | Component `as` writes to invocation env | Binding is visible to downstream siblings at call site |
+| K7 | `<Capture>` is not a component boundary | Eval/exec inside `<Capture>` use parent env/scope and journal normally |
 
 ### Tier L — Persist modifier
 
@@ -4536,3 +4676,9 @@ A.md references <C />.
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
 | 77 | Function component re-imported on replay | `import()` runs on every execution including replay because the function itself is not serializable; the file content hash in the journal detects staleness; the import is fast (local file) |
 | 78 | Vendored tarballs for pkg.pr.new packages | `@effectionx/durable-streams` and `@effectionx/durable-effects` are pre-release builds not published to npm/JSR; vendored as `.tgz` tarballs in `.vendor/`, extracted at install time via `deno task setup`; temporary until packages are published |
+| 79 | `as` is a reserved expansion prop | `as` is consumed by the expansion engine (not component inputs), stripped before validation, and used to bind rendered output into `env.values` |
+| 80 | `<Capture>` is the inline binding directive | Captures arbitrary inline rendered content while preserving JSX ergonomics and a single binding-target syntax (`as`) |
+| 81 | Component `as` writes to invocation-site env | Captured bindings must be visible to subsequent siblings/eval blocks where the invocation appears |
+| 82 | `<Capture>` does not create a new env/scope | Capture is structural (like `<Content />`), not a component boundary; middleware/scope behavior remains deterministic |
+| 83 | Capture trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
+| 84 | Capture assignment is not independently journaled | Captured value is deterministic from journaled effects and expansion order; replay reconstructs the same binding without extra journal entries |

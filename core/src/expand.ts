@@ -87,6 +87,7 @@ export interface ExpansionContext {
 // ---------------------------------------------------------------------------
 
 const MAX_EXPANSION_DEPTH = 64;
+const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
 /**
  * Expand an array of segments, resolving components and executing code blocks.
@@ -122,6 +123,21 @@ export function* expandSegments(
       }
 
       case "component": {
+        if (segment.name === "Capture") {
+          const captureResult = yield* expandCapture(
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            ctx,
+            counter,
+          );
+          if (captureResult) {
+            result.push(captureResult);
+          }
+          break;
+        }
+
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -202,6 +218,94 @@ export function* expandSegments(
   }
 
   return result;
+}
+
+function* expandCapture(
+  segment: Extract<Segment, { type: "component" }>,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  ctx: ExpansionContext,
+  counter: BlockCounter,
+): Operation<ErrorSegment | undefined> {
+  if (segment.selfClosing || segment.children.length === 0) {
+    return {
+      type: "error",
+      message: '<Capture> must have children. Use <Capture as="x">...</Capture>.',
+      source: "Capture",
+    };
+  }
+
+  const propNames = Object.keys(segment.props);
+  if (propNames.some((name) => name !== "as")) {
+    return {
+      type: "error",
+      message: '<Capture> only accepts the "as" prop.',
+      source: "Capture",
+    };
+  }
+
+  const expressionNames = Object.keys(segment.expressions);
+  if (expressionNames.length > 0) {
+    if (expressionNames.includes("as")) {
+      return {
+        type: "error",
+        message: '<Capture as={...}> is invalid: "as" must be a string literal.',
+        source: "Capture",
+      };
+    }
+    return {
+      type: "error",
+      message: '<Capture> only accepts the "as" prop.',
+      source: "Capture",
+    };
+  }
+
+  if (segment.props.as === undefined) {
+    return {
+      type: "error",
+      message: '<Capture> requires an "as" prop (non-empty string).',
+      source: "Capture",
+    };
+  }
+
+  const asBinding = validateBindingName(segment.props.as);
+  if (!asBinding.ok) {
+    return {
+      type: "error",
+      message: asBinding.error,
+      source: "Capture",
+    };
+  }
+  const bindingName = asBinding.value;
+  if (bindingName === undefined) {
+    return {
+      type: "error",
+      message: '<Capture> requires an "as" prop (non-empty string).',
+      source: "Capture",
+    };
+  }
+
+  const expandedChildren = yield* expandSegments(
+    segment.children,
+    parentMeta,
+    parentProps,
+    hideSet,
+    ctx,
+    counter,
+  );
+  const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
+
+  const env = yield* EvalEnvCtx.get();
+  if (!env) {
+    return {
+      type: "error",
+      message: "<Capture> requires an evaluation environment.",
+      source: "Capture",
+    };
+  }
+  env.values[bindingName] = rendered;
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,12 +392,29 @@ function* expandComponent(
     ];
   }
 
+  if ("as" in expressions) {
+    return [
+      {
+        type: "error",
+        message: `Prop "as" on <${name} /> must be a string literal.`,
+        source: name,
+      },
+    ];
+  }
+
   // Validate props against declared inputs.
   // Strip the `slot` prop before validation — it is consumed by the
   // expansion engine for slot assignment, not forwarded to the child.
   let validatedProps: Record<string, Json>;
+  let asBinding: string | undefined;
   try {
-    const { slot: _slot, ...propsForValidation } = resolvedProps;
+    const binding = validateBindingName(resolvedProps.as);
+    if (!binding.ok) {
+      throw new Error(`Prop "as" on <${name} /> ${binding.error}`);
+    }
+    asBinding = binding.value;
+
+    const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
     return [
@@ -418,7 +539,7 @@ function* expandComponent(
     });
   };
 
-  return yield* EvalEnvCtx.with(
+  const expanded = yield* EvalEnvCtx.with(
     componentEnv,
     function* () {
       if (childEvalScope) {
@@ -446,6 +567,23 @@ function* expandComponent(
       );
     },
   );
+
+  if (asBinding) {
+    const parentEnv = yield* EvalEnvCtx.get();
+    if (!parentEnv) {
+      return [
+        {
+          type: "error",
+          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+          source: name,
+        },
+      ];
+    }
+    parentEnv.values[asBinding] = renderSegments(expanded);
+    return [];
+  }
+
+  return expanded;
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +607,16 @@ function* expandFunctionComponent(
   ctx: ExpansionContext,
   counter: BlockCounter,
 ): Operation<Segment[]> {
+  if ("as" in expressions) {
+    return [
+      {
+        type: "error",
+        message: `Prop "as" on <${name} /> must be a string literal.`,
+        source: name,
+      },
+    ];
+  }
+
   // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
@@ -484,7 +632,18 @@ function* expandFunctionComponent(
   }
 
   // Strip slot prop before validation
-  const { slot: _slot, ...propsForValidation } = resolvedProps;
+  const asBindingResult = validateBindingName(resolvedProps.as);
+  if (!asBindingResult.ok) {
+    return [
+      {
+        type: "error",
+        message: `Prop "as" on <${name} /> ${asBindingResult.error}`,
+        source: name,
+      },
+    ];
+  }
+  const asBinding = asBindingResult.value;
+  const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
 
   // Validate props
   let validatedProps: Record<string, Json>;
@@ -538,6 +697,21 @@ function* expandFunctionComponent(
   // Call the function component
   try {
     const output = yield* definition.fn(validatedProps);
+    if (asBinding) {
+      const parentEnv = yield* EvalEnvCtx.get();
+      if (!parentEnv) {
+        return [
+          {
+            type: "error",
+            message:
+              `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+            source: name,
+          },
+        ];
+      }
+      parentEnv.values[asBinding] = output;
+      return [];
+    }
     return [{ type: "text", content: output }];
   } catch (error) {
     return [
@@ -550,6 +724,27 @@ function* expandFunctionComponent(
       },
     ];
   }
+}
+
+function validateBindingName(
+  value: Json | undefined,
+): { ok: true; value?: string } | { ok: false; error: string } {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: 'must be a non-empty string literal.' };
+  }
+  if (value.length === 0) {
+    return { ok: false, error: "must be non-empty." };
+  }
+  if (!IDENTIFIER_RE.test(value)) {
+    return {
+      ok: false,
+      error: `must be a valid JavaScript identifier. Got: "${value}"`,
+    };
+  }
+  return { ok: true, value };
 }
 
 // ---------------------------------------------------------------------------
