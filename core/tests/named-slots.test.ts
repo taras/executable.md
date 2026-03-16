@@ -47,6 +47,7 @@ function makeComponent(
   } = {},
 ): ComponentDefinition {
   return {
+    kind: "markdown",
     name,
     path: `components/${name}.md`,
     meta: opts.meta ?? {},

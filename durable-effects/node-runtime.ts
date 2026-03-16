@@ -11,6 +11,7 @@
  */
 
 import { relative, sep } from "node:path";
+import process from "node:process";
 import { fetch as effectionFetch } from "@effectionx/fetch";
 import {
   readTextFile as fsReadTextFile,
@@ -20,7 +21,6 @@ import {
 } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { each } from "effection";
-import type { Operation } from "effection";
 import type { DurableRuntime, RuntimeFetchResponse } from "./runtime.ts";
 
 /**

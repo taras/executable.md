@@ -16,6 +16,7 @@ import { FetchError, stream as fetchStream } from "@durable-streams/client";
 import { DurableStreamTestServer } from "@durable-streams/server";
 import { call, createChannel, each, main, resource, spawn } from "effection";
 import type { Operation, Stream } from "effection";
+import process from "node:process";
 import type { DurableEvent } from "../mod.ts";
 
 // ---------------------------------------------------------------------------
@@ -152,7 +153,7 @@ function formatEvent(n: number, event: DurableEvent): string {
 
 /** Length of a string without ANSI escape codes. */
 function plainLength(s: string): number {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI escapes
+  // deno-lint-ignore no-control-regex
   return s.replace(/\x1b\[[0-9;]*m/g, "").length;
 }
 

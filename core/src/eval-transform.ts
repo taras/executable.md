@@ -73,9 +73,10 @@ export function transformBlock(
   // The wrapped AST is: ExpressionStatement > FunctionExpression > body
   // AST node positions are offset by WRAPPER_PREFIX.length relative to
   // the original source.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // deno-lint-ignore no-explicit-any
   const exprStmt = (wrappedAst as any).body[0];
   const funcExpr = exprStmt?.expression;
+  // deno-lint-ignore no-explicit-any
   const ast = { body: funcExpr?.body?.body ?? [], type: "Program" } as any;
   const offset = WRAPPER_PREFIX.length;
 
@@ -131,7 +132,7 @@ export function transformBlock(
 // Mode detection (spec §4.4)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// deno-lint-ignore no-explicit-any
 type AstNode = any;
 
 /**

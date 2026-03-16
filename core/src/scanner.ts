@@ -229,7 +229,7 @@ function findFenceClose(
 
   while (pos < text.length) {
     // Must be at start of line
-    let lineStart = pos;
+    const lineStart = pos;
 
     // Optional leading spaces (0-3)
     let spaces = 0;

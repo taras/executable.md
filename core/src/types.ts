@@ -112,6 +112,7 @@ export interface InputDefinition {
 }
 
 export interface ComponentDefinition {
+  kind: "markdown";
   name: string;
   path: string;
   meta: Record<string, unknown>;

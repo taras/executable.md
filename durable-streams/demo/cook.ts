@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import process from "node:process";
 import { run } from "effection";
 import {
   type Json,

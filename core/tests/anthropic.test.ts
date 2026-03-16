@@ -136,6 +136,7 @@ function makeSampleContext(
 
 import { buildDefaultMessages } from "../src/sample/llamafile.ts";
 import { fetch } from "@effectionx/fetch";
+import { Buffer } from "node:buffer";
 
 /**
  * Test helper that mirrors callAnthropic() but accepts a custom URL.

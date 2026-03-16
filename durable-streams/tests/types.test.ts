@@ -1,3 +1,5 @@
+// deno-lint-ignore-file require-yield
+
 /**
  * Type-level tests for Workflow<T> and DurableEffect.
  *

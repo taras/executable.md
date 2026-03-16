@@ -2,6 +2,7 @@
   "workspace": ["core", "cli", "durable-streams", "durable-effects"],
   "nodeModulesDir": "auto",
   "imports": {
+    "@types/node": "npm:@types/node@^24.5.2",
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
     "@effectionx/bdd/node": "./test-support/bdd.ts",
     "@effectionx/test-adapter": "npm:@effectionx/test-adapter@^0.7.3",
@@ -24,7 +25,7 @@
   },
   "tasks": {
     "ema": "deno run --allow-all cli/src/cli.ts",
-    "test": "deno test --no-check --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/",
+    "test": "deno test --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/",
     "check": "deno check core/mod.ts",
     "lint": "deno lint core/src/ cli/src/ durable-streams/ durable-effects/"
   }

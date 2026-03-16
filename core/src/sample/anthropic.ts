@@ -21,6 +21,7 @@
 
 import { fetch } from "@effectionx/fetch";
 import type { Operation } from "effection";
+import process from "node:process";
 import type { SampleContext } from "../types.ts";
 import { buildDefaultMessages, type ChatMessage } from "./llamafile.ts";
 

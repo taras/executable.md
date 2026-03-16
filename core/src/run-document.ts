@@ -28,7 +28,9 @@ import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
 import type {
   ComponentDefinition,
+  FunctionComponent,
   FunctionComponentDefinition,
+  InputDefinition,
   ImportResult,
   Modifier,
   CodeBlockContext,
@@ -54,7 +56,6 @@ import { sampleFactory } from "./modifiers/sample.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
-import type { EvalScope } from "@effectionx/scope-eval";
 
 // Re-export gray-matter — we use it for YAML frontmatter extraction
 import matter from "gray-matter";
@@ -86,7 +87,9 @@ export interface RunDocumentOptions {
 // ---------------------------------------------------------------------------
 // durableImportComponent (spec §4.3)
 //
-// This is a Workflow<ComponentDefinition> — it yields a single DurableEffect.
+// This is a Workflow<ComponentDefinition | FunctionComponentDefinition> —
+// it yields durable import effects and returns either markdown or function
+// component definitions.
 // The execute body inside createDurableOperation is an Operation<Json> —
 // it uses yield* for Effection operations (runtime.readTextFile, computeSHA256).
 // See DEC-001, DEC-004 in specs/decisions.md.
@@ -124,8 +127,11 @@ function* durableImportComponent(
     // Resolve to absolute path for dynamic import
     const absolutePath = result.path.startsWith("/")
       ? result.path
-      : `${process.cwd()}/${result.path}`;
-    const mod = yield* call(() => import(`file://${absolutePath}`));
+      : `${Deno.cwd()}/${result.path}`;
+    const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`)))) as {
+      default?: unknown;
+      inputs?: unknown;
+    };
 
     const fn = mod.default;
     if (typeof fn !== "function") {
@@ -134,14 +140,16 @@ function* durableImportComponent(
       );
     }
 
-    const inputs = mod.inputs ?? {};
+    const typedFn = fn as FunctionComponent;
+
+    const inputs = (mod.inputs ?? {}) as Record<string, InputDefinition>;
 
     return {
       kind: "function" as const,
       name,
       path: result.path,
       inputs,
-      fn,
+      fn: typedFn,
       contentHash: result.contentHash,
     };
   }
@@ -154,6 +162,7 @@ function* durableImportComponent(
   const bodySegments = scanSegments(parsed.content);
 
   return {
+    kind: "markdown" as const,
     name,
     path: result.path,
     meta,
@@ -337,6 +346,12 @@ function* documentWorkflow(
     searchPaths,
     runtime,
   );
+
+  if (root.kind === "function") {
+    throw new Error(
+      "Root document must be a markdown file, not a function component",
+    );
+  }
 
   // Create per-document binding environment (spec §3.2).
   // The EvalScope was already created in runDocument (before durableRun)

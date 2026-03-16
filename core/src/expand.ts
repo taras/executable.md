@@ -360,7 +360,7 @@ function* expandComponent(
   }
 
   // Function component: call the generator function directly
-  if ("kind" in imported && imported.kind === "function") {
+  if (imported.kind === "function") {
     return yield* expandFunctionComponent(
       name,
       props,
@@ -373,7 +373,7 @@ function* expandComponent(
     );
   }
 
-  const definition = imported as ComponentDefinition;
+  const definition = imported;
 
   // Resolve eval expression props against env.values using the shared
   // VM context. This must happen before validation so that resolved
