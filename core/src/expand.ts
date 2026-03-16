@@ -231,7 +231,7 @@ function* expandCapture(
   if (segment.selfClosing || segment.children.length === 0) {
     return {
       type: "error",
-      message: '<Capture> must have children. Use <Capture as="x">...</Capture>.',
+      message: '<Capture> must have content. Use <Capture as="x">...</Capture>.',
       source: "Capture",
     };
   }

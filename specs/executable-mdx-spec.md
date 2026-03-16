@@ -2373,7 +2373,7 @@ function* expandSegments(
           if (segment.selfClosing || segment.children.length === 0) {
             result.push({
               type: "error",
-              message: '<Capture> must have children. Use <Capture as="x">...</Capture>.',
+              message: '<Capture> must have content. Use <Capture as="x">...</Capture>.',
               source: "Capture",
             });
             break;
@@ -2855,7 +2855,7 @@ Rules:
 
 - `as` is required and must be a valid identifier.
 - `<Capture />` (self-closing) is invalid.
-- `<Capture>` must have children.
+- `<Capture>` must have content.
 - `<Capture>` accepts no props other than `as`.
 - `as={expr}` is invalid (must be string literal).
 
