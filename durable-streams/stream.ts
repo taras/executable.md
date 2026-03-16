@@ -22,7 +22,7 @@ function cloneEvents(events: DurableEvent[]): DurableEvent[] {
  * Implementations must guarantee:
  * - Append-only (events are never updated or deleted)
  * - Prefix-closed (no gaps)
- * - Monotonic indexing (sequential offsets)
+ * - Monotonic append order (backend-specific offsets may be opaque)
  * - Durability (once append resolves, the event persists)
  */
 export interface DurableStream {

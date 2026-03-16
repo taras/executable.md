@@ -20,8 +20,31 @@ import {
   walk,
 } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { each } from "effection";
+import { each, race, sleep } from "effection";
+import type { Operation } from "effection";
 import type { DurableRuntime, RuntimeFetchResponse } from "./runtime.ts";
+
+function* withTimeout<T>(
+  label: string,
+  timeout: number | undefined,
+  operation: Operation<T>,
+): Operation<T> {
+  if (timeout === undefined) {
+    return yield* operation;
+  }
+
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error(`${label}: timeout must be a non-negative finite number`);
+  }
+
+  return (yield* race([
+    operation,
+    (function* (): Operation<T> {
+      yield* sleep(timeout);
+      throw new Error(`${label} timed out after ${timeout}ms`);
+    })(),
+  ])) as T;
+}
 
 /**
  * Create a DurableRuntime backed by Node.js APIs via effectionx packages.
@@ -35,22 +58,22 @@ import type { DurableRuntime, RuntimeFetchResponse } from "./runtime.ts";
 export function nodeRuntime(): DurableRuntime {
   return {
     *exec(options) {
-      // timeout is accepted in the interface but not yet supported by
-      // @effectionx/process — tracked for future enhancement. Cancellation
-      // via Effection scope teardown provides the primary timeout mechanism.
-      const { command, cwd, env } = options;
+      const { command, cwd, env, timeout } = options;
       const [cmd, ...args] = command;
 
       if (!cmd) {
         throw new Error("exec: command array must not be empty");
       }
 
-      // @effectionx/process exec() takes a command string and options
-      const result = yield* exec(cmd, {
-        arguments: args,
-        cwd,
-        env,
-      }).join();
+      const result = yield* withTimeout(
+        `exec(${cmd})`,
+        timeout,
+        exec(cmd, {
+          arguments: args,
+          cwd,
+          env,
+        }).join(),
+      );
 
       return {
         exitCode: result.code ?? 1,
@@ -113,17 +136,26 @@ export function nodeRuntime(): DurableRuntime {
     },
 
     *fetch(input, init) {
-      const response = yield* effectionFetch(input, {
-        method: init?.method,
-        headers: init?.headers,
-        body: init?.body,
-      });
+      const timeout = init?.timeout;
+      const response = yield* withTimeout(
+        `fetch(${input})`,
+        timeout,
+        effectionFetch(input, {
+          method: init?.method,
+          headers: init?.headers,
+          body: init?.body,
+        }),
+      );
 
       return {
         status: response.status,
         headers: response.headers,
         *text() {
-          return yield* response.text();
+          return yield* withTimeout(
+            `fetch(${input}).text()`,
+            timeout,
+            response.text(),
+          );
         },
       } as RuntimeFetchResponse;
     },

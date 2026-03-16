@@ -5,10 +5,65 @@
  */
 
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
+import { call, race, resource } from "effection";
+import type { Operation } from "effection";
+import { once } from "@effectionx/node";
 import { nodeRuntime } from "../node-runtime.ts";
+
+function useTestServer(
+  handler: http.RequestListener,
+): Operation<{ url: string }> {
+  return resource<{ url: string }>(function* (provide) {
+    const server = http.createServer(handler);
+    const sockets = new Set<import("node:net").Socket>();
+    const listening = once(server, "listening");
+    const error = once<[Error]>(server, "error");
+
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+
+    server.listen(0, "127.0.0.1");
+
+    const rethrowError: Operation<never> = {
+      *[Symbol.iterator]() {
+        const [err] = yield* error;
+        throw err;
+      },
+    } as Operation<never>;
+
+    yield* race([listening, rethrowError]);
+
+    const address = server.address();
+    if (!address || typeof address !== "object") {
+      throw new Error("useTestServer: unexpected address format");
+    }
+
+    try {
+      yield* provide({
+        url: `http://127.0.0.1:${address.port}`,
+      });
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      yield* call(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          }),
+      );
+    }
+  });
+}
 
 describe("nodeRuntime", () => {
   const runtime = nodeRuntime();
@@ -48,6 +103,19 @@ describe("nodeRuntime", () => {
       const actual = result.stdout.trim();
       const expected = fs.realpathSync(cwd);
       expect(actual).toBe(expected);
+    });
+
+    it("enforces timeout", function* () {
+      try {
+        yield* runtime.exec({
+          command: ["node", "-e", "setTimeout(() => console.log('late'), 250)"],
+          timeout: 25,
+        });
+        expect(true).toBe(false);
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain("timed out after 25ms");
+      }
     });
   });
 
@@ -105,8 +173,10 @@ describe("nodeRuntime", () => {
         root: "durable-effects",
       });
       expect(results.length).toBeGreaterThan(0);
-      expect(results.every((r) => r.path.endsWith(".ts"))).toBe(true);
-      expect(results.every((r) => r.isFile)).toBe(true);
+      expect(results.every((r: { path: string }) => r.path.endsWith(".ts"))).toBe(
+        true,
+      );
+      expect(results.every((r: { isFile: boolean }) => r.isFile)).toBe(true);
     });
 
     it("returns empty for no matches", function* () {
@@ -116,6 +186,22 @@ describe("nodeRuntime", () => {
       });
       expect(results).toEqual([]);
     });
+  });
+
+  describe("fetch", () => {
+    it("fetches a response body", function* () {
+      const { url } = yield* useTestServer((_req, res) => {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end("hello");
+      });
+
+      const response = yield* runtime.fetch(url);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/plain");
+      const body = yield* response.text();
+      expect(body).toBe("hello");
+    });
+
   });
 
   describe("env", () => {

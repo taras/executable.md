@@ -94,7 +94,7 @@ const DurableRuntimeCtx = createContext<DurableRuntime>("@durable/runtime");
 **Design notes on the interface:**
 
 - `exec()` returns `Operation`. The implementation handles timeouts and process cleanup internally. When the operation is cancelled (scope torn down), the implementation kills the subprocess. No `AbortSignal` crosses the interface boundary.
-- `fetch()` returns an Operation-native response object. `response.text()` is also `Operation<string>`, not `Promise<string>`. The implementation wraps `globalThis.fetch` with `action()` or `call()` and handles abort internally.
+- `fetch()` returns an Operation-native response object. `response.text()` is also `Operation<string>`, not `Promise<string>`. The implementation is responsible for timeout enforcement on both the request and the body read.
 - `env()` and `platform()` are synchronous — no Operation wrapper needed since they don't do I/O.
 - `readTextFile()` and `glob()` return Operations. Cancellation during a long glob scan terminates the iteration.
 
@@ -161,7 +161,7 @@ Every effect needs:
 4. **Divergence** — wrong description in journal, verify `DivergenceError`
 5. **Error propagation** — operation throws, verify `Close(err)` in journal
 
-Use the Node.js test runner (`node --test`). Use `stubRuntime()` to prove non-execution during replay. Inject runtime via `DurableRunOptions.runtime`.
+Use the repository's current BDD-style Node harness (`@effectionx/bdd/node`). Use `stubRuntime()` to prove non-execution during replay. For each effect, include at least one focused partial-replay test and one divergence test in addition to the golden/full replay/error cases.
 
 ## 0.4 File locations
 
@@ -212,7 +212,8 @@ function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult>
 
 ```json
 { "type": "exec", "name": "compile", "command": ["tsc", "--noEmit"],
-  "cwd": "/workspace", "env": { "NODE_ENV": "production" }, "timeout": 300000 }
+  "cwd": "/workspace", "envKeys": ["NODE_ENV"], "timeout": 300000,
+  "throwOnError": true }
 
 { "status": "ok", "value": { "exitCode": 0, "stdout": "...", "stderr": "" } }
 ```
@@ -228,8 +229,9 @@ function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult> 
       type: "exec", name,
       command: command as Json,
       ...(cwd ? { cwd } : {}),
-      ...(env ? { env: env as Json } : {}),
+      ...(env ? { envKeys: Object.keys(env).sort() as Json } : {}),
       timeout,
+      throwOnError,
     },
     function* () {
       const scope = yield* useScope();
@@ -248,7 +250,7 @@ function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult> 
 }
 ```
 
-Timeout and process cleanup are the runtime's responsibility. When `createDurableOperation`'s scope tears down (cancellation), `runtime.exec()` is cancelled, which triggers the runtime's `finally` block to kill the process.
+Timeout and process cleanup are the runtime's responsibility. To avoid persisting secret values, exec descriptions record only `envKeys`, not the full environment map. When `createDurableOperation`'s scope tears down (cancellation), `runtime.exec()` is cancelled, which triggers the runtime's teardown path to kill the process.
 
 ### Tests
 
@@ -257,7 +259,7 @@ Timeout and process cleanup are the runtime's responsibility. When `createDurabl
 3. **Partial replay** — replayed exec, subsequent effect live.
 4. **Non-zero exit with throwOnError** — verify error in journal.
 5. **Non-zero exit without throwOnError** — `status: "ok"` with non-zero exitCode.
-6. **Env and cwd in description** — verify metadata in journal.
+6. **Env key names and cwd in description** — verify metadata in journal.
 7. **Timeout** — runtime exceeds timeout, verify error.
 8. **Cancellation** — cancel scope, verify exec operation cancelled.
 9. **Divergence** — mismatched type/name.
@@ -416,7 +418,7 @@ function* durableGlob(name: string, options: GlobOptions): Workflow<GlobResult> 
 
 ### Use case
 
-HTTP request. URL, method, headers in description. Status, filtered headers, body, bodyHash in result. HTTP error status codes (404, 500) are successful effect results — only network failures are effect errors.
+HTTP request. URL, method, and redacted/safe request metadata appear in the description. Status, filtered headers, body, bodyHash in result. HTTP error status codes (404, 500) are successful effect results — only network failures are effect errors.
 
 ### Signature
 
@@ -442,13 +444,14 @@ function* durableFetch(name: string, options: FetchOptions): Workflow<FetchResul
 
 ```json
 { "type": "fetch", "name": "call-llm", "url": "https://api.example.com",
-  "method": "POST", "headers": { "content-type": "application/json" } }
+  "method": "POST", "headers": { "content-type": "application/json" },
+  "bodyHash": "len:17" }
 
 { "status": "ok", "value": { "status": 200, "headers": { "content-type": "..." },
     "body": "...", "bodyHash": "sha256:..." } }
 ```
 
-Request body is **not** in the description.
+The raw request body is **not** in the description. Implementations MAY include body-derived metadata (for example a length or hash) so that materially different payloads to the same endpoint are distinguishable without persisting the body itself.
 
 ### Implementation
 
@@ -457,7 +460,8 @@ function* durableFetch(name: string, options: FetchOptions): Workflow<FetchResul
   const { url, method = "GET", headers = {}, body, timeout = 30_000 } = options;
 
   return (yield createDurableOperation<FetchResult>(
-    { type: "fetch", name, url, method, headers: headers as Json },
+    { type: "fetch", name, url, method, headers: safeHeaders as Json,
+      ...(body ? { bodyHash: `len:${body.length}` } : {}) },
     function* () {
       const scope = yield* useScope();
       const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
@@ -493,7 +497,7 @@ Timeout and abort are the runtime's responsibility. The effect code is just orch
 6. **Timeout** — slow response, verify error from runtime.
 7. **Filtered headers** — selected captured, ephemeral omitted.
 8. **Body hash in result** — verify correct.
-9. **Request body not in description** — POST with body, no `body` field in description.
+9. **Request body not in description** — POST with body, verify raw body is absent while body-derived metadata (if any) is safe.
 10. **Divergence** — mismatched type/name.
 
 ---

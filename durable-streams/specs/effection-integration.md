@@ -774,23 +774,25 @@ model.
 
 ### 8.2 durableSpawn
 
-Spawns a single durable child. Returns `Operation<Task<T>>` (not
-`Workflow<Task<T>>`) because it uses infrastructure effects internally:
+Spawns a single durable child. Returns `Workflow<Task<T>>` by wrapping its
+internal infrastructure operations with `ephemeral()`:
 
 ```typescript
-function* durableSpawn<T extends Json | void>(
-  childWorkflow: () => Workflow<T> | Operation<T>,
-): Operation<Task<T>> {
-  const scope = yield* useScope();
-  const ctx = scope.expect<DurableContext>(DurableCtx);
-  const childId = `${ctx.coroutineId}.${ctx.childCounter++}`;
-  return yield* spawn(() => runDurableChild(childWorkflow, childId, ctx));
+export function durableSpawn<T extends Json | void>(
+  childWorkflow: () => Workflow<T>,
+): Workflow<Task<T>> {
+  return ephemeral((function* (): Operation<Task<T>> {
+    const scope = yield* useScope();
+    const ctx = scope.expect<DurableContext>(DurableCtx);
+    const childId = `${ctx.coroutineId}.${ctx.childCounter++}`;
+    return yield* spawn(() => runDurableChild(childWorkflow, childId, ctx));
+  })());
 }
 ```
 
-Uses Effection's `spawn()` directly via `yield*`. The child runs
-concurrently in its own scope. `runDurableChild` handles DurableContext
-setup and Close events.
+The child runs concurrently in its own scope. `runDurableChild` handles
+DurableContext setup and Close events; `ephemeral()` keeps the combinator
+usable from a `Workflow` without journaling the scope-plumbing effects.
 
 ### 8.3 durableAll
 
