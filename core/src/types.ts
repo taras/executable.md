@@ -5,17 +5,16 @@
  * modifier system types, and shared interfaces.
  */
 
+import type {
+  Json as DurableJson,
+  Workflow,
+} from "@executablemd/durable-streams";
+
 // ---------------------------------------------------------------------------
 // JSON-serializable value type
 // ---------------------------------------------------------------------------
 
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | Json[]
-  | { [key: string]: Json };
+export type Json = DurableJson;
 
 // ---------------------------------------------------------------------------
 // Segment IR (spec §2.1)
@@ -131,8 +130,6 @@ export interface ImportResult {
 // Function components (spec §5.3)
 // ---------------------------------------------------------------------------
 
-import type { Operation } from "effection";
-
 /**
  * A TypeScript function component — a generator function that receives
  * validated props directly and returns rendered output as a string.
@@ -140,14 +137,15 @@ import type { Operation } from "effection";
  * Children are available via `useContent()` on the Effection scope:
  * ```ts
  * import { useContent } from "@executablemd/core/globals";
+ * import { ephemeral } from "@executablemd/core";
  * export default function*(props) {
- *   const content = yield* useContent();
+ *   const content = yield* ephemeral(useContent());
  *   return `<div>${content}</div>`;
  * }
  * ```
  */
 export interface FunctionComponent {
-  (props: Record<string, Json>): Operation<string>;
+  (props: Record<string, Json>): Workflow<string>;
 }
 
 /**

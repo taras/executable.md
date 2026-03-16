@@ -6,6 +6,7 @@
     "./globals": "./globals.ts"
   },
   "imports": {
+    "@executablemd/durable-streams": "../durable-streams/mod.ts",
     "acorn": "npm:acorn@^8.16.0",
     "gray-matter": "npm:gray-matter@^4.0.3",
     "magic-string": "npm:magic-string@^0.30.21",
