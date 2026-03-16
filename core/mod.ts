@@ -26,6 +26,9 @@ export type {
   Json,
 } from "./src/types.ts";
 
+export type { Workflow } from "@executablemd/durable-streams";
+export { ephemeral } from "@executablemd/durable-streams";
+
 export { healSegment } from "./src/heal.ts";
 
 export type { Middleware } from "@effectionx/middleware";
