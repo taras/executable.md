@@ -146,6 +146,32 @@ JSON literals resolve at scan time — no eval block needed:
 
 </Section>
 
+<Section title="Binding Capture">
+
+Binding capture routes rendered output into the eval binding environment
+instead of writing it at the invocation site.
+
+Component-level capture uses `as="name"`:
+
+<Fragment as="capturedFromComponent">component binding from Fragment</Fragment>
+
+Inline capture uses the built-in `<Capture>` directive:
+
+<Capture as="capturedInline">inline binding from Capture
+</Capture>
+
+Captured bindings are available to later executable blocks:
+
+```bash exec
+echo "Capture values: {capturedFromComponent} | {capturedInline}"
+```
+
+This Note is captured but intentionally not rendered inline:
+
+<Note as="hiddenCapturedNote" message="Hidden capture should not render inline." />
+
+</Section>
+
 <Section title="Markdown Healing">
 
 Components and executable code blocks are **semantic boundaries**.
@@ -458,6 +484,8 @@ cat <<'EOF'
 | props interpolation       | {props.title}, {props.message}, etc.    |
 | Props passthrough         | <PropDemo greeting="Hey" subject="w">  |
 | Expression props          | <PropDemo greeting={dynamic} subject={dynamic}> |
+| component as capture      | <Fragment as="capturedFromComponent">...       |
+| Capture directive         | <Capture as="capturedInline">...               |
 | Durability                | Timestamp stable across reruns          |
 | eval modifier             | js eval blocks with shared bindings     |
 | persist modifier          | js persist eval block, resource lifetime|

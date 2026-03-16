@@ -5,7 +5,8 @@
  * interpolation, component expansion, nested components, dotted names,
  * executable code blocks, silent modifier, props, Content slot, markdown
  * healing, non-executable passthrough, eval blocks with shared bindings,
- * persist modifier, timeout modifier, daemon modifier, sample modifier,
+ * binding capture (`as` and `<Capture>`), persist modifier, timeout modifier,
+ * daemon modifier, sample modifier,
  * bracket params, provider pattern, and nested providers.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -97,6 +98,13 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     expect(output).toContain("silent modifier");
     expect(output).toContain("Markdown healing");
 
+    // ----- Binding capture section -----
+    expect(output).toContain("§ Binding Capture");
+    expect(output).toContain("Capture values:");
+    expect(output).toContain("component binding from Fragment");
+    expect(output).toContain("| inline binding from Capture");
+    expect(output).not.toContain("Hidden capture should not render inline.");
+
     // ----- In-Process Evaluation section -----
     expect(output).toContain("§ In-Process Evaluation");
 
@@ -169,6 +177,8 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     expect(output).toContain("renderChildren() closure");
     expect(output).toContain("Instruction component");
     expect(output).toContain("composable instructions");
+    expect(output).toContain("component as capture");
+    expect(output).toContain("Capture directive");
 
     // ----- Instruction Component section -----
     expect(output).toContain("§ Instruction Component");
