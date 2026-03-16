@@ -15,7 +15,7 @@
  * evalScope channel boundary).
  */
 
-import { ephemeral } from "@effectionx/durable-streams";
+import { ephemeral } from "@executablemd/durable-streams";
 import type { ModifierFactory } from "../modifiers.ts";
 import { PersistFlagCtx } from "../eval-env.ts";
 

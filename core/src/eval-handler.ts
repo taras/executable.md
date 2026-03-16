@@ -2,16 +2,16 @@
  * The `eval` terminal modifier factory (spec §6).
  *
  * Evaluates code blocks in-process as Effection generator operations.
- * Uses durableEval from @effectionx/durable-effects for journaling.
+ * Uses durableEval from @executablemd/durable-effects for journaling.
  *
  * Unlike `exec` (subprocess), `eval` executes code in the same Effection
  * process, enabling direct access to live in-memory objects, native
  * yield* of Effection operations, and shared state across blocks.
  */
 
-import { ephemeral } from "@effectionx/durable-streams";
-import type { Json } from "@effectionx/durable-streams";
-import { durableEval } from "@effectionx/durable-effects";
+import { ephemeral } from "@executablemd/durable-streams";
+import type { Json } from "@executablemd/durable-streams";
+import { durableEval } from "@executablemd/durable-effects";
 import { unbox } from "@effectionx/scope-eval";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";

@@ -15,7 +15,7 @@ import { call } from "effection";
 import type { Operation } from "effection";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import type { DurableEvent } from "@effectionx/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
 
 /**
  * Load journal events from a JSONL file.

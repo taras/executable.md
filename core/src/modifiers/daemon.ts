@@ -11,7 +11,7 @@
  * `daemon` is the outermost terminal modifier and ignores `next`.
  */
 
-import { ephemeral } from "@effectionx/durable-streams";
+import { ephemeral } from "@executablemd/durable-streams";
 import { daemon } from "@effectionx/process";
 import type { ModifierFactory } from "../modifiers.ts";
 import { useCodeBlock } from "../modifiers.ts";

@@ -17,8 +17,8 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { race, sleep } from "effection";
-import { InMemoryStream } from "@effectionx/durable-streams";
-import { nodeRuntime } from "@effectionx/durable-effects";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { nodeRuntime } from "@executablemd/durable-effects";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import * as fs from "node:fs";

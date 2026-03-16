@@ -12,8 +12,8 @@
 
 import { createContext } from "effection";
 import type { Operation } from "effection";
-import { ephemeral } from "@effectionx/durable-streams";
-import type { Workflow } from "@effectionx/durable-streams";
+import { ephemeral } from "@executablemd/durable-streams";
+import type { Workflow } from "@executablemd/durable-streams";
 import type { Middleware } from "@effectionx/middleware";
 import { combine } from "@effectionx/middleware";
 import type {
