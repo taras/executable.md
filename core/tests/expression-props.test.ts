@@ -15,6 +15,7 @@ import { expandSegments, createBlockCounter } from "../src/expand.ts";
 import type { ExpansionContext } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import type {
@@ -225,13 +226,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       // {props.data} will be interpolated — for objects, it uses toString
       expect(output).toContain("received:");
       expect(output).not.toContain("ERROR");
@@ -262,13 +263,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("length=3");
     } finally {
       cleanup(tmpDir);
@@ -297,13 +298,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("active=true");
     } finally {
       cleanup(tmpDir);
@@ -333,13 +334,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("total=30");
     } finally {
       cleanup(tmpDir);
@@ -363,13 +364,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         "doc.md": "<Num count={42} />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("count=42");
     } finally {
       cleanup(tmpDir);
@@ -392,13 +393,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         "doc.md": '<Greet name="world" />',
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("hello world");
     } finally {
       cleanup(tmpDir);
@@ -427,13 +428,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("Failed to evaluate expression prop");
       expect(output).toContain("nonexistent");
     } finally {
@@ -463,13 +464,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("non-serializable");
     } finally {
       cleanup(tmpDir);
@@ -493,13 +494,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         "doc.md": "<Show data={someVar} />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("Failed to evaluate expression prop");
       expect(output).toContain("someVar");
     } finally {
@@ -529,13 +530,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("Failed to evaluate expression prop");
     } finally {
       cleanup(tmpDir);
@@ -570,13 +571,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("count=42");
       expect(output).toContain("data=result");
       expect(output).toContain("name=hello");
@@ -607,13 +608,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("count=5");
       expect(output).not.toContain("ERROR");
     } finally {
@@ -643,13 +644,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("expected number");
     } finally {
       cleanup(tmpDir);
@@ -686,13 +687,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("data=hello");
       expect(output).not.toContain("ERROR");
     } finally {
@@ -722,20 +723,20 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output1 = yield* runDocument({
+      const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
-      const output2 = yield* runDocument({
+      }));
+      const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output1).toContain("count=7");
       expect(output2).toBe(output1);
     } finally {
@@ -769,13 +770,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         "doc.md": "<Outer />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("inner-data=from-outer");
     } finally {
       cleanup(tmpDir);
@@ -812,13 +813,13 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("child-data=from-parent");
     } finally {
       cleanup(tmpDir);

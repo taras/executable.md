@@ -1,18 +1,16 @@
 /**
  * Tier SE — Streaming emission tests + Tier BC — Block ID counter (spec §9, §6.1).
  *
- * Tests per-segment emission through the EMA Output Api and
- * blockId stability across per-segment expansion calls.
+ * Tests per-segment emission through the document stream returned by
+ * runDocument, and blockId stability across per-segment expansion calls.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel } from "effection";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
-import { EMA } from "../src/ema-api.ts";
+import { forEach } from "@effectionx/stream-helpers";
 import { createBlockCounter } from "../src/expand.ts";
 import { runDocument } from "../src/run-document.ts";
-import { subscribe } from "../src/subscribe.ts";
 
 describe("Tier BC — Block ID counter", () => {
   // BC1: Counter increments across calls
@@ -36,45 +34,38 @@ describe("Tier BC — Block ID counter", () => {
 
 describe("Tier SE — Streaming emission", () => {
   // SE1: Per-segment emission order
-  it("SE1: segments emitted in document order via EMA output", function* () {
+  it("SE1: segments emitted in document order via stream", function* () {
     const chunks: string[] = [];
-    const scope = yield* useScope();
 
-    // Install middleware to capture output chunks (no channel needed)
-    scope.around(EMA, {
-      *output([text]) {
-        chunks.push(text);
-      },
-    });
-
-    const output = yield* runDocument({
+    const execution = yield* runDocument({
       docPath: "core/tests/fixtures/streaming/multi-segment.md",
       stream: new InMemoryStream(),
       runtime: nodeRuntime(),
     });
 
+    const fullOutput = yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+
     // Chunks should have been emitted in order
     expect(chunks.length).toBeGreaterThan(0);
-    // Full output should match collected chunks
-    expect(output).toBe(chunks.join(""));
+    // Full output (close value) should match collected chunks
+    expect(fullOutput).toBe(chunks.join(""));
   });
 
   // SE10: Empty segment produces no output call
   it("SE10: no empty strings in output chunks", function* () {
     const chunks: string[] = [];
-    const scope = yield* useScope();
 
-    scope.around(EMA, {
-      *output([text]) {
-        chunks.push(text);
-      },
-    });
-
-    yield* runDocument({
+    const execution = yield* runDocument({
       docPath: "core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
       runtime: nodeRuntime(),
     });
+
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
 
     // No empty strings in chunks
     for (const chunk of chunks) {
@@ -82,34 +73,21 @@ describe("Tier SE — Streaming emission", () => {
     }
   });
 
-  // SE9: Cross-boundary communication via channel
-  it("SE9: output() inside durable workflow reaches channel outside", function* () {
-    const channel = createChannel<string, void>();
-    const scope = yield* useScope();
+  // SE9: Streaming output reaches consumer via returned stream
+  it("SE9: output() inside durable workflow reaches stream consumer", function* () {
+    const chunks: string[] = [];
 
-    // Channel delivery — installed last so it's closest to core
-    scope.around(EMA, {
-      *output([text]) {
-        yield* channel.send(text);
-      },
+    const execution = yield* runDocument({
+      docPath: "core/tests/fixtures/streaming/simple.md",
+      stream: new InMemoryStream(),
+      runtime: nodeRuntime(),
     });
 
-    const { ready, task: consumer } = yield* subscribe<string>(channel);
-    yield* ready;
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
 
-    try {
-      yield* runDocument({
-        docPath: "core/tests/fixtures/streaming/simple.md",
-        stream: new InMemoryStream(),
-        runtime: nodeRuntime(),
-      });
-    } finally {
-      yield* channel.close();
-    }
-
-    const result = yield* consumer;
-
-    expect(result.length).toBeGreaterThan(0);
-    expect(result.join("")).toContain("Hello");
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.join("")).toContain("Hello");
   });
 });

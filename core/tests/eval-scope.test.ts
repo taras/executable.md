@@ -10,6 +10,7 @@ import { InMemoryStream } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -47,12 +48,12 @@ describe("Tier T10 — eval-scope hierarchy", () => {
         "```js eval\nconst a = 1;\n```\n\n```js eval\nconst b = a + 1;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Both blocks should execute without error
     // Text between two adjacent eval blocks may produce a newline
@@ -68,12 +69,12 @@ describe("Tier T10 — eval-scope hierarchy", () => {
         "```js eval\nconst x = 42;\n```\n\n```bash exec\necho hello\n```\n\n```js eval\nconst y = x + 1;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Exec output should be present
     expect(output).toContain("hello");

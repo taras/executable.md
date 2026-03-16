@@ -10,6 +10,7 @@ import { InMemoryStream } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -48,12 +49,12 @@ describe("Tier T5 — Binding environment", () => {
     });
 
     // Should not throw — port is available in block 2
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Eval blocks produce no rendered output (only text between blocks remains)
     expect(output.trim()).toBe("");
@@ -70,12 +71,12 @@ describe("Tier T5 — Binding environment", () => {
     });
 
     // Should succeed — x is 2 in block 3 (shadowed by block 2)
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).not.toContain("ERROR");
   });
@@ -87,12 +88,12 @@ describe("Tier T5 — Binding environment", () => {
       "test.md": "```js eval\n\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toBe("");
   });
@@ -104,12 +105,12 @@ describe("Tier T5 — Binding environment", () => {
       "test.md": "```js eval\nconst y = undeclaredVar + 1;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toContain("ERROR");
   });
@@ -121,12 +122,12 @@ describe("Tier T5 — Binding environment", () => {
       "test.md": "```js eval\nconst x = ;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toContain("ERROR");
   });

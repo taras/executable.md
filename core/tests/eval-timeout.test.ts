@@ -10,6 +10,7 @@ import { InMemoryStream } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -46,12 +47,12 @@ describe("Tier T7 — timeout modifier", () => {
       "test.md": "```js timeout=30s eval\nconst x = 42;\n```\n",
     });
 
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).toBe("");
     expect(output).not.toContain("ERROR");
@@ -86,12 +87,12 @@ describe("Tier T7 — timeout modifier", () => {
     });
 
     // Should work with default timeout
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output).not.toContain("timed out");
   });

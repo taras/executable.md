@@ -2,9 +2,9 @@
  * CLI journal integration tests.
  *
  * Exercises the full CLI pipeline as a subprocess — arg parsing,
- * channel wiring, middleware, journal persistence, and replay.
+ * stream consumption, middleware, journal persistence, and replay.
  *
- * Each test shells out to `node --experimental-strip-types src/cli.ts`
+ * Each test shells out to `deno run --allow-all cli/src/cli.ts`
  * and uses timebox to prevent hangs from blocking the test suite.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -20,8 +20,8 @@ import * as os from "node:os";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const CLI_CMD = process.execPath;
-const CLI_ARGS = ["--experimental-strip-types", "core/src/cli.ts", "run"];
+const CLI_CMD = "deno";
+const CLI_ARGS = ["run", "--allow-all", "cli/src/cli.ts", "run"];
 const TIMEOUT = 15_000;
 
 function makeTmpDir(): string {

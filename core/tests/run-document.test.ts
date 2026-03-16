@@ -15,6 +15,7 @@ import { InMemoryStream, StaleInputError } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -123,12 +124,12 @@ describe("Tier B — durable import", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     const events = stream.snapshot();
     const imports = events.flatMap((e) =>
@@ -162,20 +163,20 @@ describe("Tier B — durable import", () => {
     const runtime = makeRuntime(files);
 
     // Golden run
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Replay — no I/O runtime
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: noIORuntime(),
       freshness: false,
-    });
+    }));
 
     expect(secondResult).toBe(firstResult);
   });
@@ -195,19 +196,19 @@ describe("Tier B — durable import", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: noIORuntime(),
       freshness: false,
-    });
+    }));
 
     expect(secondResult).toBe(firstResult);
     expect(secondResult).toContain("# Parsed");
@@ -222,12 +223,12 @@ describe("Tier B — durable import", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("ERROR");
     expect(
@@ -250,12 +251,12 @@ describe("Tier B — durable import", () => {
     const runtime = makeRuntime(originalFiles);
 
     // Golden run — produces Yield + Close events
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Build a new stream with only the Yield events (no Close).
     // This simulates an interrupted workflow where replay must
@@ -269,18 +270,20 @@ describe("Tier B — durable import", () => {
     };
     const changedRuntime = makeRuntime(changedFiles);
 
-    // Replay with freshness check — guard's decide phase detects hash mismatch
+    // Replay with freshness check — guard's decide phase detects hash mismatch.
+    // The error propagates through yield* execution via withResolvers reject.
+    let caught: unknown;
     try {
-      yield* runDocument({
+      yield* collect(yield* runDocument({
         docPath: "README.md",
         stream: interruptedStream,
         runtime: changedRuntime,
         freshness: true,
-      });
-      throw new Error("should have thrown StaleInputError");
+      }));
     } catch (error) {
-      expect(error).toBeInstanceOf(StaleInputError);
+      caught = error;
     }
+    expect(caught).toBeInstanceOf(StaleInputError);
   });
 
   // B11: stale import — no guard → replay uses stored content silently
@@ -293,22 +296,22 @@ describe("Tier B — durable import", () => {
     const runtime = makeRuntime(originalFiles);
 
     // Golden run
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Change the file and replay WITHOUT guard
     const changedRuntime = makeRuntime({ "README.md": "Hello changed\n" });
 
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: changedRuntime,
       freshness: false,
-    });
+    }));
 
     // Should use stored (original) content
     expect(secondResult).toBe(firstResult);
@@ -324,12 +327,12 @@ describe("Tier B — durable import", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "doc.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     const events = stream.snapshot();
     const [rootImport] = events.flatMap((e) =>
@@ -354,12 +357,12 @@ describe("Tier B — durable import", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("Click me");
 
@@ -390,12 +393,12 @@ describe("Tier B — durable import", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("Banner from root");
   });
@@ -419,12 +422,12 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("hello");
 
@@ -452,20 +455,20 @@ describe("Tier D — code execution and modifiers", () => {
     const runtime = makeRuntime(files);
 
     // Golden run
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Replay — no I/O
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: noIORuntime(),
       freshness: false,
-    });
+    }));
 
     expect(secondResult).toBe(firstResult);
     expect(secondResult).toContain("hello");
@@ -484,12 +487,12 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntimeWithFailingExec(files, 1, "command not found");
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(
       result.includes("ERROR") || result.includes("failed"),
@@ -510,12 +513,12 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Verify the command array in journal contains full script
     const events = stream.snapshot();
@@ -560,12 +563,12 @@ describe("Tier D — code execution and modifiers", () => {
       },
     });
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("hello");
 
@@ -592,12 +595,12 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Output should be empty (silent suppresses)
     expect(result).not.toContain("secret");
@@ -626,20 +629,20 @@ describe("Tier D — code execution and modifiers", () => {
     const runtime = makeRuntime(files);
 
     // Golden
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Replay
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: noIORuntime(),
       freshness: false,
-    });
+    }));
 
     expect(secondResult).toBe(firstResult);
     expect(secondResult).not.toContain("secret");
@@ -658,12 +661,12 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("ERROR");
     expect(
@@ -684,12 +687,12 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Without exec/eval, code block is passive text — preserved as-is
     expect(result).toContain("```bash");
@@ -709,7 +712,7 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
@@ -724,7 +727,7 @@ describe("Tier D — code execution and modifiers", () => {
           };
         }(),
       },
-    });
+    }));
 
     expect(result).toContain("HELLO");
   });
@@ -744,7 +747,7 @@ describe("Tier D — code execution and modifiers", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
@@ -755,7 +758,7 @@ describe("Tier D — code execution and modifiers", () => {
           return next();
         },
       },
-    });
+    }));
 
     expect(receivedParams).toBe("30s");
   });
@@ -799,12 +802,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false, // Skip guard for golden run test
-    });
+    }));
 
     // Check output contains expected content
     expect(result).toContain("# My Project");
@@ -843,12 +846,12 @@ describe("runDocument", () => {
     const runtime = makeRuntime(files);
 
     // First run — golden
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Second run — replay from same stream, stub runtime that throws on all I/O
     let readCalled = false;
@@ -867,12 +870,12 @@ describe("runDocument", () => {
       },
     });
 
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: replayRuntime,
       freshness: false,
-    });
+    }));
 
     expect(secondResult).toBe(firstResult);
     expect(readCalled).toBe(false);
@@ -898,12 +901,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("Hello, Alice!");
   });
@@ -924,12 +927,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Should contain error about undeclared prop
     expect(result).toContain("ERROR");
@@ -955,12 +958,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Output should NOT contain the exec result
     expect(result).not.toContain("hidden");
@@ -984,12 +987,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toBe("# Hello World\n\nThis is a test.\n");
   });
@@ -1013,12 +1016,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("Hello, world!");
   });
@@ -1049,12 +1052,12 @@ describe("runDocument", () => {
     const runtime = makeRuntime(files);
 
     // Golden run to get full journal
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     const fullEvents = stream.snapshot();
 
@@ -1090,12 +1093,12 @@ describe("runDocument", () => {
       },
     });
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream: partialStream,
       runtime: resumeRuntime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("Hello, world!");
     expect(result).toContain("done");
@@ -1131,12 +1134,12 @@ describe("runDocument", () => {
     const runtime = makeRuntime(files);
 
     // Golden run — produces Yield + Close events
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Strip Close event — simulates interrupted workflow
     const yieldEvents = stream.snapshot().filter((e) => e.type === "yield");
@@ -1161,12 +1164,12 @@ describe("runDocument", () => {
     // Replay with guard — decide phase detects hash mismatch on Greeting.
     // The expansion engine catches the StaleInputError and renders it as
     // an ErrorSegment (same as any import failure for child components).
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream: interruptedStream,
       runtime: changedRuntime,
       freshness: true,
-    });
+    }));
 
     expect(
       result.includes("Component changed") || result.includes("Greeting"),
@@ -1185,12 +1188,12 @@ describe("runDocument", () => {
     const runtime = makeRuntime(files);
 
     // Golden run with just Header
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Now add Footer to the document
     const updatedFiles: Record<string, string> = {
@@ -1202,12 +1205,12 @@ describe("runDocument", () => {
     const newStream = new InMemoryStream();
     const updatedRuntime = makeRuntime(updatedFiles);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream: newStream,
       runtime: updatedRuntime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("Header content");
     expect(result).toContain("Footer content");
@@ -1223,12 +1226,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // The **bold should be healed (closed) before component expansion.
     // remend appends closing ** after the text segment (including trailing \n).
@@ -1276,23 +1279,23 @@ describe("runDocument", () => {
     const runtime = makeRuntime(files);
 
     // Golden run
-    const firstResult = yield* runDocument({
+    const firstResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     // Record journal size
     const goldenEventCount = stream.snapshot().length;
 
     // Replay — no I/O
-    const secondResult = yield* runDocument({
+    const secondResult = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime: noIORuntime(),
       freshness: false,
-    });
+    }));
 
     expect(secondResult).toBe(firstResult);
     expect(secondResult).toContain("# Test");
@@ -1314,12 +1317,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("HEADER");
     expect(result).toContain("FOOTER");
@@ -1343,12 +1346,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("before");
     expect(result).toContain("INNER");
@@ -1378,12 +1381,12 @@ describe("runDocument", () => {
     const stream = new InMemoryStream();
     const runtime = makeRuntime(files);
 
-    const result = yield* runDocument({
+    const result = yield* collect(yield* runDocument({
       docPath: "README.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(result).toContain("BEFORE");
     expect(result).toContain("inside");

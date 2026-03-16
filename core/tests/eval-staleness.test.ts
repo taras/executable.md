@@ -9,6 +9,7 @@ import { InMemoryStream, StaleInputError } from "@effectionx/durable-streams";
 import { stubRuntime } from "@effectionx/durable-effects";
 import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -45,19 +46,19 @@ describe("Tier T8 — Staleness detection", () => {
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
 
-    const output1 = yield* runDocument({
+    const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
-    const output2 = yield* runDocument({
+    const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: false,
-    });
+    }));
 
     expect(output2).toBe(output1);
   });
@@ -73,20 +74,20 @@ describe("Tier T8 — Staleness detection", () => {
     const runtime = makeRuntime(files);
 
     // Golden run with freshness
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
     // Same source — replay should work
-    const output2 = yield* runDocument({
+    const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
     expect(output2).toBe("");
   });
@@ -100,24 +101,24 @@ describe("Tier T8 — Staleness detection", () => {
     const runtime = makeRuntime(files);
 
     // Golden run
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
     // Change the file
     files["test.md"] = "Different content\n";
 
     // Replay with stale file — should produce stale error
     try {
-      yield* runDocument({
+      yield* collect(yield* runDocument({
         docPath: "test.md",
         stream,
         runtime,
         freshness: true,
-      });
+      }));
       // If we get here, the guard didn't fire (might replay and not read file)
     } catch (e) {
       expect(e).toBeInstanceOf(StaleInputError);
@@ -131,19 +132,19 @@ describe("Tier T8 — Staleness detection", () => {
       "test.md": "```bash exec\necho hello\n```\n",
     });
 
-    const output1 = yield* runDocument({
+    const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
-    const output2 = yield* runDocument({
+    const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
     expect(output2).toBe(output1);
     expect(output1).toContain("hello");
@@ -156,20 +157,20 @@ describe("Tier T8 — Staleness detection", () => {
       "test.md": "```js eval\nconst greeting = 'hi';\n```\n",
     });
 
-    yield* runDocument({
+    yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
     // Replay — should work fine
-    const output = yield* runDocument({
+    const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
       runtime,
       freshness: true,
-    });
+    }));
 
     expect(output).toBe("");
   });

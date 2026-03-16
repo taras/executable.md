@@ -9,8 +9,8 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { useScope, resource } from "effection";
-import type { Operation } from "effection";
+import { useScope, spawn, createChannel, withResolvers } from "effection";
+import type { Operation, Stream } from "effection";
 import {
   DurableRuntimeCtx,
   durableRun,
@@ -38,7 +38,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { expandSegments, createBlockCounter } from "./expand.ts";
 import type { ExpansionContext } from "./expand.ts";
 import { renderSegment } from "./render.ts";
-import { EMA } from "./ema-api.ts";
+import { EMA } from "./api.ts";
 import {
   composeModifierChain,
   buildCommand,
@@ -51,7 +51,6 @@ import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
 import { sampleFactory } from "./modifiers/sample.ts";
-import { createEvalContext, EvalCtxKey } from "./eval-context.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
@@ -417,9 +416,54 @@ function* documentWorkflow(
 // ---------------------------------------------------------------------------
 
 /**
- * Execute a markdown document as a durable workflow.
+ * A running document execution.
+ *
+ * `yield* execution` waits for the workflow to complete and returns
+ * the full output string (or throws on error).
+ *
+ * `execution.output` is a `Stream<string, string>` for consuming
+ * chunks as they arrive. The close value is the full output.
  */
-export function* runDocument(options: RunDocumentOptions): Operation<string> {
+export interface DocumentExecution extends Operation<string> {
+  /** Stream of output chunks. Close value is the full output. */
+  output: Stream<string, string>;
+}
+
+/**
+ * Execute a markdown document as a durable workflow.
+ *
+ * Returns a `DocumentExecution` — an operation you can `yield*` to
+ * get the full output, with a `.output` stream for chunk-by-chunk
+ * consumption.
+ *
+ * Simple — just get the output:
+ *
+ * ```ts
+ * const execution = yield* runDocument(options);
+ * const output = yield* execution;
+ * ```
+ *
+ * Streaming — consume chunks as they arrive:
+ *
+ * ```ts
+ * const execution = yield* runDocument(options);
+ * const output = yield* forEach(function* (chunk) {
+ *   process.stdout.write(chunk);
+ * }, execution.output);
+ * ```
+ *
+ * Error handling:
+ *
+ * ```ts
+ * const execution = yield* runDocument(options);
+ * try {
+ *   const output = yield* execution;
+ * } catch (e) {
+ *   // workflow error (e.g., StaleInputError)
+ * }
+ * ```
+ */
+export function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution> {
   const {
     docPath,
     stream,
@@ -429,35 +473,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
     modifiers: customModifiers = {},
   } = options;
 
-  // Install runtime context
-  const scope = yield* useScope();
-  scope.set(DurableRuntimeCtx, runtime);
-
-  // Install replay guards
-  if (freshness) {
-    yield* useImportComponentGuard(runtime);
-  }
-
-  // Create EvalContext — marks that the eval system is initialized.
-  // In the Deno model, there's no VM context — eval blocks are compiled
-  // into data: URI modules. The context exists as a marker.
-  const evalContext = createEvalContext();
-  scope.set(EvalCtxKey, evalContext);
-
-  // Create per-document eval scope (spec §3.1).
-  // Must be created BEFORE durableRun so the channel processor task lives
-  // in the outer Operation scope, not inside the durable execution scope.
-  // evalScope.eval() from within durableEval sends to a channel whose
-  // processor must be reachable by the Effection scheduler — this only
-  // works when both sender and processor share an ancestor scope outside
-  // the durable execution boundary.
-  const evalScope: EvalScope = yield* resource<EvalScope>(function* (provide) {
-    const es = yield* useEvalScope();
-    yield* provide(es);
-  });
-  scope.set(EvalScopeCtx, evalScope);
-
-  // Build modifier registry with built-in + custom handlers
+  // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
   registry.set("exec", createExecFactory(runtime));
   registry.set("silent", silentFactory);
@@ -470,9 +486,75 @@ export function* runDocument(options: RunDocumentOptions): Operation<string> {
     registry.set(name, handler);
   }
 
-  // Run the durable workflow
-  return yield* durableRun(
-    () => documentWorkflow(docPath, componentDirs, runtime, registry),
-    { stream },
-  );
+  // ---------------------------------------------------------------------------
+  // Document execution.
+  //
+  // The workflow runs in a spawned child scope that contains all
+  // execution state: DurableRuntimeCtx, replay guards, eval context/scope,
+  // and the EMA→channel bridge. Nothing leaks onto the caller's scope.
+  //
+  // withResolvers captures the completion result so `yield* execution`
+  // can wait for it without needing to await the spawned Task directly
+  // (which would propagate errors through scope teardown).
+  // ---------------------------------------------------------------------------
+
+  const channel = createChannel<string, string>();
+  const { operation, resolve, reject } = withResolvers<string>();
+
+  yield* spawn(function* () {
+    const scope = yield* useScope();
+    let emitted = false;
+
+    // Install runtime context — scoped to document execution, not leaked.
+    scope.set(DurableRuntimeCtx, runtime);
+
+    // Install replay guards
+    if (freshness) {
+      yield* useImportComponentGuard(runtime);
+    }
+
+    // EMA → channel bridge (innermost middleware — output flows through
+    // caller-installed normalize/terminal middleware first, then here).
+    scope.around(EMA, {
+      *output([text]) {
+        emitted = true;
+        yield* channel.send(text);
+      },
+    });
+
+    // Create per-document eval scope (spec §3.1).
+    // Created in the same scope as durableRun so that DurableCtx
+    // (set by durableRun) is visible to eval code that calls
+    // renderChildren → importComponent → createDurableOperation.
+    scope.set(EvalScopeCtx, yield* useEvalScope());
+
+    // Run the durable workflow.
+    try {
+      const storedOutput = yield* durableRun(
+        () => documentWorkflow(docPath, componentDirs, runtime, registry),
+        { stream },
+      );
+
+      // On replay, durableRun short-circuits and the workflow body never
+      // runs — no output() calls are made. Emit the stored result through
+      // the full Output Api pipeline (normalize, terminal format, channel)
+      // so replay output is consistent with fresh runs.
+      if (!emitted && storedOutput) {
+        yield* EMA.operations.output(storedOutput);
+      }
+
+      yield* channel.close(storedOutput);
+      resolve(storedOutput);
+    } catch (error) {
+      yield* channel.close("");
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+
+  return {
+    *[Symbol.iterator]() {
+      return yield* operation;
+    },
+    output: channel,
+  };
 }

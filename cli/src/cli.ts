@@ -1,4 +1,3 @@
-#!/usr/bin/env node --experimental-strip-types
 /**
  * CLI — run an executable markdown document.
  *
@@ -7,23 +6,21 @@
  *   ema <document.md> [options]        (run is the default command)
  *
  * Examples:
- *   ema run examples/hello-world.md
- *   ema examples/hello-world.md --verbose
- *   ema run examples/hello-world.md --journal events.jsonl
+ *   deno task ema run examples/hello-world.md
+ *   deno task ema examples/hello-world.md --verbose
+ *   deno task ema run examples/hello-world.md --journal events.jsonl
  */
 
-import { main, exit, spawn, each, createSignal, createChannel, useScope, type Operation } from "effection";
+import { main, exit, spawn, each, createSignal, type Operation } from "effection";
 import { InMemoryStream, type DurableEvent, type DurableStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
+import { forEach } from "@effectionx/stream-helpers";
 import { inspect } from "node:util";
 import { program, object, field, cli, commands, type Mods } from "@frontside/configliere";
 import { z } from "zod";
-import { runDocument } from "./run-document.ts";
+import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 import { FileStream } from "./file-stream.ts";
 import { loadJournal } from "./load-journal.ts";
-import { EMA } from "./ema-api.ts";
-import { useNormalizedOutput, useTerminalOutput } from "./output/mod.ts";
-import { subscribe } from "./subscribe.ts";
 
 // ---------------------------------------------------------------------------
 // Workaround: field.default exists at runtime but is missing from the .d.ts
@@ -156,95 +153,52 @@ function* run(config: {
           yield* each.next();
         }
       })
-    : spawn(function *() {});
+    : spawn(function* () {});
 
   // ---------------------------------------------------------------------------
-  // EMA Output Api wiring (spec §9.6)
+  // Output middleware (spec §9).
   //
-  // scope.around semantics: first-installed runs first (outermost).
-  // Its next() delegates to the second-installed handler, and so on
-  // down to the core no-op.
-  //
-  // Install order: normalize → terminal → channel delivery.
-  // Execution order: normalize → terminal → channel (same order).
+  // Middleware is installed on the EMA Api via scope.around() before
+  // runDocument is called. runDocument owns the channel internally —
+  // the CLI just installs transformations and consumes the returned stream.
   // ---------------------------------------------------------------------------
 
-  const scope = yield* useScope();
-
-  // Channel type: string chunks, void close value.
-  const channel = createChannel<string, void>();
-
-  // 1. Normalization first (runs first — outermost transform).
   if (!raw) {
     yield* useNormalizedOutput();
   }
 
-  // 2. Terminal formatting second (runs after normalization).
   if (process.stdout.isTTY && !raw) {
     yield* useTerminalOutput();
   }
 
-  // 3. Channel delivery last (runs last — closest to core).
-  // channel.send() is yield*'d for backpressure and cancellation safety.
-  // The emitted flag tracks whether the workflow produced streaming output.
-  let emitted = false;
-  scope.around(EMA, {
-    *output([text]) {
-      emitted = true;
-      yield* channel.send(text);
-    },
+  // Run the document — returns a DocumentExecution.
+  // yield* execution waits for completion. execution.output streams chunks.
+  const execution = yield* runDocument({
+    docPath,
+    stream,
+    runtime: nodeRuntime(),
+    componentDirs: componentDir,
+    freshness: false,
   });
 
-  // Subscribe to the output channel with deterministic handshake.
-  // yield* ready blocks until the subscription is established,
-  // preventing the replay hang where durableRun returns synchronously
-  // and channel.close() fires before the consumer subscribes.
-  const { ready, task: consumer } = yield* subscribe<string>(
-    channel,
-    (chunk) => {
-      if (process.stdout.isTTY) {
-        process.stdout.write(chunk);
-      }
-    },
-  );
-  yield* ready;
-
-  let storedOutput = "";
-  try {
-    storedOutput = yield* runDocument({
-      docPath,
-      stream,
-      runtime: nodeRuntime(),
-      componentDirs: componentDir,
-      freshness: false,
-    });
-
-    // On replay, durableRun short-circuits and the workflow body never
-    // runs — no output() calls are made. Emit the stored result through
-    // the full Output Api pipeline (normalize, terminal format, channel)
-    // so replay output is consistent with fresh runs.
-    if (!emitted && storedOutput) {
-      yield* EMA.operations.output(storedOutput);
+  // Consume the output stream with forEach.
+  // Interactive TTY: write each chunk as it arrives.
+  // Piped: collect and write the full output at the end.
+  const fullOutput = yield* forEach(function* (chunk: string) {
+    if (process.stdout.isTTY) {
+      process.stdout.write(chunk);
     }
-  } finally {
-    // Close the channel so the consumer's subscription loop exits cleanly.
-    // channel.close() returns Operation<void> — yield* is valid in finally.
-    yield* channel.close();
-
-    // Close the signal so the writer drains remaining events and exits.
-    if (signal) {
-      signal.close();
-      yield* writer;
-    }
-  }
-
-  // Collect streamed output from the consumer.
-  const chunks = yield* consumer;
-  const fullOutput = chunks.join("");
+  }, execution.output);
 
   // When piped (not TTY), write the full output at the end.
   if (!process.stdout.isTTY) {
     process.stdout.write(fullOutput);
+  }
+
+  // Close the signal so the writer drains remaining events and exits.
+  if (signal) {
+    signal.close();
+    yield* writer;
   }
 }
 

@@ -80,3 +80,25 @@ export {
   serializeExports,
   isJson,
 } from "./src/eval-transform.ts";
+
+// ---------------------------------------------------------------------------
+// Output Api & middleware
+// ---------------------------------------------------------------------------
+
+export { EMA } from "./src/api.ts";
+export type { EMAApi } from "./src/api.ts";
+export { useNormalizedOutput } from "./src/output/normalize.ts";
+export { useTerminalOutput } from "./src/output/terminal.ts";
+
+// ---------------------------------------------------------------------------
+// Document runner
+// ---------------------------------------------------------------------------
+
+export { runDocument } from "./src/run-document.ts";
+export type { RunDocumentOptions, DocumentExecution } from "./src/run-document.ts";
+
+// ---------------------------------------------------------------------------
+// Stream consumption
+// ---------------------------------------------------------------------------
+
+export { collect } from "./src/collect.ts";

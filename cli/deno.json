@@ -1,0 +1,9 @@
+{
+  "name": "@executablemd/cli",
+  "version": "0.1.0",
+  "exports": "./src/cli.ts",
+  "imports": {
+    "@executablemd/core": "../core/mod.ts",
+    "zod": "npm:zod@^4.3.6"
+  }
+}

@@ -7,6 +7,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { runDocument } from "../src/run-document.ts";
+import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 import * as fs from "node:fs";
@@ -42,13 +43,13 @@ describe("Tier FC — Function components", () => {
         "doc.md": "<Hello />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("Hello from TypeScript!");
     } finally {
       cleanup(tmpDir);
@@ -71,13 +72,13 @@ describe("Tier FC — Function components", () => {
         "doc.md": '<Greet name="world" />',
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("Hello, world!");
     } finally {
       cleanup(tmpDir);
@@ -103,13 +104,13 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("BEFORE");
       expect(output).toContain("child content here");
       expect(output).toContain("AFTER");
@@ -136,13 +137,13 @@ describe("Tier FC — Function components", () => {
         "doc.md": "<Dual />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("FROM-MARKDOWN");
       expect(output).not.toContain("FROM-TYPESCRIPT");
     } finally {
@@ -162,13 +163,13 @@ describe("Tier FC — Function components", () => {
         "doc.md": "<Broken />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("component error");
     } finally {
       cleanup(tmpDir);
@@ -191,13 +192,13 @@ describe("Tier FC — Function components", () => {
         "doc.md": '<Typed count={42} />',
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("count=42");
     } finally {
       cleanup(tmpDir);
@@ -220,13 +221,13 @@ describe("Tier FC — Function components", () => {
         "doc.md": "<Req />",
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("Required prop");
     } finally {
       cleanup(tmpDir);
@@ -255,13 +256,13 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* runDocument({
+      const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output).toContain("FROM-MD");
       expect(output).toContain("FROM-TS");
     } finally {
@@ -281,20 +282,20 @@ describe("Tier FC — Function components", () => {
         "doc.md": "<Static />",
       });
       const stream = new InMemoryStream();
-      const output1 = yield* runDocument({
+      const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
-      const output2 = yield* runDocument({
+      }));
+      const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
         runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
-      });
+      }));
       expect(output1).toContain("STATIC-OUTPUT");
       expect(output2).toBe(output1);
     } finally {

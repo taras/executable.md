@@ -22,12 +22,21 @@ import type { Operation } from "effection";
 
 let current: TestAdapter | undefined;
 
-export function describe(name: string, body: () => void): void {
+export interface DescribeOptions {
+  sanitizeOps?: boolean;
+  sanitizeResources?: boolean;
+}
+
+export function describe(name: string, body: () => void): void;
+export function describe(name: string, options: DescribeOptions, body: () => void): void;
+export function describe(name: string, optionsOrBody: DescribeOptions | (() => void), maybeBody?: () => void): void {
+  const options = typeof optionsOrBody === "function" ? {} : optionsOrBody;
+  const body = typeof optionsOrBody === "function" ? optionsOrBody : maybeBody!;
   const original = current;
   try {
     const child = createTestAdapter({ name, parent: original });
     current = child;
-    $describe(name, () => {
+    $describe(name, options, () => {
       $afterAll(() => child.destroy());
       body();
     });

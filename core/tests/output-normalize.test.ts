@@ -4,7 +4,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { useScope, createChannel, type Operation } from "effection";
-import { EMA } from "../src/ema-api.ts";
+import { EMA } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { subscribe } from "../src/subscribe.ts";
 

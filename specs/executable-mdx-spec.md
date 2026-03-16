@@ -1528,13 +1528,14 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` — inference HTTP utility |
 | `src/sample/ollama.ts` | `callOllama()` — Ollama inference HTTP utility |
 | `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
-| `src/cli.ts` | CLI entrypoint with `--verbose`, `--journal`, and `--raw` flags; Output Api channel wiring (§9.6) |
-| `src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
-| `src/ema-api.ts` | EMA Output Api definition, exports `output` (§9.2) |
+| `src/api.ts` | EMA Output Api definition, exports `output` (§9.2) |
+| `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
-| `src/load-journal.ts` | `loadJournal()` — reads/sanitizes JSONL journal for replay |
+| `cli/src/cli.ts` | CLI entrypoint (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
+| `cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
+| `cli/src/load-journal.ts` | `loadJournal()` — reads/sanitizes JSONL journal for replay |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
@@ -3340,7 +3341,16 @@ interface RunDocumentOptions {
   sampleHandler?: SampleApi;
 }
 
-function* runDocument(options: RunDocumentOptions): Operation<string> {
+/**
+ * A document execution handle. Yield it to get the full output string,
+ * or consume `.output` for chunk-by-chunk streaming.
+ */
+interface DocumentExecution extends Operation<string> {
+  /** Stream of output chunks emitted during execution. */
+  output: Stream<string, string>;
+}
+
+function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution> {
   const {
     docPath,
     stream,
@@ -3350,54 +3360,81 @@ function* runDocument(options: RunDocumentOptions): Operation<string> {
     modifiers: customModifiers = {},
   } = options;
 
-  // Install runtime
-  yield* DurableRuntimeCtx.set(runtime);
+  // Completion signal — resolve/reject surface through yield* execution.
+  const { operation, resolve, reject } = withResolvers<string>();
 
-  // Install replay guard
-  if (freshness) {
-    yield* useImportComponentGuard();
-  }
+  // Create the output channel — internal to runDocument.
+  const channel = createChannel<string, string>();
 
-  // Install resolver middleware — maps __root__ to docPath,
-  // then falls through to directory resolver for components
-  const scope = yield* useScope();
-  scope.around(Resolve, {
-    *resolve([name], next): Operation<ResolveResult> {
-      if (name === "__root__") {
-        return { path: docPath };
-      }
-      return yield* next(name);
-    },
+  // Spawn the execution scope. All durable state lives inside this
+  // spawned task: DurableRuntimeCtx, eval scope, replay guards,
+  // EMA→channel bridge. The channel and workflow share this scope;
+  // scope teardown cancels the producer and closes the channel.
+  yield* spawn(function* () {
+    // Install runtime
+    yield* DurableRuntimeCtx.set(runtime);
+
+    // Install replay guard
+    if (freshness) {
+      yield* useImportComponentGuard();
+    }
+
+    // Install resolver middleware — maps __root__ to docPath,
+    // then falls through to directory resolver for components
+    const scope = yield* useScope();
+    scope.around(Resolve, {
+      *resolve([name], next): Operation<ResolveResult> {
+        if (name === "__root__") {
+          return { path: docPath };
+        }
+        return yield* next(name);
+      },
+    });
+    yield* useDirectoryResolver(componentDirs);
+
+    // Create eval context marker (§4.2)
+    const evalCtx = createEvalContext();
+    yield* EvalCtxKey.set(evalCtx);
+
+    // Create eval scope — MUST be created before durableRun (§4.4).
+    // The channel processor task and the sender inside durableEval
+    // must share an ancestor scope outside the durable execution boundary.
+    const evalScope = yield* resource(useEvalScope());
+    yield* EvalScopeCtx.set(evalScope);
+
+    // Install built-in modifier handlers (exec, silent, sample, eval, persist, timeout)
+    yield* useBuiltinModifiers();
+
+    // Install custom modifier handlers
+    for (const [name, factory] of Object.entries(customModifiers)) {
+      registry.set(name, factory);
+    }
+
+    // Channel delivery is the innermost EMA handler (installed first).
+    scope.around(EMA, {
+      *output([text]) {
+        yield* channel.send(text);
+      },
+    });
+
+    // Run the durable workflow. On completion, resolve with the
+    // stored output and close the channel; on failure, reject and close.
+    try {
+      const storedOutput = yield* durableRun(
+        () => documentWorkflow(docPath),
+        { stream },
+      );
+      channel.close(storedOutput);
+      resolve(storedOutput);
+    } catch (error) {
+      channel.close();
+      reject(error);
+    }
   });
-  yield* useDirectoryResolver(componentDirs);
 
-  // Create eval context marker (§4.2)
-  const evalCtx = createEvalContext();
-  yield* EvalCtxKey.set(evalCtx);
-
-  // Create eval scope — MUST be created before durableRun (§4.4).
-  // The channel processor task and the sender inside durableEval
-  // must share an ancestor scope outside the durable execution boundary.
-  const evalScope = yield* resource(useEvalScope());
-  yield* EvalScopeCtx.set(evalScope);
-
-  // Install built-in modifier handlers (exec, silent, sample, eval, persist, timeout)
-  yield* useBuiltinModifiers();
-
-  // Install custom modifier handlers
-  for (const [name, factory] of Object.entries(customModifiers)) {
-    registry.set(name, factory);
-  }
-
-  // Run the durable workflow.
-  // documentWorkflow emits output incrementally via the EMA Output Api (§9).
-  // The caller (e.g., CLI's runCommand) must install EMA middleware and
-  // a channel delivery handler before calling runDocument — see §9.6
-  // for the full host wiring pattern.
-  return yield* durableRun(
-    () => documentWorkflow(docPath),
-    { stream },
-  );
+  // Return the execution handle — caller can yield* it for the full
+  // output, or consume execution.output for streaming chunks.
+  return { ...operation, output: channel } as DocumentExecution;
 }
 ```
 
@@ -3409,13 +3446,14 @@ import { InMemoryStream } from "@effectionx/durable-streams";
 import { nodeRuntime } from "@effectionx/durable-effects";
 
 await run(function* () {
-  const result = yield* runDocument({
+  const execution = yield* runDocument({
     docPath: "./README.md",
     stream: new InMemoryStream(),
     runtime: nodeRuntime(),
   });
 
-  console.log(result);
+  const output = yield* execution;
+  console.log(output);
 });
 ```
 
@@ -3448,7 +3486,7 @@ is the system's public surface — extensible to progress, diagnostics, etc.
 as needs grow.
 
 ```typescript
-// src/ema-api.ts
+// src/api.ts
 
 import type { Operation } from "effection";
 import { createApi } from "./api.ts";
@@ -3474,7 +3512,7 @@ Core handler is a no-op. Behavior comes from two sources:
 Call sites import `output` directly:
 
 ```typescript
-import { output } from "./ema-api.ts";
+import { output } from "./api.ts";
 
 yield* ephemeral(output(text));
 ```
@@ -3486,8 +3524,8 @@ Three concerns, three mechanisms:
 | Concern | Mechanism | Where |
 |---|---|---|
 | **Transformation** | Middleware (`scope.around`) | `output/normalize.ts`, `output/terminal.ts` |
-| **Delivery** | Channel (`createChannel`) | `cli.ts` terminal handler |
-| **Consumption** | Stream (`forEach` from `@effectionx/stream-helpers`) | `cli.ts` spawned consumer |
+| **Delivery** | Channel (`createChannel`, internal to `runDocument`) | `run-document.ts` |
+| **Consumption** | Stream (`forEach` on `execution.output`) | Caller (`cli.ts`, tests) |
 
 Middleware only intercepts and transforms. Buffering and streaming are not
 middleware — they are natural consequences of using a channel with `forEach`.
@@ -3509,7 +3547,7 @@ full document.
 ```typescript
 import type { Operation } from "effection";
 import { useScope } from "effection";
-import { EMA } from "../ema-api.ts";
+import { EMA } from "../api.ts";
 
 export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
@@ -3557,7 +3595,7 @@ import type { Operation } from "effection";
 import { useScope } from "effection";
 import { Marked } from "marked";
 import TerminalRenderer from "marked-terminal";
-import { EMA } from "../ema-api.ts";
+import { EMA } from "../api.ts";
 
 export function* useTerminalOutput(): Operation<void> {
   const marked = new Marked({ renderer: new TerminalRenderer() });
@@ -3574,89 +3612,35 @@ export function* useTerminalOutput(): Operation<void> {
 
 ### 9.6 Host wiring
 
-**File:** `src/cli.ts` (modified)
+**File:** `cli/src/cli.ts` (separate `cli` workspace package)
 
-The CLI creates a channel, installs the terminal handler and middleware,
-spawns a consumer, runs the document, then collects the full output.
-
-The channel type `createChannel<string, void>` uses `string` for chunk
-values and `void` for the close value — `channel.close()` signals end
-of stream with no payload.
+The CLI installs output middleware (transforms only — no channel wiring
+needed), calls `runDocument` to get a `DocumentExecution`, consumes
+`execution.output` with `forEach` for streaming, and can `yield*`
+the execution directly to get the full output or catch errors.
 
 ```typescript
-import { createChannel, spawn, useScope } from "effection";
+// cli/src/cli.ts
 import { forEach } from "@effectionx/stream-helpers";
-import { EMA } from "./ema-api.ts";
-import { useNormalizedOutput, useTerminalOutput } from "./output/mod.ts";
+import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 
-function* runCommand(/* ... existing params including `raw` flag ... */) {
-  const scope = yield* useScope();
+function* run(/* ... config params ... */) {
+  if (!raw) yield* useNormalizedOutput();
+  if (process.stdout.isTTY && !raw) yield* useTerminalOutput();
 
-  // 1. Create the output channel.
-  //    Point-to-point: one producer, one consumer. Each chunk consumed once.
-  const channel = createChannel<string, void>();
+  const execution = yield* runDocument({ docPath, stream, runtime, ... });
 
-  // 2. Install channel delivery (innermost — install first).
-  //    Does not call next() — this is the end of the chain.
-  //    channel.send() is yield*'d to ensure backpressure and
-  //    cancellation safety — no text "in flight" when scope tears down.
-  scope.around(EMA, {
-    *output([text]) {
-      yield* channel.send(text);
-    },
-  });
+  const fullOutput = yield* forEach(function* (chunk: string) {
+    if (process.stdout.isTTY) {
+      process.stdout.write(chunk);
+    }
+  }, execution.output);
 
-  // 3. Install interception middleware.
-  //    Install order: inner → outer. Execution order: outer → inner.
-  if (process.stdout.isTTY && !raw) {
-    yield* useTerminalOutput();
-  }
-
-  if (!raw) {
-    yield* useNormalizedOutput();
-  }
-
-  // 4. Spawn the stream consumer.
-  //    Subscribes before any output flows.
-  const consumer = yield* spawn(function* () {
-    const chunks: string[] = [];
-
-    yield* forEach(function* (chunk) {
-      if (process.stdout.isTTY) {
-        process.stdout.write(chunk);
-      }
-      chunks.push(chunk);
-    }, channel);
-
-    return chunks.join("");
-  });
-
-  // 5. Run the document — channel.close() in finally block
-  //    guarantees the consumer exits cleanly even if runDocument throws.
-  try {
-    yield* runDocument({ /* ... existing options ... */ });
-  } finally {
-    channel.close();
-  }
-
-  // 6. Collect the full output.
-  const fullOutput = yield* consumer;
-
-  // When piped, write the full output at the end.
   if (!process.stdout.isTTY) {
     process.stdout.write(fullOutput);
   }
-
-  // Journal gets fullOutput for the close event.
-  return fullOutput;
 }
 ```
-
-**Important:** `channel.close()` is in a `finally` block to guarantee
-the consumer's `forEach` loop exits cleanly regardless of whether
-`runDocument` succeeds or throws. Without this, a `runDocument` failure
-would leave the spawned consumer hanging until scope teardown cancels it.
-Explicit closure keeps channel resources deterministic.
 
 ### 9.7 Execution flows
 
@@ -3664,10 +3648,10 @@ Explicit closure keeps channel resources deterministic.
 
 ```
 output(text)
-  → normalize (middleware, transforms text)
-  → terminal format (middleware, adds ANSI)
-  → channel.send(text) (delivery)
-  → forEach consumer writes to stdout + collects
+  → normalize (middleware, caller-installed)
+  → terminal format (middleware, caller-installed)
+  → channel.send(text) (internal to runDocument)
+  → execution.output stream (caller's forEach/collect)
 ```
 
 User sees cleaned, colorized text streaming segment-by-segment.
@@ -3676,9 +3660,9 @@ User sees cleaned, colorized text streaming segment-by-segment.
 
 ```
 output(text)
-  → normalize (middleware)
-  → channel.send(text) (delivery)
-  → forEach consumer collects only
+  → normalize (middleware, caller-installed)
+  → channel.send(text) (internal to runDocument)
+  → execution.output stream (caller's forEach/collect)
   → fullOutput written to stdout at end
 ```
 
@@ -3688,8 +3672,8 @@ User gets cleaned raw markdown dumped at end.
 
 ```
 output(text)
-  → channel.send(text) (delivery, no transformation)
-  → forEach consumer writes/collects
+  → channel.send(text) (internal to runDocument, no transformation)
+  → execution.output stream (caller's forEach/collect)
 ```
 
 Unmodified text as emitted by the expansion engine.
@@ -3733,12 +3717,16 @@ All middleware and side effects triggered by `output()` (normalization,
 formatting, channel send) execute on the ephemeral side. No durable state
 capture occurs in the output pipeline.
 
-The channel and consumer live **outside** the durable boundary (in
-`runCommand`), while `output()` is called **inside** (in
-`documentWorkflow`). This cross-boundary communication is safe because
-the channel's scope encloses the durable workflow — scope teardown
-cancels both senders and consumer together, preserving structured
-concurrency.
+The entire workflow runs in a `spawn()` inside `runDocument`. The channel
+and all execution state (DurableRuntimeCtx, eval scope, replay guards,
+EMA→channel bridge) share this spawned scope. The consumer
+(`forEach`/`collect` on `execution.output`) runs in the **caller's**
+scope. This cross-boundary communication is safe because scope teardown
+of the spawned task cancels the producer and closes the channel, which
+terminates the consumer's forEach loop. The `withResolvers` completion
+signal also lives in the spawned scope — `resolve()` and `reject()` are
+called from inside the spawn, and the resulting operation is returned to
+the caller as part of the `DocumentExecution` handle.
 
 ### 9.10 Known issues
 
@@ -3767,14 +3755,19 @@ of middleware granularity, not an architectural issue.
 ### 9.11 File layout
 
 ```
-src/
-  ema-api.ts              Api definition, exports `output`
+core/src/
+  api.ts                  Api definition, exports `output`
+  collect.ts              Stream consumption helper (returns Result<string>)
   output/
     mod.ts                Barrel export
     normalize.ts          Whitespace normalization middleware
     terminal.ts           Terminal ANSI formatting middleware
-  cli.ts                  Channel + consumer + middleware wiring (modified)
-  run-document.ts         Emission loop (modified)
+  run-document.ts         Document runner (owns channel, returns stream)
+
+cli/src/
+  cli.ts                  CLI entrypoint with forEach stream consumption
+  file-stream.ts          JSONL-backed DurableStream
+  load-journal.ts         Journal file loading/sanitization
 ```
 
 ### 9.12 Dependencies
@@ -4368,7 +4361,7 @@ instead of all under `root`).
 | OA7 | Channel close ends consumer | `channel.close()` causes `forEach` to complete |
 | OA8 | Multiple middleware compose | Normalize → terminal → channel: all three run in order |
 | OA9 | `ephemeral()` wrapper | `output()` inside durable context produces no journal entry |
-| OA10 | Channel close on runDocument failure | `runDocument` throws → `finally` block closes channel → consumer exits |
+| OA10 | runDocument workflow error surfaces through execution | `runDocument` workflow error → `reject(error)` → `yield* execution` throws |
 
 ### Tier WN — Whitespace normalization
 
@@ -4537,7 +4530,7 @@ A.md references <C />.
 | 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
-| 73 | Channel close in `finally` block | Guarantees `forEach` consumer exits cleanly regardless of `runDocument` success or failure; explicit closure keeps channel resources deterministic |
+| 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<string>` (`yield*` for result) and has `.output` stream for chunks; errors surface through `yield* execution` via `withResolvers` `reject()`; eliminates `Result<string>` / `unbox` in consumer code |
 | 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
 | 75 | `useContent()` on Effection scope, not in function args | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same pattern as `EvalEnvCtx`, `EvalScopeCtx`; supports named slots via `useContent("header")` |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
