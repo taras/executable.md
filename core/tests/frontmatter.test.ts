@@ -153,6 +153,16 @@ describe("parseFrontmatter", () => {
     });
     expect(result.meta).toMatchObject({ color: "blue", count: 42 });
   });
+
+  it("reserved input name as is rejected", function*() {
+    expect(() =>
+      parseFrontmatter({
+        inputs: {
+          as: { type: "string" },
+        },
+      })
+    ).toThrow('"as" is a reserved prop name');
+  });
 });
 
 describe("normalizeInputDef", () => {

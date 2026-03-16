@@ -26,7 +26,7 @@ export function parseFrontmatter(
 
   // Reserved input names — consumed by the expansion engine, not
   // available as component inputs. See spec §6.3 (named slots).
-  const RESERVED_INPUT_NAMES = new Set(["slot"]);
+  const RESERVED_INPUT_NAMES = new Set(["slot", "as"]);
 
   for (const [key, value] of Object.entries(rawInputs)) {
     if (RESERVED_INPUT_NAMES.has(key)) {

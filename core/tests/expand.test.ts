@@ -7,6 +7,7 @@ import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
+import { EvalEnvCtx } from "../src/eval-env.ts";
 import type {
   Segment,
   ComponentDefinition,
@@ -70,16 +71,39 @@ function expand(
   props: Record<string, Json> = {},
 ): Operation<string> {
   function* op() {
-    const expanded = yield* expandSegments(
-      segments,
-      meta,
-      props,
-      new Set(),
-      ctx,
-    );
-    return renderSegments(expanded);
+    return yield* EvalEnvCtx.with({ values: {} }, function* () {
+      const expanded = yield* expandSegments(
+        segments,
+        meta,
+        props,
+        new Set(),
+        ctx,
+      );
+      return renderSegments(expanded);
+    });
   }
   return op() as unknown as Operation<string>;
+}
+
+function expandWithEnv(
+  segments: Segment[],
+  ctx: ExpansionContext,
+): Operation<{ output: string; env: Record<string, unknown> }> {
+  function* op() {
+    const env = { values: {} as Record<string, unknown> };
+    const output = yield* EvalEnvCtx.with(env, function* () {
+      const expanded = yield* expandSegments(
+        segments,
+        {},
+        {},
+        new Set(),
+        ctx,
+      );
+      return renderSegments(expanded);
+    });
+    return { output, env: env.values };
+  }
+  return op() as unknown as Operation<{ output: string; env: Record<string, unknown> }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +297,58 @@ describe("expansion", () => {
     const segments = scanSegments("```bash silent exec\necho hello\n```\n");
     const output = yield* expand(segments, ctx);
     expect(output).toBe("");
+  });
+
+  it("captures component output with as", function*() {
+    const comp = makeComponent("Greeting", "Hello world!");
+    const ctx = makeCtx({ Greeting: comp });
+    const segments = scanSegments("<Greeting as=\"saved\" />");
+    const { output, env } = yield* expandWithEnv(segments, ctx);
+    expect(output).toBe("");
+    expect(env["saved"]).toBe("Hello world!");
+  });
+
+  it("Capture stores children output into env and stays silent", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments(
+      "<Capture as=\"x\">hello\n</Capture>",
+    );
+    const { output, env } = yield* expandWithEnv(segments, ctx);
+    expect(output).toBe("");
+    expect(env["x"]).toBe("hello");
+  });
+
+  it("Capture rejects expression as prop", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments("<Capture as={name}>text</Capture>");
+    const output = yield* expand(segments, ctx);
+    expect(output).toContain("ERROR");
+    expect(output).toContain("must be a string literal");
+  });
+
+  it("Capture rejects self-closing usage", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments("<Capture as=\"x\" />");
+    const output = yield* expand(segments, ctx);
+    expect(output).toContain("ERROR");
+    expect(output).toContain("must have children");
+  });
+
+  it("Capture rejects extra props", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments("<Capture as=\"x\" slot=\"y\">text</Capture>");
+    const output = yield* expand(segments, ctx);
+    expect(output).toContain("ERROR");
+    expect(output).toContain("only accepts the \"as\" prop");
+  });
+
+  it("component as rejects expression prop", function*() {
+    const comp = makeComponent("Greeting", "Hello world!");
+    const ctx = makeCtx({ Greeting: comp });
+    const segments = scanSegments("<Greeting as={name} />");
+    const output = yield* expand(segments, ctx);
+    expect(output).toContain("ERROR");
+    expect(output).toContain("must be a string literal");
   });
 });
 
