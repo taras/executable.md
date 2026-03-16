@@ -10,7 +10,7 @@
  */
 
 import { timebox } from "@effectionx/timebox";
-import { ephemeral } from "@effectionx/durable-streams";
+import { ephemeral } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "../modifiers.ts";
 import type { CodeBlockResult } from "../types.ts";

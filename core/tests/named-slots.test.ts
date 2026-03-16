@@ -17,10 +17,10 @@ import { parseFrontmatter } from "../src/frontmatter.ts";
 import { validateProps } from "../src/validate.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
-import { InMemoryStream } from "@effectionx/durable-streams";
-import { nodeRuntime } from "@effectionx/durable-effects";
-import { stubRuntime } from "@effectionx/durable-effects";
-import type { StatResult } from "@effectionx/durable-effects";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { nodeRuntime } from "@executablemd/durable-effects";
+import { stubRuntime } from "@executablemd/durable-effects";
+import type { StatResult } from "@executablemd/durable-effects";
 import type {
   Segment,
   ComponentDefinition,
@@ -29,7 +29,7 @@ import type {
   Modifier,
   CodeBlockContext,
 } from "../src/types.ts";
-import type { DurableRuntime } from "@effectionx/durable-effects";
+import type { DurableRuntime } from "@executablemd/durable-effects";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";

@@ -5,9 +5,9 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { InMemoryStream, StaleInputError } from "@effectionx/durable-streams";
-import { stubRuntime } from "@effectionx/durable-effects";
-import type { DurableRuntime, StatResult } from "@effectionx/durable-streams";
+import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { stubRuntime } from "@executablemd/durable-effects";
+import type { DurableRuntime, StatResult } from "@executablemd/durable-streams";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 

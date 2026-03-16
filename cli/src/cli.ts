@@ -12,8 +12,8 @@
  */
 
 import { main, exit, spawn, each, createSignal, type Operation } from "effection";
-import { InMemoryStream, type DurableEvent, type DurableStream } from "@effectionx/durable-streams";
-import { nodeRuntime } from "@effectionx/durable-effects";
+import { InMemoryStream, type DurableEvent, type DurableStream } from "@executablemd/durable-streams";
+import { nodeRuntime } from "@executablemd/durable-effects";
 import { forEach } from "@effectionx/stream-helpers";
 import { inspect } from "node:util";
 import { program, object, field, cli, commands, type Mods } from "@frontside/configliere";

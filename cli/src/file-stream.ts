@@ -12,7 +12,7 @@
 import { call } from "effection";
 import type { Operation } from "effection";
 import { appendFile } from "node:fs/promises";
-import type { DurableStream, DurableEvent } from "@effectionx/durable-streams";
+import type { DurableStream, DurableEvent } from "@executablemd/durable-streams";
 
 function cloneEvent(event: DurableEvent): DurableEvent {
   return structuredClone(event);

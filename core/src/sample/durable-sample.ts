@@ -13,7 +13,7 @@ import {
   createDurableOperation,
   type Json,
   type Workflow,
-} from "@effectionx/durable-streams";
+} from "@executablemd/durable-streams";
 import { unbox } from "@effectionx/scope-eval";
 import type { Operation } from "effection";
 import { EvalScopeCtx } from "../eval-env.ts";

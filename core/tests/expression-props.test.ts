@@ -16,8 +16,8 @@ import type { ExpansionContext } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
-import { InMemoryStream } from "@effectionx/durable-streams";
-import { nodeRuntime } from "@effectionx/durable-effects";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { nodeRuntime } from "@executablemd/durable-effects";
 import type {
   Segment,
   ComponentDefinition,

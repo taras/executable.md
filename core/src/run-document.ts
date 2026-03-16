@@ -4,8 +4,8 @@
  * Wires together the boundary scanner, component import, expansion engine,
  * modifier system, and durable execution infrastructure.
  *
- * This is the only module that imports from @effectionx/durable-streams
- * and @effectionx/durable-effects — all other modules are dependency-free.
+ * This is the only module that imports from @executablemd/durable-streams
+ * and @executablemd/durable-effects — all other modules are dependency-free.
  * See DEC-005 in specs/decisions.md.
  */
 
@@ -20,11 +20,11 @@ import {
   type DurableRuntime,
   ReplayGuard,
   StaleInputError,
-} from "@effectionx/durable-streams";
+} from "@executablemd/durable-streams";
 import {
   computeSHA256,
-} from "@effectionx/durable-effects";
-import type { Workflow, Json } from "@effectionx/durable-streams";
+} from "@executablemd/durable-effects";
+import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
 import type {
   ComponentDefinition,
