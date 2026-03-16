@@ -16,6 +16,7 @@ import {
   buildDefaultMessages,
 } from "../src/sample/llamafile.ts";
 import type { SampleContext } from "../src/types.ts";
+import { Buffer } from "node:buffer";
 
 // ---------------------------------------------------------------------------
 // Mock server resource
