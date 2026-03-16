@@ -59,8 +59,7 @@ export function* durableCall<T extends Json>(
   // which branch fn() takes.
   return (yield createDurableOperation<T>(
     { type: "call", name },
-    // biome-ignore lint/suspicious/noExplicitAny: fn returns Promise<T> | Operation<T>, call() accepts both
-    () => call(fn as any) as Operation<T>,
+    () => call(fn) as unknown as Operation<T>,
   )) as T;
 }
 

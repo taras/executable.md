@@ -140,6 +140,7 @@ export function composeModifierChain(
   context: CodeBlockContext,
   registry: ModifierRegistry,
 ): () => CodeBlockWorkflow {
+  // deno-lint-ignore require-yield
   const terminal: () => CodeBlockWorkflow = function* () {
     throw new Error("No terminal modifier (exec/eval) in chain");
   };
@@ -150,6 +151,7 @@ export function composeModifierChain(
     const factory = registry.get(mod.name);
     if (!factory) {
       const missingName = mod.name;
+      // deno-lint-ignore require-yield
       return function* () {
         throw new Error(`Unknown modifier: ${missingName}`);
       };

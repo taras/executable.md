@@ -16,6 +16,7 @@ import { InMemoryStream, type DurableEvent, type DurableStream } from "@executab
 import { nodeRuntime } from "@executablemd/durable-effects";
 import { forEach } from "@effectionx/stream-helpers";
 import { inspect } from "node:util";
+import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "@frontside/configliere";
 import { z } from "zod";
 import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";

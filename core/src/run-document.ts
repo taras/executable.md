@@ -54,7 +54,6 @@ import { sampleFactory } from "./modifiers/sample.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
-import type { EvalScope } from "@effectionx/scope-eval";
 
 // Re-export gray-matter — we use it for YAML frontmatter extraction
 import matter from "gray-matter";
@@ -124,7 +123,7 @@ function* durableImportComponent(
     // Resolve to absolute path for dynamic import
     const absolutePath = result.path.startsWith("/")
       ? result.path
-      : `${process.cwd()}/${result.path}`;
+      : `${Deno.cwd()}/${result.path}`;
     const mod = yield* call(() => import(`file://${absolutePath}`));
 
     const fn = mod.default;

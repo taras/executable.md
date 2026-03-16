@@ -350,7 +350,9 @@ describe("divergence detection", () => {
     expect(result).toBe("alpha");
   });
 
-  it("ContinuePastCloseDivergenceError can be constructed", function* () {
+  it("ContinuePastCloseDivergenceError can be constructed",
+    // deno-lint-ignore require-yield
+    function* () {
     // Verify the error class exists and can be constructed.
     const err = new ContinuePastCloseDivergenceError("root.0", 2);
     expect(err.name).toBe("ContinuePastCloseDivergenceError");

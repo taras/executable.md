@@ -43,6 +43,7 @@ interface SampleApi {
  * ```
  */
 export const Sample = createApi<SampleApi>("Sample", {
+  // deno-lint-ignore require-yield
   *sample(_context: SampleContext): Operation<string> {
     throw new Error(
       "sample modifier requires Sample Api middleware — " +

@@ -1,3 +1,5 @@
+// deno-lint-ignore-file require-yield
+
 import { describe, it } from "@effectionx/bdd/node";
 import {
   type DurableEvent,

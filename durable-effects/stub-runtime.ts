@@ -1,3 +1,5 @@
+// deno-lint-ignore-file require-yield
+
 /**
  * stubRuntime — test stub for DurableRuntime.
  *

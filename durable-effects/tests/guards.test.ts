@@ -1,3 +1,5 @@
+// deno-lint-ignore-file require-yield
+
 /**
  * Tests for replay guards — useFileContentGuard, useGlobContentGuard,
  * useCodeFreshnessGuard.
@@ -17,7 +19,6 @@ import {
   type DurableEvent,
   InMemoryStream,
   type Json,
-  StaleInputError,
   type Workflow,
   durableRun,
 } from "@executablemd/durable-streams";

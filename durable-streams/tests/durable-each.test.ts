@@ -1,3 +1,5 @@
+// deno-lint-ignore-file require-yield
+
 /**
  * Tier 4 tests — durable iteration (durableEach).
  *

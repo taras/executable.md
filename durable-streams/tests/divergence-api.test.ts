@@ -12,7 +12,6 @@
 
 import { describe, it } from "@effectionx/bdd/node";
 import { call, run, useScope } from "effection";
-import type { Operation } from "effection";
 import { expect } from "@std/expect";
 import {
   ContinuePastCloseDivergenceError,

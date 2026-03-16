@@ -2,6 +2,7 @@
   "workspace": ["core", "cli", "durable-streams", "durable-effects"],
   "nodeModulesDir": "auto",
   "imports": {
+    "@types/node": "npm:@types/node@^24.5.2",
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
     "@effectionx/bdd/node": "./test-support/bdd.ts",
     "@effectionx/test-adapter": "npm:@effectionx/test-adapter@^0.7.3",
