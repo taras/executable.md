@@ -512,12 +512,13 @@ divergence detection:
 |---------|----------|--------|
 | Same type, same name | — | **Match.** Consume entry, feed result. Extra fields are ignored. |
 | Different type | — | **Hard divergence.** Always fatal. |
-| Same type, different name | — | **Hard divergence** (default). Configurable to warning for specific migration scenarios. |
+| Same type, different name | — | **Hard divergence** (default). Implementations MAY install an explicit divergence policy that chooses an alternative (for example, run-live migration mode), but strict failure is the default contract. |
 
 > **INVARIANT (Divergence Detection):** During replay, every yielded
 > effect MUST be validated against the corresponding journal entry
 > before its stored result is fed to the generator. A mismatch in
-> effect type is always a fatal `DivergenceError`.
+> effect type is always fatal unless the implementation is explicitly
+> running under an alternate divergence policy.
 
 ### 6.2 `DivergenceError`
 
@@ -534,10 +535,12 @@ class DivergenceError extends Error {
 }
 ```
 
-A `DivergenceError` is **not recoverable**. The workflow cannot continue
-because the generator's execution path has diverged from the recorded
-history. The runtime MUST halt the workflow and surface the error to
-the operator.
+A `DivergenceError` is the default strict behavior. In the default mode,
+the workflow cannot continue because the generator's execution path has
+diverged from the recorded history, and the runtime MUST halt the
+workflow and surface the error to the operator. Implementations MAY
+provide an explicit non-default divergence policy that converts certain
+divergence cases into run-live behavior for controlled migrations.
 
 ### 6.3 Terminal divergence cases
 
@@ -799,7 +802,9 @@ past a join until all children have `Close` events.
 
 The stream is an ordered, append-only sequence of `DurableEvent` values.
 Each event occupies a unique position (offset) in the stream. Offsets
-are monotonically increasing integers starting from 0.
+are monotonically increasing, opaque resumption tokens supplied by the
+storage backend. An implementation MAY also maintain a separate logical
+index for diagnostics or in-memory replay bookkeeping.
 
 ```
 offset 0: DurableEvent

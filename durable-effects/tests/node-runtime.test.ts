@@ -5,10 +5,42 @@
  */
 
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
+import { call } from "effection";
 import { nodeRuntime } from "../node-runtime.ts";
+
+async function startServer(
+  handler: http.RequestListener,
+): Promise<{ server: http.Server; url: string }> {
+  const server = http.createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to determine server address");
+  }
+  return {
+    server,
+    url: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+async function stopServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
 
 describe("nodeRuntime", () => {
   const runtime = nodeRuntime();
@@ -48,6 +80,19 @@ describe("nodeRuntime", () => {
       const actual = result.stdout.trim();
       const expected = fs.realpathSync(cwd);
       expect(actual).toBe(expected);
+    });
+
+    it("enforces timeout", function* () {
+      try {
+        yield* runtime.exec({
+          command: ["node", "-e", "setTimeout(() => console.log('late'), 250)"],
+          timeout: 25,
+        });
+        expect(true).toBe(false);
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain("timed out after 25ms");
+      }
     });
   });
 
@@ -105,8 +150,10 @@ describe("nodeRuntime", () => {
         root: "durable-effects",
       });
       expect(results.length).toBeGreaterThan(0);
-      expect(results.every((r) => r.path.endsWith(".ts"))).toBe(true);
-      expect(results.every((r) => r.isFile)).toBe(true);
+      expect(results.every((r: { path: string }) => r.path.endsWith(".ts"))).toBe(
+        true,
+      );
+      expect(results.every((r: { isFile: boolean }) => r.isFile)).toBe(true);
     });
 
     it("returns empty for no matches", function* () {
@@ -115,6 +162,50 @@ describe("nodeRuntime", () => {
         root: "durable-effects",
       });
       expect(results).toEqual([]);
+    });
+  });
+
+  describe("fetch", () => {
+    it("fetches a response body", function* () {
+      const { server, url } = yield* call(() =>
+        startServer((_req, res) => {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end("hello");
+        })
+      );
+
+      try {
+        const response = yield* runtime.fetch(url);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("text/plain");
+        const body = yield* response.text();
+        expect(body).toBe("hello");
+      } finally {
+        yield* call(() => stopServer(server));
+      }
+    });
+
+    it("enforces timeout for slow responses", function* () {
+      const { server, url } = yield* call(() =>
+        startServer((_req, res) => {
+          setTimeout(() => {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            res.end("slow body");
+          }, 250);
+        })
+      );
+
+      try {
+        try {
+          yield* runtime.fetch(url, { timeout: 25 });
+          expect(true).toBe(false);
+        } catch (error) {
+          expect(error).toBeInstanceOf(Error);
+          expect((error as Error).message).toContain("timed out after 25ms");
+        }
+      } finally {
+        yield* call(() => stopServer(server));
+      }
     });
   });
 

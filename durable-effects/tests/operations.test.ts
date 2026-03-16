@@ -2,6 +2,7 @@
 
 import { describe, it } from "@effectionx/bdd/node";
 import {
+  DivergenceError,
   type DurableEvent,
   InMemoryStream,
   type Json,
@@ -9,6 +10,7 @@ import {
   durableRun,
 } from "@executablemd/durable-streams";
 import { useScope } from "effection";
+import type { Operation } from "effection";
 import { expect } from "@std/expect";
 import { type EvalResult, durableEval } from "../durable-eval.ts";
 import { type ExecResult, durableExec } from "../durable-exec.ts";
@@ -24,6 +26,34 @@ import {
 import { DurableRuntimeCtx } from "../runtime.ts";
 import { stubRuntime } from "../stub-runtime.ts";
 
+function warmupEvents(): DurableEvent[] {
+  return [
+    {
+      type: "yield",
+      coroutineId: "root",
+      description: {
+        type: "resolve",
+        name: "now",
+        kind: "current_time",
+      },
+      result: { status: "ok", value: "2026-03-16T00:00:00.000Z" },
+    },
+  ];
+}
+
+function* expectDivergence(
+  workflow: () => Workflow<Json>,
+  event: DurableEvent,
+): Operation<void> {
+  const stream = new InMemoryStream([event]);
+  try {
+    yield* durableRun(workflow, { stream });
+    throw new Error("expected divergence");
+  } catch (error) {
+    expect(error).toBeInstanceOf(DivergenceError);
+  }
+}
+
 describe("durable operations", () => {
   describe("durableExec", () => {
     it("golden run: executes command and records yield/close", function* () {
@@ -33,7 +63,7 @@ describe("durable operations", () => {
       scope.set(
         DurableRuntimeCtx,
         stubRuntime({
-          *exec({ command }) {
+          *exec({ command }: { command: string[] }) {
             expect(command).toEqual(["tsc"]);
             return { exitCode: 0, stdout: "compiled", stderr: "" };
           },
@@ -150,6 +180,51 @@ describe("durable operations", () => {
         expect(events[1]!.result.status).toBe("err");
       }
     });
+
+    it("partial replay: warmup replays, exec runs live", function* () {
+      const stream = new InMemoryStream(warmupEvents());
+      const scope = yield* useScope();
+      let execCalls = 0;
+      scope.set(
+        DurableRuntimeCtx,
+        stubRuntime({
+          *exec() {
+            execCalls += 1;
+            return { exitCode: 0, stdout: "partial", stderr: "" };
+          },
+        }),
+      );
+
+      function* workflow(): Workflow<Json> {
+        yield* durableNow();
+        return (yield* durableExec("compile", {
+          command: ["tsc"],
+        })) as unknown as Json;
+      }
+
+      const result = (yield* durableRun(workflow, { stream })) as unknown as ExecResult;
+      expect(result.stdout).toBe("partial");
+      expect(execCalls).toBe(1);
+    });
+
+    it("divergence: mismatched exec name throws", function* () {
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+
+      yield* expectDivergence(
+        function* (): Workflow<Json> {
+          return (yield* durableExec("compile", {
+            command: ["tsc"],
+          })) as unknown as Json;
+        },
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "exec", name: "other" },
+          result: { status: "ok", value: { exitCode: 0, stdout: "", stderr: "" } },
+        },
+      );
+    });
   });
 
   describe("durableReadFile", () => {
@@ -160,7 +235,7 @@ describe("durable operations", () => {
       scope.set(
         DurableRuntimeCtx,
         stubRuntime({
-          *readTextFile(path) {
+          *readTextFile(path: string) {
             expect(path).toBe("src/input.txt");
             return "hello durable world";
           },
@@ -234,6 +309,47 @@ describe("durable operations", () => {
       expect(result).toEqual(stored);
       expect(stream.appendCount).toBe(0);
     });
+
+    it("partial replay: warmup replays, read file runs live", function* () {
+      const stream = new InMemoryStream(warmupEvents());
+      const scope = yield* useScope();
+      let reads = 0;
+      scope.set(
+        DurableRuntimeCtx,
+        stubRuntime({
+          *readTextFile() {
+            reads += 1;
+            return "partial read";
+          },
+        }),
+      );
+
+      function* workflow(): Workflow<Json> {
+        yield* durableNow();
+        return (yield* durableReadFile("read-input", "src/input.txt")) as unknown as Json;
+      }
+
+      const result = (yield* durableRun(workflow, { stream })) as unknown as ReadFileResult;
+      expect(result.content).toBe("partial read");
+      expect(reads).toBe(1);
+    });
+
+    it("divergence: mismatched read_file name throws", function* () {
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+
+      yield* expectDivergence(
+        function* (): Workflow<Json> {
+          return (yield* durableReadFile("read-input", "src/input.txt")) as unknown as Json;
+        },
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "read_file", name: "other" },
+          result: { status: "ok", value: { content: "x", contentHash: "sha256:1" } },
+        },
+      );
+    });
   });
 
   describe("durableGlob", () => {
@@ -244,7 +360,13 @@ describe("durable operations", () => {
       scope.set(
         DurableRuntimeCtx,
         stubRuntime({
-          *glob({ patterns, root, exclude }) {
+          *glob(
+            {
+              patterns,
+              root,
+              exclude,
+            }: { patterns: string[]; root: string; exclude?: string[] },
+          ) {
             expect(patterns).toEqual(["**/*.ts"]);
             expect(root).toBe("project");
             expect(exclude).toEqual(["**/*.test.ts"]);
@@ -255,7 +377,7 @@ describe("durable operations", () => {
               { path: "src/a.ts", isFile: true },
             ];
           },
-          *readTextFile(path) {
+          *readTextFile(path: string) {
             if (path === "project/src/a.ts") return "A";
             if (path === "project/src/b.ts") return "B";
             throw new Error(`unexpected file: ${path}`);
@@ -345,6 +467,56 @@ describe("durable operations", () => {
       expect(result).toEqual(stored);
       expect(stream.appendCount).toBe(0);
     });
+
+    it("partial replay: warmup replays, glob runs live", function* () {
+      const stream = new InMemoryStream(warmupEvents());
+      const scope = yield* useScope();
+      let scans = 0;
+      scope.set(
+        DurableRuntimeCtx,
+        stubRuntime({
+          *glob() {
+            scans += 1;
+            return [{ path: "src/a.ts", isFile: true }];
+          },
+          *readTextFile() {
+            return "A";
+          },
+        }),
+      );
+
+      function* workflow(): Workflow<Json> {
+        yield* durableNow();
+        return (yield* durableGlob("scan", {
+          baseDir: "project",
+          include: ["**/*.ts"],
+        })) as unknown as Json;
+      }
+
+      const result = (yield* durableRun(workflow, { stream })) as unknown as GlobResult;
+      expect(result.matches.map((match) => match.path)).toEqual(["src/a.ts"]);
+      expect(scans).toBe(1);
+    });
+
+    it("divergence: mismatched glob name throws", function* () {
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+
+      yield* expectDivergence(
+        function* (): Workflow<Json> {
+          return (yield* durableGlob("scan", {
+            baseDir: "project",
+            include: ["**/*.ts"],
+          })) as unknown as Json;
+        },
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "glob", name: "other" },
+          result: { status: "ok", value: { matches: [], scanHash: "sha256:1" } },
+        },
+      );
+    });
   });
 
   describe("durableFetch", () => {
@@ -365,7 +537,15 @@ describe("durable operations", () => {
       scope.set(
         DurableRuntimeCtx,
         stubRuntime({
-          *fetch(url, init) {
+          *fetch(
+            url: string,
+            init?: {
+              method?: string;
+              headers?: Record<string, string>;
+              body?: string;
+              timeout?: number;
+            },
+          ) {
             capturedUrl = url;
             capturedInit = init;
             return {
@@ -473,6 +653,60 @@ describe("durable operations", () => {
       expect(result).toEqual(stored);
       expect(stream.appendCount).toBe(0);
     });
+
+    it("partial replay: warmup replays, fetch runs live", function* () {
+      const stream = new InMemoryStream(warmupEvents());
+      const scope = yield* useScope();
+      let fetchCalls = 0;
+      scope.set(
+        DurableRuntimeCtx,
+        stubRuntime({
+          *fetch() {
+            fetchCalls += 1;
+            return {
+              status: 200,
+              headers: { get: () => null },
+              *text() {
+                return "partial fetch";
+              },
+            };
+          },
+        }),
+      );
+
+      function* workflow(): Workflow<Json> {
+        yield* durableNow();
+        return (yield* durableFetch("download", {
+          url: "https://example.com/data",
+        })) as unknown as Json;
+      }
+
+      const result = (yield* durableRun(workflow, { stream })) as unknown as FetchResult;
+      expect(result.body).toBe("partial fetch");
+      expect(fetchCalls).toBe(1);
+    });
+
+    it("divergence: mismatched fetch name throws", function* () {
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+
+      yield* expectDivergence(
+        function* (): Workflow<Json> {
+          return (yield* durableFetch("download", {
+            url: "https://example.com/data",
+          })) as unknown as Json;
+        },
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "fetch", name: "other" },
+          result: {
+            status: "ok",
+            value: { status: 200, headers: {}, body: "", bodyHash: "sha256:1" },
+          },
+        },
+      );
+    });
   });
 
   describe("durableEval", () => {
@@ -558,6 +792,55 @@ describe("durable operations", () => {
       expect(result).toEqual(stored);
       expect(stream.appendCount).toBe(0);
     });
+
+    it("partial replay: warmup replays, eval runs live", function* () {
+      const stream = new InMemoryStream(warmupEvents());
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+      let evaluatorCalls = 0;
+
+      function* workflow(): Workflow<Json> {
+        yield* durableNow();
+        return (yield* durableEval(
+          "compute",
+          function* () {
+            evaluatorCalls += 1;
+            return { ok: true } as Json;
+          },
+          { source: "1+1", bindings: {} },
+        )) as unknown as Json;
+      }
+
+      const result = (yield* durableRun(workflow, { stream })) as unknown as EvalResult;
+      expect(result.value).toEqual({ ok: true });
+      expect(evaluatorCalls).toBe(1);
+    });
+
+    it("divergence: mismatched eval name throws", function* () {
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+
+      yield* expectDivergence(
+        function* (): Workflow<Json> {
+          return (yield* durableEval(
+            "compute",
+            function* () {
+              return 1 as Json;
+            },
+            { source: "1", bindings: {} },
+          )) as unknown as Json;
+        },
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "eval", name: "other" },
+          result: {
+            status: "ok",
+            value: { value: 1, sourceHash: "sha256:1", bindingsHash: "sha256:2" },
+          },
+        },
+      );
+    });
   });
 
   describe("durableResolve", () => {
@@ -633,6 +916,54 @@ describe("durable operations", () => {
       expect(result).toEqual(stored);
       expect(stream.appendCount).toBe(0);
     });
+
+    it("partial replay: warmup replays, resolve runs live", function* () {
+      const stream = new InMemoryStream(warmupEvents());
+      const scope = yield* useScope();
+      let platformCalls = 0;
+      scope.set(
+        DurableRuntimeCtx,
+        stubRuntime({
+          platform() {
+            platformCalls += 1;
+            return { os: "linux", arch: "x64" };
+          },
+        }),
+      );
+
+      function* workflow(): Workflow<Json> {
+        yield* durableNow();
+        return (yield* durableResolve("platform-info", {
+          kind: "platform",
+        })) as unknown as Json;
+      }
+
+      const result = (yield* durableRun(workflow, { stream })) as unknown as {
+        os: string;
+        arch: string;
+      };
+      expect(result).toEqual({ os: "linux", arch: "x64" });
+      expect(platformCalls).toBe(1);
+    });
+
+    it("divergence: mismatched resolve name throws", function* () {
+      const scope = yield* useScope();
+      scope.set(DurableRuntimeCtx, stubRuntime());
+
+      yield* expectDivergence(
+        function* (): Workflow<Json> {
+          return (yield* durableResolve("platform-info", {
+            kind: "platform",
+          })) as unknown as Json;
+        },
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "resolve", name: "other" },
+          result: { status: "ok", value: { os: "linux", arch: "x64" } },
+        },
+      );
+    });
   });
 
   describe("convenience wrappers", () => {
@@ -692,7 +1023,7 @@ describe("durable operations", () => {
       scope.set(
         DurableRuntimeCtx,
         stubRuntime({
-          env(name) {
+          env(name: string) {
             return name === "API_KEY" ? "secret-value" : undefined;
           },
         }),
