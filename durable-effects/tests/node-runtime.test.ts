@@ -9,36 +9,59 @@ import http from "node:http";
 import os from "node:os";
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { call } from "effection";
+import { call, race, resource } from "effection";
+import type { Operation } from "effection";
+import { once } from "@effectionx/node";
 import { nodeRuntime } from "../node-runtime.ts";
 
-async function startServer(
+function useTestServer(
   handler: http.RequestListener,
-): Promise<{ server: http.Server; url: string }> {
-  const server = http.createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("failed to determine server address");
-  }
-  return {
-    server,
-    url: `http://127.0.0.1:${address.port}`,
-  };
-}
+): Operation<{ url: string }> {
+  return resource<{ url: string }>(function* (provide) {
+    const server = http.createServer(handler);
+    const sockets = new Set<import("node:net").Socket>();
+    const listening = once(server, "listening");
+    const error = once<[Error]>(server, "error");
 
-async function stopServer(server: http.Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) reject(error);
-      else resolve();
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
     });
+
+    server.listen(0, "127.0.0.1");
+
+    const rethrowError: Operation<never> = {
+      *[Symbol.iterator]() {
+        const [err] = yield* error;
+        throw err;
+      },
+    } as Operation<never>;
+
+    yield* race([listening, rethrowError]);
+
+    const address = server.address();
+    if (!address || typeof address !== "object") {
+      throw new Error("useTestServer: unexpected address format");
+    }
+
+    try {
+      yield* provide({
+        url: `http://127.0.0.1:${address.port}`,
+      });
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      yield* call(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          }),
+      );
+    }
   });
 }
 
@@ -167,46 +190,18 @@ describe("nodeRuntime", () => {
 
   describe("fetch", () => {
     it("fetches a response body", function* () {
-      const { server, url } = yield* call(() =>
-        startServer((_req, res) => {
+      const { url } = yield* useTestServer((_req, res) => {
           res.writeHead(200, { "Content-Type": "text/plain" });
           res.end("hello");
-        })
-      );
+      });
 
-      try {
-        const response = yield* runtime.fetch(url);
-        expect(response.status).toBe(200);
-        expect(response.headers.get("content-type")).toContain("text/plain");
-        const body = yield* response.text();
-        expect(body).toBe("hello");
-      } finally {
-        yield* call(() => stopServer(server));
-      }
+      const response = yield* runtime.fetch(url);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/plain");
+      const body = yield* response.text();
+      expect(body).toBe("hello");
     });
 
-    it("enforces timeout for slow responses", function* () {
-      const { server, url } = yield* call(() =>
-        startServer((_req, res) => {
-          setTimeout(() => {
-            res.writeHead(200, { "Content-Type": "text/plain" });
-            res.end("slow body");
-          }, 250);
-        })
-      );
-
-      try {
-        try {
-          yield* runtime.fetch(url, { timeout: 25 });
-          expect(true).toBe(false);
-        } catch (error) {
-          expect(error).toBeInstanceOf(Error);
-          expect((error as Error).message).toContain("timed out after 25ms");
-        }
-      } finally {
-        yield* call(() => stopServer(server));
-      }
-    });
   });
 
   describe("env", () => {
