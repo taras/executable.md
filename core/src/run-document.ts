@@ -128,7 +128,7 @@ function* durableImportComponent(
     const absolutePath = result.path.startsWith("/")
       ? result.path
       : `${Deno.cwd()}/${result.path}`;
-    const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`))) ) as {
+    const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`)))) as {
       default?: unknown;
       inputs?: unknown;
     };
@@ -161,11 +161,11 @@ function* durableImportComponent(
   );
   const bodySegments = scanSegments(parsed.content);
 
-    return {
-      kind: "markdown" as const,
-      name,
-      path: result.path,
-      meta,
+  return {
+    kind: "markdown" as const,
+    name,
+    path: result.path,
+    meta,
     inputs,
     bodySegments,
     contentHash: result.contentHash,
