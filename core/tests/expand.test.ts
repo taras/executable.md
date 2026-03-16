@@ -331,7 +331,7 @@ describe("expansion", () => {
     const segments = scanSegments("<Capture as=\"x\" />");
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
-    expect(output).toContain("must have children");
+    expect(output).toContain("must have content");
   });
 
   it("Capture rejects extra props", function*() {
