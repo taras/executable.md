@@ -126,7 +126,7 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
   <Instruction system="You are a precise TypeScript code review assistant for the executable-markdown-agents monorepo. Be concise. Report only findings, not praise.">
     <GitHubComment>
       <Format>
-        <ReviewBody pr={pr} diagnostics={diagnostics} doctor={doctor} />
+        <PrPolicyReport pr={pr} diagnostics={diagnostics} doctor={doctor} />
       </Format>
     </GitHubComment>
   </Instruction>

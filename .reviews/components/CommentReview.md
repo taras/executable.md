@@ -31,6 +31,9 @@ const pairsText = hasPairs
     ).join("\n---\n")
   : "";
 
+let hasChecklist = false;
+let checklistMd = "";
+
 // ---------------------------------------------------------------------------
 // 2. Fetch previous bot review comments and human replies
 const token = process.env.GITHUB_TOKEN;
@@ -239,8 +242,8 @@ for (const pf of pendingFindings) {
   });
 }
 
-const hasChecklist = checklistItems.length > 0;
-const checklistMd = checklistItems.map(item => {
+hasChecklist = checklistItems.length > 0;
+checklistMd = checklistItems.map(item => {
   const checked = item.status !== "pending" ? "x" : " ";
   if (item.status === "applied") {
     return `- [${checked}] \`${item.file}:${item.lineNumber}\` (removed)`;

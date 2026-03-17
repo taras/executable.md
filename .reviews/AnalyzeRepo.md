@@ -123,7 +123,7 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
 <ThinkFilter>
 <OllamaProvider model="qwen3:30b-a3b">
   <Instruction system="You are a precise TypeScript code health analyst. Be concise. Report only findings, not praise. Focus on actionable cleanup opportunities.">
-    <RepoBody diagnostics={diagnostics} doctor={doctor} fileList={fileList} fileCount={fileCount} lineCount={lineCount} />
+    <RepoPolicyReport diagnostics={diagnostics} doctor={doctor} fileList={fileList} fileCount={fileCount} lineCount={lineCount} />
   </Instruction>
 </OllamaProvider>
 </ThinkFilter>

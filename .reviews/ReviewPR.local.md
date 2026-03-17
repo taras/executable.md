@@ -120,7 +120,7 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
 <ThinkFilter>
 <OllamaProvider model="qwen3:30b-a3b">
   <Instruction system="You are a precise TypeScript code review assistant. Be concise. Report only findings, not praise.">
-    <ReviewBody pr={pr} diagnostics={diagnostics} doctor={doctor} />
+    <PrPolicyReport pr={pr} diagnostics={diagnostics} doctor={doctor} />
   </Instruction>
 </OllamaProvider>
 </ThinkFilter>

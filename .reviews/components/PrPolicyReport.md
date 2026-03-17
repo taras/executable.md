@@ -15,11 +15,11 @@ inputs:
 
 **{pr.stats.totalFiles}** files, **+{pr.stats.additions}** / **-{pr.stats.deletions}**
 
-<ScopeCheck pr={pr} />
+<ScopePolicy pr={pr} />
 
-<StructuralBloat pr={pr} diagnostics={diagnostics} />
+<BloatPolicy pr={pr} diagnostics={diagnostics} />
 
-<VerbosityCheck pr={pr} />
+<SlopPolicy pr={pr} diagnostics={diagnostics} />
 
 <Show when={!!diagnostics && !!doctor}>
 
@@ -27,4 +27,4 @@ inputs:
 
 </Show>
 
-<SemanticReview pr={pr} diagnostics={diagnostics} doctor={doctor} />
+<ExtraneousCodePolicy pr={pr} diagnostics={diagnostics} doctor={doctor} />

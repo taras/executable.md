@@ -23,4 +23,4 @@ inputs:
 
 <OxlintSummary diagnostics={diagnostics} doctor={doctor} />
 
-<RepoSemanticReview diagnostics={diagnostics} doctor={doctor} fileList={fileList} />
+<RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} />

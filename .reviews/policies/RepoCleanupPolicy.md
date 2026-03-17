@@ -11,7 +11,7 @@ inputs:
     required: true
 ---
 
-<ReviewSection heading="Code Health Analysis"
+<ReviewSection heading="Cleanup Policy"
   clean="✅ No code health issues detected.">
 
 <Show when={diagnostics.total > 0}>

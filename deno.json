@@ -31,8 +31,8 @@
     "test": "deno test --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/tests/",
     "check": "deno check core/mod.ts",
     "lint": "deno lint core/src/ cli/src/ durable-streams/ durable-effects/",
-    "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir core/components -j .reviews/journal.jsonl",
-    "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir core/components -j .reviews/journal.local.jsonl",
-    "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir core/components -j .reviews/journal.analyze.jsonl"
+    "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.jsonl",
+    "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.local.jsonl",
+    "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.jsonl"
   }
 }
