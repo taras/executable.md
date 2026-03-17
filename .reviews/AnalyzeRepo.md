@@ -23,6 +23,10 @@ cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
 TSCONFIG
 ```
 
+```bash silent exec
+ollama show qwen3:30b-a3b >/dev/null 2>&1 || ollama pull qwen3:30b-a3b
+```
+
 <Capture as="repoStats">
 
 ```bash exec
