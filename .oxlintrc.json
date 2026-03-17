@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  "plugins": ["typescript", "unicorn", "import"],
+
+  "categories": {
+    "correctness": "warn",
+    "suspicious": "warn",
+    "pedantic": "off",
+    "style": "off"
+  },
+
+  "rules": {
+    "eslint/no-unused-vars": ["warn", {
+      "args": "all",
+      "argsIgnorePattern": "^_",
+      "varsIgnorePattern": "^_",
+      "caughtErrorsIgnorePattern": "^_",
+      "destructuredArrayIgnorePattern": "^_",
+      "ignoreRestSiblings": true
+    }],
+    "typescript/no-inferrable-types": "warn",
+    "typescript/no-empty-object-type": "warn",
+    "typescript/no-useless-empty-export": "warn",
+    "typescript/no-unnecessary-type-constraint": "warn",
+    "typescript/no-unnecessary-parameter-property-assignment": "warn",
+    "unicorn/no-static-only-class": "warn",
+    "eslint/no-empty-function": "warn",
+    "eslint/no-console": ["warn", { "allow": ["warn", "error"] }],
+    "eslint/no-debugger": "warn",
+
+    "typescript/no-unnecessary-type-arguments": "warn",
+    "typescript/no-unnecessary-type-assertion": "warn",
+    "typescript/no-redundant-type-constituents": "warn",
+    "typescript/no-unnecessary-boolean-literal-compare": "warn"
+  },
+
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts", "**/test/**", "**/tests/**"],
+      "rules": {
+        "eslint/no-console": "off",
+        "eslint/no-empty-function": "off"
+      }
+    }
+  ]
+}
