@@ -58,11 +58,17 @@ if (token && repo && prNumber) {
     c.body && c.body.includes("Redundant comment")
   );
 
+  // Build map of bot comment id → { file, line, comment }
   const botCommentMap = new Map();
   for (const bc of botComments) {
+    // Extract the comment text from the diff hunk (last + line with //)
+    const hunkLines = (bc.diff_hunk ?? "").split("\n");
+    const commentLine = hunkLines.filter(l => l.startsWith("+")).pop() ?? "";
+    const commentText = commentLine.replace(/^\+\s*/, "").trim();
     botCommentMap.set(bc.id, {
       file: bc.path,
       lineNumber: bc.original_line ?? bc.line,
+      comment: commentText,
     });
   }
 
@@ -74,6 +80,12 @@ if (token && repo && prNumber) {
   // Check which replies already have a 👍 reaction (already processed)
   for (const reply of humanReplies) {
     const location = botCommentMap.get(reply.in_reply_to_id);
+    const entry = {
+      ...location,
+      botCommentId: reply.in_reply_to_id,
+      replyText: reply.body,
+      replyId: reply.id,
+    };
     try {
       const reactions = yield* fetch(
         `${api}/pulls/comments/${reply.id}/reactions`, { headers }
@@ -82,26 +94,12 @@ if (token && repo && prNumber) {
         r.user.login === "github-actions[bot]" && r.content === "+1"
       );
       if (alreadyAcked) {
-        dismissedReplies.push({
-          ...location,
-          replyText: reply.body,
-          replyId: reply.id,
-          alreadyProcessed: true,
-        });
+        dismissedReplies.push({ ...entry, alreadyProcessed: true });
       } else {
-        repliesForClassification.push({
-          ...location,
-          replyText: reply.body,
-          replyId: reply.id,
-        });
+        repliesForClassification.push(entry);
       }
     } catch {
-      // If we can't fetch reactions, classify it
-      repliesForClassification.push({
-        ...location,
-        replyText: reply.body,
-        replyId: reply.id,
-      });
+      repliesForClassification.push(entry);
     }
   }
 
@@ -227,6 +225,7 @@ for (const df of dismissedReplies) {
     status: "dismissed",
     file: df.file,
     lineNumber: df.lineNumber,
+    comment: df.comment ?? "",
     label: df.replyText,
   });
 }
@@ -236,17 +235,20 @@ for (const pf of pendingFindings) {
     status: "pending",
     file: pf.file,
     lineNumber: pf.lineNumber,
-    label: pf.comment,
+    comment: pf.comment,
   });
 }
 
 const hasChecklist = checklistItems.length > 0;
 const checklistMd = checklistItems.map(item => {
   const checked = item.status !== "pending" ? "x" : " ";
-  const suffix = item.status === "applied" ? " (removed)"
-    : item.status === "dismissed" ? ` (kept: "${item.label}")`
-    : "";
-  return `- [${checked}] \`${item.file}:${item.lineNumber}\`${suffix}`;
+  if (item.status === "applied") {
+    return `- [${checked}] \`${item.file}:${item.lineNumber}\` (removed)`;
+  }
+  if (item.status === "dismissed") {
+    return `- [${checked}] \`${item.file}:${item.lineNumber}\` — \`${item.comment}\` (kept: "${item.label}")`;
+  }
+  return `- [${checked}] \`${item.file}:${item.lineNumber}\` — \`${item.comment}\``;
 }).join("\n");
 
 const newDismissReplies = dismissedReplies.filter(d => !d.alreadyProcessed);
