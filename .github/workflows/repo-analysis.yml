@@ -1,0 +1,66 @@
+name: Repo Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to analyze
+        required: true
+        default: main
+      report_name:
+        description: Optional report label prefix
+        required: false
+        default: repo-analysis
+
+concurrency:
+  group: repo-analysis-${{ inputs.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2.0.3
+
+      - name: Install dependencies
+        run: deno install
+
+      - name: Run repo analysis
+        env:
+          DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
+        run: deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
+
+      - name: Write run metadata
+        if: always()
+        run: |
+          mkdir -p .reviews
+          cat > .reviews/analyze-run.json <<'JSON'
+          {
+            "workflow": "repo-analysis.yml",
+            "run_id": "${{ github.run_id }}",
+            "run_number": "${{ github.run_number }}",
+            "run_attempt": "${{ github.run_attempt }}",
+            "sha": "${{ github.sha }}",
+            "ref": "${{ inputs.ref }}",
+            "report_name": "${{ inputs.report_name }}"
+          }
+          JSON
+
+      - name: Upload analysis artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.report_name }}-${{ github.sha }}
+          path: |
+            .reviews/analyze-report.md
+            .reviews/journal.analyze.ci.jsonl
+            .reviews/analyze-run.json
+          retention-days: 30
