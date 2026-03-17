@@ -15,6 +15,9 @@ inputs:
   lineCount:
     type: number
     required: true
+  cleanupAnalysis:
+    type: object
+    required: false
 ---
 
 ## Repository Analysis
@@ -23,4 +26,4 @@ inputs:
 
 <OxlintSummary diagnostics={diagnostics} doctor={doctor} />
 
-<RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} />
+<RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} cleanupAnalysis={cleanupAnalysis} />

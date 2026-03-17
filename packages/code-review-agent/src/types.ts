@@ -157,3 +157,33 @@ export interface PolicyReport {
   clusters: PolicyCluster[];
   scores: PolicyScore[];
 }
+
+export type FileKind = "production" | "test" | "demo" | "config";
+
+export interface FileCluster {
+  file: string;
+  kind: FileKind;
+  totalViolations: number;
+  ruleIds: string[];
+  categories: {
+    structural: number;
+    verbosity: number;
+    typeAware: number;
+    other: number;
+  };
+  coOccurrence: number;
+  score: number;
+}
+
+export interface CleanupEvidence {
+  file: string;
+  ruleId: string;
+  line: number;
+  message: string;
+}
+
+export interface CleanupAnalysis {
+  fileClusters: FileCluster[];
+  evidence: CleanupEvidence[];
+  promptContext: string;
+}
