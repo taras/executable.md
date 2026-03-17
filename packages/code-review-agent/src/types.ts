@@ -1,9 +1,11 @@
 /**
- * Types for the code review agent's parsed PR representation.
- *
- * `parseDiff` transforms raw `git diff` and `git diff --name-status`
- * output into these typed structures for use by review components.
+ * Types for the code review agent's parsed PR representation
+ * and Oxlint diagnostic structures.
  */
+
+// ---------------------------------------------------------------------------
+// Diff types
+// ---------------------------------------------------------------------------
 
 export interface PR {
   files: DiffFile[];
@@ -51,4 +53,67 @@ export interface DiffLine {
   file: string;
   lineNumber: number;
   isTest: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Oxlint diagnostic types
+// ---------------------------------------------------------------------------
+
+export interface OxlintDiagnostic {
+  ruleId: string;
+  severity: "error" | "warning";
+  message: string;
+  file: string;
+  line: number;
+  column: number;
+  endLine?: number;
+  endColumn?: number;
+}
+
+export interface DiagnosticGroup {
+  ruleId: string;
+  count: number;
+  files: string[];
+  instances: OxlintDiagnostic[];
+}
+
+export interface Diagnostics {
+  groups: DiagnosticGroup[];
+  total: number;
+  fileCount: number;
+  ruleCount: number;
+  byCategory: {
+    structural: DiagnosticGroup[];
+    verbosity: DiagnosticGroup[];
+    typeAware: DiagnosticGroup[];
+    other: DiagnosticGroup[];
+  };
+  summary: string;
+  density: number;
+}
+
+// ---------------------------------------------------------------------------
+// Doctor result types
+// ---------------------------------------------------------------------------
+
+export interface DoctorResult {
+  oxlintInstalled: boolean;
+  oxlintVersion: string;
+  tsgolintInstalled: boolean;
+  tsgolintVersion: string;
+  tsconfigExists: boolean;
+  nodeModulesExists: boolean;
+  typeAwareAvailable: boolean;
+  filesAnalyzed: number;
+  filesSkipped: number;
+  importErrors: number;
+  bloatRulesAvailable: string[];
+  bloatRulesMissing: string[];
+  recommendation: "type-aware" | "type-aware-filtered" | "syntax-only";
+  nativeSpecifiers: {
+    count: number;
+    files: string[];
+    jsr: number;
+    npm: number;
+  };
 }
