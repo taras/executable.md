@@ -32,6 +32,86 @@ function emptyDiagnostics(): Diagnostics {
   };
 }
 
+function extractDiagnosticsArray(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  if (parsed && typeof parsed === "object") {
+    const direct = (parsed as { diagnostics?: unknown }).diagnostics;
+    if (Array.isArray(direct)) {
+      return direct;
+    }
+
+    if (direct && typeof direct === "object") {
+      const nested = (direct as { diagnostics?: unknown }).diagnostics;
+      if (Array.isArray(nested)) {
+        return nested;
+      }
+    }
+  }
+
+  return [];
+}
+
+function parseRuleId(code: string): string {
+  const match = /\(([^)]+)\)/.exec(code);
+  return match?.[1] ?? code;
+}
+
+function normalizeDiagnostic(entry: unknown): OxlintDiagnostic | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const diagnostic = entry as Record<string, unknown>;
+
+  const ruleId = typeof diagnostic.ruleId === "string"
+    ? diagnostic.ruleId
+    : typeof diagnostic.code === "string"
+    ? parseRuleId(diagnostic.code)
+    : "unknown";
+
+  const severity = diagnostic.severity === "error" ? "error" : "warning";
+  const message = typeof diagnostic.message === "string" ? diagnostic.message : "";
+
+  const file = typeof diagnostic.file === "string"
+    ? diagnostic.file
+    : typeof diagnostic.filename === "string"
+    ? diagnostic.filename
+    : "";
+
+  const firstLabel = Array.isArray(diagnostic.labels)
+    ? diagnostic.labels[0]
+    : undefined;
+  const firstSpan = firstLabel && typeof firstLabel === "object"
+    ? (firstLabel as { span?: unknown }).span
+    : undefined;
+
+  const line = typeof diagnostic.line === "number"
+    ? diagnostic.line
+    : (firstSpan && typeof firstSpan === "object"
+        && typeof (firstSpan as { line?: unknown }).line === "number")
+    ? (firstSpan as { line: number }).line
+    : 0;
+
+  const column = typeof diagnostic.column === "number"
+    ? diagnostic.column
+    : (firstSpan && typeof firstSpan === "object"
+        && typeof (firstSpan as { column?: unknown }).column === "number")
+    ? (firstSpan as { column: number }).column
+    : 0;
+
+  return {
+    ruleId,
+    severity,
+    message,
+    file,
+    line,
+    column,
+  };
+}
+
 /**
  * Parse raw Oxlint JSON output into structured diagnostics.
  */
@@ -43,7 +123,9 @@ export function parseDiagnostics(
   let raw: OxlintDiagnostic[];
   try {
     const parsed = JSON.parse(rawJson);
-    raw = Array.isArray(parsed) ? parsed : [];
+    raw = extractDiagnosticsArray(parsed)
+      .map((entry) => normalizeDiagnostic(entry))
+      .filter((entry): entry is OxlintDiagnostic => entry !== null);
   } catch {
     return emptyDiagnostics();
   }

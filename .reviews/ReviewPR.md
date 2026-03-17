@@ -83,7 +83,12 @@ const doctor = parseDoctorResult(doctorJson);
          || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
-npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
+OUT=$(npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
+if [ -n "$OUT" ]; then
+  printf '%s' "$OUT"
+else
+  echo "[]"
+fi
 ```
 
 </Show>
@@ -92,13 +97,20 @@ npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2
          && doctor.oxlintInstalled}>
 
 ```bash exec
-npx oxlint --format json 2>&1 || true
+OUT=$(npx oxlint --format json 2>/dev/null || true)
+if [ -n "$OUT" ]; then
+  printf '%s' "$OUT"
+else
+  echo "[]"
+fi
 ```
 
 </Show>
 
-<Show when={!doctor.oxlintInstalled}
-  fallback="[]">
+<Show when={!doctor.oxlintInstalled}>
+
+[]
+
 </Show>
 
 </Capture>

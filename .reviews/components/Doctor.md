@@ -110,7 +110,11 @@ let probe = { diagnostics: [], stderr: "" };
 try { probe = JSON.parse(probeResult); } catch { /* malformed */ }
 
 const diagnostics = Array.isArray(probe.diagnostics)
-  ? probe.diagnostics : [];
+  ? probe.diagnostics
+  : (probe.diagnostics && typeof probe.diagnostics === "object"
+      && Array.isArray(probe.diagnostics.diagnostics))
+  ? probe.diagnostics.diagnostics
+  : [];
 
 const importNoise = diagnostics.filter(d =>
   d.message?.includes("Cannot find module")
