@@ -118,7 +118,14 @@ export function* expandSegments(
           parentMeta,
           parentProps,
         );
-        result.push({ type: "text", content: interpolated });
+        // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
+        // Runs after meta/props interpolation so component contract takes
+        // precedence. Only runs when an EvalEnv is present on the scope.
+        const textEvalEnv = yield* EvalEnvCtx.get();
+        const final = textEvalEnv
+          ? interpolateEvalBindings(interpolated, textEvalEnv.values)
+          : interpolated;
+        result.push({ type: "text", content: final });
         break;
       }
 
