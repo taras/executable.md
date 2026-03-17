@@ -153,6 +153,7 @@ export function* expandSegments(
           hideSet,
           ctx,
           counter,
+          segment.projectedEnv,
         );
         result.push(...expanded);
         break;
@@ -327,6 +328,7 @@ function* expandComponent(
   hideSet: Set<string>,
   ctx: ExpansionContext,
   counter: BlockCounter,
+  projectedEnv?: EvalEnv,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -377,6 +379,7 @@ function* expandComponent(
       hideSet,
       ctx,
       counter,
+      projectedEnv,
     );
   }
 
@@ -387,7 +390,7 @@ function* expandComponent(
   // values can be type-checked. See spec §5.1 (expression prop evaluation).
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(props, expressions, name);
+    resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
   } catch (error) {
     return [
       {
@@ -434,15 +437,25 @@ function* expandComponent(
     ];
   }
 
+  // Capture the caller's eval environment before creating the component's
+  // own env. Children are caller-provided content — expression props like
+  // {pr} should resolve against the scope where the JSX was written, not
+  // the component that renders <Content />. This follows React's lexical
+  // scoping model for JSX expressions.
+  const callerEvalEnv = yield* EvalEnvCtx.get();
+
   // Substitute raw children into <Content /> positions. Children are NOT
   // pre-expanded — they expand in document order when the component body
   // is expanded. This ensures eval blocks before <Content /> (e.g.,
   // provider middleware installation) run before children's code blocks.
+  // Children segments are tagged with callerEvalEnv so expression props
+  // resolve in the caller's lexical scope.
   const substituted = substituteContent(
     definition.bodySegments,
     children,
     definition.meta,
     validatedProps,
+    callerEvalEnv ?? undefined,
   );
 
   // Recurse with augmented hide set.
@@ -510,9 +523,14 @@ function* expandComponent(
   const capturedChildrenHideSet = hideSet;
   const capturedCtx = ctx;
   const capturedParentEvalScope = parentEvalScope;
+  // Children are caller-provided content. Use the caller's eval env so
+  // expression props (e.g., {pr}) resolve against the scope where the
+  // JSX was written, not the wrapping component's env. Falls back to
+  // componentEnv if there's no caller env (root-level expansion).
+  const capturedCallerEnv = callerEvalEnv ?? componentEnv;
 
   componentEnv.values.renderChildren = function* () {
-    return yield* EvalEnvCtx.with(componentEnv, function* () {
+    return yield* EvalEnvCtx.with(capturedCallerEnv, function* () {
       if (capturedParentEvalScope) {
         return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
@@ -530,7 +548,7 @@ function* expandComponent(
 
   componentEnv.values.render = function* (markdown: string) {
     const segments = scanSegments(markdown);
-    return yield* EvalEnvCtx.with(componentEnv, function* () {
+    return yield* EvalEnvCtx.with(capturedCallerEnv, function* () {
       if (capturedParentEvalScope) {
         return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
@@ -613,6 +631,7 @@ function* expandFunctionComponent(
   hideSet: Set<string>,
   ctx: ExpansionContext,
   counter: BlockCounter,
+  projectedEnv?: EvalEnv,
 ): Operation<Segment[]> {
   if ("as" in expressions) {
     return [
@@ -627,7 +646,7 @@ function* expandFunctionComponent(
   // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(props, expressions, name);
+    resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
   } catch (error) {
     return [
       {
@@ -778,6 +797,7 @@ function* resolveExpressionProps(
   props: Record<string, Json>,
   expressions: Record<string, string>,
   componentName: string,
+  explicitEnv?: EvalEnv,
 ): Operation<Record<string, Json>> {
   // Start with already-resolved props
   const resolved = { ...props };
@@ -787,8 +807,18 @@ function* resolveExpressionProps(
     return resolved;
   }
 
-  // Get the eval environment
-  const evalEnv = yield* EvalEnvCtx.get();
+  // Get the current (component's) eval env from context.
+  const contextEnv = yield* EvalEnvCtx.get();
+
+  // For projected children (substituted via <Content />), merge the
+  // caller's env (explicitEnv) with the wrapping component's env
+  // (contextEnv). The component's env takes priority because its eval
+  // blocks run before <Content /> and may define bindings that children
+  // reference. The caller's env provides fallback bindings from the
+  // outer scope (e.g., root document's `pr` binding).
+  const evalEnv = (explicitEnv && contextEnv)
+    ? { values: { ...explicitEnv.values, ...contextEnv.values } }
+    : contextEnv ?? explicitEnv;
 
   if (!evalEnv) {
     const names = Object.keys(expressions).join(", ");
@@ -970,10 +1000,27 @@ function substituteContent(
   children: Segment[],
   meta: Record<string, unknown>,
   props: Record<string, Json>,
+  callerEnv?: EvalEnv,
 ): Segment[] {
   const slots = partitionBySlot(children);
   // Track whether errors have been emitted (only emit once)
   let errorsEmitted = false;
+
+  // Tag projected children with the caller's eval env so expression
+  // props resolve in the lexical scope where the JSX was written.
+  const tagProjected = (segments: Segment[]): Segment[] => {
+    if (!callerEnv) return segments;
+    return segments.map((seg) => {
+      if (seg.type === "component") {
+        return {
+          ...seg,
+          projectedEnv: callerEnv,
+          children: tagProjected(seg.children),
+        };
+      }
+      return seg;
+    });
+  };
 
   return bodySegments.flatMap((segment) => {
     if (segment.type === "component" && segment.name === "Content") {
@@ -986,11 +1033,11 @@ function substituteContent(
         // Named slot projection — strip slot prop from each child
         return [
           ...pendingErrors,
-          ...(slots.named.get(targetSlot) ?? []).map(stripSlotProp),
+          ...tagProjected((slots.named.get(targetSlot) ?? []).map(stripSlotProp)),
         ];
       }
       // Default slot projection
-      return [...pendingErrors, ...slots.default];
+      return [...pendingErrors, ...tagProjected(slots.default)];
     }
     if (segment.type === "text") {
       return [
