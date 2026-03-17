@@ -115,15 +115,19 @@ fi
 </Capture>
 
 ```ts eval
-import { parseDiagnostics } from "@executablemd/code-review-agent";
+import {
+  buildCleanupAnalysis,
+  parseDiagnostics,
+} from "@executablemd/code-review-agent";
 
 const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
+const cleanupAnalysis = buildCleanupAnalysis(diagnostics);
 ```
 
 <ThinkFilter>
 <OllamaProvider model="qwen3:30b-a3b">
   <Instruction system="You are a precise TypeScript code health analyst. Be concise. Report only findings, not praise. Focus on actionable cleanup opportunities.">
-    <RepoPolicyReport diagnostics={diagnostics} doctor={doctor} fileList={fileList} fileCount={fileCount} lineCount={lineCount} />
+    <RepoPolicyReport diagnostics={diagnostics} doctor={doctor} fileList={fileList} fileCount={fileCount} lineCount={lineCount} cleanupAnalysis={cleanupAnalysis} />
   </Instruction>
 </OllamaProvider>
 </ThinkFilter>

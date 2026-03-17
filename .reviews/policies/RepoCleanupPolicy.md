@@ -9,43 +9,58 @@ inputs:
   fileList:
     type: string
     required: true
+  cleanupAnalysis:
+    type: object
+    required: false
 ---
 
 <ReviewSection heading="Cleanup Policy"
   clean="✅ No code health issues detected.">
 
-<Show when={diagnostics.total > 0}>
+<Show when={diagnostics.total > 0 && !!cleanupAnalysis}>
 
 <Sample>
 
-You are analyzing a TypeScript monorepo for code health issues using
-Oxlint static analysis results.
+You are reviewing pre-scored cleanup clusters from a TypeScript monorepo.
+Oxlint provided the raw signals. The system ranked files by co-occurrence
+of distinct rule violations, weighted toward production code.
 
-STATIC ANALYSIS SIGNALS:
-{diagnostics.summary}
+Your job is NOT to re-analyze diagnostics. The ranking is already done.
+Your job IS to explain why each top cluster matters and what specific
+cleanup action to take.
 
-Violation density: {diagnostics.density} per source line.
+{cleanupAnalysis.promptContext}
 
-SOURCE FILES:
-{fileList}
+For each of the top 5 clusters above, produce exactly this format:
 
-Analyze the diagnostic distribution and report:
+### [rank]. [file path]
+- **Why**: [1-2 sentences explaining what the co-occurring signals mean together]
+- **Action**: [specific verb: remove, inline, delete, extract, add try/finally, etc.]
+- **Scope**: [mechanical | review-required]
+- **Confidence**: [high | medium | low]
 
-1. **Hotspots** — files with disproportionate violation density
-   compared to the repo average
-2. **Dead code clusters** — concentrations of no-unused-vars that
-   suggest unused modules or abandoned features
-3. **Cleanup opportunities** — areas with multiple rule violations
-   suggesting unreviewed or generated code
-4. **Architecture signals** — patterns across multiple files in
-   the same package (e.g., many empty functions, excessive type
-   assertions)
+Rules:
+- "mechanical" means a maintainer can fix it without design decisions.
+- "review-required" means the fix depends on intent not obvious from signals.
+- Do NOT restate raw counts only; focus on what to DO.
+- Do NOT add items outside ranked clusters. If fewer than 5 clusters, report fewer.
+- If a file is test/demo, call it lower priority unless the same pattern appears in production.
 
-For each finding: PACKAGE/FILE, PATTERN, CONCERN, SUGGESTED ACTION.
+Example of a good item:
 
-If the repo is clean: "No code health issues detected."
+### 1. durable-streams/operations.ts
+- **Why**: 4 distinct rules fire here (type assertions, empty functions, unused vars, floating promises), indicating mechanical scaffolding that was not cleaned up.
+- **Action**: Remove unnecessary type assertions first, then audit empty function stubs for dead code.
+- **Scope**: mechanical
+- **Confidence**: high
 
 </Sample>
+
+</Show>
+
+<Show when={diagnostics.total > 0 && !cleanupAnalysis}>
+
+{diagnostics.summary}
 
 </Show>
 

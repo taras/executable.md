@@ -9,9 +9,12 @@ export { parseDiff } from "./src/parse-diff.ts";
 export { parseDiagnostics } from "./src/parse-diagnostics.ts";
 export { parseDoctorResult } from "./src/parse-doctor.ts";
 export {
+  buildCleanupAnalysis,
+  clusterByFile,
   buildPolicyInput,
   buildPolicyReport,
   clusterDiagnostics,
+  extractEvidence,
   scoreClusters,
 } from "./src/policy.ts";
 export {
@@ -21,12 +24,16 @@ export {
   VERBOSITY_RULES,
 } from "./src/categories.ts";
 export type {
+  CleanupAnalysis,
+  CleanupEvidence,
   Diagnostics,
   DiagnosticGroup,
   DiffFile,
   DiffHunk,
   DiffLine,
   DoctorResult,
+  FileCluster,
+  FileKind,
   OxlintDiagnostic,
   PolicyCategory,
   PolicyCluster,
