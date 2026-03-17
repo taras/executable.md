@@ -5,7 +5,7 @@ inputs:
 
 ```ts eval
 const content = yield* renderChildren();
-const body = marker + "\n" + content;
+const body = marker + "\n" + content.trim();
 
 const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;

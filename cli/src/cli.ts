@@ -69,7 +69,7 @@ const ema = program({
 // ---------------------------------------------------------------------------
 
 const pretty = (value: unknown): string =>
-  inspect(value, { colors: true, compact: true, breakLength: Infinity, depth: 2, maxStringLength: 60 });
+  inspect(value, { colors: true, compact: true, breakLength: Infinity, depth: 2, maxStringLength: 200 });
 
 function formatYieldResult(event: DurableEvent & { type: "yield" }): string {
   const { result, description } = event;
