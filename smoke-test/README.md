@@ -339,61 +339,6 @@ concurrency — no manual cleanup needed.
 
 </Section>
 
-<Section title="Sample Modifier and Provider Pattern">
-
-The `sample` modifier wraps `exec` in the modifier chain. After the
-inner command runs, `sample` delegates to the Sample Api for processing.
-Provider components install middleware via `Sample.around()` to handle
-sample calls.
-
-<StubProvider model="smoke-model">
-
-With a provider active, sample blocks route through its middleware.
-The stub provider returns a canned response containing the model name:
-
-```bash sample exec
-echo "this output is replaced by the sample middleware"
-```
-
-Bracket params allow targeting a specific model:
-
-```bash sample[model=smoke-model] exec
-echo "explicitly targeting smoke-model"
-```
-
-</StubProvider>
-
-</Section>
-
-<Section title="Nested Providers">
-
-Nested providers compose via Effection's middleware chain. The innermost
-provider handles sample calls by default (no model specified). When an
-explicit model is requested, the call routes through the chain until a
-matching provider is found.
-
-<StubProvider model="outer-smoke">
-
-<InnerStubProvider model="inner-smoke">
-
-No model — innermost provider handles:
-
-```bash sample exec
-echo "routed to inner"
-```
-
-Explicit model targeting the outer provider — inner passes through:
-
-```bash sample[model=outer-smoke] exec
-echo "routed to outer"
-```
-
-</InnerStubProvider>
-
-</StubProvider>
-
-</Section>
-
 <Section title="Sample Component">
 
 The `<Sample>` component captures its children's rendered output (or
@@ -463,8 +408,8 @@ prompt. With `<Instruction>`, the author's text replaces that default:
 
 Instructions accumulate through nesting. Agent components install
 instruction middleware via `persist eval` blocks that enrich the
-`SampleContext.instructions` field. When present, instructions replace
-the default system prompt in the provider's message builder.
+`SampleContext.system` field. When present, the system prompt is
+passed through to the provider.
 
 </Section>
 
@@ -523,10 +468,7 @@ cat <<'EOF'
 | eval binding interpolation| {port} in exec block from eval binding  |
 | daemon modifier           | bash daemon exec starts background proc |
 | daemon + when readiness   | Daemon server polled until ready        |
-| sample modifier           | bash sample exec delegates to Sample Api|
-| bracket params            | sample[model=X] targets specific model  |
 | provider pattern          | StubProvider installs Sample middleware  |
-| nested providers          | Inner/outer providers, innermost wins   |
 | per-component eval scope  | Each provider gets isolated middleware   |
 | props in env.values       | model prop available in eval blocks     |
 | Sample component          | <Sample prompt>, <Sample> with children |
@@ -535,7 +477,7 @@ cat <<'EOF'
 | Named slots               | <TwoColumn> with slot="left"/slot="right" |
 | Fragment passthrough      | <Fragment slot="..."> wraps raw text       |
 | Instruction component     | <Instruction text> wraps Sample calls   |
-| composable instructions   | Instructions enrich SampleContext        |
+| composable instructions   | Instructions enrich SampleContext.system |
 | Text interpolation        | {textHost}:{textPort} in prose text     |
 | Text + meta coexistence   | {meta.title} and {textPort} in same text|
 | Escaped text bindings     | \{textPort} produces literal braces     |

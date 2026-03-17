@@ -167,28 +167,21 @@ export interface ResolveResult {
 }
 
 // ---------------------------------------------------------------------------
-// Sample Api context (spec §3.4)
+// Sample Api context
 // ---------------------------------------------------------------------------
 
 export interface SampleContext {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  command: string;
-  language: string;
-  params?: string;
-  componentName?: string;
+  /** The content to send to the LLM (rendered children or prompt text). */
+  content: string;
   /**
    * Model identifier requested by the sample call. Undefined if the author
    * did not specify a model — in which case the innermost active provider wins.
-   * Set from the sample modifier's bracket params: ```bash sample[model=phi3-mini] exec
    */
   model?: string;
-  /**
-   * Accumulated instructions from enclosing `<Instruction>` components.
-   * When present, replaces the default system prompt in buildDefaultMessages.
-   * Accumulated by Instruction middleware — outer instructions appear first,
-   * inner instructions are appended with newline separators.
-   */
-  instructions?: string;
+  /** Additional params for the sample call. */
+  params?: string;
+  /** System prompt set by enclosing `<Instructions>` components. */
+  system?: string;
+  /** Name of the component that initiated the sample call. */
+  componentName?: string;
 }

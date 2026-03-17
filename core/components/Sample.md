@@ -34,15 +34,11 @@ const childrenOutput = yield* renderChildren();
 const content = childrenOutput || prompt || '';
 
 const sampleResult = yield* Sample.operations.sample({
-  stdout: content,
-  stderr: '',
-  exitCode: 0,
-  command: content,
-  language: 'markdown',
+  content,
   params: params || undefined,
   componentName: 'Sample',
   model: model || undefined,
 });
 
-output(sampleResult);
+return sampleResult;
 ```

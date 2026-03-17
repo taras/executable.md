@@ -58,7 +58,7 @@ const STANDARD_IMPORTS = [
   'import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";',
   'import { when } from "@effectionx/converge";',
   'import { fetch } from "@effectionx/fetch";',
-  'import { useContent, findFreePort, Sample, callLlamafile, callOllama, callAnthropic } from "@executablemd/core/globals";',
+  'import { useContent, findFreePort, Sample } from "@executablemd/core/globals";',
 ].join("\n");
 
 // ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ const STANDARD_IMPORTS = [
 export function* compileBlock(
   transformedBodyCode: string,
   userImports: string[],
-): Operation<(env: Record<string, unknown>) => Generator<unknown, void, unknown>> {
+): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
   const userImportLines = userImports.length > 0
     ? userImports.join("\n") + "\n"
     : "";
@@ -101,7 +101,7 @@ export function* compileBlock(
   ].join("\n");
 
   const dataUri = `data:application/typescript,${encodeURIComponent(moduleSource)}`;
-  const mod: { default: (env: Record<string, unknown>) => Generator<unknown, void, unknown> } =
+  const mod: { default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown> } =
     yield* call(() => import(dataUri));
 
   if (typeof mod.default !== "function") {

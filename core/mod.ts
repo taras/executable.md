@@ -56,9 +56,6 @@ export { EvalCtxKey, createEvalContext, compileBlock } from "./src/eval-context.
 // ---------------------------------------------------------------------------
 
 export { Sample } from "./src/sample-api.ts";
-export { callLlamafile } from "./src/sample/llamafile.ts";
-export { callOllama } from "./src/sample/ollama.ts";
-export { callAnthropic } from "./src/sample/anthropic.ts";
 
 export { evalFactory } from "./src/eval-handler.ts";
 export { persistFactory } from "./src/modifiers/persist.ts";

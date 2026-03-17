@@ -46,7 +46,7 @@ function writeFiles(dir: string, files: Record<string, string>): void {
   }
 }
 
-/** Stub provider that echoes context.instructions alongside model and stdout. */
+/** Stub provider that echoes context.system alongside model and content. */
 function stubProviderWithInstructions(componentName: string): string {
   return [
     "---",
@@ -64,7 +64,7 @@ function stubProviderWithInstructions(componentName: string): string {
     "    if (context.model !== undefined && context.model !== model) {",
     "      return yield* next(context);",
     "    }",
-    "    return '[sampled-by-' + model + ':' + context.stdout.trim() + '|instructions:' + (context.instructions || 'none') + ']';",
+    "    return '[sampled-by-' + model + ':' + context.content.trim() + '|system:' + (context.system || 'none') + ']';",
     "  },",
     "}, { at: 'min' });",
     "```",
@@ -91,7 +91,7 @@ function stubProvider(componentName: string): string {
     "    if (context.model !== undefined && context.model !== model) {",
     "      return yield* next(context);",
     "    }",
-    "    return '[sampled-by-' + model + ':' + context.stdout.trim() + ']';",
+    "    return '[sampled-by-' + model + ':' + context.content.trim() + ']';",
     "  },",
     "}, { at: 'min' });",
     "```",
@@ -288,9 +288,9 @@ describe("Tier SC — Sample component", () => {
         freshness: false,
       }));
 
-      // Should contain error about missing Sample Api middleware
+      // Should contain error about missing Sample Api provider
       expect(output).toContain("ERROR");
-      expect(output).toContain("Sample Api middleware");
+      expect(output).toContain("Sample Api requires provider middleware");
     } finally {
       cleanup(tmpDir);
     }
@@ -728,7 +728,7 @@ describe("Tier IN — Instruction component", () => {
         freshness: false,
       }));
 
-      expect(output).toContain("instructions:You are a pirate. Respond in pirate speak.");
+      expect(output).toContain("system:You are a pirate. Respond in pirate speak.");
       expect(output).not.toContain("ERROR");
     } finally {
       cleanup(tmpDir);
@@ -766,7 +766,7 @@ describe("Tier IN — Instruction component", () => {
         freshness: false,
       }));
 
-      expect(output).toContain("instructions:none");
+      expect(output).toContain("system:none");
       expect(output).not.toContain("ERROR");
     } finally {
       cleanup(tmpDir);
@@ -815,7 +815,7 @@ describe("Tier IN — Instruction component", () => {
       }));
 
       expect(output).toContain("Some visible text before the sample.");
-      expect(output).toContain("instructions:Be a pirate.");
+      expect(output).toContain("system:Be a pirate.");
       expect(output).not.toContain("ERROR");
     } finally {
       cleanup(tmpDir);
@@ -886,11 +886,11 @@ describe("Tier AG — Agent component pattern", () => {
           "```js persist eval",
           "yield* Sample.around({",
           "  *sample([context], next) {",
-          "    const existing = context.instructions || '';",
+          "    const existing = context.system || '';",
           "    const instruction = 'You are a code reviewer. Be concise.';",
           "    return yield* next({",
           "      ...context,",
-          "      instructions: existing ? existing + '\\n' + instruction : instruction,",
+          "      system: existing ? existing + '\\n' + instruction : instruction,",
           "    });",
           "  },",
           "}, { at: 'min' });",
@@ -918,7 +918,7 @@ describe("Tier AG — Agent component pattern", () => {
         freshness: false,
       }));
 
-      expect(output).toContain("instructions:You are a code reviewer. Be concise.");
+      expect(output).toContain("system:You are a code reviewer. Be concise.");
       expect(output).toContain("def add(a, b): return a - b");
       expect(output).not.toContain("ERROR");
     } finally {
@@ -948,11 +948,11 @@ describe("Tier AG — Agent component pattern", () => {
           "```js persist eval",
           "yield* Sample.around({",
           "  *sample([context], next) {",
-          "    const existing = context.instructions || '';",
+          "    const existing = context.system || '';",
           "    const instruction = 'You are a code reviewer.';",
           "    return yield* next({",
           "      ...context,",
-          "      instructions: existing ? existing + '\\n' + instruction : instruction,",
+          "      system: existing ? existing + '\\n' + instruction : instruction,",
           "    });",
           "  },",
           "}, { at: 'min' });",
@@ -969,11 +969,11 @@ describe("Tier AG — Agent component pattern", () => {
           "```js persist eval",
           "yield* Sample.around({",
           "  *sample([context], next) {",
-          "    const existing = context.instructions || '';",
+          "    const existing = context.system || '';",
           "    const instruction = 'Focus on security vulnerabilities.';",
           "    return yield* next({",
           "      ...context,",
-          "      instructions: existing ? existing + '\\n' + instruction : instruction,",
+          "      system: existing ? existing + '\\n' + instruction : instruction,",
           "    });",
           "  },",
           "}, { at: 'min' });",

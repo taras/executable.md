@@ -40,8 +40,11 @@ import { transformBlock, serializeExports } from "./eval-transform.ts";
  * execution are retained in the persistent EvalScope until the component
  * finishes expanding.
  *
- * Eval blocks produce no rendered output — they exist for bindings
- * and side effects.
+ * Eval blocks can produce rendered output in two ways:
+ * 1. `output("text")` — explicit side-effect function call
+ * 2. `return "text"` — generator return value (if output() wasn't called)
+ *
+ * If both are used, output() wins. Null/undefined returns produce no output.
  */
 export const evalFactory: ModifierFactory = (_params) =>
   (_args, _next) =>
@@ -88,13 +91,19 @@ export const evalFactory: ModifierFactory = (_params) =>
             // so spawned resources are retained in the persistent EvalScope.
             const evalScope = yield* EvalScopeCtx.expect();
             const blockResult = yield* evalScope.eval(
-              () => fn(env.values) as unknown as Operation<void>,
+              () => fn(env.values) as unknown as Operation<unknown>,
             );
-            unbox(blockResult);
+            const returnValue = unbox(blockResult);
+            if (!outputRef.text && returnValue != null) {
+              outputRef.text = String(returnValue);
+            }
           } else {
             // Normal mode: run the compiled block in the current scope.
             // Resources are torn down when this operation completes.
-            yield* fn(env.values) as unknown as Operation<void>;
+            const returnValue = yield* fn(env.values) as unknown as Operation<unknown>;
+            if (!outputRef.text && returnValue != null) {
+              outputRef.text = String(returnValue);
+            }
           }
 
           const exports = serializeExports(

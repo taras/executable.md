@@ -89,6 +89,40 @@ function providerComponent(name = "TestProvider"): string {
   ].join("\n");
 }
 
+/**
+ * Build the Sample component file — uses persist eval to call Sample Api.
+ */
+function sampleComponent(): string {
+  return [
+    "---",
+    "meta:",
+    "  componentName: Sample",
+    "inputs:",
+    "  prompt:",
+    "    type: string",
+    "    default: \"\"",
+    "  model:",
+    "    type: string",
+    "    default: \"\"",
+    "  params:",
+    "    type: string",
+    "    default: \"\"",
+    "---",
+    "",
+    "```js persist eval",
+    "const childrenOutput = yield* renderChildren();",
+    "const content = childrenOutput || prompt || '';",
+    "const sampleResult = yield* Sample.operations.sample({",
+    "  content,",
+    "  params: params || undefined,",
+    "  componentName: 'Sample',",
+    "  model: model || undefined,",
+    "});",
+    "return sampleResult;",
+    "```",
+  ].join("\n");
+}
+
 describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitizeResources: false }, () => {
   // S1: Full provider golden run
   // eval → daemon → when → children → cleanup
@@ -159,21 +193,20 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
     }
   });
 
-  // S3: Children can call sample after daemon ready
-  // Uses Sample Api middleware stub to verify the modifier chain works
+  // S3: Children can call Sample component after daemon ready
+  // Uses Sample Api middleware stub to verify the <Sample> component works
   // within the provider's children.
-  it("S3: children can call sample after daemon ready", function* () {
+  it("S3: children can call Sample component after daemon ready", function* () {
     const tmpDir = makeTempDir();
 
     try {
       writeFiles(tmpDir, {
         "components/TestProvider.md": providerComponent(),
+        "components/Sample.md": sampleComponent(),
         "doc.md": [
           "<TestProvider>",
           "",
-          "```bash sample exec",
-          "echo raw-output",
-          "```",
+          "<Sample>raw-output</Sample>",
           "",
           "</TestProvider>",
         ].join("\n"),
@@ -195,7 +228,7 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
         freshness: false,
       }));
 
-      // The stub sample middleware replaces exec output with "[sampled]"
+      // The stub sample middleware replaces content with "[sampled]"
       expect(output).toContain("[sampled]");
       expect(output).not.toContain("ERROR");
     } finally {
@@ -408,7 +441,7 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
 
   // S8: Nested providers, no model specified — innermost handles
   // Two stub providers (OuterProvider, InnerProvider) install
-  // Sample middleware via Sample.around(). A sample block with
+  // Sample middleware via Sample.around(). A <Sample> component with
   // no model should be handled by the innermost provider.
   it("S8: nested providers, no model — innermost handles", function* () {
     const tmpDir = makeTempDir();
@@ -445,14 +478,13 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       writeFiles(tmpDir, {
         "components/OuterProvider.md": stubProviderBody("OuterProvider"),
         "components/InnerProvider.md": stubProviderBody("InnerProvider"),
+        "components/Sample.md": sampleComponent(),
         "doc.md": [
           '<OuterProvider model="outer-model">',
           "",
           '<InnerProvider model="inner-model">',
           "",
-          "```bash sample exec",
-          "echo ignored",
-          "```",
+          '<Sample prompt="test content" />',
           "",
           "</InnerProvider>",
           "",
@@ -511,14 +543,13 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       writeFiles(tmpDir, {
         "components/OuterProvider.md": stubProviderBody("OuterProvider"),
         "components/InnerProvider.md": stubProviderBody("InnerProvider"),
+        "components/Sample.md": sampleComponent(),
         "doc.md": [
           '<OuterProvider model="outer-model">',
           "",
           '<InnerProvider model="inner-model">',
           "",
-          "```bash sample[model=outer-model] exec",
-          "echo ignored",
-          "```",
+          '<Sample prompt="test content" model="outer-model" />',
           "",
           "</InnerProvider>",
           "",
@@ -577,14 +608,13 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       writeFiles(tmpDir, {
         "components/OuterProvider.md": stubProviderBody("OuterProvider"),
         "components/InnerProvider.md": stubProviderBody("InnerProvider"),
+        "components/Sample.md": sampleComponent(),
         "doc.md": [
           '<OuterProvider model="outer-model">',
           "",
           '<InnerProvider model="inner-model">',
           "",
-          "```bash sample[model=inner-model] exec",
-          "echo ignored",
-          "```",
+          '<Sample prompt="test content" model="inner-model" />',
           "",
           "</InnerProvider>",
           "",
@@ -643,12 +673,11 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
 
       writeFiles(tmpDir, {
         "components/StubProvider.md": stubProvider(),
+        "components/Sample.md": sampleComponent(),
         "doc.md": [
           '<StubProvider model="known-model">',
           "",
-          "```bash sample[model=unknown-model] exec",
-          "echo ignored",
-          "```",
+          '<Sample prompt="test" model="unknown-model" />',
           "",
           "</StubProvider>",
         ].join("\n"),
@@ -664,7 +693,7 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       }));
 
       // Chain exhausted → core handler throws → error in output
-      expect(output).toMatch(/error|Error|sample/i);
+      expect(output).toMatch(/error|Error|Sample/i);
     } finally {
       cleanup(tmpDir);
     }

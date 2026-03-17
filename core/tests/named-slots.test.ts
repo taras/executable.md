@@ -151,7 +151,7 @@ function stubProvider(componentName: string): string {
     "    if (context.model !== undefined && context.model !== model) {",
     "      return yield* next(context);",
     "    }",
-    "    return '[sampled-by-' + model + ':' + context.stdout.trim() + ']';",
+    "    return '[sampled-by-' + model + ':' + context.content.trim() + ']';",
     "  },",
     "}, { at: 'min' });",
     "```",
