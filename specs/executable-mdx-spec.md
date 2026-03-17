@@ -2736,6 +2736,50 @@ Rules:
 Interpolation is a runtime operation — deterministic from its inputs,
 no journal entry.
 
+#### Text segment interpolation pipeline
+
+Text segments undergo two interpolation passes in sequence:
+
+```
+text segment
+  → remend (heal markdown)
+  → interpolate {meta.key}, {props.key}         ← first pass
+  → interpolateEvalBindings {name}              ← second pass
+  → output
+```
+
+The second pass (`interpolateEvalBindings`) runs on text segments
+when an `EvalEnv` is present on the scope. It resolves bare `{name}`
+references from `env.values`. This allows eval block exports to flow
+into surrounding prose naturally:
+
+````markdown
+```ts eval
+const port = yield* findFreePort();
+const baseUrl = `http://127.0.0.1:${port}`;
+```
+
+Server running at {baseUrl} on port {port}.
+````
+
+Renders: `Server running at http://127.0.0.1:49821 on port 49821.`
+
+**Precedence:** `{meta.*}` and `{props.*}` resolve first because they
+are the component's declared interface. If a component declares
+`inputs: { title: ... }` and an eval block also exports `title`, the
+prop wins (accessed via `{props.title}`). Bare `{title}` resolves via
+the second pass against `env.values`. There is no actual collision
+because the two passes match different syntax: dotted (`{ns.key}`) vs
+bare (`{identifier}`).
+
+**Escaping:** `\{name}` is left as literal `{name}` in the output.
+Both passes respect `\{` escaping — the backslash is consumed and
+the brace is preserved as a literal character.
+
+**No EvalEnv:** If no `EvalEnv` is on the scope (e.g., text outside
+component expansion), the second pass is skipped and bare `{name}`
+references are left verbatim.
+
 ### 6.5 Prop validation
 
 Components only accept props declared in their `inputs` frontmatter.
@@ -2961,10 +3005,11 @@ color: blue
 
 ### 6.6 Eval binding interpolation
 
-Inside any executable code block's **content**, bare `{name}`
-references (no namespace prefix) resolve against `env.values` — the
-eval binding environment populated by preceding `eval` blocks within
-the same component:
+Bare `{name}` references (no namespace prefix) resolve against
+`env.values` — the eval binding environment populated by preceding
+`eval` blocks within the same component. This applies to both
+**code block content** and **text segments** (see §6.4 for the text
+segment interpolation pipeline).
 
 ````markdown
 ```ts eval
@@ -2995,35 +3040,55 @@ verbatim. Non-string values are converted via `String()`.
 
 Note: `{meta.*}` and `{props.*}` interpolation applies only to
 **text segments**, not to code block content. Code blocks receive
-only eval binding interpolation. To use a prop value in a code block,
-capture it into a binding via an `eval` block first.
+only eval binding interpolation (`{name}`). To use a prop value in a
+code block, capture it into a binding via an `eval` block first.
+Text segments receive both passes: `{meta.*}`/`{props.*}` first,
+then bare `{name}` from `env.values`.
 
 #### Where interpolation runs
 
-Eval binding interpolation runs **once in the expansion engine**, in
-`expandSegments`, immediately before the modifier chain is composed
-for a `codeBlock` segment. By the time any modifier factory receives
-`ctx.content`, the content is already fully interpolated — modifiers
-are not responsible for text preparation and do not need to know
-interpolation exists.
+Eval binding interpolation runs in `expandSegments` in two places:
+
+1. **Code blocks** — immediately before the modifier chain is composed
+   for a `codeBlock` segment. By the time any modifier factory receives
+   `ctx.content`, the content is already fully interpolated — modifiers
+   are not responsible for text preparation.
+
+2. **Text segments** — after `{meta.*}`/`{props.*}` interpolation
+   (§6.4). The second pass resolves bare `{name}` references from
+   `env.values` when an `EvalEnv` is present on the scope.
+
+Eval blocks skip interpolation entirely — they access bindings directly
+via the env preamble (`const { name } = env;`). Interpolating would
+mangle JS template literals like `` `${name}` `` into `$<value>`.
 
 ```typescript
 function interpolateEvalBindings(
   content: string,
   bindings: Record<string, unknown>,
 ): string {
-  return content.replace(
+  // Protect escaped braces: \{ → placeholder
+  const escaped = content.replaceAll("\\{", PLACEHOLDER);
+  const interpolated = escaped.replace(
     /\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g,
     (match, key) => key in bindings ? String(bindings[key]) : match,
   );
+  // Restore escaped braces: placeholder → literal {
+  return interpolated.replaceAll(PLACEHOLDER, "{");
 }
 ```
 
 This is a runtime operation — deterministic from `env.values` and
-the block source. It produces no journal entry. On replay,
+the content. It produces no journal entry. On replay,
 `env.values` is populated from the stored `durableEval` result (§4.5)
 before any subsequent blocks execute, so interpolation produces the
 same substitutions as the original run.
+
+**Escaping:** `\{name}` is preserved as literal `{name}`. The
+`interpolateEvalBindings` function protects escaped braces via a
+Unicode private-use placeholder before running the regex, then restores
+them afterward. This is consistent with how `interpolate()` handles
+`\{meta.key}`.
 
 #### Serialization constraint
 
@@ -4682,3 +4747,6 @@ A.md references <C />.
 | 82 | `<Capture>` does not create a new env/scope | Capture is structural (like `<Content />`), not a component boundary; middleware/scope behavior remains deterministic |
 | 83 | Capture trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
 | 84 | Capture assignment is not independently journaled | Captured value is deterministic from journaled effects and expansion order; replay reconstructs the same binding without extra journal entries |
+| 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
+| 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
+| 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |

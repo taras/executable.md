@@ -271,6 +271,33 @@ echo "Exec blocks are independent of eval bindings"
 
 </Section>
 
+<Section title="Text Interpolation">
+
+Eval bindings also resolve in **prose text**, not just code blocks. Values
+computed in eval blocks flow naturally into surrounding text without
+needing a template literal inside an eval block.
+
+```js eval
+const textPort = 49821;
+const textHost = "127.0.0.1";
+```
+
+The server is running at {textHost}:{textPort}.
+
+Both `{meta.*}` / `{props.*}` and bare `{name}` work in the same text.
+Meta values resolve first, then eval bindings fill in remaining references.
+The document title is {meta.title} and the text port is {textPort}.
+
+Escaped braces produce literal output: \{textPort} stays as-is.
+
+If a bare reference has no matching binding, it passes through verbatim:
+{undefinedBinding} is not resolved.
+
+Non-string values are coerced via `String()`. The count from the
+Expression Props section is {itemCount}.
+
+</Section>
+
 <Section title="Background Processes">
 
 The `daemon` modifier starts a long-running process that survives across
@@ -509,6 +536,11 @@ cat <<'EOF'
 | Fragment passthrough      | <Fragment slot="..."> wraps raw text       |
 | Instruction component     | <Instruction text> wraps Sample calls   |
 | composable instructions   | Instructions enrich SampleContext        |
+| Text interpolation        | {textHost}:{textPort} in prose text     |
+| Text + meta coexistence   | {meta.title} and {textPort} in same text|
+| Escaped text bindings     | \{textPort} produces literal braces     |
+| Verbatim unresolved       | {undefinedBinding} left as-is           |
+| Non-string text coercion  | {itemCount} coerced via String()        |
 EOF
 ```
 
