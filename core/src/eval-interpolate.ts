@@ -1,25 +1,32 @@
 /**
  * Eval binding interpolation (spec §6.6).
  *
- * Substitutes bare `{name}` references in content with values from the
- * eval binding environment (`env.values`). This runs in the expansion
- * engine for both code block content and text segments.
+ * Substitutes `{name}` and `{name.path.chain}` references in content
+ * with values from the eval binding environment (`env.values`). This
+ * runs in the expansion engine for both code block content and text
+ * segments.
  *
- * Bare references use JavaScript identifier syntax:
- *   /\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g
+ * References use JavaScript identifier syntax with optional dot paths:
+ *   /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g
  *
- * Namespaced references (`{meta.title}`, `{props.name}`) contain a `.`
- * and are excluded — they are handled by the existing interpolation pass.
+ * The first segment of a dotted path must be a key in `env.values`.
+ * Subsequent segments traverse nested properties. If any intermediate
+ * value is null/undefined, the reference is left verbatim.
  *
- * If `env.values` has no key matching the reference, it is left verbatim.
- * Non-string values are converted via `String()`.
+ * No collision with `{meta.key}` / `{props.key}`: those are consumed
+ * by the `interpolate()` pass which runs first. By the time this
+ * function runs, namespaced references are already resolved.
+ *
+ * If `env.values` has no key matching the root reference, it is left
+ * verbatim. Non-string values are converted via `String()`.
  *
  * Escaped braces (`\{name}`) are preserved as literal `{name}` in the
  * output — the backslash is consumed. This is consistent with
  * `interpolate()` which handles `\{meta.key}` the same way.
  */
 
-const BARE_BINDING_RE = /\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g;
+const BARE_BINDING_RE =
+  /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g;
 
 /**
  * Unicode private-use placeholder for escaped opening braces.
@@ -42,10 +49,24 @@ export function interpolateEvalBindings(
   // Protect escaped braces: \{ → placeholder
   const escaped = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
 
-  // Run interpolation on the protected content
+  // Run interpolation on the protected content.
+  // Supports dotted paths: {pr.meta.number} traverses bindings.pr.meta.number
   const interpolated = escaped.replace(
     BARE_BINDING_RE,
-    (match, key: string) => key in bindings ? String(bindings[key]) : match,
+    (match, key: string) => {
+      const parts = key.split(".");
+      if (!(parts[0] in bindings)) return match;
+
+      let value: unknown = bindings;
+      for (let i = 0; i < parts.length; i++) {
+        if (value == null || typeof value !== "object") return match;
+        const obj = value as Record<string, unknown>;
+        if (i < parts.length - 1 && !(parts[i] in obj)) return match;
+        value = obj[parts[i]];
+      }
+
+      return String(value);
+    },
   );
 
   // Restore escaped braces: placeholder → literal {

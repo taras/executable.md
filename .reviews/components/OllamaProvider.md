@@ -1,21 +1,9 @@
 ---
-meta:
-  componentName: OllamaProvider
-
 inputs:
   model:
     type: string
     required: true
-    description: >
-      Model identifier. Passed as the `model` field in every
-      /v1/chat/completions request and used as the routing key for
-      sample calls. Must match an Ollama model name that has been
-      pulled locally (e.g., "llama3.2", "phi3", "qwen2.5").
-  baseUrl:
-    type: string
-    default: "http://localhost:11434"
-    description: >
-      Base URL for the Ollama API server.
+  baseUrl: "http://localhost:11434"
 ---
 
 ```ts persist eval

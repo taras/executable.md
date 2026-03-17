@@ -857,4 +857,152 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       cleanup(tmpDir);
     }
   });
+
+  // S13: Expression prop from root env visible through provider nesting
+  // Root document defines `pr` in an eval block, wraps ReviewBody in
+  // a provider chain. The {pr} expression prop should resolve from the
+  // root scope, not the provider's scope.
+  it("S13: expression prop from root env resolves through provider nesting", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      // Middleware component — installs Sample middleware and renders <Content />
+      const wrapper = () =>
+        [
+          "---",
+          "meta:",
+          "  componentName: Wrapper",
+          "inputs:",
+          "  label:",
+          "    type: string",
+          "    required: true",
+          "---",
+          "",
+          "```js persist eval",
+          "yield* Sample.around({",
+          "  *sample([context], next) {",
+          "    return '[wrapped-by-' + label + ']';",
+          "  },",
+          "}, { at: 'min' });",
+          "```",
+          "",
+          "<Content />",
+        ].join("\n");
+
+      // Consumer component — receives pr as a prop and renders it
+      const consumer = () =>
+        [
+          "---",
+          "meta:",
+          "  componentName: Consumer",
+          "inputs:",
+          "  data:",
+          "    type: object",
+          "    required: true",
+          "---",
+          "",
+          "Received: {props.data.value}",
+        ].join("\n");
+
+      writeFiles(tmpDir, {
+        "components/Wrapper.md": wrapper(),
+        "components/Consumer.md": consumer(),
+        "doc.md": [
+          "```js eval",
+          "const pr = { value: 'hello-from-root' };",
+          "```",
+          "",
+          '<Wrapper label="test-wrapper">',
+          "",
+          "<Consumer data={pr} />",
+          "",
+          "</Wrapper>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* collect(yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      }));
+
+      // The expression prop {pr} should resolve from the root env
+      expect(output).toContain("hello-from-root");
+      expect(output).not.toContain("ERROR");
+      expect(output).not.toContain("pr is not defined");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // S15: Expression prop resolves through double nesting (Root → W1 → W2 → Consumer)
+  // This mirrors the code review agent: Root → OllamaProvider → Instruction → ReviewBody
+  it("S15: expression prop resolves through double-nested wrappers", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const passthrough = (name: string) =>
+        [
+          "---",
+          "meta:",
+          `  componentName: ${name}`,
+          "inputs:",
+          "  label:",
+          "    type: string",
+          "    required: true",
+          "---",
+          "",
+          "<Content />",
+        ].join("\n");
+
+      const consumer = () =>
+        [
+          "---",
+          "meta:",
+          "  componentName: Consumer",
+          "inputs:",
+          "  data:",
+          "    type: object",
+          "    required: true",
+          "---",
+          "",
+          "Received: {props.data.value}",
+        ].join("\n");
+
+      writeFiles(tmpDir, {
+        "components/Outer.md": passthrough("Outer"),
+        "components/Inner.md": passthrough("Inner"),
+        "components/Consumer.md": consumer(),
+        "doc.md": [
+          "```js eval",
+          "const pr = { value: 'deep-hello' };",
+          "```",
+          "",
+          '<Outer label="outer">',
+          '<Inner label="inner">',
+          "<Consumer data={pr} />",
+          "</Inner>",
+          "</Outer>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* collect(yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      }));
+
+      expect(output).toContain("deep-hello");
+      expect(output).not.toContain("ERROR");
+      expect(output).not.toContain("pr is not defined");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
 });

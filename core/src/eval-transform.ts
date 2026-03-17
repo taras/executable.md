@@ -28,8 +28,9 @@ export interface TransformResult {
   /** Execution mode detected from AST */
   mode: "generator" | "async" | "sync";
   /** User import declarations extracted from the eval block source.
-   *  These are hoisted to the generated module's top level.
-   *  Currently always empty — import extraction is Phase 1 future work. */
+   *  These are hoisted to the generated module's top level by compileBlock.
+   *  Extracted via AST — ImportDeclaration nodes are separated from body
+   *  nodes during parsing and removed from the transformed code. */
   userImports: string[];
 }
 
@@ -60,13 +61,29 @@ export function transformBlock(
   // so yield* is valid syntax. We use `async function*` so that `await`
   // is also parseable (for mode detection — we detect and reject mixed
   // yield+await later).
+  //
+  // `allowImportExportEverywhere` lets acorn parse `import` declarations
+  // inside the function body. These are extracted as userImports and
+  // hoisted to module top level by compileBlock.
+  //
+  // To handle TypeScript `import type { X }` syntax (which acorn doesn't
+  // understand), we normalize it to `import      { X }` (spaces, same
+  // length) before parsing. This preserves AST positions so we can
+  // extract the original source text including `import type`.
   const WRAPPER_PREFIX = "(async function*() {\n";
   const WRAPPER_SUFFIX = "\n})";
-  const wrappedSource = `${WRAPPER_PREFIX}${source}${WRAPPER_SUFFIX}`;
+
+  const normalizedSource = source.replace(
+    /^(import\s+)type(\s+)/gm,
+    (_, pre, post) => pre + " ".repeat("type".length) + post,
+  );
+
+  const wrappedSource = `${WRAPPER_PREFIX}${normalizedSource}${WRAPPER_SUFFIX}`;
   const wrappedAst = parse(wrappedSource, {
     ecmaVersion: "latest",
     sourceType: "module",
     allowReturnOutsideFunction: true,
+    allowImportExportEverywhere: true,
   });
 
   // Extract the body of the inner async generator function.
@@ -76,9 +93,29 @@ export function transformBlock(
   // deno-lint-ignore no-explicit-any
   const exprStmt = (wrappedAst as any).body[0];
   const funcExpr = exprStmt?.expression;
-  // deno-lint-ignore no-explicit-any
-  const ast = { body: funcExpr?.body?.body ?? [], type: "Program" } as any;
+  const allNodes: AstNode[] = funcExpr?.body?.body ?? [];
   const offset = WRAPPER_PREFIX.length;
+
+  // 1b. Separate ImportDeclaration nodes from body nodes.
+  // Import nodes are extracted as userImports (hoisted to module level
+  // by compileBlock). Body nodes proceed through the existing pipeline.
+  const importNodes: AstNode[] = [];
+  const bodyNodes: AstNode[] = [];
+  for (const node of allNodes) {
+    if (node.type === "ImportDeclaration") {
+      importNodes.push(node);
+    } else {
+      bodyNodes.push(node);
+    }
+  }
+
+  const userImports = importNodes.map((node: AstNode) =>
+    source.slice(node.start - offset, node.end - offset)
+  );
+
+  // Build AST with only body nodes for mode detection, export collection, etc.
+  // deno-lint-ignore no-explicit-any
+  const ast = { body: bodyNodes, type: "Program" } as any;
 
   // 2. Detect mode
   const mode = detectMode(ast);
@@ -95,7 +132,19 @@ export function transformBlock(
   // 5–7. Build transformed code
   const s = new MagicString(source);
 
-  // 5. Build preamble
+  // 5a. Remove import declarations from the body.
+  for (const node of importNodes) {
+    let start = node.start - offset;
+    let end = node.end - offset;
+    if (end < source.length && source[end] === "\n") {
+      end++;
+    }
+    if (start > 0 && source[start - 1] === "\n") {
+      start--;
+    }
+    s.remove(start, end);
+  }
+
   if (imports.length > 0) {
     const preamble = `const { ${imports.join(", ")} } = env;\n`;
     s.prepend(preamble);
@@ -124,7 +173,7 @@ export function transformBlock(
     exports,
     imports,
     mode,
-    userImports: [],
+    userImports,
   };
 }
 

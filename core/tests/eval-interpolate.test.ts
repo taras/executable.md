@@ -121,4 +121,67 @@ describe("Tier P — Eval binding interpolation", () => {
     expect(result).toBe("const url = `http://127.0.0.1:$49821/health`;");
     expect(result).not.toContain("${port}");
   });
+
+  // P13: Dotted path resolves nested property
+  it("P13: dotted path resolves nested property", function* () {
+    const result = interpolateEvalBindings(
+      "PR #{pr.meta.number}: {pr.meta.title}",
+      { pr: { meta: { number: "42", title: "feat: add feature" } } },
+    );
+    expect(result).toBe("PR #42: feat: add feature");
+  });
+
+  // P14: Deep dotted path
+  it("P14: deep dotted path resolves", function* () {
+    const result = interpolateEvalBindings(
+      "{a.b.c.d}",
+      { a: { b: { c: { d: "deep" } } } },
+    );
+    expect(result).toBe("deep");
+  });
+
+  // P15: Missing intermediate in dotted path — left verbatim
+  it("P15: missing intermediate in dotted path left verbatim", function* () {
+    const result = interpolateEvalBindings(
+      "{pr.nonexistent.field}",
+      { pr: { meta: { title: "test" } } },
+    );
+    expect(result).toBe("{pr.nonexistent.field}");
+  });
+
+  // P16: Bare identifier still works (backward compat)
+  it("P16: bare identifier still works with dotted path support", function* () {
+    const result = interpolateEvalBindings(
+      "port={port}",
+      { port: 8080 },
+    );
+    expect(result).toBe("port=8080");
+  });
+
+  // P17: Root key not in bindings — left verbatim even with dots
+  it("P17: root key not in bindings left verbatim", function* () {
+    const result = interpolateEvalBindings(
+      "{unknown.path}",
+      { other: "value" },
+    );
+    expect(result).toBe("{unknown.path}");
+  });
+
+  // P18: Dotted path with null intermediate
+  it("P18: null intermediate in dotted path left verbatim", function* () {
+    const result = interpolateEvalBindings(
+      "{pr.meta.title}",
+      { pr: { meta: null } },
+    );
+    expect(result).toBe("{pr.meta.title}");
+  });
+
+  // P19: Mixed bare and dotted in same text
+  it("P19: mixed bare and dotted in same text", function* () {
+    const result = interpolateEvalBindings(
+      "{pr.stats.totalFiles} files, port {port}",
+      { pr: { stats: { totalFiles: 5 } }, port: 3000 },
+    );
+    expect(result).toBe("5 files, port 3000");
+  });
 });

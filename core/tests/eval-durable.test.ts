@@ -171,4 +171,31 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     const events = stream.snapshot();
     expect(events.length).toBeGreaterThan(1);
   });
+
+  // T-import-1: eval block with user import — runs through full pipeline
+  it("T-import-1: eval block with user import runs correctly", function* () {
+    const stream = new InMemoryStream();
+    // Import from a well-known Deno/Node built-in to avoid needing
+    // an actual package. We use a self-contained data: URI import
+    // that's resolvable at runtime.
+    const runtime = makeRuntime({
+      "test.md": [
+        "```ts eval",
+        'import { basename } from "node:path";',
+        "",
+        'const name = basename("/foo/bar/baz.txt");',
+        "return name;",
+        "```",
+      ].join("\n"),
+    });
+
+    const output = yield* collect(yield* runDocument({
+      docPath: "test.md",
+      stream,
+      runtime,
+      freshness: false,
+    }));
+
+    expect(output).toContain("baz.txt");
+  });
 });

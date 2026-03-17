@@ -52,26 +52,26 @@ which model runs, what system prompt is set, or where the output goes.
 
 ---
 
-## 2. EMA Core Changes (Implemented)
+## 2. EMA Changes (Implemented)
 
-The following EMA core changes have been implemented:
+All EMA core changes and the full agent implementation are complete:
 
-- **Eval block `return` as rendered output** — If a generator returns
-  a non-null value, it becomes the block's rendered output. `output()`
-  takes precedence. See `core/src/eval-handler.ts`.
-- **Eval binding interpolation in text segments** — Bare `{name}`
-  references from `env.values` resolve in text segments after
-  `{meta.*}`/`{props.*}` pass. See `core/src/expand.ts`.
-- **Simplified `SampleContext`** — Changed from exec-centric
-  `{stdout, stderr, exitCode, command, language}` to content-centric
-  `{content, model?, params?, system?, componentName?}`.
-- **Removed `sample` modifier** — All LLM calls go through the
-  `<Sample>` component. `sampleFactory`, `durableSample`,
-  `callLlamafile`, `callOllama`, `callAnthropic` deleted.
-- **Updated `Sample.md`** — Uses `return` instead of `output()` and
-  new `SampleContext` shape.
-- **Updated `Instruction.md`** — Uses `context.system` instead of
-  `context.instructions`.
+- **Eval block `return` as rendered output** (PR #35)
+- **Eval binding interpolation in text segments** (PR #34)
+- **Simplified `SampleContext`** to `{content, model?, params?, system?, componentName?}` (PR #35)
+- **Removed `sample` modifier** — all LLM calls via `<Sample>` component (PR #35)
+- **Renamed `Instruction.md` input** `text` → `system` for clarity
+- **Fixed broken providers** — `OllamaProvider`, `LlamafileProvider`,
+  `AnthropicProvider` updated to use direct `fetch()` calls
+- **Component resolution** — review components resolved via
+  `--component-dir .reviews/components --component-dir core/components`
+- **AST-based user import extraction** (DEC-93) — eval blocks can use
+  standard `import` declarations; extracted via acorn's
+  `allowImportExportEverywhere` and hoisted to module level
+- **Projected children expression prop scoping** (DEC-91, DEC-92) —
+  children substituted via `<Content />` carry the caller's eval env.
+  Expression props on projected children resolve against merged env
+  (all ancestor bindings propagated through multi-level nesting)
 
 ---
 
@@ -1155,40 +1155,14 @@ contain no JavaScript.
 
 ---
 
-## 12. Implementation Order
+## 12. Implementation Order (All Complete)
 
-### Phase 1: EMA core (parallel)
+All phases have been implemented across PRs #34, #35, and the
+code-review-agent PR:
 
-1. **Text interpolation** — `interpolateEvalBindings` on text segments
-2. **Eval return** — capture return value in `evalFactory`
-
-### Phase 2: Infrastructure
-
-3. **`Show.md`** + **`Finding.md`** + **`ReviewSection.md`**
-4. **`Instructions.md`**
-5. **`DeepInfraProvider.md`** + **`OllamaProvider.md`**
-6. **`GitHubComment.md`**
-
-### Phase 3: Package
-
-7. **`@executablemd/code-review-agent`** — `parseDiff`
-
-### Phase 4: Rule components
-
-8. **`Threshold`**, **`Pattern`**, **`Ratio`**, **`UnusedInDiff`**
-9. **`DescriptionCheck`**, **`LinkedIssue`**, **`ConfigSourceMix`**,
-   **`AbstractionNames`**, **`NewDependencies`**
-10. **`CommentReview`**
-
-### Phase 5: Policy and entry points
-
-11. **`ScopeCheck`**, **`StructuralBloat`**, **`VerbosityCheck`**,
-    **`SemanticReview`**, **`ReviewBody`**
-12. **`ReviewPR.md`** + **`ReviewPR.local.md`**
-13. **CI workflow**
-
-### Phase 6: EMA cleanup
-
-14. **Remove `sample` modifier** — delete `sampleFactory`,
-    `durableSample`, `parseSampleParams`, `buildDefaultMessages`.
-    Simplify `SampleContext`. Update smoke test.
+- Phase 1: EMA core (text interpolation, eval return) — PR #34, #35
+- Phase 2: Infrastructure components — code-review-agent PR
+- Phase 3: `@executablemd/code-review-agent` package — code-review-agent PR
+- Phase 4: Rule components — code-review-agent PR
+- Phase 5: Policy documents + entry points + CI — code-review-agent PR
+- Phase 6: Sample modifier removal — PR #35

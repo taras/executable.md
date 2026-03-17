@@ -1163,11 +1163,12 @@ and **magic-string** for string mutations.
 
 ```typescript
 interface TransformResult {
-  code: string;       // transformed body, without the generator wrapper
-  map: string;        // V3 source map JSON
-  exports: string[];  // top-level names written to env
-  imports: string[];  // names read from env (free variables present in env)
+  code: string;        // transformed body, without the generator wrapper
+  map: string;         // V3 source map JSON
+  exports: string[];   // top-level names written to env
+  imports: string[];   // names read from env (free variables present in env)
   mode: "generator" | "async" | "sync";
+  userImports: string[]; // import declarations hoisted to module level
 }
 
 function transformBlock(
@@ -1175,6 +1176,40 @@ function transformBlock(
   blockId: string,
   currentEnvKeys: string[],
 ): TransformResult;
+```
+
+#### User import extraction (DEC-93)
+
+Eval blocks may contain standard `import` declarations. These are
+extracted from the AST during `transformBlock` and hoisted to the
+generated module's top level by `compileBlock`.
+
+Acorn's `allowImportExportEverywhere: true` option allows `import`
+declarations inside the generator function wrapper alongside `yield`
+expressions. The transform separates `ImportDeclaration` nodes from
+body nodes — imports go to `userImports`, body nodes proceed through
+the existing pipeline (mode detection, export collection, etc.).
+
+TypeScript `import type { X }` syntax is handled by normalizing
+`type` to spaces (same length, preserving AST positions) before
+acorn parse, then extracting the original source text.
+
+```typescript
+// Eval block source:
+import { parseDiff } from "@executablemd/code-review-agent";
+const pr = parseDiff(rawDiff, rawFiles, meta);
+
+// transformBlock produces:
+//   userImports: ['import { parseDiff } from "@executablemd/code-review-agent";']
+//   code: 'const { rawDiff, rawFiles, meta } = env;\nconst pr = parseDiff(rawDiff, rawFiles, meta); env.pr = pr;'
+
+// compileBlock generates:
+import { sleep, spawn, ... } from "effection";       // STANDARD_IMPORTS
+import { parseDiff } from "@executablemd/code-review-agent";  // userImports
+export default function*(env) {
+  const { rawDiff, rawFiles, meta } = env;
+  const pr = parseDiff(rawDiff, rawFiles, meta); env.pr = pr;
+}
 ```
 
 #### Transform rules
@@ -2516,16 +2551,27 @@ function* expandComponent(
   // Validate props against declared inputs
   const validatedProps = validateProps(name, propsForValidation, definition.inputs);
 
+  // Capture the caller's eval env. For multi-level nesting, merge
+  // projectedEnv (from outer caller) with the current context env
+  // so ancestor bindings propagate through all levels (DEC-91, 92).
+  const contextEnv = yield* EvalEnvCtx.get();
+  const callerEvalEnv = projectedEnv
+    ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
+    : contextEnv;
+
   // Substitute raw children into <Content /> positions.
   // Children are NOT pre-expanded — they expand in document order
   // when the substituted body is expanded. This ensures code blocks
   // before <Content /> (e.g., provider middleware installation) run
   // before children's code blocks.
+  // Children segments are tagged with callerEvalEnv so expression
+  // props resolve in the caller's lexical scope (DEC-91).
   const substituted = substituteContent(
     definition.bodySegments,
     children,
     definition.meta,
     validatedProps,
+    callerEvalEnv ?? undefined,
   );
 
   // Recurse with augmented hide set.
@@ -4769,3 +4815,6 @@ A.md references <C />.
 | 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; enables components like `<Show>` where the entire block is conditional rendering |
 | 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; removes `sampleFactory`, `durableSample`, `callLlamafile`, `callOllama`, `callAnthropic`; simplifies the modifier chain to pure exec/eval concerns |
 | 87 | `SampleContext` simplified to content-centric shape | Changed from exec-centric `{stdout, stderr, exitCode, command, language}` to content-centric `{content, model?, params?, system?, componentName?}`; providers build their own messages directly instead of relying on `buildDefaultMessages` |
+| 91 | Projected children carry caller's eval env | Children substituted via `<Content />` are tagged with `projectedEnv`. Expression props on projected children resolve against merged env (caller + component), with component bindings taking precedence. Follows React's lexical scoping model. |
+| 92 | Multi-level projection env propagation | When `expandComponent` receives `projectedEnv`, it merges it with the current context env before tagging the next level's children. Creates a cumulative chain: Root → Provider → Instruction → ReviewBody all carry root bindings. Innermost-wins on collision. |
+| 93 | AST-based user import extraction in eval blocks | `ImportDeclaration` nodes in eval blocks are extracted via acorn's `allowImportExportEverywhere` and hoisted to module top level by `compileBlock`. TypeScript `import type` normalized to spaces before parse, extracted from original source. |

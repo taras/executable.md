@@ -299,6 +299,16 @@ describe("Text interpolation — eval bindings in text segments", () => {
     expect(output).toBe("Value is {name} and {other}.");
   });
 
+  // TI17: Dotted path in text segment resolves nested property
+  it("TI17: dotted path {pr.meta.title} resolves in text segment", function* () {
+    const ctx = makeCtx({});
+    const segments = scanSegments("PR #{pr.meta.number}: {pr.meta.title}");
+    const output = yield* expandWithBindings(segments, ctx, {
+      pr: { meta: { number: "42", title: "feat: add feature" } },
+    });
+    expect(output).toBe("PR #42: feat: add feature");
+  });
+
   // TI16: Code blocks unchanged
   it("TI16: code block interpolation still works as before", function* () {
     const capturedContext: CodeBlockContext[] = [];

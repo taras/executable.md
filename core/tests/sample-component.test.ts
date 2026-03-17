@@ -711,7 +711,7 @@ describe("Tier IN — Instruction component", () => {
         "doc.md": [
           '<TestProvider model="test-model">',
           "",
-          '<Instruction text="You are a pirate. Respond in pirate speak.">',
+          '<Instruction system="You are a pirate. Respond in pirate speak.">',
           '<Sample prompt="hello" model="test-model" />',
           "</Instruction>",
           "",
@@ -794,7 +794,7 @@ describe("Tier IN — Instruction component", () => {
         "doc.md": [
           '<TestProvider model="test-model">',
           "",
-          '<Instruction text="Be a pirate.">',
+          '<Instruction system="Be a pirate.">',
           "",
           "Some visible text before the sample.",
           "",
@@ -835,7 +835,7 @@ describe("Tier IN — Instruction component", () => {
       writeFiles(tmpDir, {
         "components/Instruction.md": instructionMd,
         "doc.md": [
-          '<Instruction text="Be concise.">',
+          '<Instruction system="Be concise.">',
           "",
           "Just some text, no Sample here.",
           "</Instruction>",
