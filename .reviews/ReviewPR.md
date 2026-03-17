@@ -48,7 +48,9 @@ const pr = parseDiff(rawDiff, rawFiles, {
 <DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
   <Instruction system="You are a precise TypeScript code review assistant for the executable-markdown-agents monorepo. Be concise. Report only findings, not praise.">
     <GitHubComment>
-      <ReviewBody pr={pr} />
+      <Format>
+        <ReviewBody pr={pr} />
+      </Format>
     </GitHubComment>
   </Instruction>
 </DeepInfraProvider>

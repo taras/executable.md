@@ -5,8 +5,9 @@ inputs:
     required: true
 ---
 
-<Show when={pr.stats.totalChanges > 20}
-  fallback="✅ Small PR — semantic review skipped.">
+<ReviewSection heading="Semantic" clean="✅ Small PR — semantic review skipped.">
+
+<Show when={pr.stats.totalChanges > 20}>
 
 <Sample>
 
@@ -33,3 +34,5 @@ DIFF:
 </Sample>
 
 </Show>
+
+</ReviewSection>

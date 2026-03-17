@@ -27,6 +27,8 @@ const pairsText = hasPairs
 
 <Show when={hasPairs}>
 
+Redundant comments found:
+
 <Sample>
 
 Review these comment/code pairs. List ONLY obvious/redundant ones
