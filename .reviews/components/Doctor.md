@@ -8,43 +8,33 @@ inputs:
     default: ".reviews/tsconfig.oxlint.json"
 ---
 
-### Oxlint Compatibility Check
-
-**Oxlint binary:**
-
 <Capture as="oxlintVersion">
 
-```bash silent exec
+```bash exec
 npx oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
 ```
 
 </Capture>
 
-**tsgolint binary:**
-
 <Capture as="tsgolintVersion">
 
-```bash silent exec
+```bash exec
 npx oxlint-tsgolint --version 2>/dev/null || echo "NOT_INSTALLED"
 ```
 
 </Capture>
 
-**node_modules/:**
-
 <Capture as="nodeModulesCheck">
 
-```bash silent exec
+```bash exec
 test -d node_modules && echo "EXISTS" || echo "MISSING"
 ```
 
 </Capture>
 
-**Generated tsconfig** at `{tsconfigPath}`:
-
 <Capture as="tsconfigCheck">
 
-```bash silent exec
+```bash exec
 test -f {tsconfigPath} && echo "EXISTS" || echo "MISSING"
 ```
 
@@ -60,11 +50,9 @@ const canProbeTypeAware = oxlintInstalled && tsgolintInstalled
   && nodeModulesExists && tsconfigExists;
 ```
 
-**Import specifier scan:**
-
 <Capture as="specifierScan">
 
-```bash silent exec
+```bash exec
 grep -rn --include='*.ts' --include='*.tsx' -E '^\s*(import|export)\s.*from\s+['"'"'"](jsr:|npm:)' packages/ src/ 2>/dev/null | head -50 || echo "NONE"
 ```
 
@@ -85,18 +73,12 @@ const jsrCount = specifierLines.filter(l => l.includes("jsr:")).length;
 const npmCount = specifierLines.filter(l => l.includes("npm:")).length;
 ```
 
-<Show when={!canProbeTypeAware}>
-
-Skipping type-aware probe — prerequisites not met.
-
-</Show>
-
 <Capture as="probeResult">
 
 <Show when={canProbeTypeAware}
   fallback='{"diagnostics":[],"stderr":""}'>
 
-```bash silent exec
+```bash exec
 RESULT=$(npx oxlint --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
 STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
 rm -f .reviews/probe-stderr.tmp

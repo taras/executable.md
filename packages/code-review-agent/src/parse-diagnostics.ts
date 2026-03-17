@@ -32,14 +32,6 @@ function emptyDiagnostics(): Diagnostics {
   };
 }
 
-function isImportNoise(d: OxlintDiagnostic): boolean {
-  const msg = d.message ?? "";
-  return (
-    msg.includes("Cannot find module") ||
-    msg.includes("cannot find")
-  );
-}
-
 /**
  * Parse raw Oxlint JSON output into structured diagnostics.
  */
@@ -56,9 +48,11 @@ export function parseDiagnostics(
     return emptyDiagnostics();
   }
 
-  // Filter import noise when in type-aware-filtered mode
   const filtered = doctor.recommendation === "type-aware-filtered"
-    ? raw.filter((d) => !isImportNoise(d))
+    ? raw.filter((d) => {
+      const msg = d.message ?? "";
+      return !msg.includes("Cannot find module") && !msg.includes("cannot find");
+    })
     : raw;
 
   // Group by ruleId
@@ -98,7 +92,6 @@ export function parseDiagnostics(
     }
   }
 
-  // Compute totals
   const total = filtered.length;
   const allFiles = new Set(filtered.map((d) => d.file).filter(Boolean));
   const fileCount = allFiles.size;
