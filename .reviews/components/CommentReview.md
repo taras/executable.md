@@ -36,13 +36,12 @@ const pairsText = hasPairs
 
 <Sample>
 
-Review these comment/code pairs. Return ONLY a JSON array of 0-based
-indices where the comment is obviously redundant (restates what the
-code already says).
+Review these comment/code pairs. List ONLY obvious/redundant ones
+where the comment restates what the code does.
 
-If none are redundant: return []
+Format each finding as: REDUNDANT[index]: comment text
 
-Example response: [0, 3, 7]
+If none are obvious: "No obvious comments found."
 
 {pairsText}
 
@@ -51,16 +50,15 @@ Example response: [0, 3, 7]
 </Capture>
 
 ```ts eval
-let indices = [];
-try {
-  const match = sampleResult.match(/\[[\d\s,]*\]/);
-  if (match) indices = JSON.parse(match[0]);
-} catch {}
+const redundantIndices = [];
+const indexPattern = /REDUNDANT\[(\d+)\]/g;
+let m;
+while ((m = indexPattern.exec(sampleResult)) !== null) {
+  const idx = parseInt(m[1], 10);
+  if (idx >= 0 && idx < pairs.length) redundantIndices.push(idx);
+}
 
-const redundantFindings = indices
-  .filter(i => typeof i === "number" && i >= 0 && i < pairs.length)
-  .map(i => pairs[i]);
-
+const redundantFindings = redundantIndices.map(i => pairs[i]);
 const hasFindings = redundantFindings.length > 0;
 ```
 
