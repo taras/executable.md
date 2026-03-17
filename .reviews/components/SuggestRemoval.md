@@ -28,7 +28,6 @@ const headers = {
   "Content-Type": "application/json",
 };
 
-// 1. Delete old bot reviews to avoid duplicates
 const existingReviews = yield* fetch(
   `${api}/pulls/${prNumber}/reviews`, { headers }
 ).expect().json();
@@ -46,11 +45,9 @@ for (const review of botReviews) {
     }).expect();
   } catch {
     // Review may already be submitted (can't delete submitted reviews).
-    // That's fine — the new review will be posted alongside.
   }
 }
 
-// 2. React 👍 on dismiss replies that haven't been reacted to yet
 for (const reply of dismissedReplies) {
   if (!reply.replyId) continue;
   try {
@@ -60,11 +57,9 @@ for (const reply of dismissedReplies) {
       body: JSON.stringify({ content: "+1" }),
     }).expect();
   } catch {
-    // Reaction may already exist — that's fine.
   }
 }
 
-// 3. Post new review with pending findings
 const comments = findings.map(f => ({
   path: f.file,
   line: f.lineNumber,

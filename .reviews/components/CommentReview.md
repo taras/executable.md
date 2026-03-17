@@ -8,7 +8,6 @@ inputs:
 ```ts eval
 // ---------------------------------------------------------------------------
 // 1. Build comment/code pairs with file/line metadata
-// ---------------------------------------------------------------------------
 const pairs = [];
 const lines = pr.added.filter(l => !l.isTest);
 
@@ -34,7 +33,6 @@ const pairsText = hasPairs
 
 // ---------------------------------------------------------------------------
 // 2. Fetch previous bot review comments and human replies
-// ---------------------------------------------------------------------------
 const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
@@ -51,18 +49,15 @@ if (token && repo && prNumber) {
     "Accept": "application/vnd.github+json",
   };
 
-  // Fetch all PR review comments
   const allComments = yield* fetch(
     `${api}/pulls/${prNumber}/comments?per_page=100`, { headers }
   ).expect().json();
 
-  // Bot suggestion comments
   const botComments = allComments.filter(c =>
     c.user.login === "github-actions[bot]" &&
     c.body && c.body.includes("Redundant comment")
   );
 
-  // Build map of bot comment id → { file, line }
   const botCommentMap = new Map();
   for (const bc of botComments) {
     botCommentMap.set(bc.id, {
@@ -71,7 +66,6 @@ if (token && repo && prNumber) {
     });
   }
 
-  // Human replies to bot comments
   const humanReplies = allComments.filter(c =>
     c.in_reply_to_id && botCommentMap.has(c.in_reply_to_id) &&
     c.user.type !== "Bot"
@@ -88,7 +82,6 @@ if (token && repo && prNumber) {
         r.user.login === "github-actions[bot]" && r.content === "+1"
       );
       if (alreadyAcked) {
-        // Already processed — treat as dismissed
         dismissedReplies.push({
           ...location,
           replyText: reply.body,
@@ -96,7 +89,6 @@ if (token && repo && prNumber) {
           alreadyProcessed: true,
         });
       } else {
-        // New reply — needs classification
         repliesForClassification.push({
           ...location,
           replyText: reply.body,
@@ -113,7 +105,6 @@ if (token && repo && prNumber) {
     }
   }
 
-  // Previous findings from bot comments (for applied detection)
   previousFindings = botComments.map(bc => ({
     file: bc.path,
     lineNumber: bc.original_line ?? bc.line,
@@ -150,7 +141,6 @@ Format: [index] DISMISS or [index] ACCEPT
 </Capture>
 
 ```ts eval
-// Parse classification results
 const classPattern = /\[(\d+)\]\s*(DISMISS|ACCEPT)/gi;
 let cm;
 while ((cm = classPattern.exec(classificationResult)) !== null) {
@@ -169,12 +159,10 @@ while ((cm = classPattern.exec(classificationResult)) !== null) {
 // 3. Build dismissed set and detect applied suggestions
 // ---------------------------------------------------------------------------
 
-// Dismissed: file:line pairs where user replied to dismiss
 const dismissedSet = new Set(
   dismissedReplies.map(d => `${d.file}:${d.lineNumber}`)
 );
 
-// Applied: previous findings whose comment line is no longer in pr.added
 const addedLineSet = new Set(
   pr.added.map(l => `${l.file}:${l.lineNumber}`)
 );
@@ -217,17 +205,14 @@ while ((m = indexPattern.exec(sampleResult)) !== null) {
   if (idx >= 0 && idx < pairs.length) redundantIndices.push(idx);
 }
 
-// Filter out dismissed findings
 const allFindings = redundantIndices.map(i => pairs[i]);
 const pendingFindings = allFindings.filter(f =>
   !dismissedSet.has(`${f.file}:${f.lineNumber}`)
 );
 const hasFindings = pendingFindings.length > 0;
 
-// Build checklist items
 const checklistItems = [];
 
-// Applied items (from previous runs, line no longer in diff)
 for (const af of appliedFindings) {
   checklistItems.push({
     status: "applied",
@@ -237,7 +222,6 @@ for (const af of appliedFindings) {
   });
 }
 
-// Dismissed items
 for (const df of dismissedReplies) {
   checklistItems.push({
     status: "dismissed",
@@ -247,7 +231,6 @@ for (const df of dismissedReplies) {
   });
 }
 
-// Pending items (current findings not dismissed)
 for (const pf of pendingFindings) {
   checklistItems.push({
     status: "pending",

@@ -456,7 +456,6 @@ function* expandComponent(
   // is expanded. This ensures eval blocks before <Content /> (e.g.,
   // provider middleware installation) run before children's code blocks.
   // Children segments are tagged with callerEvalEnv so expression props
-  // resolve in the caller's lexical scope.
   const substituted = substituteContent(
     definition.bodySegments,
     children,
@@ -533,7 +532,6 @@ function* expandComponent(
   // Children are caller-provided content. Use the caller's eval env so
   // expression props (e.g., {pr}) resolve against the scope where the
   // JSX was written, not the wrapping component's env. Falls back to
-  // componentEnv if there's no caller env (root-level expansion).
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
 
   componentEnv.values.renderChildren = function* () {
@@ -814,7 +812,6 @@ function* resolveExpressionProps(
     return resolved;
   }
 
-  // Get the current (component's) eval env from context.
   const contextEnv = yield* EvalEnvCtx.get();
 
   // For projected children (substituted via <Content />), merge the
@@ -822,7 +819,6 @@ function* resolveExpressionProps(
   // (contextEnv). The component's env takes priority because its eval
   // blocks run before <Content /> and may define bindings that children
   // reference. The caller's env provides fallback bindings from the
-  // outer scope (e.g., root document's `pr` binding).
   const evalEnv = (explicitEnv && contextEnv)
     ? { values: { ...explicitEnv.values, ...contextEnv.values } }
     : contextEnv ?? explicitEnv;
@@ -1014,7 +1010,6 @@ function substituteContent(
   let errorsEmitted = false;
 
   // Tag projected children with the caller's eval env so expression
-  // props resolve in the lexical scope where the JSX was written.
   const tagProjected = (segments: Segment[]): Segment[] => {
     if (!callerEnv) return segments;
     return segments.map((seg) => {

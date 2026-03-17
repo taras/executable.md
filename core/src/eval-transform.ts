@@ -73,7 +73,6 @@ export function transformBlock(
   const WRAPPER_PREFIX = "(async function*() {\n";
   const WRAPPER_SUFFIX = "\n})";
 
-  // Normalize `import type` for acorn parsing (preserve positions)
   const normalizedSource = source.replace(
     /^(import\s+)type(\s+)/gm,
     (_, pre, post) => pre + " ".repeat("type".length) + post,
@@ -110,7 +109,6 @@ export function transformBlock(
     }
   }
 
-  // Extract original import source text (preserves `import type` etc.)
   const userImports = importNodes.map((node: AstNode) =>
     source.slice(node.start - offset, node.end - offset)
   );
@@ -135,22 +133,18 @@ export function transformBlock(
   const s = new MagicString(source);
 
   // 5a. Remove import declarations from the body.
-  // They are hoisted to module top level by compileBlock via userImports.
   for (const node of importNodes) {
     let start = node.start - offset;
     let end = node.end - offset;
-    // Also remove trailing newline if present
     if (end < source.length && source[end] === "\n") {
       end++;
     }
-    // Also remove a leading newline if it would leave a blank line
     if (start > 0 && source[start - 1] === "\n") {
       start--;
     }
     s.remove(start, end);
   }
 
-  // 5b. Build preamble
   if (imports.length > 0) {
     const preamble = `const { ${imports.join(", ")} } = env;\n`;
     s.prepend(preamble);
