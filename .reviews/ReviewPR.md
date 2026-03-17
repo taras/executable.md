@@ -72,7 +72,7 @@ TSCONFIG
 </Capture>
 
 ```ts eval
-import { parseDoctorResult, parseDiagnostics } from "@executablemd/code-review-agent";
+import { parseDoctorResult } from "@executablemd/code-review-agent";
 
 const doctor = parseDoctorResult(doctorJson);
 ```
@@ -104,6 +104,8 @@ npx oxlint --format json 2>&1 || true
 </Capture>
 
 ```ts eval
+import { parseDiagnostics } from "@executablemd/code-review-agent";
+
 const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
 ```
 
