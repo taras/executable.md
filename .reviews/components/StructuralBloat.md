@@ -39,7 +39,7 @@ inputs:
   severity="warning"
   message="{count} console statements." />
 
-<Show when={diagnostics && diagnostics.byCategory && diagnostics.byCategory.structural && diagnostics.byCategory.structural.length > 0}>
+<Show when={!!diagnostics && !!diagnostics.byCategory && !!diagnostics.byCategory.structural && diagnostics.byCategory.structural.length > 0}>
 
 <OxlintSignals groups={diagnostics.byCategory.structural}
   label="structural signals" />

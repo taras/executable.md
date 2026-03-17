@@ -22,7 +22,7 @@ You are reviewing a TypeScript PR for EXTRANEOUS code only.
 PR: {pr.meta.title}
 Description: {pr.meta.body}
 
-<Show when={diagnostics && diagnostics.summary}>
+<Show when={!!diagnostics && !!diagnostics.summary}>
 
 STATIC ANALYSIS SIGNALS:
 {diagnostics.summary}

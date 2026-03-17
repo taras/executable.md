@@ -21,7 +21,7 @@ inputs:
 
 <VerbosityCheck pr={pr} />
 
-<Show when={diagnostics && doctor}>
+<Show when={!!diagnostics && !!doctor}>
 
 <OxlintSummary diagnostics={diagnostics} doctor={doctor} />
 
