@@ -138,6 +138,114 @@ describe("Tier T1 — Source transform", () => {
 });
 
 // ---------------------------------------------------------------------------
+// User import extraction
+// ---------------------------------------------------------------------------
+
+describe("User import extraction", () => {
+  // T17: Single-line import → extracted in userImports, removed from code
+  it("T17: single-line import extracted", function* () {
+    const result = transformBlock(
+      'import { parseDiff } from "@executablemd/code-review-agent";\n\nconst pr = parseDiff();',
+      "block-17",
+      [],
+    );
+    expect(result.userImports).toHaveLength(1);
+    expect(result.userImports[0]).toBe(
+      'import { parseDiff } from "@executablemd/code-review-agent";',
+    );
+    expect(result.code).not.toContain("import");
+    expect(result.code).toContain("const pr = parseDiff();");
+    expect(result.exports).toContain("pr");
+  });
+
+  // T18: import type → extracted correctly (TypeScript syntax preserved)
+  it("T18: import type preserved in userImports", function* () {
+    const result = transformBlock(
+      'import type { PR } from "@executablemd/code-review-agent";\n\nconst x = 1;',
+      "block-18",
+      [],
+    );
+    expect(result.userImports).toHaveLength(1);
+    expect(result.userImports[0]).toBe(
+      'import type { PR } from "@executablemd/code-review-agent";',
+    );
+    expect(result.code).not.toContain("import");
+    expect(result.code).toContain("const x = 1;");
+  });
+
+  // T19: import + const + yield* → import extracted, const exported, mode=generator
+  it("T19: import + const + yield coexist", function* () {
+    const result = transformBlock(
+      'import { foo } from "pkg";\n\nconst x = yield* foo();',
+      "block-19",
+      [],
+    );
+    expect(result.userImports).toHaveLength(1);
+    expect(result.userImports[0]).toBe('import { foo } from "pkg";');
+    expect(result.exports).toContain("x");
+    expect(result.mode).toBe("generator");
+    expect(result.code).not.toContain("import");
+    expect(result.code).toContain("env.x = x;");
+  });
+
+  // T20: dynamic import() expression → NOT extracted, stays in code
+  it("T20: dynamic import() not extracted", function* () {
+    const result = transformBlock(
+      'const mod = await import("pkg");',
+      "block-20",
+      [],
+    );
+    expect(result.userImports).toHaveLength(0);
+    expect(result.code).toContain('import("pkg")');
+    expect(result.mode).toBe("async");
+  });
+
+  // T21: multi-line import → extracted as single string
+  it("T21: multi-line import extracted", function* () {
+    const source = [
+      "import {",
+      "  parseDiff,",
+      "  somethingElse,",
+      '} from "pkg";',
+      "",
+      "const x = parseDiff();",
+    ].join("\n");
+    const result = transformBlock(source, "block-21", []);
+    expect(result.userImports).toHaveLength(1);
+    expect(result.userImports[0]).toContain("parseDiff");
+    expect(result.userImports[0]).toContain("somethingElse");
+    expect(result.userImports[0]).toContain('from "pkg"');
+    expect(result.code).not.toContain('from "pkg"');
+    expect(result.code).toContain("const x = parseDiff();");
+  });
+
+  // T22: no imports → userImports empty, code unchanged (backward compat)
+  it("T22: no imports → empty userImports", function* () {
+    const result = transformBlock("const x = 42;", "block-22", []);
+    expect(result.userImports).toHaveLength(0);
+    expect(result.code).toContain("const x = 42;");
+    expect(result.exports).toContain("x");
+  });
+
+  // T23: multiple imports → all extracted
+  it("T23: multiple imports all extracted", function* () {
+    const source = [
+      'import { a } from "pkg-a";',
+      'import { b } from "pkg-b";',
+      "",
+      "const x = a + b;",
+    ].join("\n");
+    const result = transformBlock(source, "block-23", []);
+    expect(result.userImports).toHaveLength(2);
+    expect(result.userImports[0]).toBe('import { a } from "pkg-a";');
+    expect(result.userImports[1]).toBe('import { b } from "pkg-b";');
+    expect(result.code).not.toContain('from "pkg-a"');
+    expect(result.code).not.toContain('from "pkg-b"');
+    expect(result.code).toContain("const x = a + b;");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
