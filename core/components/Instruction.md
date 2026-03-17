@@ -7,24 +7,21 @@ inputs:
     type: string
     required: true
     description: >
-      Instruction text to add to the Sample context. When Sample calls
+      Instruction text to set as the system prompt. When Sample calls
       are made within this component's children, the instruction text
-      is included in the SampleContext.instructions field, which
-      replaces the default system prompt in buildDefaultMessages.
-      Multiple Instruction components accumulate — instructions from
-      enclosing scopes appear first, inner instructions are appended.
-      Use as a wrapper (<Instruction text="...">children</Instruction>)
-      or self-closing before <Content /> in agent components
-      (<Instruction text="..." /> then <Content />).
+      is included in the SampleContext.system field, which providers
+      use as the system prompt. Multiple Instruction components
+      accumulate — instructions from enclosing scopes appear first,
+      inner instructions are appended.
 ---
 
 ```js persist eval
 yield* Sample.around({
   *sample([context], next) {
-    const existing = context.instructions || '';
+    const existing = context.system || '';
     return yield* next({
       ...context,
-      instructions: existing ? existing + '\n' + text : text,
+      system: existing ? existing + '\n' + text : text,
     });
   },
 }, { at: 'min' });

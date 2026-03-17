@@ -143,20 +143,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     // The daemon server responds with "daemon-ok"
     expect(output).toContain("daemon-ok");
 
-    // ----- Sample Modifier section -----
-    expect(output).toContain("§ Sample Modifier and Provider Pattern");
-    // StubProvider returns "[response-from-smoke-model]"
-    expect(output).toContain("[response-from-smoke-model]");
-    // The raw exec output should be replaced by the sample middleware
-    expect(output).not.toContain("this output is replaced by the sample middleware");
-
-    // ----- Nested Providers section -----
-    expect(output).toContain("§ Nested Providers");
-    // No model → innermost handles
-    expect(output).toContain("[response-from-inner-smoke]");
-    // Explicit model=outer-smoke → outer handles
-    expect(output).toContain("[response-from-outer-smoke]");
-
     // ----- Sample Component section -----
     expect(output).toContain("§ Sample Component");
     // Self-closing with prompt — StubProvider returns [response-from-sample-stub]
@@ -166,10 +152,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
 
     // ----- Smoke test summary table — new entries -----
     expect(output).toContain("daemon modifier");
-    expect(output).toContain("sample modifier");
-    expect(output).toContain("bracket params");
     expect(output).toContain("provider pattern");
-    expect(output).toContain("nested providers");
     expect(output).toContain("per-component eval scope");
     expect(output).toContain("props in env.values");
     expect(output).toContain("Sample component");
@@ -182,8 +165,8 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
 
     // ----- Instruction Component section -----
     expect(output).toContain("§ Instruction Component");
-    // Instruction wraps Sample — response includes instruction text
-    expect(output).toContain("[response-from-instruction-stub|instructions:You are a helpful pirate.]");
+    // Instruction wraps Sample — response includes system prompt text
+    expect(output).toContain("[response-from-instruction-stub|system:You are a helpful pirate.]");
 
     // ----- Durability section -----
     expect(output).toContain("Run at:");

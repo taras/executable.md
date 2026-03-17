@@ -453,7 +453,6 @@ The host installs built-in factories before `durableRun`:
 ```typescript
 registry.set("exec", createExecFactory(runtime));
 registry.set("silent", silentFactory);
-registry.set("sample", sampleFactory);
 registry.set("eval", evalFactory);
 registry.set("persist", persistFactory);
 registry.set("timeout", timeoutFactory);
@@ -1547,11 +1546,28 @@ Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/stream-helpers`, `acorn`, `magic-string`, `marked`,
 `marked-terminal`.
 
-### 4.7 The `output()` function
+### 4.7 Eval block output
 
-Eval blocks produce no rendered output by default. The `output()`
-function allows an eval block to set its rendered output explicitly.
-It is a plain synchronous function call (not `yield*`):
+Eval blocks can produce rendered output in two ways:
+
+1. **`return` value** — if the generator returns a non-null value,
+   `String(returnValue)` becomes the block's rendered output.
+2. **`output()` function** — explicit side-effect call that sets
+   the output text.
+
+If both are used, `output()` wins. `null`/`undefined` returns produce
+no output.
+
+#### `return` as output
+
+```typescript
+return "This text appears in the rendered document";
+return 42;  // coerced to "42"
+```
+
+#### `output()` function
+
+`output()` is a plain synchronous function call (not `yield*`):
 
 ```typescript
 output("This text appears in the rendered document");
@@ -4750,3 +4766,6 @@ A.md references <C />.
 | 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
 | 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |
+| 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; enables components like `<Show>` where the entire block is conditional rendering |
+| 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; removes `sampleFactory`, `durableSample`, `callLlamafile`, `callOllama`, `callAnthropic`; simplifies the modifier chain to pure exec/eval concerns |
+| 87 | `SampleContext` simplified to content-centric shape | Changed from exec-centric `{stdout, stderr, exitCode, command, language}` to content-centric `{content, model?, params?, system?, componentName?}`; providers build their own messages directly instead of relying on `buildDefaultMessages` |

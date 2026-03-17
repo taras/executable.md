@@ -52,7 +52,6 @@ import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
-import { sampleFactory } from "./modifiers/sample.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
@@ -496,7 +495,6 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   registry.set("persist", persistFactory);
   registry.set("timeout", timeoutFactory);
   registry.set("daemon", daemonFactory);
-  registry.set("sample", sampleFactory);
   for (const [name, handler] of Object.entries(customModifiers)) {
     registry.set(name, handler);
   }
