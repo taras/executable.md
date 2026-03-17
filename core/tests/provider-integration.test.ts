@@ -937,4 +937,72 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       cleanup(tmpDir);
     }
   });
+
+  // S15: Expression prop resolves through double nesting (Root → W1 → W2 → Consumer)
+  // This mirrors the code review agent: Root → OllamaProvider → Instruction → ReviewBody
+  it("S15: expression prop resolves through double-nested wrappers", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const passthrough = (name: string) =>
+        [
+          "---",
+          "meta:",
+          `  componentName: ${name}`,
+          "inputs:",
+          "  label:",
+          "    type: string",
+          "    required: true",
+          "---",
+          "",
+          "<Content />",
+        ].join("\n");
+
+      const consumer = () =>
+        [
+          "---",
+          "meta:",
+          "  componentName: Consumer",
+          "inputs:",
+          "  data:",
+          "    type: object",
+          "    required: true",
+          "---",
+          "",
+          "Received: {props.data.value}",
+        ].join("\n");
+
+      writeFiles(tmpDir, {
+        "components/Outer.md": passthrough("Outer"),
+        "components/Inner.md": passthrough("Inner"),
+        "components/Consumer.md": consumer(),
+        "doc.md": [
+          "```js eval",
+          "const pr = { value: 'deep-hello' };",
+          "```",
+          "",
+          '<Outer label="outer">',
+          '<Inner label="inner">',
+          "<Consumer data={pr} />",
+          "</Inner>",
+          "</Outer>",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* collect(yield* runDocument({
+        docPath: path.join(tmpDir, "doc.md"),
+        stream,
+        runtime: nodeRuntime(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        freshness: false,
+      }));
+
+      expect(output).toContain("deep-hello");
+      expect(output).not.toContain("ERROR");
+      expect(output).not.toContain("pr is not defined");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
 });

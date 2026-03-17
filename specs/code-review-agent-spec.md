@@ -64,7 +64,14 @@ All EMA core changes and the full agent implementation are complete:
 - **Fixed broken providers** — `OllamaProvider`, `LlamafileProvider`,
   `AnthropicProvider` updated to use direct `fetch()` calls
 - **Component resolution** — review components resolved via
-  `--componentDir .reviews/components --componentDir core/components`
+  `--component-dir .reviews/components --component-dir core/components`
+- **AST-based user import extraction** (DEC-93) — eval blocks can use
+  standard `import` declarations; extracted via acorn's
+  `allowImportExportEverywhere` and hoisted to module level
+- **Projected children expression prop scoping** (DEC-91, DEC-92) —
+  children substituted via `<Content />` carry the caller's eval env.
+  Expression props on projected children resolve against merged env
+  (all ancestor bindings propagated through multi-level nesting)
 
 ---
 

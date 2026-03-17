@@ -440,9 +440,16 @@ function* expandComponent(
   // Capture the caller's eval environment before creating the component's
   // own env. Children are caller-provided content — expression props like
   // {pr} should resolve against the scope where the JSX was written, not
-  // the component that renders <Content />. This follows React's lexical
-  // scoping model for JSX expressions.
-  const callerEvalEnv = yield* EvalEnvCtx.get();
+  // the component that renders <Content />.
+  //
+  // For multi-level nesting (Root → Provider → Instruction → ReviewBody),
+  // the projectedEnv from the outer caller must be merged with the current
+  // context env so that ancestor bindings propagate through all levels.
+  // The current context env's bindings take precedence (innermost-wins).
+  const contextEnv = yield* EvalEnvCtx.get();
+  const callerEvalEnv = projectedEnv
+    ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
+    : contextEnv;
 
   // Substitute raw children into <Content /> positions. Children are NOT
   // pre-expanded — they expand in document order when the component body
