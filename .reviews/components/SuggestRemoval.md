@@ -1,7 +1,7 @@
 ---
 inputs:
   findings:
-    type: object
+    type: array
     required: true
 ---
 
