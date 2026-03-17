@@ -59,7 +59,14 @@ cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
     "lib": ["ESNext", "DOM"],
     "types": []
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/*.ts"],
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/*.ts",
+    "core/src/**/*.ts",
+    "cli/src/**/*.ts",
+    "durable-streams/**/*.ts",
+    "durable-effects/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", ".vendor", "**/*.test.ts"]
 }
 TSCONFIG
@@ -77,15 +84,22 @@ import { parseDoctorResult } from "@executablemd/code-review-agent";
 const doctor = parseDoctorResult(doctorJson);
 ```
 
+<Capture as="changedTsFiles">
+
+```bash silent exec
+git diff --name-only {BASE_SHA}...{HEAD_SHA} -- '*.ts' '*.tsx' | grep -v '\.test\.' | grep -v '\.spec\.' | grep -v '\.d\.ts$' | head -200
+```
+
+</Capture>
+
 <Capture as="rawDiagnostics">
 
 <Show when={doctor.recommendation === "type-aware"
          || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
-OUT=$(npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
-if [ -n "$OUT" ]; then
-  printf '%s' "$OUT"
+if [ -n "{changedTsFiles}" ]; then
+  echo "{changedTsFiles}" | tr '\n' ' ' | xargs npx oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true
 else
   echo "[]"
 fi
@@ -97,9 +111,8 @@ fi
          && doctor.oxlintInstalled}>
 
 ```bash exec
-OUT=$(npx oxlint --format json 2>/dev/null || true)
-if [ -n "$OUT" ]; then
-  printf '%s' "$OUT"
+if [ -n "{changedTsFiles}" ]; then
+  echo "{changedTsFiles}" | tr '\n' ' ' | xargs npx oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true
 else
   echo "[]"
 fi

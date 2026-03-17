@@ -325,7 +325,7 @@ describe("parseDiagnostics", () => {
     const result = parseDiagnostics(raw, makePR(100), makeDoctor());
 
     expect(result.summary).toContain("3 diagnostics across 2 files (2 rules)");
-    expect(result.summary).toContain("Density: 0.03 violations/added-line");
+    expect(result.summary).toContain("Density: 0.030 violations/added-line");
     expect(result.summary).toContain("no-unused-vars (2)");
     expect(result.summary).toContain("no-console (1)");
   });

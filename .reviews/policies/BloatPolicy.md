@@ -5,7 +5,7 @@ inputs:
     required: true
   diagnostics:
     type: object
-    required: false
+    required: true
 ---
 
 <ReviewSection heading="Structural" clean="✅ No structural bloat detected.">
@@ -39,11 +39,7 @@ inputs:
   severity="warning"
   message="{count} console statements." />
 
-<Show when={!!diagnostics && !!diagnostics.byCategory && !!diagnostics.byCategory.structural && diagnostics.byCategory.structural.length > 0}>
-
 <OxlintSignals groups={diagnostics.byCategory.structural}
   label="structural signals" />
-
-</Show>
 
 </ReviewSection>

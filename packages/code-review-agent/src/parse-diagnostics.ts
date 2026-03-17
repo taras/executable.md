@@ -177,14 +177,14 @@ export function parseDiagnostics(
   const fileCount = allFiles.size;
   const ruleCount = groups.length;
   const density = pr.stats.additions > 0
-    ? Math.round((total / pr.stats.additions) * 100) / 100
+    ? Math.round((total / pr.stats.additions) * 1000) / 1000
     : 0;
 
   const lines: string[] = [];
   lines.push(
     `Oxlint: ${total} diagnostic${total !== 1 ? "s" : ""} across ${fileCount} file${fileCount !== 1 ? "s" : ""} (${ruleCount} rule${ruleCount !== 1 ? "s" : ""})`,
   );
-  lines.push(`Density: ${density} violations/added-line`);
+  lines.push(`Density: ${density.toFixed(3)} violations/added-line`);
   lines.push("");
 
   for (const g of groups) {

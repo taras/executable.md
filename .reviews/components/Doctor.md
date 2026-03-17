@@ -8,6 +8,8 @@ inputs:
     default: ".reviews/tsconfig.oxlint.json"
 ---
 
+Checking environment for Oxlint static analysis...
+
 <Capture as="oxlintVersion">
 
 ```bash exec
@@ -50,6 +52,8 @@ const canProbeTypeAware = oxlintInstalled && tsgolintInstalled
   && nodeModulesExists && tsconfigExists;
 ```
 
+Scanning source files for scheme specifiers (jsr:, npm:)...
+
 <Capture as="specifierScan">
 
 ```bash exec
@@ -73,13 +77,15 @@ const jsrCount = specifierLines.filter(l => l.includes("jsr:")).length;
 const npmCount = specifierLines.filter(l => l.includes("npm:")).length;
 ```
 
+Running type-aware probe to test Oxlint compatibility...
+
 <Capture as="probeResult">
 
 <Show when={canProbeTypeAware}
   fallback='{"diagnostics":[],"stderr":""}'>
 
 ```bash exec
-RESULT=$(npx oxlint --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
+RESULT=$(npx oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
 STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
 rm -f .reviews/probe-stderr.tmp
 echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"

@@ -26,6 +26,12 @@
     "oxlint": "npm:oxlint@^1",
     "oxlint-tsgolint": "npm:oxlint-tsgolint@^0.17"
   },
+  "lint": {
+    "plugins": ["./lint-plugins/no-scheme-specifiers.ts"],
+    "rules": {
+      "include": ["no-scheme-specifiers/no-scheme-specifiers"]
+    }
+  },
   "tasks": {
     "ema": "deno run --allow-all cli/src/cli.ts",
     "test": "deno test --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/tests/",

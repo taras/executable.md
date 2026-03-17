@@ -5,10 +5,10 @@ inputs:
     required: true
   diagnostics:
     type: object
-    required: false
+    required: true
   doctor:
     type: object
-    required: false
+    required: true
 ---
 
 ## PR #{pr.meta.number}: {pr.meta.title}
@@ -21,10 +21,6 @@ inputs:
 
 <SlopPolicy pr={pr} diagnostics={diagnostics} />
 
-<Show when={!!diagnostics && !!doctor}>
-
 <OxlintSummary diagnostics={diagnostics} doctor={doctor} />
-
-</Show>
 
 <ExtraneousCodePolicy pr={pr} diagnostics={diagnostics} doctor={doctor} />

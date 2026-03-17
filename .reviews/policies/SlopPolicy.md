@@ -5,7 +5,7 @@ inputs:
     required: true
   diagnostics:
     type: object
-    required: false
+    required: true
 ---
 
 <ReviewSection heading="Slop" clean="✅ Slop indicators look low.">
@@ -21,11 +21,7 @@ inputs:
 
 <CommentReview pr={pr} />
 
-<Show when={!!diagnostics && !!diagnostics.byCategory && !!diagnostics.byCategory.verbosity && diagnostics.byCategory.verbosity.length > 0}>
-
 <OxlintSignals groups={diagnostics.byCategory.verbosity}
   label="slop signals" />
-
-</Show>
 
 </ReviewSection>

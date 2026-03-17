@@ -1166,3 +1166,82 @@ code-review-agent PR:
 - Phase 4: Rule components — code-review-agent PR
 - Phase 5: Policy documents + entry points + CI — code-review-agent PR
 - Phase 6: Sample modifier removal — PR #35
+
+---
+
+## 13. Extension: Oxlint Sensor (v2)
+
+**Full spec:** `oxlint-sensor-spec-v2.md`
+
+Oxlint runs as a structured signal source inside the review pipeline.
+Its JSON output becomes a density metric the LLM uses alongside the
+diff to detect quality deficits that correlate with unreviewed AI
+output. All rules at `"warn"` — Oxlint collects signals, not verdicts.
+
+### 13.1 Sensor configuration
+
+`.reviews/.oxlintrc.json` — committed config with `pedantic: "warn"`
+and `style: "warn"` enabled (14 bloat-relevant rules). All oxlint
+invocations in capture blocks reference this config via
+`--config .reviews/.oxlintrc.json`.
+
+### 13.2 Environment detection (`Doctor.md`)
+
+The Doctor component probes the environment before oxlint runs:
+oxlint binary, tsgolint binary, `node_modules/`, tsconfig, scheme
+specifier scan (`jsr:`, `npm:`), and a type-aware test run. Outputs
+a recommendation: `type-aware`, `type-aware-filtered`, or
+`syntax-only`. Includes prose narration for local visibility.
+
+### 13.3 PR-scoped analysis
+
+PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) scope oxlint
+to changed `.ts`/`.tsx` files only via `git diff --name-only` +
+`xargs`. Density against `pr.stats.additions` is only meaningful
+when diagnostics come from the same files the additions are in.
+Repo analysis entry points run on everything.
+
+### 13.4 Density calibration
+
+| Density | Interpretation |
+|---|---|
+| < 0.020 | Clean — experienced contributor, reviewed code |
+| 0.020–0.080 | Normal — minor issues, typical development |
+| > 0.100 | Elevated — likely unreviewed generated code |
+
+3 decimal places to preserve signal in the narrow normal band.
+
+### 13.5 Policy updates
+
+- `ExtraneousCodePolicy.md` — density calibration thresholds,
+  interpretation rules, Rule of Three, and object literal assertion
+  detection added to LLM prompt
+- `BloatPolicy.md`, `SlopPolicy.md` — `diagnostics` changed from
+  optional to required; defensive guards removed
+- `RepoCleanupPolicy.md` — Rule of Three and YAGNI principles
+  added to LLM prompt
+
+### 13.6 Import specifier enforcement
+
+`lint-plugins/no-scheme-specifiers.ts` — Deno lint plugin that
+flags `jsr:` and `npm:` scheme specifiers in source files and
+auto-fixes them to bare specifiers. Required for tsgo/Oxlint
+compatibility since tsgo uses Node module resolution.
+
+### 13.7 Process enforcement
+
+`.github/pull_request_template.md` — scope confirmation, Rule of
+Three checklist for new abstractions, dependency justification.
+
+### 13.8 Additional files
+
+```
+.reviews/
+  .oxlintrc.json                   Sensor config (committed)
+
+.github/
+  pull_request_template.md         Process enforcement
+
+lint-plugins/
+  no-scheme-specifiers.ts          Deno lint plugin
+```
