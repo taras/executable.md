@@ -19,7 +19,7 @@ npx oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
 <Capture as="tsgolintVersion">
 
 ```bash exec
-npx oxlint-tsgolint --version 2>/dev/null || echo "NOT_INSTALLED"
+test -d node_modules/oxlint-tsgolint && echo "INSTALLED" || echo "NOT_INSTALLED"
 ```
 
 </Capture>

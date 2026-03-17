@@ -22,7 +22,9 @@
     "@effectionx/timebox": "npm:@effectionx/timebox@^0.4.2",
     "@frontside/configliere": "npm:@jsr/frontside__configliere@^0.2.3",
     "@std/expect": "jsr:@std/expect@^1",
-    "@std/testing/bdd": "jsr:@std/testing@^1/bdd"
+    "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
+    "oxlint": "npm:oxlint@^1",
+    "oxlint-tsgolint": "npm:oxlint-tsgolint@^0.17"
   },
   "tasks": {
     "ema": "deno run --allow-all cli/src/cli.ts",

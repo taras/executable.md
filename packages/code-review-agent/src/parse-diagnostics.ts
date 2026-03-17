@@ -55,7 +55,6 @@ export function parseDiagnostics(
     })
     : raw;
 
-  // Group by ruleId
   const groupMap = new Map<string, OxlintDiagnostic[]>();
   for (const d of filtered) {
     const key = d.ruleId ?? "unknown";
@@ -77,7 +76,6 @@ export function parseDiagnostics(
     }))
     .sort((a, b) => b.count - a.count);
 
-  // Categorize groups
   const byCategory: Diagnostics["byCategory"] = {
     structural: [],
     verbosity: [],
@@ -100,7 +98,6 @@ export function parseDiagnostics(
     ? Math.round((total / pr.stats.additions) * 100) / 100
     : 0;
 
-  // Generate summary
   const lines: string[] = [];
   lines.push(
     `Oxlint: ${total} diagnostic${total !== 1 ? "s" : ""} across ${fileCount} file${fileCount !== 1 ? "s" : ""} (${ruleCount} rule${ruleCount !== 1 ? "s" : ""})`,

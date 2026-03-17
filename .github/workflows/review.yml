@@ -19,8 +19,6 @@ jobs:
 
       - run: deno install
 
-      - run: npm install -g oxlint oxlint-tsgolint || true
-
       - name: Run review
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
