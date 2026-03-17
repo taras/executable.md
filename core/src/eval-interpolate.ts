@@ -55,20 +55,16 @@ export function interpolateEvalBindings(
     BARE_BINDING_RE,
     (match, key: string) => {
       const parts = key.split(".");
-      // Root key must exist in bindings
       if (!(parts[0] in bindings)) return match;
 
-      // Traverse the path
       let value: unknown = bindings;
       for (let i = 0; i < parts.length; i++) {
         if (value == null || typeof value !== "object") return match;
         const obj = value as Record<string, unknown>;
-        // For intermediate segments, the key must exist in the object
         if (i < parts.length - 1 && !(parts[i] in obj)) return match;
         value = obj[parts[i]];
       }
 
-      // Leaf value found — stringify (including null/undefined)
       return String(value);
     },
   );
