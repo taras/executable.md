@@ -393,14 +393,14 @@ a `slot` prop go to the default slot:
 The `<Instruction>` component surfaces the system prompt as visible,
 composable document content. Instead of hiding the LLM's instructions
 inside provider internals, authors wrap Sample calls with
-`<Instruction text="...">` to define what the LLM is told.
+`<Instruction system="...">` to define what the LLM is told.
 
 Without an instruction, the provider uses a hardcoded default system
 prompt. With `<Instruction>`, the author's text replaces that default:
 
 <StubProvider model="instruction-stub">
 
-<Instruction text="You are a helpful pirate.">
+<Instruction system="You are a helpful pirate.">
 <Sample prompt="ahoy" model="instruction-stub" />
 </Instruction>
 
@@ -476,7 +476,7 @@ cat <<'EOF'
 | renderChildren() closure  | Sample component captures children      |
 | Named slots               | <TwoColumn> with slot="left"/slot="right" |
 | Fragment passthrough      | <Fragment slot="..."> wraps raw text       |
-| Instruction component     | <Instruction text> wraps Sample calls   |
+| Instruction component     | <Instruction system> wraps Sample calls |
 | composable instructions   | Instructions enrich SampleContext.system |
 | Text interpolation        | {textHost}:{textPort} in prose text     |
 | Text + meta coexistence   | {meta.title} and {textPort} in same text|

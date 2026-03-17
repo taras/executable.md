@@ -1,0 +1,37 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+
+      - uses: actions/cache@v4
+        with:
+          path: .reviews/journal.jsonl
+          key: ema-review-${{ github.event.pull_request.head.sha }}
+          restore-keys: |
+            ema-review-${{ github.event.pull_request.base.sha }}
+
+      - name: Run review
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
+        run: deno task review

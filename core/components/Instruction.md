@@ -3,16 +3,15 @@ meta:
   componentName: Instruction
 
 inputs:
-  text:
+  system:
     type: string
     required: true
     description: >
-      Instruction text to set as the system prompt. When Sample calls
-      are made within this component's children, the instruction text
-      is included in the SampleContext.system field, which providers
-      use as the system prompt. Multiple Instruction components
-      accumulate — instructions from enclosing scopes appear first,
-      inner instructions are appended.
+      System prompt text. When Sample calls are made within this
+      component's children, the text is included in the
+      SampleContext.system field, which providers use as the system
+      prompt. Multiple Instruction components accumulate — instructions
+      from enclosing scopes appear first, inner instructions are appended.
 ---
 
 ```js persist eval
@@ -21,7 +20,7 @@ yield* Sample.around({
     const existing = context.system || '';
     return yield* next({
       ...context,
-      system: existing ? existing + '\n' + text : text,
+      system: existing ? existing + '\n' + system : system,
     });
   },
 }, { at: 'min' });
