@@ -11,7 +11,7 @@ inputs:
     required: false
 ---
 
-<ReviewSection heading="Semantic" clean="✅ Small PR — semantic review skipped.">
+<ReviewSection heading="Correctness" clean="✅ Small PR — correctness policy skipped.">
 
 <Show when={pr.stats.totalChanges > 20}>
 

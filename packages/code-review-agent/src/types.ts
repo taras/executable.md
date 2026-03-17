@@ -117,3 +117,43 @@ export interface DoctorResult {
     npm: number;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Policy types
+// ---------------------------------------------------------------------------
+
+export type PolicyMode = "pr" | "repo";
+
+export interface PolicyInput {
+  mode: PolicyMode;
+  diagnostics: Diagnostics;
+  pr?: PR;
+  doctor?: DoctorResult;
+  metadata?: {
+    source?: string;
+    generatedAt?: string;
+  };
+}
+
+export type PolicyCategory = "bloat" | "slop" | "correctness" | "scope";
+
+export interface PolicyCluster {
+  id: string;
+  category: PolicyCategory;
+  ruleIds: string[];
+  files: string[];
+  count: number;
+  summary: string;
+}
+
+export interface PolicyScore {
+  clusterId: string;
+  score: number;
+  confidence: "low" | "medium" | "high";
+}
+
+export interface PolicyReport {
+  summary: string;
+  clusters: PolicyCluster[];
+  scores: PolicyScore[];
+}

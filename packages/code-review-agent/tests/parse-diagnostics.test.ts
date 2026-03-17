@@ -231,6 +231,62 @@ describe("parseDiagnostics", () => {
     expect(result.ruleCount).toBe(0);
   });
 
+  it("accepts oxlint object shape with diagnostics array", function* () {
+    const raw = JSON.stringify({
+      diagnostics: [
+        makeDiag("no-unused-vars", "src/a.ts"),
+        makeDiag("no-console", "src/b.ts"),
+      ],
+    });
+
+    const result = parseDiagnostics(raw, makePR(), makeDoctor());
+
+    expect(result.total).toBe(2);
+    expect(result.groups.map((g) => g.ruleId)).toEqual([
+      "no-unused-vars",
+      "no-console",
+    ]);
+  });
+
+  it("accepts nested diagnostics wrapper shape", function* () {
+    const raw = JSON.stringify({
+      diagnostics: {
+        diagnostics: [
+          makeDiag("no-unused-vars", "src/a.ts"),
+        ],
+      },
+    });
+
+    const result = parseDiagnostics(raw, makePR(), makeDoctor());
+
+    expect(result.total).toBe(1);
+    expect(result.groups[0].ruleId).toBe("no-unused-vars");
+  });
+
+  it("normalizes native oxlint fields", function* () {
+    const raw = JSON.stringify({
+      diagnostics: [
+        {
+          message: "Type 'X' is imported but never used.",
+          code: "eslint(no-unused-vars)",
+          severity: "warning",
+          filename: "src/example.ts",
+          labels: [{ span: { line: 12, column: 7 } }],
+        },
+      ],
+    });
+
+    const result = parseDiagnostics(raw, makePR(), makeDoctor());
+
+    expect(result.total).toBe(1);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].ruleId).toBe("no-unused-vars");
+    expect(result.groups[0].files).toEqual(["src/example.ts"]);
+    expect(result.byCategory.structural.map((g) => g.ruleId)).toContain(
+      "no-unused-vars",
+    );
+  });
+
   it("PD8: malformed JSON returns empty diagnostics", function* () {
     const result = parseDiagnostics(
       "not valid json {{{",

@@ -9,6 +9,12 @@ export { parseDiff } from "./src/parse-diff.ts";
 export { parseDiagnostics } from "./src/parse-diagnostics.ts";
 export { parseDoctorResult } from "./src/parse-doctor.ts";
 export {
+  buildPolicyInput,
+  buildPolicyReport,
+  clusterDiagnostics,
+  scoreClusters,
+} from "./src/policy.ts";
+export {
   categorizeRule,
   STRUCTURAL_RULES,
   TYPE_AWARE_RULES,
@@ -22,5 +28,11 @@ export type {
   DiffLine,
   DoctorResult,
   OxlintDiagnostic,
+  PolicyCategory,
+  PolicyCluster,
+  PolicyInput,
+  PolicyMode,
+  PolicyReport,
+  PolicyScore,
   PR,
 } from "./src/types.ts";
