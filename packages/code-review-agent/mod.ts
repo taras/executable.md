@@ -1,9 +1,26 @@
 /**
  * @executablemd/code-review-agent
  *
- * Provides `parseDiff` — transforms raw git diff output into a typed PR
- * object for use by EMA review components.
+ * Provides parsers for transforming raw git diff and Oxlint output
+ * into typed structures for use by EMA review components.
  */
 
 export { parseDiff } from "./src/parse-diff.ts";
-export type { PR, DiffFile, DiffHunk, DiffLine } from "./src/types.ts";
+export { parseDiagnostics } from "./src/parse-diagnostics.ts";
+export { parseDoctorResult } from "./src/parse-doctor.ts";
+export {
+  categorizeRule,
+  STRUCTURAL_RULES,
+  TYPE_AWARE_RULES,
+  VERBOSITY_RULES,
+} from "./src/categories.ts";
+export type {
+  Diagnostics,
+  DiagnosticGroup,
+  DiffFile,
+  DiffHunk,
+  DiffLine,
+  DoctorResult,
+  OxlintDiagnostic,
+  PR,
+} from "./src/types.ts";

@@ -17,6 +17,8 @@ jobs:
 
       - uses: denoland/setup-deno@v2
 
+      - run: deno install
+
       - name: Run review
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
