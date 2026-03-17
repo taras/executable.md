@@ -6,6 +6,9 @@ inputs:
 ---
 
 ```ts eval
+// ---------------------------------------------------------------------------
+// 1. Build comment/code pairs with file/line metadata
+// ---------------------------------------------------------------------------
 const pairs = [];
 const lines = pr.added.filter(l => !l.isTest);
 
@@ -28,6 +31,162 @@ const pairsText = hasPairs
       `[${i}] COMMENT: ${p.comment}\nCODE: ${p.code}`
     ).join("\n---\n")
   : "";
+
+// ---------------------------------------------------------------------------
+// 2. Fetch previous bot review comments and human replies
+// ---------------------------------------------------------------------------
+const token = process.env.GITHUB_TOKEN;
+const repo = process.env.GITHUB_REPOSITORY;
+const prNumber = process.env.PR_NUMBER;
+
+let previousFindings = [];
+let dismissedReplies = [];
+let repliesForClassification = [];
+
+if (token && repo && prNumber) {
+  const [owner, name] = repo.split("/");
+  const api = `https://api.github.com/repos/${owner}/${name}`;
+  const headers = {
+    "Authorization": `Bearer ${token}`,
+    "Accept": "application/vnd.github+json",
+  };
+
+  // Fetch all PR review comments
+  const allComments = yield* fetch(
+    `${api}/pulls/${prNumber}/comments?per_page=100`, { headers }
+  ).expect().json();
+
+  // Bot suggestion comments
+  const botComments = allComments.filter(c =>
+    c.user.login === "github-actions[bot]" &&
+    c.body && c.body.includes("Redundant comment")
+  );
+
+  // Build map of bot comment id → { file, line }
+  const botCommentMap = new Map();
+  for (const bc of botComments) {
+    botCommentMap.set(bc.id, {
+      file: bc.path,
+      lineNumber: bc.original_line ?? bc.line,
+    });
+  }
+
+  // Human replies to bot comments
+  const humanReplies = allComments.filter(c =>
+    c.in_reply_to_id && botCommentMap.has(c.in_reply_to_id) &&
+    c.user.type !== "Bot"
+  );
+
+  // Check which replies already have a 👍 reaction (already processed)
+  for (const reply of humanReplies) {
+    const location = botCommentMap.get(reply.in_reply_to_id);
+    try {
+      const reactions = yield* fetch(
+        `${api}/pulls/comments/${reply.id}/reactions`, { headers }
+      ).expect().json();
+      const alreadyAcked = reactions.some(r =>
+        r.user.login === "github-actions[bot]" && r.content === "+1"
+      );
+      if (alreadyAcked) {
+        // Already processed — treat as dismissed
+        dismissedReplies.push({
+          ...location,
+          replyText: reply.body,
+          replyId: reply.id,
+          alreadyProcessed: true,
+        });
+      } else {
+        // New reply — needs classification
+        repliesForClassification.push({
+          ...location,
+          replyText: reply.body,
+          replyId: reply.id,
+        });
+      }
+    } catch {
+      // If we can't fetch reactions, classify it
+      repliesForClassification.push({
+        ...location,
+        replyText: reply.body,
+        replyId: reply.id,
+      });
+    }
+  }
+
+  // Previous findings from bot comments (for applied detection)
+  previousFindings = botComments.map(bc => ({
+    file: bc.path,
+    lineNumber: bc.original_line ?? bc.line,
+  }));
+}
+
+const hasRepliesToClassify = repliesForClassification.length > 0;
+const repliesText = hasRepliesToClassify
+  ? repliesForClassification.map((r, i) =>
+      `[${i}] FILE: ${r.file}:${r.lineNumber}\nREPLY: "${r.replyText}"`
+    ).join("\n---\n")
+  : "";
+```
+
+<Show when={hasRepliesToClassify}>
+
+<Capture as="classificationResult">
+
+<Sample>
+
+For each reply to an automated code review suggestion, classify the
+user's intent. They are replying to a suggestion to remove a redundant
+code comment.
+
+DISMISS — the user wants to keep the comment (any reason)
+ACCEPT — the user agrees the comment should be removed
+
+Format: [index] DISMISS or [index] ACCEPT
+
+{repliesText}
+
+</Sample>
+
+</Capture>
+
+```ts eval
+// Parse classification results
+const classPattern = /\[(\d+)\]\s*(DISMISS|ACCEPT)/gi;
+let cm;
+while ((cm = classPattern.exec(classificationResult)) !== null) {
+  const idx = parseInt(cm[1], 10);
+  const intent = cm[2].toUpperCase();
+  if (idx >= 0 && idx < repliesForClassification.length && intent === "DISMISS") {
+    dismissedReplies.push(repliesForClassification[idx]);
+  }
+}
+```
+
+</Show>
+
+```ts eval
+// ---------------------------------------------------------------------------
+// 3. Build dismissed set and detect applied suggestions
+// ---------------------------------------------------------------------------
+
+// Dismissed: file:line pairs where user replied to dismiss
+const dismissedSet = new Set(
+  dismissedReplies.map(d => `${d.file}:${d.lineNumber}`)
+);
+
+// Applied: previous findings whose comment line is no longer in pr.added
+const addedLineSet = new Set(
+  pr.added.map(l => `${l.file}:${l.lineNumber}`)
+);
+const appliedFindings = previousFindings.filter(pf =>
+  pf.lineNumber && !addedLineSet.has(`${pf.file}:${pf.lineNumber}`) &&
+  !dismissedSet.has(`${pf.file}:${pf.lineNumber}`)
+);
+const appliedSet = new Set(
+  appliedFindings.map(af => `${af.file}:${af.lineNumber}`)
+);
+
+const hasHistory = previousFindings.length > 0;
 ```
 
 <Show when={hasPairs}>
@@ -58,16 +217,68 @@ while ((m = indexPattern.exec(sampleResult)) !== null) {
   if (idx >= 0 && idx < pairs.length) redundantIndices.push(idx);
 }
 
-const redundantFindings = redundantIndices.map(i => pairs[i]);
-const hasFindings = redundantFindings.length > 0;
+// Filter out dismissed findings
+const allFindings = redundantIndices.map(i => pairs[i]);
+const pendingFindings = allFindings.filter(f =>
+  !dismissedSet.has(`${f.file}:${f.lineNumber}`)
+);
+const hasFindings = pendingFindings.length > 0;
+
+// Build checklist items
+const checklistItems = [];
+
+// Applied items (from previous runs, line no longer in diff)
+for (const af of appliedFindings) {
+  checklistItems.push({
+    status: "applied",
+    file: af.file,
+    lineNumber: af.lineNumber,
+    label: "removed",
+  });
+}
+
+// Dismissed items
+for (const df of dismissedReplies) {
+  checklistItems.push({
+    status: "dismissed",
+    file: df.file,
+    lineNumber: df.lineNumber,
+    label: df.replyText,
+  });
+}
+
+// Pending items (current findings not dismissed)
+for (const pf of pendingFindings) {
+  checklistItems.push({
+    status: "pending",
+    file: pf.file,
+    lineNumber: pf.lineNumber,
+    label: pf.comment,
+  });
+}
+
+const hasChecklist = checklistItems.length > 0;
+const checklistMd = checklistItems.map(item => {
+  const checked = item.status !== "pending" ? "x" : " ";
+  const suffix = item.status === "applied" ? " (removed)"
+    : item.status === "dismissed" ? ` (kept: "${item.label}")`
+    : "";
+  return `- [${checked}] \`${item.file}:${item.lineNumber}\`${suffix}`;
+}).join("\n");
+
+const newDismissReplies = dismissedReplies.filter(d => !d.alreadyProcessed);
 ```
 
 <Show when={hasFindings}>
 
-Redundant comments found — see inline suggestions.
-
-<SuggestRemoval findings={redundantFindings} />
+<SuggestRemoval findings={pendingFindings} dismissedReplies={newDismissReplies} />
 
 </Show>
+
+</Show>
+
+<Show when={hasChecklist}>
+
+{checklistMd}
 
 </Show>

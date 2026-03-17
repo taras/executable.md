@@ -3,6 +3,10 @@ inputs:
   findings:
     type: array
     required: true
+  dismissedReplies:
+    type: array
+    required: false
+    default: []
 ---
 
 ```ts eval
@@ -24,6 +28,43 @@ const headers = {
   "Content-Type": "application/json",
 };
 
+// 1. Delete old bot reviews to avoid duplicates
+const existingReviews = yield* fetch(
+  `${api}/pulls/${prNumber}/reviews`, { headers }
+).expect().json();
+
+const botReviews = existingReviews.filter(r =>
+  r.user.login === "github-actions[bot]" &&
+  r.body && r.body.includes("redundant comment")
+);
+
+for (const review of botReviews) {
+  try {
+    yield* fetch(`${api}/pulls/${prNumber}/reviews/${review.id}`, {
+      method: "DELETE",
+      headers,
+    }).expect();
+  } catch {
+    // Review may already be submitted (can't delete submitted reviews).
+    // That's fine — the new review will be posted alongside.
+  }
+}
+
+// 2. React 👍 on dismiss replies that haven't been reacted to yet
+for (const reply of dismissedReplies) {
+  if (!reply.replyId) continue;
+  try {
+    yield* fetch(`${api}/pulls/comments/${reply.replyId}/reactions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: "+1" }),
+    }).expect();
+  } catch {
+    // Reaction may already exist — that's fine.
+  }
+}
+
+// 3. Post new review with pending findings
 const comments = findings.map(f => ({
   path: f.file,
   line: f.lineNumber,
