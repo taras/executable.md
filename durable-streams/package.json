@@ -1,0 +1,4 @@
+{
+  "name": "@executablemd/durable-streams",
+  "exports": { ".": "./mod.ts" }
+}

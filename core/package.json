@@ -1,7 +1,10 @@
 {
+  "name": "@executablemd/core",
+  "exports": {
+    ".": "./mod.ts",
+    "./globals": "./globals.ts"
+  },
   "dependencies": {
-    "@opencode-ai/plugin": "1.2.27",
-    "@executablemd/core": "file:../core",
     "@executablemd/durable-streams": "file:../durable-streams",
     "@executablemd/durable-effects": "file:../durable-effects"
   }

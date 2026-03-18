@@ -1,0 +1,10 @@
+{
+  "name": "@executablemd/durable-effects",
+  "exports": {
+    ".": "./mod.ts",
+    "./node-runtime": "./node-runtime.ts"
+  },
+  "dependencies": {
+    "@executablemd/durable-streams": "file:../durable-streams"
+  }
+}
