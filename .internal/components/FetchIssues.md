@@ -5,8 +5,16 @@ inputs:
     required: false
 ---
 
+<Capture as="ghToken">
+
+```bash exec
+gh auth token 2>/dev/null || echo ""
+```
+
+</Capture>
+
 ```ts eval
-const token = process.env.GITHUB_TOKEN;
+const token = ghToken.trim();
 const api = "https://api.github.com/repos/taras/executable-markdown-agents";
 const headers = {
   "Accept": "application/vnd.github+json",
