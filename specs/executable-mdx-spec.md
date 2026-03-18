@@ -36,7 +36,9 @@ streaming, whitespace-normalized, ANSI-formatted output — see §9).
 Expansion also supports binding capture: component invocations may
 declare `as="name"` to route rendered output into `env.values` instead
 of the document, and the built-in `<Capture as="name">...</Capture>`
-directive captures inline rendered content into `env.values` without
+directive captures inline rendered content into `env.values`,
+optionally applying a CSS selector (via remark + `unist-util-select`)
+to extract specific markdown nodes from the rendered content, without
 creating a new component boundary (see §6.5).
 
 ### 1.1 Example
@@ -2439,9 +2441,18 @@ function* expandSegments(
             ctx,
             counter,
           );
-          const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
+          let captured = renderSegments(expandedChildren).replace(/\s+$/, "");
+
+          // If select prop is present, parse rendered content as markdown
+          // and apply CSS selector to extract matching node's text content.
+          // Falls back to full rendered content if no node matches.
+          // See §6.5 for selector syntax and node extraction rules.
+          if (segment.props.select is a non-empty string) {
+            captured = applyCssSelector(captured, segment.props.select);
+          }
+
           const env = yield* ephemeral(EvalEnvCtx.expect());
-          env.values[asBinding] = rendered;
+          env.values[asBinding] = captured;
           break;
         }
 
@@ -2962,7 +2973,8 @@ Rules:
 - `as` is required and must be a valid identifier.
 - `<Capture />` (self-closing) is invalid.
 - `<Capture>` must have content.
-- `<Capture>` accepts no props other than `as`.
+- `<Capture>` accepts `as` (required) and `select` (optional) props.
+  No other props are allowed.
 - `as={expr}` is invalid (must be string literal).
 
 Behavior:
@@ -2971,10 +2983,40 @@ Behavior:
    new `EvalScope`).
 2. Render children to string.
 3. Trim trailing whitespace (`/\s+$/`).
-4. Store the string in `env.values[as]`.
-5. Produce no output segment.
+4. If `select` prop is present, apply CSS selector extraction (see below).
+5. Store the resulting string in `env.values[as]`.
+6. Produce no output segment.
 
 Overwrites are allowed for both mechanisms: last writer wins.
+
+##### `select` prop — CSS selector extraction
+
+When the `select` prop is present, `<Capture>` parses the rendered
+children as markdown via `remark` and queries the AST with
+`unist-util-select` using CSS selector syntax. The text content of the
+first matching node is stored instead of the full rendered output.
+
+| Selector | Matches |
+|---|---|
+| `code` | Any fenced code block |
+| `code[lang=json]` | Code block with `lang` attribute "json" |
+| `heading[depth=1]` | h1 heading |
+| `paragraph:first-child` | First paragraph |
+
+If no node matches the selector, the full rendered content is stored
+(fallback behavior).
+
+For matched nodes, literal nodes (`Code`, `InlineCode`, `Html`, `Text`)
+use their `.value` property directly. Parent nodes (e.g., `Paragraph`,
+`Heading`) use `mdast-util-to-string` to extract concatenated child text.
+
+**Example.** A component that returns prose narration followed by
+JSON wrapped in a `` ```json `` code fence. The caller uses
+`<Capture as="doctorJson" select="code[lang=json]">` to extract
+only the JSON value, ignoring the surrounding prose. If the
+component later adds or removes narration text, the captured
+binding is unaffected — the selector isolates the structured data
+from the human-readable content.
 
 #### Expression props
 
@@ -4282,6 +4324,9 @@ instead of all under `root`).
 | C26 | Reserved prop `as` in inputs | Declaring `as` in component `inputs` fails frontmatter validation |
 | C27 | Invalid capture names | `as=""`, `as="123bad"`, or `as={expr}` produce validation errors |
 | C28 | `<Capture />` invalid | Self-closing Capture produces ErrorSegment |
+| C29 | `<Capture select>` CSS extraction | `<Capture as="x" select="code[lang=json]">` with code fence child stores code block value only |
+| C30 | `<Capture select>` fallback | `select="code[lang=json]"` with no matching node stores full rendered content |
+| C31 | `<Capture select>` paragraph | `select="paragraph"` extracts paragraph text content |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -4818,3 +4863,6 @@ A.md references <C />.
 | 91 | Projected children carry caller's eval env | Children substituted via `<Content />` are tagged with `projectedEnv`. Expression props on projected children resolve against merged env (caller + component), with component bindings taking precedence. Follows React's lexical scoping model. |
 | 92 | Multi-level projection env propagation | When `expandComponent` receives `projectedEnv`, it merges it with the current context env before tagging the next level's children. Creates a cumulative chain: Root → Provider → Instruction → ReviewBody all carry root bindings. Innermost-wins on collision. |
 | 93 | AST-based user import extraction in eval blocks | `ImportDeclaration` nodes in eval blocks are extracted via acorn's `allowImportExportEverywhere` and hoisted to module top level by `compileBlock`. TypeScript `import type` normalized to spaces before parse, extracted from original source. |
+| 94 | `<Capture select>` uses CSS selectors via remark + `unist-util-select` | Standard CSS selector syntax on markdown AST (mdast); reuses existing remark dependency; supports attribute selectors, combinators, pseudo-classes; matches Web platform conventions for querying tree structures |
+| 95 | `select` falls back to full content on no match | Non-destructive — authors can add `select` to existing Captures without breaking behavior if the selector doesn't match; avoids silent data loss |
+| 96 | Literal nodes use `.value`, parent nodes use `mdast-util-to-string` | Code blocks store text in `.value` (no child nodes); paragraphs/headings have child Text nodes requiring recursive extraction; two extraction strategies cover all mdast node types |

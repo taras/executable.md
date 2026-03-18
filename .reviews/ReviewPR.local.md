@@ -68,7 +68,7 @@ TSCONFIG
 ollama show qwen3:30b-a3b >/dev/null 2>&1 || ollama pull qwen3:30b-a3b
 ```
 
-<Capture as="doctorJson">
+<Capture as="doctorJson" select="code[lang=json]">
 
 <Doctor pr={pr} />
 

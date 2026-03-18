@@ -72,7 +72,7 @@ cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
 TSCONFIG
 ```
 
-<Capture as="doctorJson">
+<Capture as="doctorJson" select="code[lang=json]">
 
 <Doctor pr={pr} />
 

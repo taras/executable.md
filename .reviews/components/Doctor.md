@@ -176,5 +176,5 @@ const doctor = {
   },
 };
 
-return JSON.stringify(doctor);
+return '```json\n' + JSON.stringify(doctor) + '\n```';
 ```

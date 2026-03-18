@@ -340,7 +340,46 @@ describe("expansion", () => {
     const segments = scanSegments("<Capture as=\"x\" slot=\"y\">text</Capture>");
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
-    expect(output).toContain("only accepts the \"as\" prop");
+    expect(output).toContain('only accepts "as" and "select" props');
+  });
+
+  it("Capture with select extracts code block by CSS selector", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments(
+      '<Capture as="data" select="code[lang=json]">prose text\n\n```json\n{"key":"val"}\n```\n\nmore prose\n</Capture>',
+    );
+    const { output, env } = yield* expandWithEnv(segments, ctx);
+    expect(output).toBe("");
+    expect(env["data"]).toBe('{"key":"val"}');
+  });
+
+  it("Capture with select falls back to full content when no match", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments(
+      '<Capture as="data" select="code[lang=json]">no code here\n</Capture>',
+    );
+    const { output, env } = yield* expandWithEnv(segments, ctx);
+    expect(output).toBe("");
+    expect(env["data"]).toBe("no code here");
+  });
+
+  it("Capture with select extracts paragraph text", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments(
+      '<Capture as="data" select="paragraph">Hello world\n</Capture>',
+    );
+    const { output, env } = yield* expandWithEnv(segments, ctx);
+    expect(output).toBe("");
+    expect(env["data"]).toBe("Hello world");
+  });
+
+  it("Capture accepts select alongside as without error", function*() {
+    const ctx = makeCtx({});
+    const segments = scanSegments(
+      '<Capture as="x" select="paragraph">text\n</Capture>',
+    );
+    const output = yield* expand(segments, ctx);
+    expect(output).not.toContain("ERROR");
   });
 
   it("component as rejects expression prop", function*() {

@@ -60,7 +60,7 @@ const pr = {
 };
 ```
 
-<Capture as="doctorJson">
+<Capture as="doctorJson" select="code[lang=json]">
 
 <Doctor pr={pr} />
 

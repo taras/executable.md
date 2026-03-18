@@ -27,11 +27,13 @@
     "npm:magic-string@~0.30.21": "0.30.21",
     "npm:marked-terminal@^7.3.0": "7.3.0_marked@17.0.4",
     "npm:marked@^17.0.4": "17.0.4",
+    "npm:mdast-util-to-string@4": "4.0.0",
     "npm:oxlint-tsgolint@0.17": "0.17.0",
     "npm:oxlint@1": "1.56.0_oxlint-tsgolint@0.17.0",
     "npm:remark-mdx@3": "3.1.1",
     "npm:remark@15": "15.0.1",
     "npm:remend@^1.2.2": "1.2.2",
+    "npm:unist-util-select@5": "5.1.0",
     "npm:unist-util-visit@5": "5.1.0",
     "npm:zod@^4.3.6": "4.3.6"
   },
@@ -372,6 +374,9 @@
     "bail@2.0.2": {
       "integrity": "sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw=="
     },
+    "boolbase@1.0.0": {
+      "integrity": "sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww=="
+    },
     "ccount@2.0.1": {
       "integrity": "sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg=="
     },
@@ -445,6 +450,9 @@
         "shebang-command",
         "which"
       ]
+    },
+    "css-selector-parser@3.3.0": {
+      "integrity": "sha512-Y2asgMGFqJKF4fq4xHDSlFYIkeVfRsm69lQC1q9kbEsH5XtnINTMrweLkjYMeaUgiXBy/uvKeO/a1JHTNnmB2g=="
     },
     "ctrlc-windows@2.2.0": {
       "integrity": "sha512-t9y568r+T8FUuBaqKK60YGFJdj3b3ktdJW9WXIT3CuBdQhAOYdSZu75jFUN0Ay4Yz5HHicVQqAYCwcnqhOn23g=="
@@ -969,6 +977,12 @@
         "skin-tone"
       ]
     },
+    "nth-check@2.1.1": {
+      "integrity": "sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==",
+      "dependencies": [
+        "boolbase"
+      ]
+    },
     "object-assign@4.1.1": {
       "integrity": "sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg=="
     },
@@ -1200,6 +1214,16 @@
         "@types/unist@3.0.3"
       ]
     },
+    "unist-util-select@5.1.0": {
+      "integrity": "sha512-4A5mfokSHG/rNQ4g7gSbdEs+H586xyd24sdJqF1IWamqrLHvYb+DH48fzxowyOhOfK7YSqX+XlCojAyuuyyT2A==",
+      "dependencies": [
+        "@types/unist@3.0.3",
+        "css-selector-parser",
+        "devlop",
+        "nth-check",
+        "zwitch"
+      ]
+    },
     "unist-util-stringify-position@4.0.0": {
       "integrity": "sha512-0ASV06AAoKCDkS2+xw5RXJywruurpbC4JZSm7nr7MOt1ojAzvyyaO+UxZf18j8FCF6kmzCZKcAgN/yu2gm2XgQ==",
       "dependencies": [
@@ -1293,8 +1317,10 @@
       "npm:@jsr/frontside__configliere@~0.2.3",
       "npm:@types/node@^24.5.2",
       "npm:effection@4.1.0-alpha.7",
+      "npm:mdast-util-to-string@4",
       "npm:oxlint-tsgolint@0.17",
-      "npm:oxlint@1"
+      "npm:oxlint@1",
+      "npm:unist-util-select@5"
     ],
     "members": {
       "cli": {
@@ -1309,7 +1335,10 @@
           "npm:magic-string@~0.30.21",
           "npm:marked-terminal@^7.3.0",
           "npm:marked@^17.0.4",
+          "npm:mdast-util-to-string@4",
+          "npm:remark@15",
           "npm:remend@^1.2.2",
+          "npm:unist-util-select@5",
           "npm:zod@^4.3.6"
         ]
       }

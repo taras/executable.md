@@ -37,6 +37,9 @@ import { validateProps } from "./validate.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
 import { renderSegments } from "./render.ts";
+import { remark } from "remark";
+import { select as cssSelect } from "unist-util-select";
+import { toString as mdastToString } from "mdast-util-to-string";
 
 // ---------------------------------------------------------------------------
 // Block ID counter (spec §6.1)
@@ -245,10 +248,10 @@ function* expandCapture(
   }
 
   const propNames = Object.keys(segment.props);
-  if (propNames.some((name) => name !== "as")) {
+  if (propNames.some((name) => name !== "as" && name !== "select")) {
     return {
       type: "error",
-      message: '<Capture> only accepts the "as" prop.',
+      message: '<Capture> only accepts "as" and "select" props.',
       source: "Capture",
     };
   }
@@ -262,11 +265,13 @@ function* expandCapture(
         source: "Capture",
       };
     }
-    return {
-      type: "error",
-      message: '<Capture> only accepts the "as" prop.',
-      source: "Capture",
-    };
+    if (!expressionNames.every((n) => n === "select")) {
+      return {
+        type: "error",
+        message: '<Capture> only accepts "as" and "select" props.',
+        source: "Capture",
+      };
+    }
   }
 
   if (segment.props.as === undefined) {
@@ -304,6 +309,18 @@ function* expandCapture(
   );
   const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
 
+  // Apply CSS selector if select prop is present (spec §6.5)
+  let captured = rendered;
+  const selectProp = segment.props.select as string | undefined;
+  if (typeof selectProp === "string" && selectProp.length > 0) {
+    const tree = remark().parse(captured);
+    // deno-lint-ignore no-explicit-any
+    const node = cssSelect(selectProp, tree as any);
+    if (node) {
+      captured = "value" in node ? String(node.value) : mdastToString(node);
+    }
+  }
+
   const env = yield* EvalEnvCtx.get();
   if (!env) {
     return {
@@ -312,7 +329,7 @@ function* expandCapture(
       source: "Capture",
     };
   }
-  env.values[bindingName] = rendered;
+  env.values[bindingName] = captured;
   return undefined;
 }
 

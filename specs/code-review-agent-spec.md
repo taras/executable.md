@@ -1192,6 +1192,9 @@ oxlint binary, tsgolint binary, `node_modules/`, tsconfig, scheme
 specifier scan (`jsr:`, `npm:`), and a type-aware test run. Outputs
 a recommendation: `type-aware`, `type-aware-filtered`, or
 `syntax-only`. Includes prose narration for local visibility.
+Its JSON output is wrapped in a `` ```json `` code fence and
+extracted via `<Capture select="code[lang=json]">` (see EMA spec
+§6.5), isolating the structured data from surrounding narration.
 
 ### 13.3 PR-scoped analysis
 
