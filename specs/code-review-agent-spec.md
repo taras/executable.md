@@ -1236,11 +1236,36 @@ compatibility since tsgo uses Node module resolution.
 `.github/pull_request_template.md` — scope confirmation, Rule of
 Three checklist for new abstractions, dependency justification.
 
-### 13.8 Additional files
+### 13.8 Cleanup issues (`CleanupIssues.md`)
+
+The repo analysis pipeline creates idempotent GitHub issues for
+the top 5 file clusters ranked by `buildCleanupAnalysis()`.
+
+**Identity:** Each issue body contains a marker comment
+`<!-- ema-cleanup:{file} -->`. The component searches open issues
+with the `ema-cleanup` label for matching markers before creating.
+
+**Lifecycle:**
+
+| Existing issue? | File in top 5? | Action |
+|---|---|---|
+| No | Yes | Create new issue |
+| Yes | Yes | Update title + body with latest stats |
+| Yes | No | Close with resolution comment |
+
+Issues are driven entirely by deterministic cluster data — file
+path, score, violation count, co-occurring rule count, category
+breakdown. No LLM output parsing.
+
+Local runs skip issue creation (no `GITHUB_TOKEN` → return empty).
+
+### 13.9 Additional files
 
 ```
 .reviews/
   .oxlintrc.json                   Sensor config (committed)
+  components/
+    CleanupIssues.md               Idempotent GitHub issue lifecycle
 
 .github/
   pull_request_template.md         Process enforcement

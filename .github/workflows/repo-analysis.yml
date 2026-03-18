@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -36,6 +37,8 @@ jobs:
       - name: Run repo analysis
         env:
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
 
       - name: Write run metadata

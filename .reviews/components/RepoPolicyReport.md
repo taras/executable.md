@@ -27,3 +27,5 @@ inputs:
 <OxlintSummary diagnostics={diagnostics} doctor={doctor} />
 
 <RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} cleanupAnalysis={cleanupAnalysis} />
+
+<CleanupIssues cleanupAnalysis={cleanupAnalysis} diagnostics={diagnostics} />
