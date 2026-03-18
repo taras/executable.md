@@ -21,9 +21,7 @@ import {
 } from "@executablemd/durable-streams";
 import { useScope } from "effection";
 import type { Operation } from "effection";
-import { API } from "@executablemd/runtime";
-
-const { readTextFile, glob } = API.Fs.operations;
+import { glob, readTextFile } from "@executablemd/runtime";
 import { canonicalJson } from "./canonical-json.ts";
 import { computeSHA256 } from "./hash.ts";
 

@@ -8,12 +8,21 @@
  *
  * ## Architecture
  *
- * `API` is the single canonical access path. Consumers destructure
- * operations locally:
+ * Import operation functions for normal calls, and use `API` only when
+ * installing middleware with `.around()`:
  *
  * ```typescript
- * import { API } from "@executablemd/runtime";
- * const { readTextFile, stat } = API.Fs.operations;
+ * import { readTextFile, stat, API } from "@executablemd/runtime";
+ *
+ * // normal calls
+ * const file = yield* readTextFile("doc.md");
+ *
+ * // middleware
+ * yield* API.Fs.around({
+ *   *readTextFile([path], next) {
+ *     return yield* next(path);
+ *   },
+ * });
  * ```
  *
  * ## Why four separate APIs?
@@ -338,4 +347,30 @@ export const API: {
   } as any) as unknown as Api<EnvHandler>,
 };
 
+// ---------------------------------------------------------------------------
+// Convenience operation exports
+//
+// Use these for normal operation calls. Use API.* only when installing
+// middleware with .around().
+// ---------------------------------------------------------------------------
 
+export const exec: typeof API.Process.operations.exec =
+  API.Process.operations.exec;
+
+export const readTextFile: typeof API.Fs.operations.readTextFile =
+  API.Fs.operations.readTextFile;
+
+export const stat: typeof API.Fs.operations.stat =
+  API.Fs.operations.stat;
+
+export const glob: typeof API.Fs.operations.glob =
+  API.Fs.operations.glob;
+
+export const fetch: typeof API.Fetch.operations.fetch =
+  API.Fetch.operations.fetch;
+
+export const env: typeof API.Env.operations.env =
+  API.Env.operations.env;
+
+export const platform: typeof API.Env.operations.platform =
+  API.Env.operations.platform;

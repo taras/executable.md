@@ -12,9 +12,7 @@ import {
   createDurableOperation,
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { API } from "@executablemd/runtime";
-
-const { env, platform } = API.Env.operations;
+import { env, platform } from "@executablemd/runtime";
 
 export type ResolveKind =
   | { kind: "current_time" }

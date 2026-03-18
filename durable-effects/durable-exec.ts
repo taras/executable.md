@@ -11,9 +11,7 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { API } from "@executablemd/runtime";
-
-const { exec } = API.Process.operations;
+import { exec } from "@executablemd/runtime";
 
 export interface ExecOptions {
   command: string[];

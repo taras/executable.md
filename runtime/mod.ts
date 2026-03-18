@@ -2,7 +2,10 @@
  * @module
  * Runtime Context APIs for executable markdown.
  *
- * `API` is the single entry point. Four domain APIs:
+ * `API` is available for middleware (`.around()`).
+ * For normal calls, import operations directly.
+ *
+ * Four domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
  * - `API.Fs` — filesystem (`readTextFile`, `stat`, `glob`)
  * - `API.Fetch` — HTTP requests (`fetch`)
@@ -13,6 +16,7 @@
  */
 
 export { API } from "./apis.ts";
+export { exec, readTextFile, stat, glob, fetch, env, platform } from "./apis.ts";
 export type {
   ResponseHeaders,
   RuntimeFetchResponse,

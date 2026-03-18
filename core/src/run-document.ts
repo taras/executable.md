@@ -22,10 +22,7 @@ import {
 import {
   computeSHA256,
 } from "@executablemd/durable-effects";
-import { API } from "@executablemd/runtime";
-
-const { readTextFile, stat } = API.Fs.operations;
-const { exec } = API.Process.operations;
+import { exec, readTextFile, stat } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
 import type {

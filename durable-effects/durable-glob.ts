@@ -11,9 +11,7 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { API } from "@executablemd/runtime";
-
-const { readTextFile, glob } = API.Fs.operations;
+import { glob, readTextFile } from "@executablemd/runtime";
 import { computeSHA256 } from "./hash.ts";
 
 export interface GlobOptions {
