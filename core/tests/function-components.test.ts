@@ -9,7 +9,6 @@ import { expect } from "@std/expect";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -46,7 +45,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -75,7 +73,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -107,7 +104,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -140,7 +136,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -166,7 +161,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -195,7 +189,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -224,7 +217,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -259,7 +251,6 @@ describe("Tier FC — Function components", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -285,14 +276,12 @@ describe("Tier FC — Function components", () => {
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));

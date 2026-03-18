@@ -5,31 +5,10 @@
  * Provides platform-agnostic durable effects (exec, readFile, glob, fetch,
  * eval, resolve) and replay guards for staleness detection, built on
  * @executablemd/durable-streams.
+ *
+ * Runtime I/O operations (exec, readTextFile, stat, glob, fetch, env,
+ * platform) are provided by @executablemd/runtime as context APIs.
  */
-
-// ---------------------------------------------------------------------------
-// Runtime
-// ---------------------------------------------------------------------------
-
-export { DurableRuntimeCtx } from "./runtime.ts";
-export type {
-  DurableRuntime,
-  ResponseHeaders,
-  RuntimeFetchResponse,
-  StatResult,
-} from "./runtime.ts";
-
-// ---------------------------------------------------------------------------
-// Node.js runtime implementation
-// ---------------------------------------------------------------------------
-
-export { nodeRuntime } from "./node-runtime.ts";
-
-// ---------------------------------------------------------------------------
-// Test stub runtime
-// ---------------------------------------------------------------------------
-
-export { stubRuntime } from "./stub-runtime.ts";
 
 // ---------------------------------------------------------------------------
 // Hashing

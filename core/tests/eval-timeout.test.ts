@@ -7,50 +7,22 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { parseDuration } from "../src/modifiers/timeout.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { stubRuntime } from "@executablemd/durable-effects";
-import type { DurableRuntime, StatResult } from "@executablemd/durable-streams";
+import { useStubFs, useEchoExec } from "@executablemd/test-helpers";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-function makeRuntime(files: Record<string, string>): DurableRuntime {
-  return stubRuntime({
-    *readTextFile(path: string) {
-      const content = files[path];
-      if (content === undefined) {
-        throw new Error(`ENOENT: no such file: ${path}`);
-      }
-      return content;
-    },
-    *stat(path: string): Generator<never, StatResult, unknown> {
-      const exists = path in files;
-      return { exists, isFile: exists, isDirectory: false };
-    },
-    *exec(options: { command: string[]; timeout?: number }) {
-      const script = (options.command[2] ?? "").trim();
-      if (script.startsWith("echo ")) {
-        return { exitCode: 0, stdout: script.slice(5) + "\n", stderr: "" };
-      }
-      return { exitCode: 0, stdout: script + "\n", stderr: "" };
-    },
-  });
-}
 
 describe("Tier T7 — timeout modifier", () => {
   // T49: Block completing before timeout → success
   it("T49: block completes before timeout → success", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js timeout=30s eval\nconst x = 42;\n```\n",
     });
+    yield* useEchoExec();
 
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
@@ -82,15 +54,15 @@ describe("Tier T7 — timeout modifier", () => {
 
   it("timeout modifier with default 30s", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js timeout eval\nconst x = 1;\n```\n",
     });
+    yield* useEchoExec();
 
     // Should work with default timeout
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 

@@ -9,9 +9,9 @@ import {
   type Workflow,
   durableRun,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
 import type { Operation } from "effection";
 import { expect } from "@std/expect";
+import { API } from "@executablemd/runtime";
 import { type EvalResult, durableEval } from "../durable-eval.ts";
 import { type ExecResult, durableExec } from "../durable-exec.ts";
 import { type FetchResult, durableFetch } from "../durable-fetch.ts";
@@ -23,8 +23,6 @@ import {
   durableResolve,
   durableUUID,
 } from "../durable-resolve.ts";
-import { DurableRuntimeCtx } from "../runtime.ts";
-import { stubRuntime } from "../stub-runtime.ts";
 
 function warmupEvents(): DurableEvent[] {
   return [
@@ -58,17 +56,13 @@ describe("durable operations", () => {
   describe("durableExec", () => {
     it("golden run: executes command and records yield/close", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
 
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *exec({ command }: { command: string[] }) {
-            expect(command).toEqual(["tsc"]);
-            return { exitCode: 0, stdout: "compiled", stderr: "" };
-          },
-        }),
-      );
+      yield* API.Process.around({
+        *exec([options], _next) {
+          expect(options.command).toEqual(["tsc"]);
+          return { exitCode: 0, stdout: "compiled", stderr: "" };
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         return (yield* durableExec("compile", {
@@ -126,9 +120,6 @@ describe("durable operations", () => {
       ];
       const stream = new InMemoryStream(events);
 
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       function* workflow(): Workflow<Json> {
         return (yield* durableExec("compile", {
           command: ["will", "not", "run"],
@@ -144,16 +135,12 @@ describe("durable operations", () => {
 
     it("error propagation: exec failure bubbles through durableRun", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
 
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *exec() {
-            throw new Error("boom");
-          },
-        }),
-      );
+      yield* API.Process.around({
+        *exec(_args, _next) {
+          throw new Error("boom");
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         return (yield* durableExec("compile", {
@@ -183,17 +170,14 @@ describe("durable operations", () => {
 
     it("partial replay: warmup replays, exec runs live", function* () {
       const stream = new InMemoryStream(warmupEvents());
-      const scope = yield* useScope();
       let execCalls = 0;
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *exec() {
-            execCalls += 1;
-            return { exitCode: 0, stdout: "partial", stderr: "" };
-          },
-        }),
-      );
+
+      yield* API.Process.around({
+        *exec(_args, _next) {
+          execCalls += 1;
+          return { exitCode: 0, stdout: "partial", stderr: "" };
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         yield* durableNow();
@@ -208,9 +192,6 @@ describe("durable operations", () => {
     });
 
     it("divergence: mismatched exec name throws", function* () {
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       yield* expectDivergence(
         function* (): Workflow<Json> {
           return (yield* durableExec("compile", {
@@ -230,17 +211,13 @@ describe("durable operations", () => {
   describe("durableReadFile", () => {
     it("golden run: reads content and stores contentHash", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
 
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *readTextFile(path: string) {
-            expect(path).toBe("src/input.txt");
-            return "hello durable world";
-          },
-        }),
-      );
+      yield* API.Fs.around({
+        *readTextFile([path], _next) {
+          expect(path).toBe("src/input.txt");
+          return "hello durable world";
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         return (yield* durableReadFile(
@@ -293,9 +270,6 @@ describe("durable operations", () => {
         },
       ]);
 
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       function* workflow(): Workflow<Json> {
         return (yield* durableReadFile(
           "read-input",
@@ -312,17 +286,14 @@ describe("durable operations", () => {
 
     it("partial replay: warmup replays, read file runs live", function* () {
       const stream = new InMemoryStream(warmupEvents());
-      const scope = yield* useScope();
       let reads = 0;
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *readTextFile() {
-            reads += 1;
-            return "partial read";
-          },
-        }),
-      );
+
+      yield* API.Fs.around({
+        *readTextFile(_args, _next) {
+          reads += 1;
+          return "partial read";
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         yield* durableNow();
@@ -335,9 +306,6 @@ describe("durable operations", () => {
     });
 
     it("divergence: mismatched read_file name throws", function* () {
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       yield* expectDivergence(
         function* (): Workflow<Json> {
           return (yield* durableReadFile("read-input", "src/input.txt")) as unknown as Json;
@@ -355,35 +323,25 @@ describe("durable operations", () => {
   describe("durableGlob", () => {
     it("golden run: discovers files, hashes contents, computes scanHash", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
 
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *glob(
-            {
-              patterns,
-              root,
-              exclude,
-            }: { patterns: string[]; root: string; exclude?: string[] },
-          ) {
-            expect(patterns).toEqual(["**/*.ts"]);
-            expect(root).toBe("project");
-            expect(exclude).toEqual(["**/*.test.ts"]);
-            return [
-              { path: "src/b.ts", isFile: true },
-              { path: "src/a.ts", isFile: true },
-              { path: "src/dir", isFile: false },
-              { path: "src/a.ts", isFile: true },
-            ];
-          },
-          *readTextFile(path: string) {
-            if (path === "project/src/a.ts") return "A";
-            if (path === "project/src/b.ts") return "B";
-            throw new Error(`unexpected file: ${path}`);
-          },
-        }),
-      );
+      yield* API.Fs.around({
+        *glob([options], _next) {
+          expect(options.patterns).toEqual(["**/*.ts"]);
+          expect(options.root).toBe("project");
+          expect(options.exclude).toEqual(["**/*.test.ts"]);
+          return [
+            { path: "src/b.ts", isFile: true },
+            { path: "src/a.ts", isFile: true },
+            { path: "src/dir", isFile: false },
+            { path: "src/a.ts", isFile: true },
+          ];
+        },
+        *readTextFile([path], _next) {
+          if (path === "project/src/a.ts") return "A";
+          if (path === "project/src/b.ts") return "B";
+          throw new Error(`unexpected file: ${path}`);
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         return (yield* durableGlob("scan", {
@@ -451,9 +409,6 @@ describe("durable operations", () => {
         },
       ]);
 
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       function* workflow(): Workflow<Json> {
         return (yield* durableGlob("scan", {
           baseDir: "ignored",
@@ -470,20 +425,17 @@ describe("durable operations", () => {
 
     it("partial replay: warmup replays, glob runs live", function* () {
       const stream = new InMemoryStream(warmupEvents());
-      const scope = yield* useScope();
       let scans = 0;
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *glob() {
-            scans += 1;
-            return [{ path: "src/a.ts", isFile: true }];
-          },
-          *readTextFile() {
-            return "A";
-          },
-        }),
-      );
+
+      yield* API.Fs.around({
+        *glob(_args, _next) {
+          scans += 1;
+          return [{ path: "src/a.ts", isFile: true }];
+        },
+        *readTextFile(_args, _next) {
+          return "A";
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         yield* durableNow();
@@ -499,9 +451,6 @@ describe("durable operations", () => {
     });
 
     it("divergence: mismatched glob name throws", function* () {
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       yield* expectDivergence(
         function* (): Workflow<Json> {
           return (yield* durableGlob("scan", {
@@ -522,7 +471,6 @@ describe("durable operations", () => {
   describe("durableFetch", () => {
     it("golden run: fetches body and records selected headers", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
 
       let capturedUrl: string | undefined;
       let capturedInit:
@@ -534,37 +482,26 @@ describe("durable operations", () => {
           }
         | undefined;
 
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *fetch(
-            url: string,
-            init?: {
-              method?: string;
-              headers?: Record<string, string>;
-              body?: string;
-              timeout?: number;
+      yield* API.Fetch.around({
+        *fetch([url, init], _next) {
+          capturedUrl = url;
+          capturedInit = init;
+          return {
+            status: 200,
+            headers: {
+              get: (key: string) =>
+                key === "content-type"
+                  ? "text/plain"
+                  : key === "etag"
+                    ? '"v1"'
+                    : null,
             },
-          ) {
-            capturedUrl = url;
-            capturedInit = init;
-            return {
-              status: 200,
-              headers: {
-                get: (key: string) =>
-                  key === "content-type"
-                    ? "text/plain"
-                    : key === "etag"
-                      ? '"v1"'
-                      : null,
-              },
-              *text() {
-                return "response body";
-              },
-            };
-          },
-        }),
-      );
+            *text() {
+              return "response body";
+            },
+          };
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         return (yield* durableFetch("download", {
@@ -638,9 +575,6 @@ describe("durable operations", () => {
         },
       ]);
 
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       function* workflow(): Workflow<Json> {
         return (yield* durableFetch("download", {
           url: "https://ignored.invalid",
@@ -656,23 +590,20 @@ describe("durable operations", () => {
 
     it("partial replay: warmup replays, fetch runs live", function* () {
       const stream = new InMemoryStream(warmupEvents());
-      const scope = yield* useScope();
       let fetchCalls = 0;
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          *fetch() {
-            fetchCalls += 1;
-            return {
-              status: 200,
-              headers: { get: () => null },
-              *text() {
-                return "partial fetch";
-              },
-            };
-          },
-        }),
-      );
+
+      yield* API.Fetch.around({
+        *fetch(_args, _next) {
+          fetchCalls += 1;
+          return {
+            status: 200,
+            headers: { get: () => null },
+            *text() {
+              return "partial fetch";
+            },
+          };
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         yield* durableNow();
@@ -687,9 +618,6 @@ describe("durable operations", () => {
     });
 
     it("divergence: mismatched fetch name throws", function* () {
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       yield* expectDivergence(
         function* (): Workflow<Json> {
           return (yield* durableFetch("download", {
@@ -712,8 +640,6 @@ describe("durable operations", () => {
   describe("durableEval", () => {
     it("golden run: evaluates source and records hashes", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
 
       let evaluatorCalls = 0;
       function* evaluator(source: string, bindings: Record<string, Json>) {
@@ -773,9 +699,6 @@ describe("durable operations", () => {
         },
       ]);
 
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       function* workflow(): Workflow<Json> {
         return (yield* durableEval(
           "compute",
@@ -795,8 +718,6 @@ describe("durable operations", () => {
 
     it("partial replay: warmup replays, eval runs live", function* () {
       const stream = new InMemoryStream(warmupEvents());
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
       let evaluatorCalls = 0;
 
       function* workflow(): Workflow<Json> {
@@ -817,9 +738,6 @@ describe("durable operations", () => {
     });
 
     it("divergence: mismatched eval name throws", function* () {
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       yield* expectDivergence(
         function* (): Workflow<Json> {
           return (yield* durableEval(
@@ -846,15 +764,12 @@ describe("durable operations", () => {
   describe("durableResolve", () => {
     it("golden run: resolves platform through runtime", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          platform() {
-            return { os: "darwin", arch: "arm64" };
-          },
-        }),
-      );
+
+      yield* API.Env.around({
+        *platform(_args, _next) {
+          return { os: "darwin", arch: "arm64" };
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         return (yield* durableResolve("platform-info", {
@@ -900,9 +815,6 @@ describe("durable operations", () => {
         },
       ]);
 
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       function* workflow(): Workflow<Json> {
         return (yield* durableResolve("platform-info", {
           kind: "platform",
@@ -919,17 +831,14 @@ describe("durable operations", () => {
 
     it("partial replay: warmup replays, resolve runs live", function* () {
       const stream = new InMemoryStream(warmupEvents());
-      const scope = yield* useScope();
       let platformCalls = 0;
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          platform() {
-            platformCalls += 1;
-            return { os: "linux", arch: "x64" };
-          },
-        }),
-      );
+
+      yield* API.Env.around({
+        *platform(_args, _next) {
+          platformCalls += 1;
+          return { os: "linux", arch: "x64" };
+        },
+      });
 
       function* workflow(): Workflow<Json> {
         yield* durableNow();
@@ -947,9 +856,6 @@ describe("durable operations", () => {
     });
 
     it("divergence: mismatched resolve name throws", function* () {
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
-
       yield* expectDivergence(
         function* (): Workflow<Json> {
           return (yield* durableResolve("platform-info", {
@@ -969,8 +875,6 @@ describe("durable operations", () => {
   describe("convenience wrappers", () => {
     it("durableNow returns an ISO string and writes resolve event", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
 
       function* workflow(): Workflow<string> {
         return yield* durableNow();
@@ -993,8 +897,6 @@ describe("durable operations", () => {
 
     it("durableUUID returns a UUID and writes resolve event", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
-      scope.set(DurableRuntimeCtx, stubRuntime());
 
       function* workflow(): Workflow<string> {
         return yield* durableUUID();
@@ -1019,15 +921,12 @@ describe("durable operations", () => {
 
     it("durableEnv resolves an environment variable through runtime", function* () {
       const stream = new InMemoryStream();
-      const scope = yield* useScope();
-      scope.set(
-        DurableRuntimeCtx,
-        stubRuntime({
-          env(name: string) {
-            return name === "API_KEY" ? "secret-value" : undefined;
-          },
-        }),
-      );
+
+      yield* API.Env.around({
+        *env([name], _next) {
+          return name === "API_KEY" ? "secret-value" : undefined;
+        },
+      });
 
       function* workflow(): Workflow<string | null> {
         return yield* durableEnv("API_KEY");

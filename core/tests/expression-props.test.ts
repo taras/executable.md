@@ -17,7 +17,6 @@ import { renderSegments } from "../src/render.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import type {
   Segment,
   ComponentDefinition,
@@ -230,7 +229,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -267,7 +265,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -302,7 +299,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -338,7 +334,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -368,7 +363,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -397,7 +391,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -432,7 +425,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -468,7 +460,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -498,7 +489,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -534,7 +524,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -575,7 +564,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -612,7 +600,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -648,7 +635,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -691,7 +677,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -727,14 +712,12 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -774,7 +757,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -817,7 +799,6 @@ describe("Tier EP — Expression prop evaluation", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));

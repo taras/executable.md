@@ -11,9 +11,10 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
+import { API } from "@executablemd/runtime";
+
+const { readTextFile, glob } = API.Fs.operations;
 import { computeSHA256 } from "./hash.ts";
-import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
 
 export interface GlobOptions {
   baseDir: string;
@@ -52,10 +53,7 @@ export function* durableGlob(
       exclude: exclude as Json,
     },
     function* () {
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-
-      const entries = yield* runtime.glob({
+      const entries = yield* glob({
         patterns: include,
         root: baseDir,
         exclude,
@@ -64,7 +62,7 @@ export function* durableGlob(
       const matches: GlobMatch[] = [];
       for (const entry of entries) {
         if (!entry.isFile) continue;
-        const content = yield* runtime.readTextFile(`${baseDir}/${entry.path}`);
+        const content = yield* readTextFile(`${baseDir}/${entry.path}`);
         const contentHash = yield* computeSHA256(content);
         matches.push({ path: entry.path, contentHash });
       }

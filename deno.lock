@@ -9,6 +9,7 @@
     "jsr:@std/testing@*": "1.0.17",
     "jsr:@std/testing@1": "1.0.17",
     "npm:@durable-streams/client@~0.2.2": "0.2.2",
+    "npm:@effectionx/context-api@0.4": "0.4.0_effection@4.1.0-alpha.7",
     "npm:@effectionx/converge@~0.1.3": "0.1.3_effection@4.1.0-alpha.7",
     "npm:@effectionx/fetch@~0.1.2": "0.1.2_effection@4.1.0-alpha.7",
     "npm:@effectionx/fs@0.2.2": "0.2.2_effection@4.1.0-alpha.7",
@@ -73,6 +74,13 @@
         "fastq"
       ],
       "bin": true
+    },
+    "@effectionx/context-api@0.4.0_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-bjZiZWWOJM+xxin89tP2/r0z36b1fTQFIbJMi4HxM9CweyUD0K7rmIHN/eGbXOz9/J7eGrXjspHE4lXZS/q8Pg==",
+      "dependencies": [
+        "@effectionx/middleware",
+        "effection"
+      ]
     },
     "@effectionx/converge@0.1.3_effection@4.1.0-alpha.7": {
       "integrity": "sha512-LPuDslL53kA8etLgO/sMmqv9v66txOAO5d6DUWLnwZa6CwA2MTYkHEnZAoIGCnQYbjKTbPxlKatHgF15ihB4zA==",
@@ -1304,6 +1312,7 @@
       "jsr:@std/expect@1",
       "jsr:@std/testing@1",
       "npm:@durable-streams/client@~0.2.2",
+      "npm:@effectionx/context-api@0.4",
       "npm:@effectionx/converge@~0.1.3",
       "npm:@effectionx/fetch@~0.1.2",
       "npm:@effectionx/fs@0.2.2",

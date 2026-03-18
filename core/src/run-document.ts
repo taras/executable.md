@@ -12,18 +12,20 @@
 import { useScope, spawn, createChannel, withResolvers } from "effection";
 import type { Operation, Stream } from "effection";
 import {
-  DurableRuntimeCtx,
   durableRun,
   createDurableOperation,
   ephemeral,
   type DurableStream,
-  type DurableRuntime,
   ReplayGuard,
   StaleInputError,
 } from "@executablemd/durable-streams";
 import {
   computeSHA256,
 } from "@executablemd/durable-effects";
+import { API } from "@executablemd/runtime";
+
+const { readTextFile, stat } = API.Fs.operations;
+const { exec } = API.Process.operations;
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
 import type {
@@ -70,9 +72,6 @@ export interface RunDocumentOptions {
   /** Durable stream for journaling. */
   stream: DurableStream;
 
-  /** Runtime for I/O operations. */
-  runtime: DurableRuntime;
-
   /** Component search directories (default: ["./components", "./"]) */
   componentDirs?: string[];
 
@@ -98,7 +97,6 @@ function* durableImportComponent(
   name: string,
   rootDocPath: string | undefined,
   searchPaths: string[],
-  runtime: DurableRuntime,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Single durable effect: resolve + read + hash
   const result = (yield createDurableOperation<Json>(
@@ -110,11 +108,11 @@ function* durableImportComponent(
       if (name === "__root__" && rootDocPath) {
         path = rootDocPath;
       } else {
-        path = yield* resolveComponentPath(name, searchPaths, runtime);
+        path = yield* resolveComponentPath(name, searchPaths);
       }
 
       // Read file and hash
-      const content = yield* runtime.readTextFile(path);
+      const content = yield* readTextFile(path);
       const contentHash = yield* computeSHA256(content);
 
       return { path, content, contentHash } as unknown as Json;
@@ -178,7 +176,6 @@ function* durableImportComponent(
 function* resolveComponentPath(
   name: string,
   searchPaths: string[],
-  runtime: DurableRuntime,
 ): Operation<string> {
   const baseName = name.replace(/\./g, "/");
 
@@ -187,7 +184,7 @@ function* resolveComponentPath(
     const mdCandidate = normalizePath(
       dir === "." ? `${baseName}.md` : `${dir}/${baseName}.md`,
     );
-    const mdStat = yield* runtime.stat(mdCandidate);
+    const mdStat = yield* stat(mdCandidate);
     if (mdStat.exists && mdStat.isFile) {
       return mdCandidate;
     }
@@ -196,7 +193,7 @@ function* resolveComponentPath(
     const tsCandidate = normalizePath(
       dir === "." ? `${baseName}.ts` : `${dir}/${baseName}.ts`,
     );
-    const tsStat = yield* runtime.stat(tsCandidate);
+    const tsStat = yield* stat(tsCandidate);
     if (tsStat.exists && tsStat.isFile) {
       return tsCandidate;
     }
@@ -205,7 +202,7 @@ function* resolveComponentPath(
     const indexMdCandidate = normalizePath(
       dir === "." ? `${baseName}/index.md` : `${dir}/${baseName}/index.md`,
     );
-    const indexMdStat = yield* runtime.stat(indexMdCandidate);
+    const indexMdStat = yield* stat(indexMdCandidate);
     if (indexMdStat.exists && indexMdStat.isFile) {
       return indexMdCandidate;
     }
@@ -214,7 +211,7 @@ function* resolveComponentPath(
     const indexTsCandidate = normalizePath(
       dir === "." ? `${baseName}/index.ts` : `${dir}/${baseName}/index.ts`,
     );
-    const indexTsStat = yield* runtime.stat(indexTsCandidate);
+    const indexTsStat = yield* stat(indexTsCandidate);
     if (indexTsStat.exists && indexTsStat.isFile) {
       return indexTsCandidate;
     }
@@ -234,9 +231,7 @@ function normalizePath(path: string): string {
 // useImportComponentGuard (spec §4.3, §6.1)
 // ---------------------------------------------------------------------------
 
-function* useImportComponentGuard(
-  runtime: DurableRuntime,
-): Operation<void> {
+function* useImportComponentGuard(): Operation<void> {
   const scope = yield* useScope();
   const cache = new Map<string, string>();
 
@@ -250,7 +245,7 @@ function* useImportComponentGuard(
         const storedPath = result?.path;
         if (storedPath && !cache.has(storedPath)) {
           try {
-            const content = yield* runtime.readTextFile(storedPath);
+            const content = yield* readTextFile(storedPath);
             const currentHash = yield* computeSHA256(content);
             cache.set(storedPath, currentHash);
           } catch {
@@ -290,8 +285,8 @@ function* useImportComponentGuard(
 // handlers (exec) yield DurableEffects. See DEC-003 in specs/decisions.md.
 // ---------------------------------------------------------------------------
 
-function createExecFactory(runtime: DurableRuntime): ModifierFactory {
-  return (_params) => (_args, _next) => function* () {
+const execFactory: ModifierFactory = (_params) =>
+  (_args, _next) => function* () {
     const context = yield* useCodeBlock();
     const command = buildCommand(context.language, context.content);
     const result = (yield createDurableOperation<Json>(
@@ -301,7 +296,7 @@ function createExecFactory(runtime: DurableRuntime): ModifierFactory {
         command: command as unknown as Json,
       },
       function* (): Operation<Json> {
-        const execResult = yield* runtime.exec({
+        const execResult = yield* exec({
           command,
           timeout: 30_000,
         });
@@ -315,7 +310,6 @@ function createExecFactory(runtime: DurableRuntime): ModifierFactory {
       stderr: result.stderr,
     };
   }();
-}
 
 const silentFactory: ModifierFactory = (_params) =>
   (_args, next) => function* () {
@@ -335,7 +329,6 @@ const silentFactory: ModifierFactory = (_params) =>
 function* documentWorkflow(
   docPath: string,
   searchPaths: string[],
-  runtime: DurableRuntime,
   modifierRegistry: ModifierRegistry,
 ): Workflow<string> {
   // Import root — same pipeline as any component
@@ -343,7 +336,6 @@ function* documentWorkflow(
     "__root__",
     docPath,
     searchPaths,
-    runtime,
   );
 
   if (root.kind === "function") {
@@ -365,7 +357,6 @@ function* documentWorkflow(
         name,
         undefined,
         searchPaths,
-        runtime,
       );
     },
     runModifierChain: function* (
@@ -481,7 +472,6 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   const {
     docPath,
     stream,
-    runtime,
     componentDirs = ["components", "."],
     freshness = true,
     modifiers: customModifiers = {},
@@ -489,7 +479,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
 
   // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
-  registry.set("exec", createExecFactory(runtime));
+  registry.set("exec", execFactory);
   registry.set("silent", silentFactory);
   registry.set("eval", evalFactory);
   registry.set("persist", persistFactory);
@@ -503,8 +493,8 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   // Document execution.
   //
   // The workflow runs in a spawned child scope that contains all
-  // execution state: DurableRuntimeCtx, replay guards, eval context/scope,
-  // and the EMA→channel bridge. Nothing leaks onto the caller's scope.
+  // execution state: replay guards, eval context/scope, and the
+  // EMA→channel bridge. Nothing leaks onto the caller's scope.
   //
   // withResolvers captures the completion result so `yield* execution`
   // can wait for it without needing to await the spawned Task directly
@@ -518,12 +508,9 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     const scope = yield* useScope();
     let emitted = false;
 
-    // Install runtime context — scoped to document execution, not leaked.
-    scope.set(DurableRuntimeCtx, runtime);
-
     // Install replay guards
     if (freshness) {
-      yield* useImportComponentGuard(runtime);
+      yield* useImportComponentGuard();
     }
 
     // EMA → channel bridge (innermost middleware — output flows through
@@ -544,7 +531,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     // Run the durable workflow.
     try {
       const storedOutput = yield* durableRun(
-        () => documentWorkflow(docPath, componentDirs, runtime, registry),
+        () => documentWorkflow(docPath, componentDirs, registry),
         { stream },
       );
 

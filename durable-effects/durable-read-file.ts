@@ -11,9 +11,10 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
+import { API } from "@executablemd/runtime";
+
+const { readTextFile } = API.Fs.operations;
 import { computeSHA256 } from "./hash.ts";
-import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
 
 export interface ReadFileResult {
   content: string;
@@ -40,10 +41,7 @@ export function* durableReadFile(
   return (yield createDurableOperation<Json>(
     { type: "read_file", name, path, encoding },
     function* () {
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-
-      const content = yield* runtime.readTextFile(path);
+      const content = yield* readTextFile(path);
       const contentHash = yield* computeSHA256(content);
       return { content, contentHash } as unknown as Json;
     },

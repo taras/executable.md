@@ -11,9 +11,10 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
+import { API } from "@executablemd/runtime";
+
+const { fetch } = API.Fetch.operations;
 import { computeSHA256 } from "./hash.ts";
-import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
 
 export interface FetchOptions {
   url: string;
@@ -79,10 +80,7 @@ export function* durableFetch(
       ...(body ? { bodyHash: `len:${body.length}` } : {}),
     },
     function* () {
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-
-      const response = yield* runtime.fetch(url, {
+      const response = yield* fetch(url, {
         method,
         headers,
         body,

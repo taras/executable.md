@@ -7,7 +7,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import { forEach } from "@effectionx/stream-helpers";
 import { createBlockCounter } from "../src/expand.ts";
 import { runDocument } from "../src/run-document.ts";
@@ -40,7 +39,6 @@ describe("Tier SE — Streaming emission", () => {
     const execution = yield* runDocument({
       docPath: "core/tests/fixtures/streaming/multi-segment.md",
       stream: new InMemoryStream(),
-      runtime: nodeRuntime(),
     });
 
     const fullOutput = yield* forEach(function* (chunk: string) {
@@ -60,7 +58,6 @@ describe("Tier SE — Streaming emission", () => {
     const execution = yield* runDocument({
       docPath: "core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
-      runtime: nodeRuntime(),
     });
 
     yield* forEach(function* (chunk: string) {
@@ -80,7 +77,6 @@ describe("Tier SE — Streaming emission", () => {
     const execution = yield* runDocument({
       docPath: "core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
-      runtime: nodeRuntime(),
     });
 
     yield* forEach(function* (chunk: string) {

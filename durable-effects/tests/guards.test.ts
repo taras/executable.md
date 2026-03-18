@@ -1,5 +1,3 @@
-// deno-lint-ignore-file require-yield
-
 /**
  * Tests for replay guards — useFileContentGuard, useGlobContentGuard,
  * useCodeFreshnessGuard.
@@ -22,8 +20,8 @@ import {
   type Workflow,
   durableRun,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
 import { expect } from "@std/expect";
+import { API } from "@executablemd/runtime";
 import { durableEval } from "../durable-eval.ts";
 import { durableGlob } from "../durable-glob.ts";
 import { durableReadFile } from "../durable-read-file.ts";
@@ -34,8 +32,6 @@ import {
   useGlobContentGuard,
 } from "../guards.ts";
 import { computeSHA256 } from "../hash.ts";
-import { DurableRuntimeCtx } from "../runtime.ts";
-import { stubRuntime } from "../stub-runtime.ts";
 
 // ---------------------------------------------------------------------------
 // useFileContentGuard
@@ -73,17 +69,13 @@ describe("useFileContentGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
     // Runtime returns the SAME content — hash will match
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *readTextFile(path) {
-          expect(path).toBe("src/input.txt");
-          return content;
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *readTextFile([path], _next) {
+        expect(path).toBe("src/input.txt");
+        return content;
+      },
+    });
     yield* useFileContentGuard();
 
     function* workflow(): Workflow<Json> {
@@ -126,16 +118,12 @@ describe("useFileContentGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
     // Runtime returns DIFFERENT content — hash will mismatch
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *readTextFile() {
-          return newContent;
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *readTextFile(_args, _next) {
+        return newContent;
+      },
+    });
     yield* useFileContentGuard();
 
     function* workflow(): Workflow<Json> {
@@ -178,8 +166,6 @@ describe("useFileContentGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    scope.set(DurableRuntimeCtx, stubRuntime());
     yield* useFileContentGuard();
 
     function* workflow(): Workflow<Json> {
@@ -236,16 +222,12 @@ describe("useFileContentGuard", () => {
     const stream = new InMemoryStream(events);
 
     let readCount = 0;
-    const scope = yield* useScope();
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *readTextFile() {
-          readCount++;
-          return content;
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *readTextFile(_args, _next) {
+        readCount++;
+        return content;
+      },
+    });
     yield* useFileContentGuard();
 
     function* workflow(): Workflow<void> {
@@ -298,23 +280,19 @@ describe("useGlobContentGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *glob() {
-          return [
-            { path: "a.ts", isFile: true },
-            { path: "b.ts", isFile: true },
-          ];
-        },
-        *readTextFile(path) {
-          if (path === "src/a.ts") return "A";
-          if (path === "src/b.ts") return "B";
-          throw new Error(`unexpected: ${path}`);
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *glob(_args, _next) {
+        return [
+          { path: "a.ts", isFile: true },
+          { path: "b.ts", isFile: true },
+        ];
+      },
+      *readTextFile([path], _next) {
+        if (path === "src/a.ts") return "A";
+        if (path === "src/b.ts") return "B";
+        throw new Error(`unexpected: ${path}`);
+      },
+    });
     yield* useGlobContentGuard();
 
     function* workflow(): Workflow<Json> {
@@ -360,24 +338,20 @@ describe("useGlobContentGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *glob() {
-          // Now returns 2 files — scanHash will differ
-          return [
-            { path: "a.ts", isFile: true },
-            { path: "b.ts", isFile: true },
-          ];
-        },
-        *readTextFile(path) {
-          if (path === "src/a.ts") return "A";
-          if (path === "src/b.ts") return "B";
-          throw new Error(`unexpected: ${path}`);
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *glob(_args, _next) {
+        // Now returns 2 files — scanHash will differ
+        return [
+          { path: "a.ts", isFile: true },
+          { path: "b.ts", isFile: true },
+        ];
+      },
+      *readTextFile([path], _next) {
+        if (path === "src/a.ts") return "A";
+        if (path === "src/b.ts") return "B";
+        throw new Error(`unexpected: ${path}`);
+      },
+    });
     yield* useGlobContentGuard();
 
     function* workflow(): Workflow<Json> {
@@ -427,17 +401,13 @@ describe("useGlobContentGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    // Note: stubRuntime with readTextFile override so file guard check
+    // Note: readTextFile override so file guard check
     // doesn't fail (glob guard doesn't need any runtime for non-glob events)
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *readTextFile() {
-          return content;
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *readTextFile(_args, _next) {
+        return content;
+      },
+    });
     yield* useGlobContentGuard();
 
     function* workflow(): Workflow<Json> {
@@ -490,9 +460,6 @@ describe("useCodeFreshnessGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    scope.set(DurableRuntimeCtx, stubRuntime());
-
     // getCellSource returns SAME source and bindings
     yield* useCodeFreshnessGuard((cellName) => {
       if (cellName === "compute") return { source, bindings };
@@ -540,9 +507,6 @@ describe("useCodeFreshnessGuard", () => {
       },
     ];
     const stream = new InMemoryStream(events);
-
-    const scope = yield* useScope();
-    scope.set(DurableRuntimeCtx, stubRuntime());
 
     // getCellSource returns DIFFERENT source
     yield* useCodeFreshnessGuard((cellName) => {
@@ -594,9 +558,6 @@ describe("useCodeFreshnessGuard", () => {
       },
     ];
     const stream = new InMemoryStream(events);
-
-    const scope = yield* useScope();
-    scope.set(DurableRuntimeCtx, stubRuntime());
 
     // getCellSource returns same source but DIFFERENT bindings
     yield* useCodeFreshnessGuard((cellName) => {
@@ -656,9 +617,6 @@ describe("useCodeFreshnessGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    scope.set(DurableRuntimeCtx, stubRuntime());
-
     // getCellSource returns undefined for unknown cells
     yield* useCodeFreshnessGuard(() => undefined);
 
@@ -707,15 +665,11 @@ describe("useCodeFreshnessGuard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-    scope.set(
-      DurableRuntimeCtx,
-      stubRuntime({
-        *readTextFile() {
-          return content;
-        },
-      }),
-    );
+    yield* API.Fs.around({
+      *readTextFile(_args, _next) {
+        return content;
+      },
+    });
 
     // Code freshness guard should ignore read_file events
     yield* useCodeFreshnessGuard(() => undefined);
