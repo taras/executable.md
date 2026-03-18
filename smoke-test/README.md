@@ -166,6 +166,22 @@ Captured bindings are available to later executable blocks:
 echo "Capture values: {capturedFromComponent} | {capturedInline}"
 ```
 
+Capture with CSS selector extracts specific content from rendered output:
+
+<Capture as="capturedJson" select="code[lang=json]">
+Some prose before the data.
+
+```json
+["alpha","bravo",42]
+```
+
+More prose after.
+</Capture>
+
+```bash exec
+printf 'Selected JSON: %s\n' '{capturedJson}'
+```
+
 This Note is captured but intentionally not rendered inline:
 
 <Note as="hiddenCapturedNote" message="Hidden capture should not render inline." />
@@ -458,6 +474,7 @@ cat <<'EOF'
 | Expression props          | <PropDemo greeting={dynamic} subject={dynamic}> |
 | component as capture      | <Fragment as="capturedFromComponent">...       |
 | Capture directive         | <Capture as="capturedInline">...               |
+| Capture select            | <Capture select="code[lang=json]">...          |
 | Durability                | Timestamp stable across reruns          |
 | eval modifier             | js eval blocks with shared bindings     |
 | persist modifier          | js persist eval block, resource lifetime|
