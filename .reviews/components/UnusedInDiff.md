@@ -16,7 +16,10 @@ inputs:
 const declPattern = new RegExp(
   `(?:${construct})\\s+(\\w+)`, "g"
 );
-const source = pr.added.map(l => l.content).join("\n");
+const lines = pr.added.filter(l =>
+  l.file.endsWith(".ts") || l.file.endsWith(".tsx")
+);
+const source = lines.map(l => l.content).join("\n");
 
 const names = [];
 let match;

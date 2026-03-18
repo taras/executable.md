@@ -12,7 +12,10 @@
     "magic-string": "npm:magic-string@^0.30.21",
     "marked": "npm:marked@^17.0.4",
     "marked-terminal": "npm:marked-terminal@^7.3.0",
+    "remark": "npm:remark@15",
     "remend": "npm:remend@^1.2.2",
-    "zod": "npm:zod@^4.3.6"
+    "zod": "npm:zod@^4.3.6",
+    "unist-util-select": "npm:unist-util-select@^5",
+    "mdast-util-to-string": "npm:mdast-util-to-string@^4"
   }
 }

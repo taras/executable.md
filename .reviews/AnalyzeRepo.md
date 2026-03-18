@@ -64,7 +64,7 @@ const pr = {
 };
 ```
 
-<Capture as="doctorJson">
+<Capture as="doctorJson" select="code[lang=json]">
 
 <Doctor pr={pr} />
 
@@ -82,7 +82,7 @@ const doctor = parseDoctorResult(doctorJson);
          || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
-OUT=$(npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
+OUT=$(npx oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
 if [ -n "$OUT" ]; then
   printf '%s' "$OUT"
 else
@@ -96,7 +96,7 @@ fi
          && doctor.oxlintInstalled}>
 
 ```bash exec
-OUT=$(npx oxlint --format json 2>/dev/null || true)
+OUT=$(npx oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true)
 if [ -n "$OUT" ]; then
   printf '%s' "$OUT"
 else

@@ -29,6 +29,11 @@ Your job is NOT to re-analyze diagnostics. The ranking is already done.
 Your job IS to explain why each top cluster matters and what specific
 cleanup action to take.
 
+PRINCIPLES:
+- Rule of Three: flag any abstraction with fewer than 3 consumers.
+  Single-consumer abstractions should be inlined.
+- YAGNI: flag code that exists "just in case" with no current caller.
+
 {cleanupAnalysis.promptContext}
 
 For each of the top 5 clusters above, produce exactly this format:

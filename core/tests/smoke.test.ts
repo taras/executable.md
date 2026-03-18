@@ -105,6 +105,12 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     expect(output).toContain("| inline binding from Capture");
     expect(output).not.toContain("Hidden capture should not render inline.");
 
+    // ----- Capture with CSS selector -----
+    // select="code[lang=json]" extracts only the JSON code block value,
+    // ignoring surrounding prose text
+    expect(output).toContain('Selected JSON: ["alpha","bravo",42]');
+    expect(output).not.toContain("Some prose before the data");
+
     // ----- In-Process Evaluation section -----
     expect(output).toContain("§ In-Process Evaluation");
 
@@ -162,6 +168,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     expect(output).toContain("composable instructions");
     expect(output).toContain("component as capture");
     expect(output).toContain("Capture directive");
+    expect(output).toContain("Capture select");
 
     // ----- Instruction Component section -----
     expect(output).toContain("§ Instruction Component");

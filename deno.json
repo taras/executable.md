@@ -24,7 +24,15 @@
     "@std/expect": "jsr:@std/expect@^1",
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
     "oxlint": "npm:oxlint@^1",
-    "oxlint-tsgolint": "npm:oxlint-tsgolint@^0.17"
+    "oxlint-tsgolint": "npm:oxlint-tsgolint@^0.17",
+    "unist-util-select": "npm:unist-util-select@^5",
+    "mdast-util-to-string": "npm:mdast-util-to-string@^4"
+  },
+  "lint": {
+    "plugins": ["./lint-plugins/no-scheme-specifiers.ts"],
+    "rules": {
+      "include": ["no-scheme-specifiers/no-scheme-specifiers"]
+    }
   },
   "tasks": {
     "ema": "deno run --allow-all cli/src/cli.ts",
