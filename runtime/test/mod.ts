@@ -1,6 +1,6 @@
 /**
  * @module
- * Test helpers for executable markdown.
+ * Test helpers for executable markdown runtime.
  *
  * Composable stubs for runtime context APIs:
  * - `useStubFs(files)` — in-memory filesystem

@@ -12,7 +12,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
-import { useStubFs, useFailingExec } from "@executablemd/test-helpers";
+import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { runDocument } from "../src/run-document.ts";

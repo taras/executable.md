@@ -8,7 +8,7 @@
  *
  * @example
  * ```typescript
- * import { useStubFs, useEchoExec } from "@executablemd/test-helpers";
+ * import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
  *
  * it("runs a document with stubbed I/O", function* () {
  *   yield* useStubFs({ "doc.md": "# Hello\n" });
@@ -20,9 +20,9 @@
  * ```
  */
 
-import { API } from "@executablemd/runtime";
-import type { StatResult } from "@executablemd/runtime";
 import type { Operation } from "effection";
+import { API } from "../apis.ts";
+import type { StatResult } from "../apis.ts";
 
 /**
  * Install an in-memory filesystem stub.

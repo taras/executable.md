@@ -1,5 +1,5 @@
 {
-  "workspace": ["core", "cli", "durable-streams", "durable-effects", "runtime", "test-helpers", "packages/code-review-agent"],
+  "workspace": ["core", "cli", "durable-streams", "durable-effects", "runtime", "packages/code-review-agent"],
   "nodeModulesDir": "auto",
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",
@@ -11,7 +11,7 @@
     "@executablemd/durable-streams": "./durable-streams/mod.ts",
     "@executablemd/durable-effects": "./durable-effects/mod.ts",
     "@executablemd/runtime": "./runtime/mod.ts",
-    "@executablemd/test-helpers": "./test-helpers/mod.ts",
+    "@executablemd/runtime/test": "./runtime/test/mod.ts",
     "@executablemd/code-review-agent": "./packages/code-review-agent/mod.ts",
     "@effectionx/context-api": "npm:@effectionx/context-api@^0.4.0",
     "@effectionx/converge": "npm:@effectionx/converge@^0.1.3",

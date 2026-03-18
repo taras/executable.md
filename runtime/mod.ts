@@ -12,7 +12,7 @@
  * - `API.Env` — environment variables and platform info (`env`, `platform`)
  *
  * See `apis.ts` for architecture rationale.
- * See `@executablemd/test-helpers` for composable test stubs.
+ * See `@executablemd/runtime/test` for composable test stubs.
  */
 
 export { API } from "./apis.ts";

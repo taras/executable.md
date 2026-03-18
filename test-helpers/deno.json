@@ -1,8 +1,0 @@
-{
-  "name": "@executablemd/test-helpers",
-  "version": "0.1.0",
-  "exports": "./mod.ts",
-  "imports": {
-    "@executablemd/runtime": "../runtime/mod.ts"
-  }
-}

@@ -54,7 +54,7 @@
  *
  * ## Test stubs
  *
- * Common stubs are provided by `@executablemd/test-helpers`:
+ * Common stubs are provided by `@executablemd/runtime/test`:
  * `useStubFs(files)`, `useEchoExec()`, `useFailingExec(code, stderr)`.
  */
 

@@ -1,11 +1,11 @@
-# `@executablemd/test-helpers`
+# `@executablemd/runtime/test`
 
 Composable test stubs for runtime context APIs.
 
 These helpers install `around()` middleware on `@executablemd/runtime` so tests
 can replace real I/O with scoped, in-memory behavior.
 
-## When to use this package
+## When to use this module
 
 Use these helpers when a test needs:
 
@@ -30,7 +30,7 @@ This is the right default for `runDocument()` tests that want to supply a small
 virtual document tree inline.
 
 ```ts
-import { useStubFs } from "@executablemd/test-helpers";
+import { useStubFs } from "@executablemd/runtime/test";
 
 yield* useStubFs({
   "doc.md": "# Hello\n",
@@ -50,7 +50,7 @@ This is useful for tests that need `exec` blocks to produce deterministic text
 without running a real subprocess.
 
 ```ts
-import { useEchoExec } from "@executablemd/test-helpers";
+import { useEchoExec } from "@executablemd/runtime/test";
 
 yield* useEchoExec();
 ```
@@ -65,7 +65,7 @@ This is useful for testing error rendering, command failures, and non-zero exit
 paths.
 
 ```ts
-import { useFailingExec } from "@executablemd/test-helpers";
+import { useFailingExec } from "@executablemd/runtime/test";
 
 yield* useFailingExec(127, "command not found");
 ```
@@ -79,7 +79,7 @@ import {
   useStubFs,
   useEchoExec,
   useFailingExec,
-} from "@executablemd/test-helpers";
+} from "@executablemd/runtime/test";
 
 yield* useStubFs({ "doc.md": "```bash exec\necho hi\n```\n" });
 yield* useEchoExec();
