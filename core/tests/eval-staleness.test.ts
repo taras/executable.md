@@ -6,57 +6,28 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
-import { stubRuntime } from "@executablemd/durable-effects";
-import type { DurableRuntime, StatResult } from "@executablemd/durable-streams";
+import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-function makeRuntime(files: Record<string, string>): DurableRuntime {
-  return stubRuntime({
-    *readTextFile(path: string) {
-      const content = files[path];
-      if (content === undefined) {
-        throw new Error(`ENOENT: no such file: ${path}`);
-      }
-      return content;
-    },
-    *stat(path: string): Generator<never, StatResult, unknown> {
-      const exists = path in files;
-      return { exists, isFile: exists, isDirectory: false };
-    },
-    *exec(options: { command: string[]; timeout?: number }) {
-      const script = (options.command[2] ?? "").trim();
-      if (script.startsWith("echo ")) {
-        return { exitCode: 0, stdout: script.slice(5) + "\n", stderr: "" };
-      }
-      return { exitCode: 0, stdout: script + "\n", stderr: "" };
-    },
-  });
-}
 
 describe("Tier T8 — Staleness detection", () => {
   // T56: Source unchanged, bindings unchanged → replay proceeds
   it("T56: unchanged source → replay proceeds", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
+    yield* useEchoExec();
 
     const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
     const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
@@ -71,13 +42,13 @@ describe("Tier T8 — Staleness detection", () => {
     const files: Record<string, string> = {
       "test.md": "```js eval\nconst x = 42;\n```\n",
     };
-    const runtime = makeRuntime(files);
+    yield* useStubFs(files);
+    yield* useEchoExec();
 
     // Golden run with freshness
     yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 
@@ -85,7 +56,6 @@ describe("Tier T8 — Staleness detection", () => {
     const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 
@@ -98,13 +68,13 @@ describe("Tier T8 — Staleness detection", () => {
     const files: Record<string, string> = {
       "test.md": "Some text content\n",
     };
-    const runtime = makeRuntime(files);
+    yield* useStubFs(files);
+    yield* useEchoExec();
 
     // Golden run
     yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 
@@ -116,7 +86,6 @@ describe("Tier T8 — Staleness detection", () => {
       yield* collect(yield* runDocument({
         docPath: "test.md",
         stream,
-        runtime,
         freshness: true,
       }));
       // If we get here, the guard didn't fire (might replay and not read file)
@@ -128,21 +97,20 @@ describe("Tier T8 — Staleness detection", () => {
   // T59: Non-eval events pass through code freshness guard unchanged
   it("T59: exec events unaffected by code freshness guard", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```bash exec\necho hello\n```\n",
     });
+    yield* useEchoExec();
 
     const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 
     const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 
@@ -153,14 +121,14 @@ describe("Tier T8 — Staleness detection", () => {
   // T60: Unknown block name in guard — passes through
   it("T60: eval block replays correctly with freshness", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js eval\nconst greeting = 'hi';\n```\n",
     });
+    yield* useEchoExec();
 
     yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 
@@ -168,7 +136,6 @@ describe("Tier T8 — Staleness detection", () => {
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: true,
     }));
 

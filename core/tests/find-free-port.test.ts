@@ -11,7 +11,6 @@ import type { Operation } from "effection";
 import { once } from "@effectionx/node";
 import { createServer } from "node:net";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import { findFreePort } from "../src/find-free-port.ts";
 import { compileBlock } from "../src/eval-context.ts";
 import { runDocument } from "../src/run-document.ts";
@@ -132,7 +131,7 @@ describe("Tier R — Eval module globals", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tier R — Behavioral integration tests (via runDocument + nodeRuntime)
+// Tier R — Behavioral integration tests (via runDocument)
 // ---------------------------------------------------------------------------
 
 describe("Tier R — findFreePort in eval blocks", () => {
@@ -157,7 +156,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -194,7 +192,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -225,13 +222,10 @@ describe("Tier R — findFreePort in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const runtime = nodeRuntime();
-
       // Golden run
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime,
         freshness: false,
       }));
 
@@ -239,7 +233,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime,
         freshness: false,
       }));
 
@@ -286,7 +279,6 @@ describe("Tier R — when in eval blocks", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -325,7 +317,6 @@ describe("Tier R — when in eval blocks", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -358,7 +349,6 @@ describe("Tier R — when in eval blocks", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 

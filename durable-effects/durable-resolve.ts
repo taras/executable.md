@@ -11,9 +11,8 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
 import type { Operation } from "effection";
-import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
+import { env, platform } from "@executablemd/runtime";
 
 export type ResolveKind =
   | { kind: "current_time" }
@@ -66,9 +65,6 @@ export function* durableResolve<T extends Json>(
         return (yield* resolver()) as unknown as Json;
       }
 
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-
       switch (resolver.kind) {
         case "current_time":
           return new Date().toISOString() as unknown as Json;
@@ -85,9 +81,9 @@ export function* durableResolve<T extends Json>(
         case "uuid":
           return crypto.randomUUID() as unknown as Json;
         case "env_var":
-          return (runtime.env(resolver.name) ?? null) as unknown as Json;
+          return ((yield* env(resolver.name)) ?? null) as unknown as Json;
         case "platform":
-          return runtime.platform() as unknown as Json;
+          return (yield* platform()) as unknown as Json;
       }
     },
   )) as T;

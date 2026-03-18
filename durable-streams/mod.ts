@@ -58,15 +58,6 @@ export type {
 export { ReplayGuard } from "./replay-guard.ts";
 export type { ReplayOutcome } from "./replay-guard.ts";
 
-// Runtime abstraction — platform-agnostic I/O for durable effects
-export { DurableRuntimeCtx } from "./runtime.ts";
-export type {
-  DurableRuntime,
-  ResponseHeaders,
-  RuntimeFetchResponse,
-  StatResult,
-} from "./runtime.ts";
-
 // Context
 export { DurableCtx } from "./context.ts";
 export type { DurableContext } from "./context.ts";

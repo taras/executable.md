@@ -13,7 +13,7 @@
 
 import { main, exit, spawn, each, createSignal, type Operation } from "effection";
 import { InMemoryStream, type DurableEvent, type DurableStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
+
 import { forEach } from "@effectionx/stream-helpers";
 import { inspect } from "node:util";
 import process from "node:process";
@@ -177,7 +177,6 @@ function* run(config: {
   const execution = yield* runDocument({
     docPath,
     stream,
-    runtime: nodeRuntime(),
     componentDirs: componentDir,
     freshness: false,
   });

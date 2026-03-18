@@ -11,8 +11,7 @@ import {
   type Workflow,
   createDurableOperation,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
-import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
+import { exec } from "@executablemd/runtime";
 
 export interface ExecOptions {
   command: string[];
@@ -56,10 +55,7 @@ export function* durableExec(
       throwOnError,
     },
     function* () {
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-
-      const output = yield* runtime.exec({ command, cwd, env, timeout });
+      const output = yield* exec({ command, cwd, env, timeout });
 
       if (throwOnError && output.exitCode !== 0) {
         throw new Error(

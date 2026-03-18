@@ -1,7 +1,7 @@
 /**
  * Tier Q — Daemon modifier integration tests.
  *
- * Tests daemon process lifecycle with real subprocesses via nodeRuntime().
+ * Tests daemon process lifecycle with real subprocesses.
  * Verifies process lifetime, crash propagation, interpolation flow,
  * and replay behavior.
  *
@@ -18,7 +18,6 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { race, sleep } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import * as fs from "node:fs";
@@ -74,7 +73,6 @@ describe("Tier Q — Daemon integration", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -110,7 +108,6 @@ describe("Tier Q — Daemon integration", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -141,7 +138,6 @@ describe("Tier Q — Daemon integration", () => {
       yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -184,7 +180,6 @@ describe("Tier Q — Daemon integration", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -227,7 +222,6 @@ describe("Tier Q — Daemon integration", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -263,7 +257,6 @@ describe("Tier Q — Daemon integration", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         freshness: false,
       }));
 
@@ -299,13 +292,10 @@ describe("Tier Q — Daemon integration", () => {
       });
 
       const stream = new InMemoryStream();
-      const runtime = nodeRuntime();
-
       // Golden run
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime,
         freshness: false,
       }));
 
@@ -317,7 +307,6 @@ describe("Tier Q — Daemon integration", () => {
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime,
         freshness: false,
       }));
 
@@ -360,7 +349,6 @@ describe("Tier Q — Daemon integration", () => {
         collect(yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          runtime: nodeRuntime(),
           freshness: false,
         })),
         sleep(500),

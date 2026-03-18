@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "exports": "./mod.ts",
   "imports": {
-    "@executablemd/durable-streams": "../durable-streams/mod.ts"
+    "@executablemd/durable-streams": "../durable-streams/mod.ts",
+    "@executablemd/runtime": "../runtime/mod.ts"
   }
 }

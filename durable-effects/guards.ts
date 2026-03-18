@@ -21,9 +21,9 @@ import {
 } from "@executablemd/durable-streams";
 import { useScope } from "effection";
 import type { Operation } from "effection";
+import { glob, readTextFile } from "@executablemd/runtime";
 import { canonicalJson } from "./canonical-json.ts";
 import { computeSHA256 } from "./hash.ts";
-import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
 
 // ---------------------------------------------------------------------------
 // Guard 1: useFileContentGuard — file staleness detection
@@ -44,14 +44,13 @@ import { type DurableRuntime, DurableRuntimeCtx } from "./runtime.ts";
  */
 export function* useFileContentGuard(): Operation<void> {
   const scope = yield* useScope();
-  const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
   const cache = new Map<string, string>();
 
   scope.around(ReplayGuard, {
     *check([event], next): Operation<void> {
       const filePath = event.description.path;
       if (typeof filePath === "string" && !cache.has(filePath)) {
-        const content = yield* runtime.readTextFile(filePath);
+        const content = yield* readTextFile(filePath);
         const currentHash = yield* computeSHA256(content);
         cache.set(filePath, currentHash);
       }
@@ -100,7 +99,6 @@ export function* useFileContentGuard(): Operation<void> {
  */
 export function* useGlobContentGuard(): Operation<void> {
   const scope = yield* useScope();
-  const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
   const cache = new Map<string, string>();
 
   scope.around(ReplayGuard, {
@@ -112,7 +110,7 @@ export function* useGlobContentGuard(): Operation<void> {
         const key = `${baseDir}|${JSON.stringify(include)}|${JSON.stringify(exclude)}`;
 
         if (!cache.has(key)) {
-          const entries = yield* runtime.glob({
+          const entries = yield* glob({
             patterns: include,
             root: baseDir,
             exclude,
@@ -120,7 +118,7 @@ export function* useGlobContentGuard(): Operation<void> {
           const matches: Array<{ path: string; contentHash: string }> = [];
           for (const entry of entries) {
             if (!entry.isFile) continue;
-            const content = yield* runtime.readTextFile(
+            const content = yield* readTextFile(
               `${baseDir}/${entry.path}`,
             );
             const contentHash = yield* computeSHA256(content);

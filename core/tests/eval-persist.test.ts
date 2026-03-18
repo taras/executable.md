@@ -10,52 +10,24 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { stubRuntime } from "@executablemd/durable-effects";
-import type { DurableRuntime, StatResult } from "@executablemd/durable-streams";
+import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { unbox } from "effection";
 import type { Result } from "effection";
 
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-function makeRuntime(files: Record<string, string>): DurableRuntime {
-  return stubRuntime({
-    *readTextFile(path: string) {
-      const content = files[path];
-      if (content === undefined) {
-        throw new Error(`ENOENT: no such file: ${path}`);
-      }
-      return content;
-    },
-    *stat(path: string): Generator<never, StatResult, unknown> {
-      const exists = path in files;
-      return { exists, isFile: exists, isDirectory: false };
-    },
-    *exec(options: { command: string[]; timeout?: number }) {
-      const script = (options.command[2] ?? "").trim();
-      if (script.startsWith("echo ")) {
-        return { exitCode: 0, stdout: script.slice(5) + "\n", stderr: "" };
-      }
-      return { exitCode: 0, stdout: script + "\n", stderr: "" };
-    },
-  });
-}
-
 describe("Tier T6 — persist modifier", () => {
   // T43: eval without persist → block completes normally
   it("T43: eval without persist → block completes", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
+    yield* useEchoExec();
 
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
@@ -66,14 +38,14 @@ describe("Tier T6 — persist modifier", () => {
   // T44: persist eval → block completes normally
   it("T44: persist eval → block completes normally", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js persist eval\nconst server = 'running';\n```\n",
     });
+    yield* useEchoExec();
 
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
@@ -84,15 +56,15 @@ describe("Tier T6 — persist modifier", () => {
   // T45: persist eval followed by eval → bindings available
   it("T45: persist eval followed by eval → bindings available", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md":
         "```js persist eval\nconst server = 'started';\n```\n\n```js eval\nconst status = server;\n```\n",
     });
+    yield* useEchoExec();
 
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
@@ -103,21 +75,20 @@ describe("Tier T6 — persist modifier", () => {
   // T46: persist on replay → no-op
   it("T46: persist on replay → normal replay", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": "```js persist eval\nconst x = 42;\n```\n",
     });
+    yield* useEchoExec();
 
     const output1 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
     const output2 = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 
@@ -148,7 +119,7 @@ describe("Tier T6 — persist modifier", () => {
   // after 10ms. The next eval block uses when() to converge on it.
   it("T49b: persist eval retains spawned resource across blocks", function* () {
     const stream = new InMemoryStream();
-    const runtime = makeRuntime({
+    yield* useStubFs({
       "test.md": [
         "```js persist eval",
         "const status = { ready: false };",
@@ -166,11 +137,11 @@ describe("Tier T6 — persist modifier", () => {
         "```",
       ].join("\n"),
     });
+    yield* useEchoExec();
 
     const output = yield* collect(yield* runDocument({
       docPath: "test.md",
       stream,
-      runtime,
       freshness: false,
     }));
 

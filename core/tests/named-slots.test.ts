@@ -18,9 +18,6 @@ import { validateProps } from "../src/validate.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
-import { stubRuntime } from "@executablemd/durable-effects";
-import type { StatResult } from "@executablemd/durable-effects";
 import type {
   Segment,
   ComponentDefinition,
@@ -29,7 +26,7 @@ import type {
   Modifier,
   CodeBlockContext,
 } from "../src/types.ts";
-import type { DurableRuntime } from "@executablemd/durable-effects";
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -112,26 +109,6 @@ function codeSeg(content: string): Segment {
     modifiers: [{ name: "exec" }],
     executable: true,
   };
-}
-
-/** In-memory runtime that stubs readTextFile, stat, and exec. */
-function makeRuntime(files: Record<string, string>): DurableRuntime {
-  return stubRuntime({
-    *readTextFile(filePath: string) {
-      const content = files[filePath];
-      if (content === undefined) {
-        throw new Error(`ENOENT: no such file: ${filePath}`);
-      }
-      return content;
-    },
-    *stat(filePath: string): Generator<never, StatResult, unknown> {
-      const exists = filePath in files;
-      return { exists, isFile: exists, isDirectory: false };
-    },
-    *exec() {
-      return { exitCode: 0, stdout: "stub", stderr: "" };
-    },
-  });
 }
 
 function stubProvider(componentName: string): string {
@@ -692,7 +669,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -729,7 +705,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -767,7 +742,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -888,7 +862,6 @@ describe("Tier NS-F — Edge cases", () => {
       yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -924,7 +897,6 @@ describe("Tier NS-F — Edge cases", () => {
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -932,7 +904,6 @@ describe("Tier NS-F — Edge cases", () => {
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));

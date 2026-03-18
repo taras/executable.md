@@ -12,7 +12,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 
@@ -27,7 +26,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     const output = yield* collect(yield* runDocument({
       docPath: "smoke-test/README.md",
       stream,
-      runtime: nodeRuntime(),
       componentDirs: ["smoke-test", "core/components"],
       freshness: false,
     }));
@@ -191,7 +189,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     const firstOutput = yield* collect(yield* runDocument({
       docPath: "smoke-test/README.md",
       stream,
-      runtime: nodeRuntime(),
       componentDirs: ["smoke-test", "core/components"],
       freshness: false,
     }));
@@ -201,7 +198,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     const secondOutput = yield* collect(yield* runDocument({
       docPath: "smoke-test/README.md",
       stream,
-      runtime: nodeRuntime(),
       componentDirs: ["smoke-test", "core/components"],
       freshness: false,
     }));

@@ -2,7 +2,7 @@
  * Tier S — Provider component pattern integration tests.
  *
  * Tests the full provider lifecycle: eval → daemon → when → children → cleanup.
- * Uses real subprocesses via nodeRuntime() and a Node HTTP server as the daemon.
+ * Uses real subprocesses and a Node HTTP server as the daemon.
  *
  * The provider component pattern (spec §6.7) is:
  * 1. eval block allocates port via findFreePort()
@@ -14,7 +14,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { nodeRuntime } from "@executablemd/durable-effects";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { Sample } from "../src/sample-api.ts";
@@ -145,7 +144,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -180,7 +178,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -223,7 +220,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -259,7 +255,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -317,7 +312,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -378,7 +372,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -423,7 +416,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -496,7 +488,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -561,7 +552,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -626,7 +616,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -687,7 +676,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -718,15 +706,12 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       });
 
       const stream = new InMemoryStream();
-      const runtime = nodeRuntime();
-
       const componentDirs = [path.join(tmpDir, "components"), tmpDir];
 
       // Golden run
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime,
         componentDirs,
         freshness: false,
       }));
@@ -738,7 +723,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime,
         componentDirs,
         freshness: false,
       }));
@@ -770,7 +754,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
         ].join("\n"),
       });
 
-      const runtime = nodeRuntime();
       const componentDirs = [path.join(tmpDir, "components"), tmpDir];
 
       // Golden run
@@ -778,7 +761,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output1 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream: stream1,
-        runtime,
         componentDirs,
         freshness: false,
       }));
@@ -805,7 +787,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output2 = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream: stream2,
-        runtime,
         componentDirs,
         freshness: false,
       }));
@@ -844,7 +825,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -924,7 +904,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));
@@ -993,7 +972,6 @@ describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitize
       const output = yield* collect(yield* runDocument({
         docPath: path.join(tmpDir, "doc.md"),
         stream,
-        runtime: nodeRuntime(),
         componentDirs: [path.join(tmpDir, "components"), tmpDir],
         freshness: false,
       }));

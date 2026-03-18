@@ -1,5 +1,5 @@
 {
-  "workspace": ["core", "cli", "durable-streams", "durable-effects", "packages/code-review-agent"],
+  "workspace": ["core", "cli", "durable-streams", "durable-effects", "runtime", "packages/code-review-agent"],
   "nodeModulesDir": "auto",
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",
@@ -10,7 +10,10 @@
     "effection/experimental": "npm:effection@4.1.0-alpha.7/experimental",
     "@executablemd/durable-streams": "./durable-streams/mod.ts",
     "@executablemd/durable-effects": "./durable-effects/mod.ts",
+    "@executablemd/runtime": "./runtime/mod.ts",
+    "@executablemd/runtime/test": "./runtime/test/mod.ts",
     "@executablemd/code-review-agent": "./packages/code-review-agent/mod.ts",
+    "@effectionx/context-api": "npm:@effectionx/context-api@^0.4.0",
     "@effectionx/converge": "npm:@effectionx/converge@^0.1.3",
     "@effectionx/fetch": "npm:@effectionx/fetch@^0.1.2",
     "@effectionx/fs": "npm:@effectionx/fs@0.2.2",
@@ -38,7 +41,7 @@
     "ema": "deno run --allow-all cli/src/cli.ts",
     "test": "deno test --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/tests/",
     "check": "deno check core/mod.ts",
-    "lint": "deno lint core/src/ cli/src/ durable-streams/ durable-effects/",
+    "lint": "deno lint core/src/ cli/src/ durable-streams/ durable-effects/ runtime/",
     "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.jsonl",
     "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.jsonl",
