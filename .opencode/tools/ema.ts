@@ -15,9 +15,8 @@ export const issues = tool({
       ),
   },
   async execute(args, context) {
-    const env: Record<string, string> = {}
-    if (process.env.GITHUB_TOKEN) {
-      env.GITHUB_TOKEN = process.env.GITHUB_TOKEN
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
     }
     if (args.number) {
       env.ISSUE_NUMBER = String(args.number)
