@@ -232,25 +232,35 @@ function* supervisedRun(): Operation<void> {
 
 ---
 
-## DurableRuntime
+## Runtime APIs
 
-Effects that interact with the operating system (file I/O, subprocess execution, HTTP requests) use a `DurableRuntime` abstraction instead of importing Node-specific or Deno-specific APIs directly. The runtime is installed on the Effection scope as a context value before calling `durableRun`:
+Effects that interact with the operating system (file I/O, subprocess
+execution, HTTP requests) use runtime operations from `@executablemd/runtime`
+instead of importing platform APIs directly.
+
+For normal calls, durable effects use exported operations (`exec`,
+`readTextFile`, `glob`, `fetch`, `env`, `platform`). To customize behavior, use
+`API.*.around()` middleware on the current scope:
 
 ```typescript
-import { DurableRuntimeCtx } from "@effectionx/durable-streams";
-import { nodeRuntime } from "@effectionx/durable-effects";
+import { API } from "@executablemd/runtime";
 
 function* main(): Operation<void> {
-  const scope = yield* useScope();
-  scope.set(DurableRuntimeCtx, nodeRuntime());
+  yield* API.Process.around({
+    *exec([options], next) {
+      // custom behavior before/after exec
+      return yield* next(options);
+    },
+  });
 
   yield* durableRun(() => myWorkflow(), { stream });
 }
 ```
 
-Effects access the runtime inside their operation callbacks via `scope.expect<DurableRuntime>(DurableRuntimeCtx)`. The interface is fully Operation-native — every I/O method returns `Operation<T>`, not `Promise<T>`, so cancellation flows through Effection's structured concurrency automatically.
-
-The `@effectionx/durable-effects` package provides `nodeRuntime()` for production use and `stubRuntime()` for testing.
+The API surface is Operation-native — including Env handlers (`env`,
+`platform`) — so cancellation and teardown continue to flow through Effection
+scope ownership. Test helpers for common runtime stubs are provided by
+`@executablemd/runtime/test`.
 
 ---
 

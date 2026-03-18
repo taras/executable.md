@@ -12,28 +12,21 @@ for use with `@effectionx/durable-streams`.
 ## Installation
 
 ```bash
-npm install @effectionx/durable-effects @effectionx/durable-streams effection
+npm install @executablemd/durable-effects @executablemd/durable-streams effection
 ```
 
 ## Usage
 
 ```typescript
-import { durableRun, InMemoryStream } from "@effectionx/durable-streams";
+import { durableRun, InMemoryStream } from "@executablemd/durable-streams";
 import {
-  nodeRuntime,
-  DurableRuntimeCtx,
   durableExec,
   durableReadFile,
   useFileContentGuard,
-} from "@effectionx/durable-effects";
-import { run, useScope } from "effection";
+} from "@executablemd/durable-effects";
+import { run } from "effection";
 
 await run(function* () {
-  const scope = yield* useScope();
-
-  // Install the runtime
-  scope.set(DurableRuntimeCtx, nodeRuntime());
-
   // Optionally install replay guards
   yield* useFileContentGuard();
 
@@ -48,3 +41,7 @@ await run(function* () {
   }, { stream });
 });
 ```
+
+Runtime operations are provided by `@executablemd/runtime` and are consumed
+through durable effect helpers. For tests, use `@executablemd/runtime/test` or
+install custom middleware with `API.*.around()`.

@@ -23,7 +23,7 @@ The system is built entirely on the existing durable execution
 infrastructure — `createDurableOperation`, `durableExec`, `durableEval`,
 `durableGlob`, replay guards, and the Divergence API. The main
 additions are `durableImportComponent` (a durable effect that wraps
-the Resolve Api and `DurableRuntime` file read into a single journaled
+the Resolve Api and runtime file read into a single journaled
 operation, with a custom `useImportComponentGuard` for staleness
 detection), the in-process evaluation system (source transform,
 module compilation, binding environment, and eval scope for resource
@@ -111,8 +111,8 @@ makes journals portable across machines and environments — a journal
 produced on one developer's machine replays correctly on another as
 long as the workspace structure is the same.
 
-The `DurableRuntime`'s I/O methods (`readTextFile`, `stat`, `exec`,
-`glob`) all resolve paths relative to cwd. The runtime never sees
+Runtime operations (`readTextFile`, `stat`, `exec`, `glob`) all resolve
+paths relative to cwd. Runtime helpers never see
 absolute paths. Component search directories
 (`["./components", "./"]`) are relative. Resolved paths in the
 journal (`"components/Greeting.md"`) are relative. Code block `exec`
@@ -471,7 +471,7 @@ It reads the code block info from the Effection context via
 `useCodeBlock()`:
 
 ```typescript
-function createExecFactory(runtime: DurableRuntime): ModifierFactory {
+function createExecFactory(): ModifierFactory {
   return (_params) => (_args, _next) => function* () {
     const context = yield* useCodeBlock();
     const command = buildCommand(context.language, context.content);
@@ -1985,20 +1985,20 @@ function* useDirectoryResolver(
   searchPaths: string[],
 ): Operation<void> {
   const scope = yield* useScope();
-  const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+  const stat = API.Fs.operations.stat;
 
   scope.around(Resolve, {
     *resolve([name], next): Operation<ResolveResult> {
       const fileName = name.replace(/\./g, "/") + ".md";
       for (const dir of searchPaths) {
         const candidate = join(dir, fileName);
-        const stat = yield* runtime.stat(candidate);
-        if (stat.exists && stat.isFile) {
+        const statResult = yield* stat(candidate);
+        if (statResult.exists && statResult.isFile) {
           return { path: candidate };
         }
 
         const indexCandidate = join(dir, name.replace(/\./g, "/"), "index.md");
-        const indexStat = yield* runtime.stat(indexCandidate);
+        const indexStat = yield* stat(indexCandidate);
         if (indexStat.exists && indexStat.isFile) {
           return { path: indexCandidate };
         }
@@ -2079,9 +2079,8 @@ function* durableImportComponent(
       const { path } = yield* Resolve.operations.resolve(name);
 
       // Read file via runtime
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-      const content = yield* runtime.readTextFile(path);
+      const readTextFile = API.Fs.operations.readTextFile;
+      const content = yield* readTextFile(path);
       const contentHash = yield* computeSHA256(content);
 
       return { path, content, contentHash } as ImportResult;
@@ -2144,7 +2143,7 @@ The guard reads the path and contentHash from the stored *result*:
 ```typescript
 function* useImportComponentGuard(): Operation<void> {
   const scope = yield* useScope();
-  const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+  const readTextFile = API.Fs.operations.readTextFile;
   const cache = new Map<string, string>();
 
   scope.around(ReplayGuard, {
@@ -2154,7 +2153,7 @@ function* useImportComponentGuard(): Operation<void> {
           ? (event.result.value as ImportResult)?.path
           : undefined) as string | undefined;
         if (storedPath && !cache.has(storedPath)) {
-          const content = yield* runtime.readTextFile(storedPath);
+          const content = yield* readTextFile(storedPath);
           const currentHash = yield* computeSHA256(content);
           cache.set(storedPath, currentHash);
         }
@@ -3626,9 +3625,6 @@ interface RunDocumentOptions {
   /** Durable stream for journaling. */
   stream: DurableStream;
 
-  /** Runtime for I/O operations. */
-  runtime: DurableRuntime;
-
   /** Component search directories (default: ["./components", "./"]) */
   componentDirs?: string[];
 
@@ -3668,13 +3664,10 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
   const channel = createChannel<string, string>();
 
   // Spawn the execution scope. All durable state lives inside this
-  // spawned task: DurableRuntimeCtx, eval scope, replay guards,
+  // spawned task: runtime API middleware, eval scope, replay guards,
   // EMA→channel bridge. The channel and workflow share this scope;
   // scope teardown cancels the producer and closes the channel.
   yield* spawn(function* () {
-    // Install runtime
-    yield* DurableRuntimeCtx.set(runtime);
-
     // Install replay guard
     if (freshness) {
       yield* useImportComponentGuard();
@@ -3743,14 +3736,12 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
 
 ```typescript
 import { run } from "effection";
-import { InMemoryStream } from "@effectionx/durable-streams";
-import { nodeRuntime } from "@effectionx/durable-effects";
+import { InMemoryStream } from "@executablemd/durable-streams";
 
 await run(function* () {
   const execution = yield* runDocument({
     docPath: "./README.md",
     stream: new InMemoryStream(),
-    runtime: nodeRuntime(),
   });
 
   const output = yield* execution;
@@ -4019,7 +4010,7 @@ formatting, channel send) execute on the ephemeral side. No durable state
 capture occurs in the output pipeline.
 
 The entire workflow runs in a `spawn()` inside `runDocument`. The channel
-and all execution state (DurableRuntimeCtx, eval scope, replay guards,
+and all execution state (runtime API middleware, eval scope, replay guards,
 EMA→channel bridge) share this spawned scope. The consumer
 (`forEach`/`collect` on `execution.output`) runs in the **caller's**
 scope. This cross-boundary communication is safe because scope teardown

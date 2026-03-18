@@ -2,7 +2,7 @@
 
 **Status:** Ready for implementation
 **Audience:** Implementing agent
-**Inputs:** `@effectionx/durable-streams` (protocol-specification, effection-integration, DECISIONS), `operations.ts`, `runtime.ts`, `hash.ts`, `guards.ts`
+**Inputs:** `@executablemd/durable-streams` (protocol-specification, effection-integration, DECISIONS), `operations.ts`, `runtime/apis.ts`, `hash.ts`, `guards.ts`
 
 ---
 
@@ -10,24 +10,25 @@
 
 Read these files before implementing:
 
-1. `@effectionx/durable-streams` types.ts — `DurableEffect<T>`, `Workflow<T>`, `EffectDescription`, `Result`, `Json`
-2. `@effectionx/durable-streams` effect.ts — `createDurableEffect()` and `createDurableOperation()` factories
+1. `@executablemd/durable-streams` types.ts — `DurableEffect<T>`, `Workflow<T>`, `EffectDescription`, `Result`, `Json`
+2. `@executablemd/durable-streams` effect.ts — `createDurableEffect()` and `createDurableOperation()` factories
 3. `operations.ts` — existing effects: `durableCall`, `durableSleep`, `durableAction`, `versionCheck`
 4. `mod.ts` — public API barrel
-5. `@effectionx/durable-streams` durable-run.test.ts — test patterns
+5. `@executablemd/durable-streams` durable-run.test.ts — test patterns
 
 ### Factory: all new effects use `createDurableOperation`
 
-All six new effects use the Operation-based factory. Inside `createDurableOperation`, the operation runs in `scope.run()` which inherits Effection context — `useScope()` and `scope.expect()` work naturally for reading the `DurableRuntime`.
+All six new effects use the Operation-based factory. Inside
+`createDurableOperation`, the operation runs in `scope.run()` and inherits
+Effection context. Runtime calls come from `@executablemd/runtime` operation
+exports (`exec`, `readTextFile`, `stat`, `glob`, `fetch`, `env`, `platform`).
 
 ```typescript
 function* durableXxx(name: string, ...params): Workflow<XxxResult> {
   return (yield createDurableOperation<XxxResult>(
     { type: "xxx", name, /* extra description fields */ },
     function* () {
-      const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
-      // ... yield* runtime methods (they return Operation<T>) ...
+      // ... yield* runtime operations from @executablemd/runtime ...
       return result;
     },
   )) as XxxResult;
@@ -43,92 +44,40 @@ function* durableXxx(name: string, ...params): Workflow<XxxResult> {
 
 ---
 
-## 0.1 Runtime abstraction: `DurableRuntime`
+## 0.1 Runtime APIs (`@executablemd/runtime`)
 
-Effects must not depend on Deno-specific or Node-specific APIs. A `DurableRuntime` interface provides all platform operations. **Every method returns `Operation<T>`, not `Promise<T>`.** Cancellation flows through Effection's structured concurrency — when a scope tears down, the operation is cancelled. No `AbortSignal` in the interface.
+Effects must not depend on host APIs directly. Runtime operations are provided
+by `@executablemd/runtime`.
 
 ```typescript
-// runtime.ts (re-exported from @effectionx/durable-streams)
-
-interface DurableRuntime {
-  /** Execute a subprocess. Cancellation kills the process. */
-  exec(options: {
-    command: string[];
-    cwd?: string;
-    env?: Record<string, string>;
-    timeout?: number;
-  }): Operation<{ exitCode: number; stdout: string; stderr: string }>;
-
-  /** Read a text file. */
-  readTextFile(path: string): Operation<string>;
-
-  /** Expand glob patterns. Returns relative paths with isFile flag. */
-  glob(options: {
-    patterns: string[];
-    root: string;
-    exclude?: string[];
-  }): Operation<Array<{ path: string; isFile: boolean }>>;
-
-  /** Make an HTTP request. Cancellation aborts the request. */
-  fetch(input: string, init?: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: string;
-    timeout?: number;
-  }): Operation<{
-    status: number;
-    headers: Headers;
-    text(): Operation<string>;
-  }>;
-
-  /** Read an environment variable. Returns undefined if not set. */
-  env(name: string): string | undefined;
-
-  /** Return platform information. */
-  platform(): { os: string; arch: string };
-}
-
-const DurableRuntimeCtx = createContext<DurableRuntime>("@durable/runtime");
+import {
+  API,
+  exec,
+  readTextFile,
+  stat,
+  glob,
+  fetch,
+  env,
+  platform,
+} from "@executablemd/runtime";
 ```
 
-**Design notes on the interface:**
+- Use exported operation helpers (`exec`, `readTextFile`, `stat`, `glob`,
+  `fetch`, `env`, `platform`) in normal operation code.
+- Use `API.*.around()` only when installing middleware.
+
+**Design notes:**
 
 - `exec()` returns `Operation`. The implementation handles timeouts and process cleanup internally. When the operation is cancelled (scope torn down), the implementation kills the subprocess. No `AbortSignal` crosses the interface boundary.
 - `fetch()` returns an Operation-native response object. `response.text()` is also `Operation<string>`, not `Promise<string>`. The implementation is responsible for timeout enforcement on both the request and the body read.
-- `env()` and `platform()` are synchronous — no Operation wrapper needed since they don't do I/O.
+- `env()` and `platform()` are modeled as Operation handlers in the runtime Api
+  so middleware can be installed consistently with `.around()`.
 - `readTextFile()` and `glob()` return Operations. Cancellation during a long glob scan terminates the iteration.
 
-**Installation** — set via `durableRun` options:
+**Testing runtime behavior**
 
-```typescript
-interface DurableRunOptions {
-  stream: DurableStream;
-  coroutineId?: string;
-  runtime?: DurableRuntime;  // defaults to nodeRuntime()
-}
-```
-
-**Node.js implementation** (`node-runtime.ts`) — the only file that imports Node-specific APIs. Uses `@effectionx/tinyexec` for subprocess execution, `node:fs/promises` for file I/O, and `node:os` for platform info. See `node-runtime.ts` for the full implementation.
-
-> **Note:** The original project used a Deno-specific `denoRuntime()` implementation.
-> In effectionx, `nodeRuntime()` serves the same role using Node.js APIs.
-
-**Test stub** — rejects on any I/O call, override per-test:
-
-```typescript
-// stub-runtime.ts
-function stubRuntime(overrides?: Partial<DurableRuntime>): DurableRuntime {
-  return {
-    *exec() { throw new Error("exec not stubbed"); },
-    *readTextFile() { throw new Error("readTextFile not stubbed"); },
-    *glob() { throw new Error("glob not stubbed"); },
-    *fetch() { throw new Error("fetch not stubbed"); },
-    env: () => undefined,
-    platform: () => ({ os: "test", arch: "test" }),
-    ...overrides,
-  };
-}
-```
+- Common stubs live in `@executablemd/runtime/test`.
+- For custom behavior, install middleware with `API.*.around()` inside tests.
 
 ---
 
@@ -161,13 +110,17 @@ Every effect needs:
 4. **Divergence** — wrong description in journal, verify `DivergenceError`
 5. **Error propagation** — operation throws, verify `Close(err)` in journal
 
-Use the repository's current BDD-style Node harness (`@effectionx/bdd/node`). Use `stubRuntime()` to prove non-execution during replay. For each effect, include at least one focused partial-replay test and one divergence test in addition to the golden/full replay/error cases.
+Use the repository's current test harness. Use
+`@executablemd/runtime/test` stubs or explicit `API.*.around()` middleware to
+prove non-execution during replay. For each effect, include at least one
+focused partial-replay test and one divergence test in addition to the
+golden/full replay/error cases.
 
 ## 0.4 File locations
 
-- `runtime.ts` — re-exports `DurableRuntime` interface and `DurableRuntimeCtx` from `@effectionx/durable-streams`
-- `node-runtime.ts` — `nodeRuntime()` (Node.js-specific implementation)
-- `stub-runtime.ts` — `stubRuntime()` test helper
+- `runtime/apis.ts` — runtime API definitions and operation exports
+- `runtime/mod.ts` — public runtime exports
+- `runtime/test/stubs.ts` — runtime test helper middleware
 - `hash.ts` — `computeSHA256()`
 - `durable-exec.ts` — `durableExec()` subprocess execution
 - `durable-read-file.ts` — `durableReadFile()` file read with content hash
@@ -235,7 +188,7 @@ function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult> 
     },
     function* () {
       const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+      const runtime = { exec, readTextFile, glob, fetch, env, platform };
 
       const output = yield* runtime.exec({ command, cwd, env, timeout });
 
@@ -305,7 +258,7 @@ function* durableReadFile(
     { type: "read_file", name, path, encoding },
     function* () {
       const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+      const runtime = { exec, readTextFile, glob, fetch, env, platform };
 
       const content = yield* runtime.readTextFile(path);
       const contentHash = yield* computeSHA256(content);
@@ -373,7 +326,7 @@ function* durableGlob(name: string, options: GlobOptions): Workflow<GlobResult> 
     { type: "glob", name, baseDir, include: include as Json, exclude: exclude as Json },
     function* () {
       const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+      const runtime = { exec, readTextFile, glob, fetch, env, platform };
 
       const entries = yield* runtime.glob({ patterns: include, root: baseDir, exclude });
 
@@ -464,7 +417,7 @@ function* durableFetch(name: string, options: FetchOptions): Workflow<FetchResul
       ...(body ? { bodyHash: `len:${body.length}` } : {}) },
     function* () {
       const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+      const runtime = { exec, readTextFile, glob, fetch, env, platform };
 
       const response = yield* runtime.fetch(url, { method, headers, body, timeout });
       const responseBody = yield* response.text();
@@ -633,7 +586,7 @@ function* durableResolve<T extends Json>(
       }
 
       const scope = yield* useScope();
-      const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+      const runtime = { exec, readTextFile, glob, fetch, env, platform };
 
       switch (resolver.kind) {
         case "current_time": return new Date().toISOString() as T;
@@ -686,7 +639,12 @@ function* durableEnv(varName: string, name?: string): Workflow<string | null> {
 
 ## Replay Guards
 
-The `ReplayGuard` API and `StaleInputError` already exist (see `@effectionx/durable-streams` replay-guard.ts and replay-guard.test.ts). What's missing are the **concrete, reusable guard implementations** that the effects are designed to work with. The existing tests validate the middleware mechanism using inline guards. These specifications cover the packaged guards that users install.
+The `ReplayGuard` API and `StaleInputError` already exist (see
+`@executablemd/durable-streams` replay-guard.ts and replay-guard.test.ts).
+What's missing are the **concrete, reusable guard implementations** that the
+effects are designed to work with. The existing tests validate the middleware
+mechanism using inline guards. These specifications cover the packaged guards
+that users install.
 
 All guards follow the same pattern from the replay guard spec §5:
 
@@ -714,7 +672,7 @@ Detects when a file referenced by a `read_file` effect has changed since the jou
 ```typescript
 function* useFileContentGuard(): Operation<void> {
   const scope = yield* useScope();
-  const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+  const runtime = { exec, readTextFile, glob, fetch, env, platform };
   const cache = new Map<string, string>();
 
   scope.around(ReplayGuard, {
@@ -776,7 +734,7 @@ Detects when the file set matching a glob pattern has changed (files added, remo
 ```typescript
 function* useGlobContentGuard(): Operation<void> {
   const scope = yield* useScope();
-  const runtime = scope.expect<DurableRuntime>(DurableRuntimeCtx);
+  const runtime = { exec, readTextFile, glob, fetch, env, platform };
   const cache = new Map<string, string>();
 
   scope.around(ReplayGuard, {
@@ -959,12 +917,12 @@ All three guards see all events during the check phase. During decide, each guar
 
 | Effect | Type | Runtime methods used |
 |--------|------|---------------------|
-| `durableExec` | `"exec"` | `runtime.exec()` |
-| `durableReadFile` | `"read_file"` | `runtime.readTextFile()` |
-| `durableGlob` | `"glob"` | `runtime.glob()`, `runtime.readTextFile()` |
-| `durableFetch` | `"fetch"` | `runtime.fetch()` |
+| `durableExec` | `"exec"` | `exec()` |
+| `durableReadFile` | `"read_file"` | `readTextFile()` |
+| `durableGlob` | `"glob"` | `glob()`, `readTextFile()` |
+| `durableFetch` | `"fetch"` | `fetch()` |
 | `durableEval` | `"eval"` | none (caller-provided evaluator) |
-| `durableResolve` | `"resolve"` | `runtime.env()`, `runtime.platform()` |
+| `durableResolve` | `"resolve"` | `env()`, `platform()` |
 
 ### Replay guards
 
@@ -974,11 +932,13 @@ All three guards see all events during the check phase. During decide, each guar
 | `useGlobContentGuard` | `durableGlob` | Files added/removed/modified in scanned directory |
 | `useCodeFreshnessGuard` | `durableEval` | Source code or bindings changed for eval cell |
 
-All use `createDurableOperation`. All I/O goes through `DurableRuntime` (Operation-native). All hashing goes through `computeSHA256` (Operation-native).
+All use `createDurableOperation`. All I/O goes through runtime operations
+from `@executablemd/runtime` (Operation-native). All hashing goes through
+`computeSHA256` (Operation-native).
 
 ### Implementation order
 
-1. **`DurableRuntime` interface + `nodeRuntime()` + `stubRuntime()`**
+1. **Runtime APIs and middleware contracts (`@executablemd/runtime`)**
 2. **`computeSHA256` in `hash.ts`**
 3. **`durableResolve`** + wrappers — simplest
 4. **`durableReadFile`** — enables replay guard integration
@@ -998,11 +958,10 @@ export { durableExec, durableReadFile, durableGlob, durableFetch,
 } from "./operations.ts";
 export type { ExecOptions, ExecResult, ReadFileResult, GlobOptions,
   GlobMatch, GlobResult, FetchOptions, FetchResult, EvalOptions,
-  EvalResult, ResolveKind, DurableRuntime,
+  EvalResult, ResolveKind,
 } from "./operations.ts";
 export { useFileContentGuard, useGlobContentGuard, useCodeFreshnessGuard,
 } from "./guards.ts";
 export type { CellSource } from "./guards.ts";
-export { nodeRuntime } from "./node-runtime.ts";
 export { computeSHA256 } from "./hash.ts";
 ```
