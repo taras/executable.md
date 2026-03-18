@@ -81,14 +81,9 @@ export function* durableResolve<T extends Json>(
         case "uuid":
           return crypto.randomUUID() as unknown as Json;
         case "env_var":
-          // Env operations are sync but context-api wraps them as Operations
-          // at runtime. The `as any` works around the type mismatch until
-          // thefrontside/effectionx#196 aligns the types.
-          // deno-lint-ignore no-explicit-any
-          return ((yield* (env(resolver.name) as any)) ?? null) as unknown as Json;
+          return ((yield* env(resolver.name)) ?? null) as unknown as Json;
         case "platform":
-          // deno-lint-ignore no-explicit-any
-          return (yield* (platform() as any)) as unknown as Json;
+          return (yield* platform()) as unknown as Json;
       }
     },
   )) as T;

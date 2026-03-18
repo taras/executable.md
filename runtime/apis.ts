@@ -35,8 +35,7 @@
  *   with Fs or Process would blur cancellation boundaries.
  * - **Env** — synchronous host metadata (env vars, platform). Kept as a
  *   context-api despite being sync because tests use `.around()` to mock
- *   platform/env for deterministic replay testing. Uses an `as any` cast
- *   until thefrontside/effectionx#196 allows non-Operation handlers.
+ *   platform/env for deterministic replay testing.
  *
  * ## Middleware
  *
@@ -173,8 +172,8 @@ interface FetchHandler {
 }
 
 interface EnvHandler {
-  env(name: string): string | undefined;
-  platform(): { os: string; arch: string };
+  env(name: string): Operation<string | undefined>;
+  platform(): Operation<{ os: string; arch: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,18 +332,23 @@ export const API: {
   /**
    * Environment variables and platform information.
    *
-   * Synchronous operations — no I/O, no generators needed.
-   * The `as any` cast works around context-api requiring all handlers
-   * to return Operation. Remove once thefrontside/effectionx#196 lands.
+   * These are synchronous lookups wrapped as Operations to satisfy
+   * context-api handler constraints.
    */
   Env: createApi("runtime.env", {
-    env: (name: string): string | undefined => process.env[name],
-    platform: (): { os: string; arch: string } => ({
-      os: process.platform,
-      arch: process.arch,
-    }),
-    // deno-lint-ignore no-explicit-any
-  } as any) as unknown as Api<EnvHandler>,
+    // deno-lint-ignore require-yield
+    *env(name: string): Operation<string | undefined> {
+      return process.env[name];
+    },
+
+    // deno-lint-ignore require-yield
+    *platform(): Operation<{ os: string; arch: string }> {
+      return {
+        os: process.platform,
+        arch: process.arch,
+      };
+    },
+  }),
 };
 
 // ---------------------------------------------------------------------------
