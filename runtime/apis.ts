@@ -1,7 +1,7 @@
 /**
  * Runtime Context APIs — platform I/O operations with pluggable middleware.
  *
- * Four domain-specific context APIs built on `@effectionx/context-api`.
+ * Five domain-specific context APIs built on `@effectionx/context-api`.
  * Each API provides default Node.js implementations. Use `.around()` to
  * install middleware (mocking, instrumentation, sandboxing) scoped to the
  * current Effection scope.
@@ -68,7 +68,7 @@ import {
   walk,
 } from "@effectionx/fs";
 import { exec as processExec } from "@effectionx/process";
-import { each, race, sleep } from "effection";
+import { call, each, race, sleep } from "effection";
 import type { Operation } from "effection";
 
 // ---------------------------------------------------------------------------
@@ -176,6 +176,13 @@ interface EnvHandler {
   platform(): Operation<{ os: string; arch: string }>;
 }
 
+interface EvalHandler {
+  compileBlock(
+    transformedBodyCode: string,
+    userImports: string[],
+  ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>>;
+}
+
 // ---------------------------------------------------------------------------
 // Context APIs
 // ---------------------------------------------------------------------------
@@ -185,6 +192,7 @@ export const API: {
   Fs: Api<FsHandler>;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
+  Eval: Api<EvalHandler>;
 } = {
   /**
    * Subprocess execution.
@@ -349,6 +357,47 @@ export const API: {
       };
     },
   }),
+
+  Eval: createApi("runtime.eval", {
+    *compileBlock(
+      transformedBodyCode: string,
+      userImports: string[],
+    ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
+      const standardImports = [
+        'import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";',
+        'import { when } from "@effectionx/converge";',
+        'import { fetch } from "@effectionx/fetch";',
+        'import { useContent, Sample } from "@executablemd/core";',
+        'import { findFreePort } from "@executablemd/runtime";',
+      ].join("\n");
+
+      const userImportLines = userImports.length > 0
+        ? userImports.join("\n") + "\n"
+        : "";
+
+      const moduleSource = [
+        standardImports,
+        userImportLines,
+        `export default function*(env) {`,
+        transformedBodyCode,
+        `}`,
+      ].join("\n");
+
+      const dataUri =
+        `data:application/typescript,${encodeURIComponent(moduleSource)}`;
+      const mod: {
+        default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
+      } = yield* call(() => import(dataUri));
+
+      if (typeof mod.default !== "function") {
+        throw new Error(
+          `compileBlock: expected default export to be a generator function, got ${typeof mod.default}`,
+        );
+      }
+
+      return mod.default;
+    },
+  }),
 };
 
 // ---------------------------------------------------------------------------
@@ -378,3 +427,6 @@ export const env: typeof API.Env.operations.env =
 
 export const platform: typeof API.Env.operations.platform =
   API.Env.operations.platform;
+
+export const compileBlock: typeof API.Eval.operations.compileBlock =
+  API.Eval.operations.compileBlock;

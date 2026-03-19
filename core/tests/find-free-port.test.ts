@@ -11,7 +11,7 @@ import type { Operation } from "effection";
 import { once } from "@effectionx/node";
 import { createServer } from "node:net";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { findFreePort } from "../src/find-free-port.ts";
+import { findFreePort } from "@executablemd/runtime";
 import { compileBlock } from "../src/eval-context.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
