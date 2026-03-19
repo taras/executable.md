@@ -15,7 +15,7 @@
  *
  * Divergence policy is delegated to the Divergence API (DEC-031).
  * By default, mismatches are fatal. Users can install middleware via
- * scope.around(Divergence, ...) to override behavior per-scope.
+ * yield* Divergence.around(...) to override behavior per-scope.
  *
  * See integration doc §5.1, protocol spec §4.2, §5, §6.
  */

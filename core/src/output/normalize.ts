@@ -11,14 +11,12 @@
  */
 
 import type { Operation } from "effection";
-import { useScope } from "effection";
 import { EMA } from "../api.ts";
 
 export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
-  const scope = yield* useScope();
 
-  scope.around(EMA, {
+  yield* EMA.around({
     *output([text], next) {
       let normalized = text;
 

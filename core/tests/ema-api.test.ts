@@ -8,7 +8,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel } from "effection";
+import { createChannel } from "effection";
 import { EMA } from "../src/api.ts";
 import { subscribe } from "../src/subscribe.ts";
 
@@ -28,9 +28,7 @@ describe("Tier OA — EMA Output Api", () => {
   // OA3: Middleware intercepts output
   it("OA3: middleware intercepts output text", function* () {
     const captured: string[] = [];
-    const scope = yield* useScope();
-
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text], next) {
         captured.push(text);
         yield* next(text);
@@ -47,17 +45,15 @@ describe("Tier OA — EMA Output Api", () => {
   // scope.around: first-installed runs first, next() delegates to second
   it("OA4: middleware transforms text for next handler", function* () {
     const captured: string[] = [];
-    const scope = yield* useScope();
-
     // First installed → runs first (outermost), transforms text
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text], next) {
         yield* next(text.toUpperCase());
       },
     });
 
     // Second installed → runs second (closer to core), captures text
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text]) {
         captured.push(text);
       },
@@ -71,10 +67,8 @@ describe("Tier OA — EMA Output Api", () => {
   // OA5: Channel delivery
   it("OA5: channel delivery sends text via yield* channel.send()", function* () {
     const channel = createChannel<string, void>();
-    const scope = yield* useScope();
-
     // Channel delivery installed last — runs closest to core
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text]) {
         yield* channel.send(text);
       },
@@ -94,9 +88,7 @@ describe("Tier OA — EMA Output Api", () => {
   // OA6: Consumer collects all chunks
   it("OA6: consumer collects all emitted chunks in order", function* () {
     const channel = createChannel<string, void>();
-    const scope = yield* useScope();
-
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text]) {
         yield* channel.send(text);
       },
@@ -134,24 +126,22 @@ describe("Tier OA — EMA Output Api", () => {
   // OA8: Multiple middleware compose
   it("OA8: normalize + transform + channel all compose", function* () {
     const channel = createChannel<string, void>();
-    const scope = yield* useScope();
-
     // First installed → runs first (outermost): uppercase
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text], next) {
         yield* next(text.toUpperCase());
       },
     });
 
     // Second installed → runs second: add prefix
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text], next) {
         yield* next("[ok] " + text);
       },
     });
 
     // Third installed → runs last (closest to core): channel delivery
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text]) {
         yield* channel.send(text);
       },

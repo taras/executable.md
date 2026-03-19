@@ -7,7 +7,7 @@
  * Since durableRun is now an Operation<T> (DEC-032), middleware is
  * installed by the caller's scope before yield*-ing into durableRun.
  * Tests use a wrapper Operation that calls useScope(), installs
- * middleware via scope.around(), then yield*s into durableRun.
+ * middleware via Api.around(), then yield*s into durableRun.
  */
 
 import { describe, it } from "@effectionx/bdd/node";
@@ -105,8 +105,7 @@ describe("Divergence API", () => {
     const liveCalls: string[] = [];
 
     // Install divergence middleware on the caller's scope
-    const scope = yield* useScope();
-    scope.around(Divergence, {
+    yield* Divergence.around({
       decide([info], next) {
         if (info.kind === "description-mismatch") {
           return { type: "run-live" } as DivergenceDecision;
@@ -158,8 +157,7 @@ describe("Divergence API", () => {
 
     // Run 1: WITH middleware — should succeed with run-live
     const stream1 = new InMemoryStream(makeEvents());
-    const scope1 = yield* useScope();
-    scope1.around(Divergence, {
+    yield* Divergence.around({
       decide([info], next) {
         if (info.kind === "description-mismatch") {
           return { type: "run-live" } as DivergenceDecision;

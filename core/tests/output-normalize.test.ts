@@ -3,7 +3,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel, type Operation } from "effection";
+import { createChannel, type Operation } from "effection";
 import { EMA } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { subscribe } from "../src/subscribe.ts";
@@ -15,13 +15,11 @@ import { subscribe } from "../src/subscribe.ts";
  */
 function* collectNormalized(texts: string[]): Operation<string[]> {
   const channel = createChannel<string, void>();
-  const scope = yield* useScope();
-
   // First: normalization (runs first — outermost)
   yield* useNormalizedOutput();
 
   // Last: channel delivery (runs last — closest to core)
-  scope.around(EMA, {
+  yield* EMA.around({
     *output([text]) {
       yield* channel.send(text);
     },

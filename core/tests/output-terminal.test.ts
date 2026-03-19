@@ -8,7 +8,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
-import { useScope, createChannel, type Operation } from "effection";
+import { createChannel, type Operation } from "effection";
 import { EMA } from "../src/api.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
 import { subscribe } from "../src/subscribe.ts";
@@ -18,13 +18,11 @@ import { subscribe } from "../src/subscribe.ts";
  */
 function* collectTerminal(texts: string[]): Operation<string[]> {
   const channel = createChannel<string, void>();
-  const scope = yield* useScope();
-
   // First: terminal formatting (outermost)
   yield* useTerminalOutput();
 
   // Last: channel delivery (closest to core)
-  scope.around(EMA, {
+  yield* EMA.around({
     *output([text]) {
       yield* channel.send(text);
     },
@@ -74,13 +72,12 @@ describe("Tier TF — Terminal ANSI formatting", () => {
   // TF5: Middleware composes with other middleware
   it("TF5: middleware composes with other handlers", function* () {
     const captured: string[] = [];
-    const scope = yield* useScope();
 
     // First: terminal (outermost)
     yield* useTerminalOutput();
 
     // Last: capture (closest to core)
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text]) {
         captured.push(text);
       },

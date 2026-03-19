@@ -42,7 +42,7 @@ function writeFiles(dir: string, files: Record<string, string>): void {
   }
 }
 
-// Note: S3 test installs stub Sample Api middleware via scope.around(Sample, ...)
+// Note: S3 test installs stub Sample Api middleware via yield* Sample.around(...)
 // directly in the test body — no shared fixture needed.
 
 // ---------------------------------------------------------------------------

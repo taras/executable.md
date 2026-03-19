@@ -13,7 +13,7 @@
     "@executablemd/runtime": "./runtime/mod.ts",
     "@executablemd/runtime/test": "./runtime/test/mod.ts",
     "@executablemd/code-review-agent": "./packages/code-review-agent/mod.ts",
-    "@effectionx/context-api": "npm:@effectionx/context-api@^0.4.0",
+    "@effectionx/context-api": "./vendor/context-api/mod.ts",
     "@effectionx/converge": "npm:@effectionx/converge@^0.1.3",
     "@effectionx/fetch": "npm:@effectionx/fetch@^0.1.2",
     "@effectionx/fs": "npm:@effectionx/fs@0.2.2",

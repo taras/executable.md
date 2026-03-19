@@ -11,7 +11,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { run, useScope } from "effection";
+import { run } from "effection";
 import { expect } from "@std/expect";
 import {
   type DurableEvent,
@@ -94,10 +94,8 @@ describe("replay guard", () => {
     const checkEvents: Yield[] = [];
     const decideEvents: Yield[] = [];
 
-    const scope = yield* useScope();
-
     // Install a guard that tracks which events it sees
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         checkEvents.push(event);
         return yield* next(event);
@@ -159,9 +157,7 @@ describe("replay guard", () => {
     // Cache simulates current file having the same hash
     const cache = new Map<string, string>([["./test.txt", "abc123"]]);
 
-    const scope = yield* useScope();
-
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         // In real usage, would compute hash here. For test, cache is pre-populated.
         return yield* next(event);
@@ -224,9 +220,7 @@ describe("replay guard", () => {
     // Cache simulates current file having a DIFFERENT hash
     const cache = new Map<string, string>([["./test.txt", "def456"]]);
 
-    const scope = yield* useScope();
-
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         return yield* next(event);
       },
@@ -292,10 +286,8 @@ describe("replay guard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-
     // Guard A: passes
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         return yield* next(event);
       },
@@ -306,7 +298,7 @@ describe("replay guard", () => {
     });
 
     // Guard B: errors
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         return yield* next(event);
       },
@@ -356,9 +348,7 @@ describe("replay guard", () => {
 
     const timeline: string[] = [];
 
-    const scope = yield* useScope();
-
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([_event], next) {
         timeline.push("check");
         return yield* next(_event);
@@ -424,9 +414,8 @@ describe("replay guard", () => {
     for (let i = 0; i < 2; i++) {
       const stream = new InMemoryStream([...events]);
       yield* run(function* () {
-        const scope = yield* useScope();
 
-        scope.around(ReplayGuard, {
+        yield* ReplayGuard.around({
           *check([event], next) {
             return yield* next(event);
           },
@@ -473,9 +462,7 @@ describe("replay guard", () => {
     const checkCalls: number[] = [];
     const decideCalls: number[] = [];
 
-    const scope = yield* useScope();
-
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         checkCalls.push(1);
         return yield* next(event);
@@ -534,9 +521,7 @@ describe("replay guard", () => {
     let hashComputations = 0;
     const cache = new Map<string, string>();
 
-    const scope = yield* useScope();
-
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         const filePath = event.description.path;
         if (typeof filePath === "string") {
@@ -590,10 +575,8 @@ describe("replay guard", () => {
     ];
     const stream = new InMemoryStream(events);
 
-    const scope = yield* useScope();
-
     // Install guard on parent scope
-    scope.around(ReplayGuard, {
+    yield* ReplayGuard.around({
       *check([event], next) {
         return yield* next(event);
       },

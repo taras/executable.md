@@ -24,7 +24,7 @@
  *    the stored result is fed to the generator. Must be pure and side-effect-
  *    free. Reads from the cache populated during the check phase.
  *
- * Multiple guards compose via Effection's `scope.around()`. A guard that has
+ * Multiple guards compose via Effection's `Api.around()`. A guard that has
  * an opinion returns an outcome directly; one that doesn't calls `next(event)`
  * to delegate. The first `error` outcome wins — the chain short-circuits.
  *
@@ -106,7 +106,7 @@ function defaultDecide(_event: Yield): ReplayOutcome {
  * `{ outcome: "replay" }`. This preserves "logs are authoritative" unless
  * middleware says otherwise.
  *
- * Install guards via `scope.around(ReplayGuard, { ... })` before calling
+ * Install guards via `yield* ReplayGuard.around({ ... })` before calling
  * `durableRun`. Guards are inherited by child scopes through Effection's
  * context inheritance.
  *
@@ -114,7 +114,7 @@ function defaultDecide(_event: Yield): ReplayOutcome {
  * ```ts
  * function* myWorkflow(): Operation<void> {
  *   const scope = yield* useScope();
- *   scope.around(ReplayGuard, {
+ *   yield* ReplayGuard.around({
  *     *check([event], next) {
  *       // Gather observations (I/O allowed here)
  *       return yield* next(event);

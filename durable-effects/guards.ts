@@ -19,7 +19,6 @@ import {
   type ReplayOutcome,
   StaleInputError,
 } from "@executablemd/durable-streams";
-import { useScope } from "effection";
 import type { Operation } from "effection";
 import { glob, readTextFile } from "@executablemd/runtime";
 import { canonicalJson } from "./canonical-json.ts";
@@ -43,10 +42,9 @@ import { computeSHA256 } from "./hash.ts";
  *   result, calls `next(event)`.
  */
 export function* useFileContentGuard(): Operation<void> {
-  const scope = yield* useScope();
   const cache = new Map<string, string>();
 
-  scope.around(ReplayGuard, {
+  yield* ReplayGuard.around({
     *check([event], next): Operation<void> {
       const filePath = event.description.path;
       if (typeof filePath === "string" && !cache.has(filePath)) {
@@ -98,10 +96,9 @@ export function* useFileContentGuard(): Operation<void> {
  * - **No opinion**: if event type is not `"glob"`, calls `next(event)`.
  */
 export function* useGlobContentGuard(): Operation<void> {
-  const scope = yield* useScope();
   const cache = new Map<string, string>();
 
-  scope.around(ReplayGuard, {
+  yield* ReplayGuard.around({
     *check([event], next): Operation<void> {
       if (event.description.type === "glob") {
         const baseDir = event.description.baseDir as string;
@@ -197,10 +194,9 @@ export interface CellSource {
 export function* useCodeFreshnessGuard(
   getCellSource: (cellName: string) => CellSource | undefined,
 ): Operation<void> {
-  const scope = yield* useScope();
   const cache = new Map<string, { sourceHash: string; bindingsHash: string }>();
 
-  scope.around(ReplayGuard, {
+  yield* ReplayGuard.around({
     *check([event], next): Operation<void> {
       if (event.description.type === "eval") {
         const cellName = event.description.name;

@@ -6,7 +6,7 @@
  * a Close event when the workflow terminates.
  *
  * Because durableRun is an Operation, it inherits the caller's Effection
- * scope — including any middleware installed via scope.around(). This is
+ * scope — including any middleware installed via Api.around(). This is
  * how divergence policy overrides work: the caller installs middleware
  * before yield*-ing into durableRun. See DEC-032.
  *
