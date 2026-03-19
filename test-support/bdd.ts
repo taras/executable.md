@@ -17,7 +17,8 @@ import type { Operation } from "effection";
 // ---------------------------------------------------------------------------
 
 interface TestPrimitives {
-  describe: (name: string, fn: () => void) => void;
+  // deno-lint-ignore no-explicit-any
+  describe: (name: string, options: any, fn: () => void) => void;
   describeSkip: (name: string, fn: () => void) => void;
   describeOnly: (name: string, fn: () => void) => void;
   it: (desc: string, fn: () => Promise<void>) => void;
@@ -36,9 +37,10 @@ async function getPrimitives(): Promise<TestPrimitives> {
 
   if (typeof g.Deno !== "undefined" && g.Deno.test) {
     // Deno runtime — use @std/testing/bdd
+    // @ts-ignore: Deno-only module, unreachable on Node/Bun
     const bdd = await import("@std/testing/bdd");
     _primitives = {
-      describe: (name, fn) => bdd.describe(name, fn),
+      describe: (name, options, fn) => bdd.describe(name, options, fn),
       describeSkip: bdd.describe.skip,
       describeOnly: (name, fn) => bdd.describe.only(name, fn),
       it: (desc, fn) => bdd.it(desc, fn),
@@ -48,9 +50,10 @@ async function getPrimitives(): Promise<TestPrimitives> {
     };
   } else if (typeof g.Bun !== "undefined") {
     // Bun runtime — use bun:test
+    // @ts-ignore: Bun-only module, unreachable on Node/Deno
     const bunTest = await import("bun:test");
     _primitives = {
-      describe: (name, fn) => bunTest.describe(name, fn),
+      describe: (name, _options, fn) => bunTest.describe(name, fn),
       describeSkip: (name, fn) => bunTest.describe.skip(name, fn),
       describeOnly: (name, fn) => bunTest.describe.only(name, fn),
       it: (desc, fn) => bunTest.it(desc, fn),
@@ -62,7 +65,7 @@ async function getPrimitives(): Promise<TestPrimitives> {
     // Node runtime — use node:test
     const nodeTest = await import("node:test");
     _primitives = {
-      describe: (name, fn) => nodeTest.describe(name, fn),
+      describe: (name, _options, fn) => nodeTest.describe(name, fn),
       describeSkip: (name, fn) => nodeTest.describe.skip(name, fn),
       describeOnly: (name, fn) => nodeTest.describe.only(name, fn),
       it: (desc, fn) => nodeTest.it(desc, fn),
@@ -113,12 +116,13 @@ export interface DescribeOptions {
 export function describe(name: string, body: () => void): void;
 export function describe(name: string, options: DescribeOptions, body: () => void): void;
 export function describe(name: string, optionsOrBody: DescribeOptions | (() => void), maybeBody?: () => void): void {
+  const options = typeof optionsOrBody === "function" ? {} : optionsOrBody;
   const body = typeof optionsOrBody === "function" ? optionsOrBody : maybeBody!;
   const original = current;
   try {
     const child = createTestAdapter({ name, parent: original });
     current = child;
-    prims().describe(name, () => {
+    prims().describe(name, options, () => {
       prims().afterAll(() => child.destroy());
       body();
     });

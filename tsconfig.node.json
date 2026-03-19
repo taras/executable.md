@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@executablemd/core": ["./core/mod.ts"],
+      "@executablemd/runtime": ["./runtime/mod.ts"],
+      "@executablemd/runtime/test": ["./runtime/test/mod.ts"],
+      "@executablemd/durable-streams": ["./durable-streams/mod.ts"],
+      "@executablemd/durable-effects": ["./durable-effects/mod.ts"],
+      "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
+      "@effectionx/context-api": ["./vendor/context-api/mod.ts"],
+      "@effectionx/bdd/node": ["./test-support/bdd.ts"]
+    }
+  },
+  "include": [
+    "core/**/*.ts",
+    "durable-streams/**/*.ts",
+    "durable-effects/**/*.ts",
+    "runtime/**/*.ts",
+    "vendor/**/*.ts",
+    "packages/**/*.ts",
+    "test-support/**/*.ts"
+  ],
+  "exclude": [
+    "durable-streams/demo/**"
+  ]
+}

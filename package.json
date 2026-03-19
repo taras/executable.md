@@ -1,0 +1,39 @@
+{
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "dependencies": {
+    "@durable-streams/client": "^0.2.2",
+    "effection": "4.1.0-alpha.7",
+    "@effectionx/converge": "^0.1.3",
+    "@effectionx/fetch": "^0.1.2",
+    "@effectionx/fs": "0.2.2",
+    "@effectionx/middleware": "0.1.0",
+    "@effectionx/node": "^0.2.2",
+    "@effectionx/process": "^0.7.3",
+    "@effectionx/scope-eval": "^0.1.2",
+    "@effectionx/stream-helpers": "^0.8.1",
+    "@effectionx/test-adapter": "^0.7.3",
+    "@effectionx/timebox": "^0.4.2",
+    "acorn": "^8.16.0",
+    "gray-matter": "^4.0.3",
+    "magic-string": "^0.30.21",
+    "marked": "^17.0.4",
+    "marked-terminal": "^7.3.0",
+    "remark": "15",
+    "remend": "^1.2.2",
+    "zod": "^4.3.6",
+    "unist-util-select": "^5",
+    "mdast-util-to-string": "^4"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0",
+    "expect": "^30.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "scripts": {
+    "test:node": "tsx --tsconfig tsconfig.node.json --test durable-streams/tests/*.test.ts durable-effects/tests/*.test.ts core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
+    "test:deno": "deno task test"
+  }
+}
