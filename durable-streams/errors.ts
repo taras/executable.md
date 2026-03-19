@@ -54,11 +54,7 @@ export class EarlyReturnDivergenceError extends Error {
   consumedCount: number;
   totalCount: number;
 
-  constructor(
-    coroutineId: CoroutineId,
-    consumedCount: number,
-    totalCount: number,
-  ) {
+  constructor(coroutineId: CoroutineId, consumedCount: number, totalCount: number) {
     super(
       `Divergence: generator ${coroutineId} returned after ${consumedCount} yields, ` +
         `but journal has ${totalCount} yield entries`,

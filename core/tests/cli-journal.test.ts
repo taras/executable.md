@@ -91,10 +91,7 @@ function* runCli(args: string[]) {
 describe("CLI journal integration", () => {
   // CJ1: Run without journal (raw)
   it("CJ1: runs document without journal --raw", function* () {
-    const result = yield* runCli([
-      "core/tests/fixtures/streaming/simple.md",
-      "--raw",
-    ]);
+    const result = yield* runCli(["core/tests/fixtures/streaming/simple.md", "--raw"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello world");
@@ -102,9 +99,7 @@ describe("CLI journal integration", () => {
 
   // CJ2: Run without journal (normalized)
   it("CJ2: runs document without journal (normalized)", function* () {
-    const result = yield* runCli([
-      "core/tests/fixtures/streaming/simple.md",
-    ]);
+    const result = yield* runCli(["core/tests/fixtures/streaming/simple.md"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello world");

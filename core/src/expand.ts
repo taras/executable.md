@@ -116,11 +116,7 @@ export function* expandSegments(
         // Runs synchronously — no yield, no journal entry
         const healed = healSegment(segment.content);
         // Interpolate {meta.key} and {props.key} — runtime, no journal
-        const interpolated = interpolate(
-          healed,
-          parentMeta,
-          parentProps,
-        );
+        const interpolated = interpolate(healed, parentMeta, parentProps);
         // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
         // Runs after meta/props interpolation so component contract takes
         // precedence. Only runs when an EvalEnv is present on the scope.
@@ -172,11 +168,11 @@ export function* expandSegments(
         // mangle JS template literals like `${name}` into `$<value>`.
         const evalEnv = yield* EvalEnvCtx.get();
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
-        const isEvalTerminal = lastModifier !== undefined &&
-          lastModifier.name === "eval";
-        const interpolatedContent = evalEnv && !isEvalTerminal
-          ? interpolateEvalBindings(segment.content, evalEnv.values)
-          : segment.content;
+        const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
+        const interpolatedContent =
+          evalEnv && !isEvalTerminal
+            ? interpolateEvalBindings(segment.content, evalEnv.values)
+            : segment.content;
 
         // Compose modifier chain from info string and run it.
         // blockId uses counter.next() for deterministic IDs that
@@ -189,10 +185,7 @@ export function* expandSegments(
         };
 
         try {
-          const codeResult = yield* ctx.runModifierChain(
-            segment.modifiers,
-            context,
-          );
+          const codeResult = yield* ctx.runModifierChain(segment.modifiers, context);
 
           if (codeResult.exitCode !== 0 && codeResult.output === "") {
             result.push({
@@ -215,8 +208,7 @@ export function* expandSegments(
         } catch (error) {
           result.push({
             type: "error",
-            message:
-              error instanceof Error ? error.message : String(error),
+            message: error instanceof Error ? error.message : String(error),
             source: segment.content,
           });
         }
@@ -412,8 +404,7 @@ function* expandComponent(
     return [
       {
         type: "error",
-        message:
-          error instanceof Error ? error.message : String(error),
+        message: error instanceof Error ? error.message : String(error),
         source: name,
       },
     ];
@@ -447,8 +438,7 @@ function* expandComponent(
     return [
       {
         type: "error",
-        message:
-          error instanceof Error ? error.message : String(error),
+        message: error instanceof Error ? error.message : String(error),
         source: name,
       },
     ];
@@ -503,9 +493,7 @@ function* expandComponent(
   const parentEvalScope = yield* EvalScopeCtx.get();
   let childEvalScope: EvalScope | undefined = undefined;
   if (parentEvalScope) {
-    const result = yield* parentEvalScope.eval(() =>
-      useEvalScope(),
-    );
+    const result = yield* parentEvalScope.eval(() => useEvalScope());
     childEvalScope = unbox(result) as EvalScope;
   }
 
@@ -556,13 +544,23 @@ function* expandComponent(
       if (capturedParentEvalScope) {
         return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
-            children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
+            children,
+            capturedMeta,
+            capturedProps,
+            capturedChildrenHideSet,
+            capturedCtx,
+            counter,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        children, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
+        children,
+        capturedMeta,
+        capturedProps,
+        capturedChildrenHideSet,
+        capturedCtx,
+        counter,
       );
       return renderSegments(expanded);
     });
@@ -574,46 +572,50 @@ function* expandComponent(
       if (capturedParentEvalScope) {
         return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
           const expanded = yield* expandSegments(
-            segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
+            segments,
+            capturedMeta,
+            capturedProps,
+            capturedChildrenHideSet,
+            capturedCtx,
+            counter,
           );
           return renderSegments(expanded);
         });
       }
       const expanded = yield* expandSegments(
-        segments, capturedMeta, capturedProps, capturedChildrenHideSet, capturedCtx, counter,
+        segments,
+        capturedMeta,
+        capturedProps,
+        capturedChildrenHideSet,
+        capturedCtx,
+        counter,
       );
       return renderSegments(expanded);
     });
   };
 
-  const expanded = yield* EvalEnvCtx.with(
-    componentEnv,
-    function* () {
-      if (childEvalScope) {
-        return yield* EvalScopeCtx.with(
-          childEvalScope,
-          function* () {
-            return yield* expandSegments(
-              substituted,
-              definition.meta,
-              validatedProps,
-              newHideSet,
-              ctx,
-              counter,
-            );
-          },
+  const expanded = yield* EvalEnvCtx.with(componentEnv, function* () {
+    if (childEvalScope) {
+      return yield* EvalScopeCtx.with(childEvalScope, function* () {
+        return yield* expandSegments(
+          substituted,
+          definition.meta,
+          validatedProps,
+          newHideSet,
+          ctx,
+          counter,
         );
-      }
-      return yield* expandSegments(
-        substituted,
-        definition.meta,
-        validatedProps,
-        newHideSet,
-        ctx,
-        counter,
-      );
-    },
-  );
+      });
+    }
+    return yield* expandSegments(
+      substituted,
+      definition.meta,
+      validatedProps,
+      newHideSet,
+      ctx,
+      counter,
+    );
+  });
 
   if (asBinding) {
     const parentEnv = yield* EvalEnvCtx.get();
@@ -716,27 +718,13 @@ function* expandFunctionComponent(
   const contentHandle: ContentHandle = {
     segments: children,
     *renderDefault() {
-      const expanded = yield* expandSegments(
-        slots.default,
-        {},
-        {},
-        hideSet,
-        ctx,
-        counter,
-      );
+      const expanded = yield* expandSegments(slots.default, {}, {}, hideSet, ctx, counter);
       return renderSegments(expanded);
     },
     *renderSlot(slotName: string) {
       const slotChildren = (slots.named.get(slotName) ?? []).map(stripSlotProp);
       if (slotChildren.length === 0) return "";
-      const expanded = yield* expandSegments(
-        slotChildren,
-        {},
-        {},
-        hideSet,
-        ctx,
-        counter,
-      );
+      const expanded = yield* expandSegments(slotChildren, {}, {}, hideSet, ctx, counter);
       return renderSegments(expanded);
     },
   };
@@ -751,8 +739,7 @@ function* expandFunctionComponent(
         return [
           {
             type: "error",
-            message:
-              `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+            message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
             source: name,
           },
         ];
@@ -765,9 +752,10 @@ function* expandFunctionComponent(
     return [
       {
         type: "error",
-        message: error instanceof Error
-          ? `Function component ${name} error: ${error.message}`
-          : `Function component ${name} error: ${String(error)}`,
+        message:
+          error instanceof Error
+            ? `Function component ${name} error: ${error.message}`
+            : `Function component ${name} error: ${String(error)}`,
         source: name,
       },
     ];
@@ -781,7 +769,7 @@ function validateBindingName(
     return { ok: true };
   }
   if (typeof value !== "string") {
-    return { ok: false, error: 'must be a non-empty string literal.' };
+    return { ok: false, error: "must be a non-empty string literal." };
   }
   if (value.length === 0) {
     return { ok: false, error: "must be non-empty." };
@@ -836,16 +824,17 @@ function* resolveExpressionProps(
   // (contextEnv). The component's env takes priority because its eval
   // blocks run before <Content /> and may define bindings that children
   // reference. The caller's env provides fallback bindings from the
-  const evalEnv = (explicitEnv && contextEnv)
-    ? { values: { ...explicitEnv.values, ...contextEnv.values } }
-    : contextEnv ?? explicitEnv;
+  const evalEnv =
+    explicitEnv && contextEnv
+      ? { values: { ...explicitEnv.values, ...contextEnv.values } }
+      : (contextEnv ?? explicitEnv);
 
   if (!evalEnv) {
     const names = Object.keys(expressions).join(", ");
     throw new Error(
       `Expression props (${names}) on <${componentName} /> cannot be ` +
-      `resolved: no eval context available. Expression props require ` +
-      `a preceding eval block that defines the referenced bindings.`,
+        `resolved: no eval context available. Expression props require ` +
+        `a preceding eval block that defines the referenced bindings.`,
     );
   }
 
@@ -863,8 +852,8 @@ function* resolveExpressionProps(
       if (typeof result === "function" || typeof result === "undefined") {
         throw new Error(
           `Expression prop "${propName}" on <${componentName} /> evaluated ` +
-          `to a non-serializable value (${typeof result}). Props must be ` +
-          `JSON-serializable.`,
+            `to a non-serializable value (${typeof result}). Props must be ` +
+            `JSON-serializable.`,
         );
       }
 
@@ -874,22 +863,19 @@ function* resolveExpressionProps(
       } catch {
         throw new Error(
           `Expression prop "${propName}" on <${componentName} /> evaluated ` +
-          `to a non-serializable value (${typeof result}). Props must be ` +
-          `JSON-serializable.`,
+            `to a non-serializable value (${typeof result}). Props must be ` +
+            `JSON-serializable.`,
         );
       }
 
       resolved[propName] = serialized;
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes("non-serializable")
-      ) {
+      if (error instanceof Error && error.message.includes("non-serializable")) {
         throw error;
       }
       throw new Error(
         `Failed to evaluate expression prop "${propName}={${expression}}" ` +
-        `on <${componentName} />: ${error instanceof Error ? error.message : String(error)}`,
+          `on <${componentName} />: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -910,10 +896,7 @@ const SLOT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 /**
  * Validate a slot name. Returns an ErrorSegment if invalid, undefined if ok.
  */
-function validateSlotName(
-  name: string,
-  source: string,
-): ErrorSegment | undefined {
+function validateSlotName(name: string, source: string): ErrorSegment | undefined {
   if (name === "") {
     return {
       type: "error",

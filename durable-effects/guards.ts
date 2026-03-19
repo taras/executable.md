@@ -56,10 +56,10 @@ export function* useFileContentGuard(): Operation<void> {
     },
     decide([event], next): ReplayOutcome {
       const filePath = event.description.path;
-      const resultValue =
-        event.result.status === "ok" ? event.result.value : undefined;
-      const recordedHash = (resultValue as Record<string, unknown> | undefined)
-        ?.contentHash as string | undefined;
+      const resultValue = event.result.status === "ok" ? event.result.value : undefined;
+      const recordedHash = (resultValue as Record<string, unknown> | undefined)?.contentHash as
+        | string
+        | undefined;
 
       if (typeof filePath === "string" && typeof recordedHash === "string") {
         const currentHash = cache.get(filePath);
@@ -115,9 +115,7 @@ export function* useGlobContentGuard(): Operation<void> {
           const matches: Array<{ path: string; contentHash: string }> = [];
           for (const entry of entries) {
             if (!entry.isFile) continue;
-            const content = yield* readTextFile(
-              `${baseDir}/${entry.path}`,
-            );
+            const content = yield* readTextFile(`${baseDir}/${entry.path}`);
             const contentHash = yield* computeSHA256(content);
             matches.push({ path: entry.path, contentHash });
           }
@@ -204,9 +202,7 @@ export function* useCodeFreshnessGuard(
           const cell = getCellSource(cellName);
           if (cell) {
             const sourceHash = yield* computeSHA256(cell.source);
-            const bindingsHash = yield* computeSHA256(
-              canonicalJson(cell.bindings),
-            );
+            const bindingsHash = yield* computeSHA256(canonicalJson(cell.bindings));
             cache.set(cellName, { sourceHash, bindingsHash });
           }
         }
@@ -226,17 +222,13 @@ export function* useCodeFreshnessGuard(
           if (current.sourceHash !== recorded.sourceHash) {
             return {
               outcome: "error",
-              error: new StaleInputError(
-                `Source changed for cell "${cellName}"`,
-              ),
+              error: new StaleInputError(`Source changed for cell "${cellName}"`),
             };
           }
           if (current.bindingsHash !== recorded.bindingsHash) {
             return {
               outcome: "error",
-              error: new StaleInputError(
-                `Bindings changed for cell "${cellName}"`,
-              ),
+              error: new StaleInputError(`Bindings changed for cell "${cellName}"`),
             };
           }
         }

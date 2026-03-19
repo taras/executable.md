@@ -86,10 +86,7 @@ describe("Tier T2 — VM context and compiled generator", () => {
 
   // T22: Sync computation writes result to env
   it("T22: sync computation writes result to env", function* () {
-    const fn = yield* compileBlock(
-      "const result = 40 + 2; env.result = result;",
-      [],
-    );
+    const fn = yield* compileBlock("const result = 40 + 2; env.result = result;", []);
     const env: Record<string, unknown> = {};
     const gen = fn(env);
     let r = gen.next();

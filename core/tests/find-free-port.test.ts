@@ -116,11 +116,21 @@ describe("Tier R — Eval module globals", () => {
   // R6b: All expected Effection globals are available in compiled block
   it("R6b: expected Effection globals are in sandbox", function* () {
     const checks = [
-      "sleep", "spawn", "call", "resource", "useScope",
-      "createChannel", "each", "suspend", "createSignal",
-      "when", "findFreePort",
+      "sleep",
+      "spawn",
+      "call",
+      "resource",
+      "useScope",
+      "createChannel",
+      "each",
+      "suspend",
+      "createSignal",
+      "when",
+      "findFreePort",
     ];
-    const checkCode = checks.map(name => `env["has_${name}"] = typeof ${name} === "function";`).join("\n");
+    const checkCode = checks
+      .map((name) => `env["has_${name}"] = typeof ${name} === "function";`)
+      .join("\n");
     const fn = yield* compileBlock(checkCode, []);
     const env: Record<string, unknown> = {};
     const gen = fn(env);
@@ -155,11 +165,13 @@ describe("Tier R — findFreePort in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // Eval block ran without error, exec block produced output
       expect(output).toContain("port-found");
@@ -183,7 +195,7 @@ describe("Tier R — findFreePort in eval blocks", () => {
           "",
           // Daemon binds a Node HTTP server to the allocated port
           "```bash daemon exec",
-          'node -e "require(\'http\').createServer((q,s)=>s.end(\'ok\')).listen({port})"',
+          "node -e \"require('http').createServer((q,s)=>s.end('ok')).listen({port})\"",
           "```",
           "",
           "done",
@@ -191,11 +203,13 @@ describe("Tier R — findFreePort in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // If the port was in use, the daemon would error and we'd see it
       expect(output).toContain("done");
@@ -225,18 +239,22 @@ describe("Tier R — findFreePort in eval blocks", () => {
 
       const stream = new InMemoryStream();
       // Golden run
-      const output1 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output1 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // Replay — durableEval returns stored port, findFreePort not invoked
-      const output2 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output2 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // Both runs produce the same port (replayed from journal)
       expect(output1).toContain("port-is-");
@@ -278,11 +296,13 @@ describe("Tier R — when in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // when() converged after 3 retries, block completed
       expect(output).toContain("when-passed");
@@ -316,11 +336,13 @@ describe("Tier R — when in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // when() retried and converged, binding is available
       expect(output).toContain("result-converged");
@@ -348,11 +370,13 @@ describe("Tier R — when in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // when() timed out — the error should appear in output
       expect(output).toContain("never-ready");

@@ -301,7 +301,10 @@ and keyed access to close events:
 
 ```typescript
 class ReplayIndex {
-  private yields = new Map<CoroutineId, Array<{ description: EffectDescription; result: Result }>>();
+  private yields = new Map<
+    CoroutineId,
+    Array<{ description: EffectDescription; result: Result }>
+  >();
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
 
@@ -322,7 +325,9 @@ class ReplayIndex {
    * Returns the next unconsumed yield for this coroutine,
    * or undefined if the cursor is past the end.
    */
-  peekYield(coroutineId: CoroutineId): { description: EffectDescription; result: Result } | undefined {
+  peekYield(
+    coroutineId: CoroutineId,
+  ): { description: EffectDescription; result: Result } | undefined {
     const list = this.yields.get(coroutineId);
     const cursor = this.cursors.get(coroutineId) ?? 0;
     return list?.[cursor];
@@ -508,11 +513,11 @@ uses only the `type` and `name` fields — extra fields on
 `EffectDescription` beyond `type` and `name` are never compared during
 divergence detection:
 
-| Yielded | Recorded | Result |
-|---------|----------|--------|
-| Same type, same name | — | **Match.** Consume entry, feed result. Extra fields are ignored. |
-| Different type | — | **Hard divergence.** Always fatal. |
-| Same type, different name | — | **Hard divergence** (default). Implementations MAY install an explicit divergence policy that chooses an alternative (for example, run-live migration mode), but strict failure is the default contract. |
+| Yielded                   | Recorded | Result                                                                                                                                                                                                   |
+| ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Same type, same name      | —        | **Match.** Consume entry, feed result. Extra fields are ignored.                                                                                                                                         |
+| Different type            | —        | **Hard divergence.** Always fatal.                                                                                                                                                                       |
+| Same type, different name | —        | **Hard divergence** (default). Implementations MAY install an explicit divergence policy that chooses an alternative (for example, run-live migration mode), but strict failure is the default contract. |
 
 > **INVARIANT (Divergence Detection):** During replay, every yielded
 > effect MUST be validated against the corresponding journal entry
@@ -529,9 +534,9 @@ error includes:
 ```typescript
 class DivergenceError extends Error {
   coroutineId: CoroutineId;
-  position: number;         // cursor position within the coroutine
-  expected: EffectDescription;  // from the journal
-  actual: EffectDescription;    // from the generator
+  position: number; // cursor position within the coroutine
+  expected: EffectDescription; // from the journal
+  actual: EffectDescription; // from the generator
 }
 ```
 
@@ -693,7 +698,7 @@ instances.
 A version gate is itself a yielded effect:
 
 ```typescript
-const version = yield* versionCheck("add-fraud-check", { minVersion: 0, maxVersion: 1 });
+const version = yield * versionCheck("add-fraud-check", { minVersion: 0, maxVersion: 1 });
 ```
 
 On first execution (live mode), the reducer records a `Yield` event
@@ -707,7 +712,7 @@ function* orderWorkflow(orderId: string) {
   const version = yield* versionCheck("add-fraud-check", { minVersion: 0, maxVersion: 1 });
 
   if (version >= 1) {
-    yield* call(fraudCheck, orderId);  // new step, v1+
+    yield* call(fraudCheck, orderId); // new step, v1+
   }
 
   const order = yield* call(fetchOrder, orderId);
@@ -839,6 +844,7 @@ faithfully represent the `DurableEvent` type. The encoding must preserve:
 ### 11.4 Example: sequential workflow
 
 Workflow:
+
 ```typescript
 function* pipeline() {
   yield* sleep(2000);
@@ -848,6 +854,7 @@ function* pipeline() {
 ```
 
 Stream:
+
 ```
 [0] yield  root.0  { type: "sleep", name: "sleep" }      result: { status: "ok" }
 [1] yield  root.0  { type: "call",  name: "transform" }  result: { status: "ok", value: "ALPHA" }
@@ -858,18 +865,17 @@ Stream:
 ### 11.5 Example: fork/join with `all()`
 
 Workflow:
+
 ```typescript
 function* parallel() {
-  const [a, b] = yield* all([
-    call(fetchUser, "alice"),
-    call(fetchUser, "bob"),
-  ]);
+  const [a, b] = yield* all([call(fetchUser, "alice"), call(fetchUser, "bob")]);
   yield* call(merge, a, b);
   return "done";
 }
 ```
 
 Stream:
+
 ```
 [0] yield  root.0.0  { type: "call", name: "fetchUser" }  result: { status: "ok", value: { name: "alice" } }
 [1] yield  root.0.1  { type: "call", name: "fetchUser" }  result: { status: "ok", value: { name: "bob" } }
@@ -883,16 +889,15 @@ Stream:
 ### 11.6 Example: race with cancellation
 
 Workflow:
+
 ```typescript
 function* timeout() {
-  return yield* race([
-    call(fetchData),
-    sleep(5000),
-  ]);
+  return yield* race([call(fetchData), sleep(5000)]);
 }
 ```
 
 `fetchData` wins:
+
 ```
 [0] yield  root.0.0  { type: "call",  name: "fetchData" }  result: { status: "ok", value: { data: 42 } }
 [1] close  root.0.0  result: { status: "ok", value: { data: 42 } }
@@ -902,6 +907,7 @@ function* timeout() {
 ```
 
 Timeout wins (fetchData was slow, had partially executed):
+
 ```
 [0] yield  root.0.0  { type: "call", name: "fetchData.step1" }  result: { status: "ok", value: ... }
 [1] yield  root.0.1  { type: "sleep", name: "sleep" }           result: { status: "ok" }
@@ -956,21 +962,21 @@ it are replayed).
 
 For reference, the complete set of invariants defined in this specification:
 
-| # | Name | Section | Scope |
-|---|------|---------|-------|
-| 1 | Deterministic Identity | §3.3 | Coroutine IDs are stable across runs |
-| 2 | Transparency | §4.3 | Generator cannot detect replay vs. live |
-| 3 | Fork-Join Across Crash Boundaries | §4.4 | Join result is independent of replay status |
-| 4 | Persist-Before-Resume | §5 | Durable write before generator advance |
-| 5 | Divergence Detection | §6.1 | Every replayed effect is validated |
-| 6 | Lifetime Containment | §7.1 | child ⊆ parent |
-| 7 | Single Parent | §7.1 | Tree, not DAG |
-| 8 | Implicit Join | §7.1 | Scope waits for all children |
-| 9 | Cancellation Replay Fidelity | §7.2 | Cleanup path matches recorded path |
-| 10 | Causal Ordering | §8 | Stream order respects causality |
-| 11 | Append-Only | §11.3 | No mutation or deletion |
-| 12 | Prefix-Closed | §11.3 | No gaps in the stream |
-| 13 | Monotonic Indexing | §11.3 | Sequential offsets |
+| #   | Name                              | Section | Scope                                       |
+| --- | --------------------------------- | ------- | ------------------------------------------- |
+| 1   | Deterministic Identity            | §3.3    | Coroutine IDs are stable across runs        |
+| 2   | Transparency                      | §4.3    | Generator cannot detect replay vs. live     |
+| 3   | Fork-Join Across Crash Boundaries | §4.4    | Join result is independent of replay status |
+| 4   | Persist-Before-Resume             | §5      | Durable write before generator advance      |
+| 5   | Divergence Detection              | §6.1    | Every replayed effect is validated          |
+| 6   | Lifetime Containment              | §7.1    | child ⊆ parent                              |
+| 7   | Single Parent                     | §7.1    | Tree, not DAG                               |
+| 8   | Implicit Join                     | §7.1    | Scope waits for all children                |
+| 9   | Cancellation Replay Fidelity      | §7.2    | Cleanup path matches recorded path          |
+| 10  | Causal Ordering                   | §8      | Stream order respects causality             |
+| 11  | Append-Only                       | §11.3   | No mutation or deletion                     |
+| 12  | Prefix-Closed                     | §11.3   | No gaps in the stream                       |
+| 13  | Monotonic Indexing                | §11.3   | Sequential offsets                          |
 
 ---
 
@@ -980,72 +986,72 @@ For reference, the complete set of invariants defined in this specification:
 
 These tests MUST pass for the protocol to be considered implemented.
 
-| # | Test | Procedure | Verify |
-|---|------|-----------|--------|
-| 1 | **Golden run** | Execute workflow end-to-end with no interruption. | Stream contains expected events; final result is correct. |
-| 2 | **Full replay** | Replay entire stream against same code. | No effects re-executed; no divergence; same result. |
-| 3 | **Crash before first effect** | Provide empty stream to workflow. | All effects execute live; stream matches golden run. |
-| 4 | **Crash at position N** | Provide first N events from golden stream. | First N effects replayed (not re-executed); remaining execute live; same result. |
-| 5 | **Crash after last effect** | Provide all `Yield` events but no `Close` events. | All effects replayed; close events written; same result. |
-| 6 | **Persist-before-resume verification** | Inject crash between effect resolution and `iterator.next()`. | On resume, the resolved effect is in the stream; no replay gap; no duplicate execution. |
-| 7 | **Actor handoff** | Process A writes first N events, terminates. Process B reads stream, resumes. | B replays N events (none re-executed), continues live; correct result. |
+| #   | Test                                   | Procedure                                                                     | Verify                                                                                  |
+| --- | -------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 1   | **Golden run**                         | Execute workflow end-to-end with no interruption.                             | Stream contains expected events; final result is correct.                               |
+| 2   | **Full replay**                        | Replay entire stream against same code.                                       | No effects re-executed; no divergence; same result.                                     |
+| 3   | **Crash before first effect**          | Provide empty stream to workflow.                                             | All effects execute live; stream matches golden run.                                    |
+| 4   | **Crash at position N**                | Provide first N events from golden stream.                                    | First N effects replayed (not re-executed); remaining execute live; same result.        |
+| 5   | **Crash after last effect**            | Provide all `Yield` events but no `Close` events.                             | All effects replayed; close events written; same result.                                |
+| 6   | **Persist-before-resume verification** | Inject crash between effect resolution and `iterator.next()`.                 | On resume, the resolved effect is in the stream; no replay gap; no duplicate execution. |
+| 7   | **Actor handoff**                      | Process A writes first N events, terminates. Process B reads stream, resumes. | B replays N events (none re-executed), continues live; correct result.                  |
 
 ### Tier 2 — Divergence detection
 
-| # | Test | Procedure | Verify |
-|---|------|-----------|--------|
-| 8 | **Added step** | Record stream with code v1. Replay with v2 that adds an effect before existing ones. | `DivergenceError` at position 0 with expected vs. actual descriptions. |
-| 9 | **Removed step** | Record with v1. Replay with v2 that removes an effect. | `DivergenceError` at the position where removed effect was expected. |
-| 10 | **Reordered steps** | Record with v1. Replay with v2 that swaps two effects. | `DivergenceError` at first swapped position. |
-| 11 | **Type mismatch** | Record a `call` effect. Replay code yields `sleep` at same position. | `DivergenceError` citing type mismatch. |
-| 12 | **Name mismatch** | Record `call("fetchOrder")`. Replay yields `call("chargeCard")`. | `DivergenceError` citing name mismatch. |
-| 13 | **Generator finishes early** | Record stream with 5 yields + close. Replay code produces only 3 yields then returns. | `DivergenceError`: generator completed with unconsumed journal entries. |
-| 14 | **Generator continues past close** | Record stream with close after 3 yields. Replay code produces 5 yields. | `DivergenceError`: journal shows close but generator hasn't finished. |
+| #   | Test                               | Procedure                                                                             | Verify                                                                  |
+| --- | ---------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| 8   | **Added step**                     | Record stream with code v1. Replay with v2 that adds an effect before existing ones.  | `DivergenceError` at position 0 with expected vs. actual descriptions.  |
+| 9   | **Removed step**                   | Record with v1. Replay with v2 that removes an effect.                                | `DivergenceError` at the position where removed effect was expected.    |
+| 10  | **Reordered steps**                | Record with v1. Replay with v2 that swaps two effects.                                | `DivergenceError` at first swapped position.                            |
+| 11  | **Type mismatch**                  | Record a `call` effect. Replay code yields `sleep` at same position.                  | `DivergenceError` citing type mismatch.                                 |
+| 12  | **Name mismatch**                  | Record `call("fetchOrder")`. Replay yields `call("chargeCard")`.                      | `DivergenceError` citing name mismatch.                                 |
+| 13  | **Generator finishes early**       | Record stream with 5 yields + close. Replay code produces only 3 yields then returns. | `DivergenceError`: generator completed with unconsumed journal entries. |
+| 14  | **Generator continues past close** | Record stream with close after 3 yields. Replay code produces 5 yields.               | `DivergenceError`: journal shows close but generator hasn't finished.   |
 
 ### Tier 3 — Structured concurrency
 
-| # | Test | Procedure | Verify |
-|---|------|-----------|--------|
-| 15 | **Fork/join — all children complete before crash** | Parent forks 3 children, all complete; crash before parent's post-join effect. | All child results replayed from stream; parent continues live. |
-| 16 | **Fork/join — partial completion** | 2 of 3 children complete before crash. | 2 replayed, 1 re-executes from its last yield; correct join result. |
-| 17 | **Nested scopes** | Crash inside doubly-nested scope. | Scope tree reconstructed; inner scope partially replayed; outer scope waits correctly. |
-| 18 | **Cancellation propagation** | Cancel parent while children run. | Children cancelled in reverse order; `finally` blocks run; `Close(cancelled)` events written. |
-| 19 | **Cancellation replay** | Replay a stream that contains cancellation events. | `iterator.return()` called at correct positions; cleanup effects replayed; no divergence. |
-| 20 | **Error in child — sibling cancellation** | Child A throws; siblings cancelled. | Siblings cancelled in reverse order; error propagated to parent; cleanup recorded. |
-| 21 | **Error boundary** | Child error caught by parent `try/catch`. | Parent catches error; siblings NOT cancelled; execution continues. |
-| 22 | **Race — winner cancels losers** | `race([op1, op2])`, op1 wins. | op2 receives `Close(cancelled)`; race returns op1's result. |
-| 23 | **Race replay with partial loser** | Replay race where loser partially executed. | Loser's partial yields replayed, then cancelled at correct point. |
+| #   | Test                                               | Procedure                                                                      | Verify                                                                                        |
+| --- | -------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| 15  | **Fork/join — all children complete before crash** | Parent forks 3 children, all complete; crash before parent's post-join effect. | All child results replayed from stream; parent continues live.                                |
+| 16  | **Fork/join — partial completion**                 | 2 of 3 children complete before crash.                                         | 2 replayed, 1 re-executes from its last yield; correct join result.                           |
+| 17  | **Nested scopes**                                  | Crash inside doubly-nested scope.                                              | Scope tree reconstructed; inner scope partially replayed; outer scope waits correctly.        |
+| 18  | **Cancellation propagation**                       | Cancel parent while children run.                                              | Children cancelled in reverse order; `finally` blocks run; `Close(cancelled)` events written. |
+| 19  | **Cancellation replay**                            | Replay a stream that contains cancellation events.                             | `iterator.return()` called at correct positions; cleanup effects replayed; no divergence.     |
+| 20  | **Error in child — sibling cancellation**          | Child A throws; siblings cancelled.                                            | Siblings cancelled in reverse order; error propagated to parent; cleanup recorded.            |
+| 21  | **Error boundary**                                 | Child error caught by parent `try/catch`.                                      | Parent catches error; siblings NOT cancelled; execution continues.                            |
+| 22  | **Race — winner cancels losers**                   | `race([op1, op2])`, op1 wins.                                                  | op2 receives `Close(cancelled)`; race returns op1's result.                                   |
+| 23  | **Race replay with partial loser**                 | Replay race where loser partially executed.                                    | Loser's partial yields replayed, then cancelled at correct point.                             |
 
 ### Tier 4 — Deterministic identity
 
-| # | Test | Procedure | Verify |
-|---|------|-----------|--------|
-| 24 | **Stable IDs across runs** | Execute workflow twice with same inputs/resolutions. | Coroutine IDs identical in both runs. |
-| 25 | **Stable IDs: live vs. replay** | Execute workflow live. Execute same workflow via full replay. | Coroutine IDs identical. |
-| 26 | **Spawn during teardown** | `ensure()` block inside `all()` child spawns a new child. | Teardown child's coroutine ID identical between live and replay. |
-| 27 | **Dynamic spawn count divergence** | Record stream with `all([a, b])`. Replay with `all([a, b, c])`. | `DivergenceError` (c produces yields not in journal, or parent's post-join effect mismatches). |
+| #   | Test                               | Procedure                                                       | Verify                                                                                         |
+| --- | ---------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 24  | **Stable IDs across runs**         | Execute workflow twice with same inputs/resolutions.            | Coroutine IDs identical in both runs.                                                          |
+| 25  | **Stable IDs: live vs. replay**    | Execute workflow live. Execute same workflow via full replay.   | Coroutine IDs identical.                                                                       |
+| 26  | **Spawn during teardown**          | `ensure()` block inside `all()` child spawns a new child.       | Teardown child's coroutine ID identical between live and replay.                               |
+| 27  | **Dynamic spawn count divergence** | Record stream with `all([a, b])`. Replay with `all([a, b, c])`. | `DivergenceError` (c produces yields not in journal, or parent's post-join effect mismatches). |
 
 ### Tier 5 — Versioning
 
-| # | Test | Procedure | Verify |
-|---|------|-----------|--------|
-| 28 | **Version gate — old workflow** | Stream from v0 code. Replay with code containing version gate. | Gate reads v0; old path executes; no divergence. |
-| 29 | **Version gate — new workflow** | Execute with version gate, no prior stream. | Gate records v1; new path executes; stream contains version marker. |
+| #   | Test                            | Procedure                                                      | Verify                                                              |
+| --- | ------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| 28  | **Version gate — old workflow** | Stream from v0 code. Replay with code containing version gate. | Gate reads v0; old path executes; no divergence.                    |
+| 29  | **Version gate — new workflow** | Execute with version gate, no prior stream.                    | Gate records v1; new path executes; stream contains version marker. |
 
 ### Tier 6 — Edge cases
 
-| # | Test | Procedure | Verify |
-|---|------|-----------|--------|
-| 30 | **Empty workflow** | Workflow with zero yields. | Completes immediately; stream has only `Close` events; replay is no-op. |
-| 31 | **Effect that throws** | Effect resolves with error; generator catches. | Stream records error result; replay injects via `iterator.throw()`; catch path executes. |
-| 32 | **Truncated stream** | Remove last N events from valid stream. | Runtime detects incomplete state; re-executes from truncation point; no silent corruption. |
-| 33 | **Systematic crash-point sweep** | For workflow with M yields, run M+1 crash-resume cycles. | Every crash point produces correct final result; replayed effects not re-executed. |
+| #   | Test                             | Procedure                                                | Verify                                                                                     |
+| --- | -------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 30  | **Empty workflow**               | Workflow with zero yields.                               | Completes immediately; stream has only `Close` events; replay is no-op.                    |
+| 31  | **Effect that throws**           | Effect resolves with error; generator catches.           | Stream records error result; replay injects via `iterator.throw()`; catch path executes.   |
+| 32  | **Truncated stream**             | Remove last N events from valid stream.                  | Runtime detects incomplete state; re-executes from truncation point; no silent corruption. |
+| 33  | **Systematic crash-point sweep** | For workflow with M yields, run M+1 crash-resume cycles. | Every crash point produces correct final result; replayed effects not re-executed.         |
 
 ### Tier 7 — Property-based tests
 
-| # | Property | Strategy |
-|---|----------|----------|
-| 34 | **Crash-resume equivalence** | For any workflow and any set of crash points, the final result equals the uninterrupted result. |
-| 35 | **Journal monotonicity** | After any operation sequence, stream length is non-decreasing and offsets are sequential. |
-| 36 | **Replay idempotency** | Replaying the same stream K times produces the same effect sequence every time. |
-| 37 | **Random workflow fuzzing** | Generate random workflow shapes (varying depth, fork count, error/cancel injection). Verify all invariants hold. |
+| #   | Property                     | Strategy                                                                                                         |
+| --- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 34  | **Crash-resume equivalence** | For any workflow and any set of crash points, the final result equals the uninterrupted result.                  |
+| 35  | **Journal monotonicity**     | After any operation sequence, stream length is non-decreasing and offsets are sequential.                        |
+| 36  | **Replay idempotency**       | Replaying the same stream K times produces the same effect sequence every time.                                  |
+| 37  | **Random workflow fuzzing**  | Generate random workflow shapes (varying depth, fork count, error/cancel injection). Verify all invariants hold. |

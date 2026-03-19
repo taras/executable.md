@@ -12,12 +12,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import type { Operation } from "effection";
 import { expect } from "@effectionx/bdd/expect";
-import type {
-  DurableEffect,
-  EffectionResult,
-  Resolve,
-  Workflow,
-} from "../types.ts";
+import type { DurableEffect, EffectionResult, Resolve, Workflow } from "../types.ts";
 
 // ---------------------------------------------------------------------------
 // Helper: create a minimal DurableEffect for testing

@@ -18,9 +18,7 @@ export interface ParsedFrontmatter {
  * - `inputs` key: declared input interface
  * - Everything else (or `meta` key with typed definitions): component metadata
  */
-export function parseFrontmatter(
-  raw: Record<string, unknown>,
-): ParsedFrontmatter {
+export function parseFrontmatter(raw: Record<string, unknown>): ParsedFrontmatter {
   const rawInputs = (raw["inputs"] ?? {}) as Record<string, unknown>;
   const inputs: Record<string, InputDefinition> = {};
 
@@ -41,14 +39,8 @@ export function parseFrontmatter(
   // If 'meta' key exists and contains typed definitions, resolve defaults
   const meta: Record<string, unknown> = {};
 
-  if (
-    raw["meta"] &&
-    typeof raw["meta"] === "object" &&
-    !Array.isArray(raw["meta"])
-  ) {
-    for (const [key, value] of Object.entries(
-      raw["meta"] as Record<string, unknown>,
-    )) {
+  if (raw["meta"] && typeof raw["meta"] === "object" && !Array.isArray(raw["meta"])) {
+    for (const [key, value] of Object.entries(raw["meta"] as Record<string, unknown>)) {
       if (isTypedDefinition(value)) {
         meta[key] = (value as { default?: unknown })["default"];
       } else {
@@ -77,12 +69,9 @@ export function normalizeInputDef(value: unknown): InputDefinition {
     return {
       type: (def["type"] as InputDefinition["type"]) ?? "any",
       ...(hasDefault ? { default: def["default"] as Json } : {}),
-      required:
-        def["required"] === true || (!hasDefault && def["required"] !== false),
+      required: def["required"] === true || (!hasDefault && def["required"] !== false),
       ...(def["enum"] ? { enum: def["enum"] as Json[] } : {}),
-      ...(def["description"]
-        ? { description: def["description"] as string }
-        : {}),
+      ...(def["description"] ? { description: def["description"] as string } : {}),
     };
   }
 

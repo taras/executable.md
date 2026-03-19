@@ -30,15 +30,16 @@ import { PersistFlagCtx } from "../eval-env.ts";
  * chain. The eval handler reads this flag and routes the compiled block
  * execution through evalScope.eval() for resource retention.
  */
-export const persistFactory: ModifierFactory = (_params) =>
-  (_args, next) =>
-    (function* () {
-      // Set the persist flag on the scope, then delegate to the inner chain.
-      // evalFactory will read this flag and route execution through
-      // evalScope.eval() for resource retention.
-      return yield* ephemeral(
-        PersistFlagCtx.with(true, function* () {
-          return yield* next() as unknown as import("effection").Operation<import("../types.ts").CodeBlockResult>;
-        }),
-      );
-    })();
+export const persistFactory: ModifierFactory = (_params) => (_args, next) =>
+  (function* () {
+    // Set the persist flag on the scope, then delegate to the inner chain.
+    // evalFactory will read this flag and route execution through
+    // evalScope.eval() for resource retention.
+    return yield* ephemeral(
+      PersistFlagCtx.with(true, function* () {
+        return yield* next() as unknown as import("effection").Operation<
+          import("../types.ts").CodeBlockResult
+        >;
+      }),
+    );
+  })();

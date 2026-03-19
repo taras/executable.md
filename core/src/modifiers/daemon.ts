@@ -38,29 +38,28 @@ import { EvalScopeCtx } from "../eval-env.ts";
  *
  * Daemon blocks produce no rendered output and no journal entry.
  */
-export const daemonFactory: ModifierFactory = (_params) =>
-  (_args, _next) =>
-    (function* () {
-      const ctx = yield* useCodeBlock();
+export const daemonFactory: ModifierFactory = (_params) => (_args, _next) =>
+  (function* () {
+    const ctx = yield* useCodeBlock();
 
-      // Bridge from Workflow (durable) to Operation (ephemeral) —
-      // daemon produces no journal entry, so all its effects are ephemeral.
-      const launchDaemon = {
-        *[Symbol.iterator]() {
-          const evalScope = yield* EvalScopeCtx.expect();
+    // Bridge from Workflow (durable) to Operation (ephemeral) —
+    // daemon produces no journal entry, so all its effects are ephemeral.
+    const launchDaemon = {
+      *[Symbol.iterator]() {
+        const evalScope = yield* EvalScopeCtx.expect();
 
-          // The block content is a raw shell command (e.g. the body of a
-          // ```bash daemon exec``` block). Pass it directly to daemon()
-          // with shell:true so @effectionx/process invokes the system
-          // shell instead of splitting with shellwords — which would
-          // mangle commands containing nested quotes.
-          yield* evalScope.eval(function* () {
-            yield* daemon(ctx.content, { shell: true });
-          });
-        },
-      };
-      yield* ephemeral(launchDaemon);
+        // The block content is a raw shell command (e.g. the body of a
+        // ```bash daemon exec``` block). Pass it directly to daemon()
+        // with shell:true so @effectionx/process invokes the system
+        // shell instead of splitting with shellwords — which would
+        // mangle commands containing nested quotes.
+        yield* evalScope.eval(function* () {
+          yield* daemon(ctx.content, { shell: true });
+        });
+      },
+    };
+    yield* ephemeral(launchDaemon);
 
-      // Control returns here immediately after the fork.
-      return { output: "", exitCode: 0, stderr: "" };
-    })();
+    // Control returns here immediately after the fork.
+    return { output: "", exitCode: 0, stderr: "" };
+  })();

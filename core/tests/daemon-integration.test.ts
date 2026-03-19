@@ -58,23 +58,17 @@ describe("Tier Q — Daemon integration", () => {
 
     try {
       writeFiles(tmpDir, {
-        "doc.md": [
-          "before",
-          "",
-          "```bash daemon exec",
-          "sleep 300",
-          "```",
-          "",
-          "after",
-        ].join("\n"),
+        "doc.md": ["before", "", "```bash daemon exec", "sleep 300", "```", "", "after"].join("\n"),
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // runDocument completed — daemon was terminated when scope closed.
       // If daemon wasn't cleaned up, this test would hang for 300s.
@@ -93,23 +87,17 @@ describe("Tier Q — Daemon integration", () => {
 
     try {
       writeFiles(tmpDir, {
-        "doc.md": [
-          "before",
-          "",
-          "```bash daemon exec",
-          "sleep 300",
-          "```",
-          "",
-          "after",
-        ].join("\n"),
+        "doc.md": ["before", "", "```bash daemon exec", "sleep 300", "```", "", "after"].join("\n"),
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // Daemon produces no output — text segments before/after are present
       expect(output).toContain("before");
@@ -127,19 +115,17 @@ describe("Tier Q — Daemon integration", () => {
 
     try {
       writeFiles(tmpDir, {
-        "doc.md": [
-          "```bash daemon exec",
-          "sleep 300",
-          "```",
-        ].join("\n"),
+        "doc.md": ["```bash daemon exec", "sleep 300", "```"].join("\n"),
       });
 
       const stream = new InMemoryStream();
-      yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       const events = stream.snapshot();
       // Journal should have root import but no daemon/exec entry
@@ -165,23 +151,17 @@ describe("Tier Q — Daemon integration", () => {
 
     try {
       writeFiles(tmpDir, {
-        "doc.md": [
-          "before",
-          "",
-          "```bash daemon exec",
-          "exit 1",
-          "```",
-          "",
-          "after",
-        ].join("\n"),
+        "doc.md": ["before", "", "```bash daemon exec", "exit 1", "```", "", "after"].join("\n"),
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // The key property: runDocument completes without hanging.
       // The daemon exited immediately. The output should contain
@@ -219,11 +199,13 @@ describe("Tier Q — Daemon integration", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // runDocument completed successfully — the daemon received a valid
       // interpolated command. If interpolation failed, {marker} would be
@@ -254,11 +236,13 @@ describe("Tier Q — Daemon integration", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // The eval block error should appear in output
       expect(output).toContain("intentional error");
@@ -293,22 +277,26 @@ describe("Tier Q — Daemon integration", () => {
 
       const stream = new InMemoryStream();
       // Golden run
-      const output1 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output1 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       expect(output1).toContain("done");
       expect(output1).not.toContain("ERROR");
 
       // Replay — eval block replays from journal (restoring tag to env.values),
       // daemon spawns a fresh process with the restored interpolated value.
-      const output2 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        freshness: false,
-      }));
+      const output2 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          freshness: false,
+        }),
+      );
 
       // Both runs complete successfully — daemon received valid
       // interpolated command on both golden run and replay.
@@ -346,11 +334,13 @@ describe("Tier Q — Daemon integration", () => {
       // cancelling the runDocument scope (and the daemon within it).
       // If daemon cleanup is broken, race would hang for 300s.
       const result = yield* race([
-        collect(yield* runDocument({
-          docPath: path.join(tmpDir, "doc.md"),
-          stream,
-          freshness: false,
-        })),
+        collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            freshness: false,
+          }),
+        ),
         sleep(500),
       ]);
 

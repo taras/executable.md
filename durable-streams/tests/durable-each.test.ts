@@ -26,9 +26,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Create a DurableSource from an array of items. */
-function arraySource<T extends Json>(
-  items: T[],
-): DurableSource<T> & { closed: boolean } {
+function arraySource<T extends Json>(items: T[]): DurableSource<T> & { closed: boolean } {
   let index = 0;
   const src = {
     closed: false,
@@ -285,10 +283,7 @@ describe("durableEach", () => {
     yield* durableRun(
       function* () {
         for (const msg of yield* durableEach("queue", source)) {
-          yield* durableCall(
-            `process-${msg}`,
-            tracker.fn(`process-${msg}`, null),
-          );
+          yield* durableCall(`process-${msg}`, tracker.fn(`process-${msg}`, null));
           yield* durableEach.next();
         }
       },
@@ -412,9 +407,7 @@ describe("durableEach", () => {
       throw new Error("expected advance guard error");
     } catch (e) {
       expect(e).toBeInstanceOf(Error);
-      expect((e as Error).message).toContain(
-        "yield* durableEach.next() must be called",
-      );
+      expect((e as Error).message).toContain("yield* durableEach.next() must be called");
     }
   });
 

@@ -109,9 +109,7 @@ describe("replay guard", () => {
 
     const result = yield* durableRun(
       function* (): Workflow<string> {
-        return yield* durableCall<string>("stepA", () =>
-          Promise.resolve("should-not-be-called"),
-        );
+        return yield* durableCall<string>("stepA", () => Promise.resolve("should-not-be-called"));
       },
       { stream },
     );
@@ -164,11 +162,8 @@ describe("replay guard", () => {
       },
       decide([event], next) {
         const filePath = event.description.path;
-        const resultValue =
-          event.result.status === "ok" ? event.result.value : undefined;
-        const recordedHash = (
-          resultValue as Record<string, unknown> | undefined
-        )?.contentHash;
+        const resultValue = event.result.status === "ok" ? event.result.value : undefined;
+        const recordedHash = (resultValue as Record<string, unknown> | undefined)?.contentHash;
         if (typeof filePath === "string" && typeof recordedHash === "string") {
           const currentSHA = cache.get(filePath);
           if (currentSHA && currentSHA !== recordedHash) {
@@ -226,11 +221,8 @@ describe("replay guard", () => {
       },
       decide([event], next) {
         const filePath = event.description.path;
-        const resultValue =
-          event.result.status === "ok" ? event.result.value : undefined;
-        const recordedHash = (
-          resultValue as Record<string, unknown> | undefined
-        )?.contentHash;
+        const resultValue = event.result.status === "ok" ? event.result.value : undefined;
+        const recordedHash = (resultValue as Record<string, unknown> | undefined)?.contentHash;
         if (typeof filePath === "string" && typeof recordedHash === "string") {
           const currentSHA = cache.get(filePath);
           if (currentSHA && currentSHA !== recordedHash) {
@@ -316,9 +308,7 @@ describe("replay guard", () => {
     try {
       yield* durableRun(
         function* (): Workflow<string> {
-          return yield* durableCall<string>("step", () =>
-            Promise.resolve("should-not-be-called"),
-          );
+          return yield* durableCall<string>("step", () => Promise.resolve("should-not-be-called"));
         },
         { stream },
       );
@@ -414,7 +404,6 @@ describe("replay guard", () => {
     for (let i = 0; i < 2; i++) {
       const stream = new InMemoryStream([...events]);
       yield* run(function* () {
-
         yield* ReplayGuard.around({
           *check([event], next) {
             return yield* next(event);
@@ -477,9 +466,7 @@ describe("replay guard", () => {
       yield* durableRun(
         function* (): Workflow<string> {
           // Yields stepX but journal has stepA — identity mismatch
-          return yield* durableCall<string>("stepX", () =>
-            Promise.resolve("should-not-be-called"),
-          );
+          return yield* durableCall<string>("stepX", () => Promise.resolve("should-not-be-called"));
         },
         { stream },
       );
@@ -596,9 +583,7 @@ describe("replay guard", () => {
       // The guard should be visible inside durableRun's scope
       yield* durableRun(
         function* (): Workflow<string> {
-          return yield* durableCall<string>("step", () =>
-            Promise.resolve("should-not-be-called"),
-          );
+          return yield* durableCall<string>("step", () => Promise.resolve("should-not-be-called"));
         },
         { stream },
       );

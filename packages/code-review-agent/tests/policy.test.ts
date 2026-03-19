@@ -47,20 +47,27 @@ function diagnosticsFixture(): Diagnostics {
         ruleId: "no-unused-vars",
         count: 3,
         files: ["src/a.ts", "demo/b.ts"],
-        instances: [unusedA, unusedATwo, {
-          ...unusedA,
-          file: "demo/b.ts",
-          line: 9,
-        }],
+        instances: [
+          unusedA,
+          unusedATwo,
+          {
+            ...unusedA,
+            file: "demo/b.ts",
+            line: 9,
+          },
+        ],
       },
       {
         ruleId: "no-console",
         count: 2,
         files: ["demo/b.ts"],
-        instances: [consoleDemo, {
-          ...consoleDemo,
-          line: 7,
-        }],
+        instances: [
+          consoleDemo,
+          {
+            ...consoleDemo,
+            line: 7,
+          },
+        ],
       },
       {
         ruleId: "no-empty-function",
@@ -78,11 +85,15 @@ function diagnosticsFixture(): Diagnostics {
           ruleId: "no-unused-vars",
           count: 3,
           files: ["src/a.ts", "demo/b.ts"],
-          instances: [unusedA, unusedATwo, {
-            ...unusedA,
-            file: "demo/b.ts",
-            line: 9,
-          }],
+          instances: [
+            unusedA,
+            unusedATwo,
+            {
+              ...unusedA,
+              file: "demo/b.ts",
+              line: 9,
+            },
+          ],
         },
         {
           ruleId: "no-empty-function",
@@ -96,10 +107,13 @@ function diagnosticsFixture(): Diagnostics {
           ruleId: "no-console",
           count: 2,
           files: ["demo/b.ts"],
-          instances: [consoleDemo, {
-            ...consoleDemo,
-            line: 7,
-          }],
+          instances: [
+            consoleDemo,
+            {
+              ...consoleDemo,
+              line: 7,
+            },
+          ],
         },
       ],
       typeAware: [],

@@ -33,10 +33,7 @@ export { InMemoryStream } from "./stream.ts";
 
 // HTTP-backed stream adapter
 export { useHttpDurableStream } from "./http-stream.ts";
-export type {
-  HttpDurableStreamHandle,
-  HttpDurableStreamOptions,
-} from "./http-stream.ts";
+export type { HttpDurableStreamHandle, HttpDurableStreamOptions } from "./http-stream.ts";
 
 // Errors
 export {
@@ -48,11 +45,7 @@ export {
 
 // Divergence API — pluggable policy for replay mismatches (DEC-031)
 export { Divergence } from "./divergence.ts";
-export type {
-  DivergenceDecision,
-  DivergenceInfo,
-  DivergenceKind,
-} from "./divergence.ts";
+export type { DivergenceDecision, DivergenceInfo, DivergenceKind } from "./divergence.ts";
 
 // ReplayGuard API — pluggable validation for replay staleness detection
 export { ReplayGuard } from "./replay-guard.ts";
@@ -75,12 +68,7 @@ export { createDurableEffect, createDurableOperation } from "./effect.ts";
 export type { Executor } from "./effect.ts";
 
 // Workflow-enabled effects
-export {
-  durableAction,
-  durableCall,
-  durableSleep,
-  versionCheck,
-} from "./operations.ts";
+export { durableAction, durableCall, durableSleep, versionCheck } from "./operations.ts";
 
 // Structured concurrency combinators
 export { durableAll, durableRace, durableSpawn } from "./combinators.ts";

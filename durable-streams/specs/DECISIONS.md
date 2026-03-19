@@ -194,8 +194,8 @@ Updated before completion of every phase and committed at the end of each phase.
   - `enter(resolve: Resolve<Result<T>>, routine: Coroutine)`
   - returns `(resolve: Resolve<Result<void>>) => void` (teardown)
   - `Result<T> = { ok: true, value: T } | { ok: false, error: Error }`
-  DurableEffect replicates this exactly. The extra field doesn't affect
-  structural compatibility — the reducer ignores unknown properties.
+    DurableEffect replicates this exactly. The extra field doesn't affect
+    structural compatibility — the reducer ignores unknown properties.
 - **Consequences:** Two different "Result" types exist — Effection's internal
   `{ ok, value/error }` and the protocol's `{ status, value/error }`. We
   define `EffectionResult<T>` in types.ts to bridge them without importing
@@ -518,7 +518,7 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Date:** 2026-02-28
 - **Context:** The `@durable-streams/client` package provides an
   `IdempotentProducer` class designed for throughput workloads (fire-and-forget
-  + background flush). Need to decide whether to use it or raw `fetch()`.
+  - background flush). Need to decide whether to use it or raw `fetch()`.
 - **Options considered:**
   1. `IdempotentProducer` with `lingerMs=0` and await flush after every append
   2. Raw `fetch()` with manual producer headers
@@ -550,7 +550,7 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Decision:** Promise chain serialization. Sequence numbers are assigned
   synchronously (before any async work). HTTP calls are chained behind
   `this.pending`: `const p = this.pending.then(() => this.doAppend(...));
-  this.pending = p.catch(() => {});`
+this.pending = p.catch(() => {});`
 - **Rationale:** Each caller still awaits their own append promise. Ordering
   matches seq assignment order. The `p.catch(() => {})` pattern prevents
   failed appends from blocking future ones in the chain, but errors still
@@ -703,8 +703,8 @@ Updated before completion of every phase and committed at the end of each phase.
   an optional `meta?: Record<string, Json>` field on Yield events to carry
   validation metadata (file paths, content hashes) for staleness detection.
   Charles objected to adding meta to the stream. Analysis revealed that meta
-  was solving a problem that doesn't exist: file paths are effect *inputs*
-  and belong in the effect description; content hashes are effect *outputs*
+  was solving a problem that doesn't exist: file paths are effect _inputs_
+  and belong in the effect description; content hashes are effect _outputs_
   and belong in result.value.
 - **Decision:** Remove `meta` from the Yield event type entirely. Open
   `EffectDescription` to allow extra fields beyond `type` and `name` via
@@ -720,7 +720,7 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Consequences:** The Yield event type loses the `meta` field. Effect
   implementations that need staleness validation must return rich result
   objects that include validation data (e.g., content hash alongside content).
-   The protocol remains a two-field `{ type, name }` identity check with
+  The protocol remains a two-field `{ type, name }` identity check with
   open-ended storage for additional context.
 
 ## DEC-033: Operation-native HttpDurableStream via resource + Queue + worker

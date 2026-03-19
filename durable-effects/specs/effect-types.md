@@ -26,7 +26,7 @@ exports (`exec`, `readTextFile`, `stat`, `glob`, `fetch`, `env`, `platform`).
 ```typescript
 function* durableXxx(name: string, ...params): Workflow<XxxResult> {
   return (yield createDurableOperation<XxxResult>(
-    { type: "xxx", name, /* extra description fields */ },
+    { type: "xxx", name /* extra description fields */ },
     function* () {
       // ... yield* runtime operations from @executablemd/runtime ...
       return result;
@@ -50,16 +50,7 @@ Effects must not depend on host APIs directly. Runtime operations are provided
 by `@executablemd/runtime`.
 
 ```typescript
-import {
-  API,
-  exec,
-  readTextFile,
-  stat,
-  glob,
-  fetch,
-  env,
-  platform,
-} from "@executablemd/runtime";
+import { API, exec, readTextFile, stat, glob, fetch, env, platform } from "@executablemd/runtime";
 ```
 
 - Use exported operation helpers (`exec`, `readTextFile`, `stat`, `glob`,
@@ -89,10 +80,10 @@ import { call } from "effection";
 
 export function* computeSHA256(content: string): Operation<string> {
   const hashBuffer = yield* call(() =>
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(content))
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(content)),
   );
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return `sha256:${hashArray.map(b => b.toString(16).padStart(2, "0")).join("")}`;
+  return `sha256:${hashArray.map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 ```
 
@@ -179,7 +170,8 @@ function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult> 
 
   return (yield createDurableOperation<ExecResult>(
     {
-      type: "exec", name,
+      type: "exec",
+      name,
       command: command as Json,
       ...(cwd ? { cwd } : {}),
       ...(env ? { envKeys: Object.keys(env).sort() as Json } : {}),
@@ -194,7 +186,7 @@ function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult> 
 
       if (throwOnError && output.exitCode !== 0) {
         throw new Error(
-          `Command failed with exit code ${output.exitCode}: ${command.join(" ")}\n${output.stderr}`
+          `Command failed with exit code ${output.exitCode}: ${command.join(" ")}\n${output.stderr}`,
         );
       }
       return output as ExecResult;
@@ -250,7 +242,9 @@ function* durableReadFile(
 
 ```typescript
 function* durableReadFile(
-  name: string, path: string, options?: { encoding?: string }
+  name: string,
+  path: string,
+  options?: { encoding?: string },
 ): Workflow<ReadFileResult> {
   const encoding = options?.encoding ?? "utf-8";
 
@@ -340,9 +334,10 @@ function* durableGlob(name: string, options: GlobOptions): Workflow<GlobResult> 
 
       matches.sort((a, b) => a.path.localeCompare(b.path));
       const seen = new Set<string>();
-      const deduped = matches.filter(m => {
+      const deduped = matches.filter((m) => {
         if (seen.has(m.path)) return false;
-        seen.add(m.path); return true;
+        seen.add(m.path);
+        return true;
       });
 
       const scanHash = yield* computeSHA256(JSON.stringify(deduped));
@@ -413,8 +408,14 @@ function* durableFetch(name: string, options: FetchOptions): Workflow<FetchResul
   const { url, method = "GET", headers = {}, body, timeout = 30_000 } = options;
 
   return (yield createDurableOperation<FetchResult>(
-    { type: "fetch", name, url, method, headers: safeHeaders as Json,
-      ...(body ? { bodyHash: `len:${body.length}` } : {}) },
+    {
+      type: "fetch",
+      name,
+      url,
+      method,
+      headers: safeHeaders as Json,
+      ...(body ? { bodyHash: `len:${body.length}` } : {}),
+    },
     function* () {
       const scope = yield* useScope();
       const runtime = { exec, readTextFile, glob, fetch, env, platform };
@@ -430,8 +431,10 @@ function* durableFetch(name: string, options: FetchOptions): Workflow<FetchResul
       }
 
       return {
-        status: response.status, headers: responseHeaders,
-        body: responseBody, bodyHash,
+        status: response.status,
+        headers: responseHeaders,
+        body: responseBody,
+        bodyHash,
       } as FetchResult;
     },
   )) as FetchResult;
@@ -569,7 +572,8 @@ Custom resolver returns `Operation<T>`, not `Promise<T>`.
 
 ```typescript
 function* durableResolve<T extends Json>(
-  name: string, resolver: ResolveKind | (() => Operation<T>)
+  name: string,
+  resolver: ResolveKind | (() => Operation<T>),
 ): Workflow<T> {
   const isKind = typeof resolver === "object" && "kind" in resolver;
   const descExtras: Record<string, Json> = {};
@@ -578,32 +582,34 @@ function* durableResolve<T extends Json>(
     if (resolver.kind === "env_var") descExtras.varName = resolver.name;
   }
 
-  return (yield createDurableOperation<T>(
-    { type: "resolve", name, ...descExtras },
-    function* () {
-      if (typeof resolver === "function") {
-        return yield* resolver();
-      }
+  return (yield createDurableOperation<T>({ type: "resolve", name, ...descExtras }, function* () {
+    if (typeof resolver === "function") {
+      return yield* resolver();
+    }
 
-      const scope = yield* useScope();
-      const runtime = { exec, readTextFile, glob, fetch, env, platform };
+    const scope = yield* useScope();
+    const runtime = { exec, readTextFile, glob, fetch, env, platform };
 
-      switch (resolver.kind) {
-        case "current_time": return new Date().toISOString() as T;
-        case "random_float": {
-          const min = resolver.min ?? 0, max = resolver.max ?? 1;
-          return (Math.random() * (max - min) + min) as T;
-        }
-        case "random_int": {
-          const range = resolver.max - resolver.min + 1;
-          return (Math.floor(Math.random() * range) + resolver.min) as T;
-        }
-        case "uuid": return crypto.randomUUID() as T;
-        case "env_var": return (runtime.env(resolver.name) ?? null) as T;
-        case "platform": return runtime.platform() as T;
+    switch (resolver.kind) {
+      case "current_time":
+        return new Date().toISOString() as T;
+      case "random_float": {
+        const min = resolver.min ?? 0,
+          max = resolver.max ?? 1;
+        return (Math.random() * (max - min) + min) as T;
       }
-    },
-  )) as T;
+      case "random_int": {
+        const range = resolver.max - resolver.min + 1;
+        return (Math.floor(Math.random() * range) + resolver.min) as T;
+      }
+      case "uuid":
+        return crypto.randomUUID() as T;
+      case "env_var":
+        return (runtime.env(resolver.name) ?? null) as T;
+      case "platform":
+        return runtime.platform() as T;
+    }
+  })) as T;
 }
 ```
 
@@ -688,8 +694,9 @@ function* useFileContentGuard(): Operation<void> {
     decide([event], next) {
       const filePath = event.description.path;
       const resultValue = event.result.status === "ok" ? event.result.value : undefined;
-      const recordedHash = (resultValue as Record<string, unknown> | undefined)
-        ?.contentHash as string | undefined;
+      const recordedHash = (resultValue as Record<string, unknown> | undefined)?.contentHash as
+        | string
+        | undefined;
 
       if (typeof filePath === "string" && typeof recordedHash === "string") {
         const currentHash = cache.get(filePath);
@@ -698,7 +705,7 @@ function* useFileContentGuard(): Operation<void> {
             outcome: "error",
             error: new StaleInputError(
               `File changed: ${filePath} (recorded: ${recordedHash.slice(0, 16)}…, ` +
-              `current: ${currentHash.slice(0, 16)}…)`,
+                `current: ${currentHash.slice(0, 16)}…)`,
             ),
           };
         }
@@ -756,9 +763,10 @@ function* useGlobContentGuard(): Operation<void> {
           }
           matches.sort((a, b) => a.path.localeCompare(b.path));
           const seen = new Set<string>();
-          const deduped = matches.filter(m => {
+          const deduped = matches.filter((m) => {
             if (seen.has(m.path)) return false;
-            seen.add(m.path); return true;
+            seen.add(m.path);
+            return true;
           });
           const scanHash = yield* computeSHA256(JSON.stringify(deduped));
           cache.set(key, scanHash);
@@ -774,9 +782,11 @@ function* useGlobContentGuard(): Operation<void> {
         const key = `${baseDir}|${JSON.stringify(include)}|${JSON.stringify(exclude)}`;
 
         const currentHash = cache.get(key);
-        const recordedHash = (event.result.status === "ok"
-          ? (event.result.value as Record<string, unknown>)?.scanHash
-          : undefined) as string | undefined;
+        const recordedHash = (
+          event.result.status === "ok"
+            ? (event.result.value as Record<string, unknown>)?.scanHash
+            : undefined
+        ) as string | undefined;
 
         if (currentHash && recordedHash && currentHash !== recordedHash) {
           return {
@@ -845,9 +855,10 @@ function* useCodeFreshnessGuard(
       if (event.description.type === "eval") {
         const cellName = event.description.name;
         const current = cache.get(cellName);
-        const recorded = event.result.status === "ok"
-          ? event.result.value as Record<string, unknown>
-          : undefined;
+        const recorded =
+          event.result.status === "ok"
+            ? (event.result.value as Record<string, unknown>)
+            : undefined;
 
         if (current && recorded) {
           if (current.sourceHash !== recorded.sourceHash) {
@@ -897,13 +908,16 @@ function* myWorkflow(): Operation<void> {
   yield* useGlobContentGuard();
   yield* useCodeFreshnessGuard((name) => currentSources.get(name));
 
-  yield* durableRun(function* () {
-    const files = yield* durableGlob("sources", { baseDir: "src/", include: ["**/*.ts"] });
-    for (const match of files.matches) {
-      const content = yield* durableReadFile(`read:${match.path}`, match.path);
-      yield* durableEval(`eval:${match.path}`, myEvaluator, { source: content.content });
-    }
-  }, { stream, runtime });
+  yield* durableRun(
+    function* () {
+      const files = yield* durableGlob("sources", { baseDir: "src/", include: ["**/*.ts"] });
+      for (const match of files.matches) {
+        const content = yield* durableReadFile(`read:${match.path}`, match.path);
+        yield* durableEval(`eval:${match.path}`, myEvaluator, { source: content.content });
+      }
+    },
+    { stream, runtime },
+  );
 }
 ```
 
@@ -915,22 +929,22 @@ All three guards see all events during the check phase. During decide, each guar
 
 ### Effect vocabulary
 
-| Effect | Type | Runtime methods used |
-|--------|------|---------------------|
-| `durableExec` | `"exec"` | `exec()` |
-| `durableReadFile` | `"read_file"` | `readTextFile()` |
-| `durableGlob` | `"glob"` | `glob()`, `readTextFile()` |
-| `durableFetch` | `"fetch"` | `fetch()` |
-| `durableEval` | `"eval"` | none (caller-provided evaluator) |
-| `durableResolve` | `"resolve"` | `env()`, `platform()` |
+| Effect            | Type          | Runtime methods used             |
+| ----------------- | ------------- | -------------------------------- |
+| `durableExec`     | `"exec"`      | `exec()`                         |
+| `durableReadFile` | `"read_file"` | `readTextFile()`                 |
+| `durableGlob`     | `"glob"`      | `glob()`, `readTextFile()`       |
+| `durableFetch`    | `"fetch"`     | `fetch()`                        |
+| `durableEval`     | `"eval"`      | none (caller-provided evaluator) |
+| `durableResolve`  | `"resolve"`   | `env()`, `platform()`            |
 
 ### Replay guards
 
-| Guard | Works with | Detects |
-|-------|-----------|---------|
-| `useFileContentGuard` | `durableReadFile` | File content changed since journal recorded |
-| `useGlobContentGuard` | `durableGlob` | Files added/removed/modified in scanned directory |
-| `useCodeFreshnessGuard` | `durableEval` | Source code or bindings changed for eval cell |
+| Guard                   | Works with        | Detects                                           |
+| ----------------------- | ----------------- | ------------------------------------------------- |
+| `useFileContentGuard`   | `durableReadFile` | File content changed since journal recorded       |
+| `useGlobContentGuard`   | `durableGlob`     | Files added/removed/modified in scanned directory |
+| `useCodeFreshnessGuard` | `durableEval`     | Source code or bindings changed for eval cell     |
 
 All use `createDurableOperation`. All I/O goes through runtime operations
 from `@executablemd/runtime` (Operation-native). All hashing goes through
@@ -953,15 +967,31 @@ from `@executablemd/runtime` (Operation-native). All hashing goes through
 ### Exports (in `mod.ts`)
 
 ```typescript
-export { durableExec, durableReadFile, durableGlob, durableFetch,
-  durableEval, durableResolve, durableNow, durableUUID, durableEnv,
+export {
+  durableExec,
+  durableReadFile,
+  durableGlob,
+  durableFetch,
+  durableEval,
+  durableResolve,
+  durableNow,
+  durableUUID,
+  durableEnv,
 } from "./operations.ts";
-export type { ExecOptions, ExecResult, ReadFileResult, GlobOptions,
-  GlobMatch, GlobResult, FetchOptions, FetchResult, EvalOptions,
-  EvalResult, ResolveKind,
+export type {
+  ExecOptions,
+  ExecResult,
+  ReadFileResult,
+  GlobOptions,
+  GlobMatch,
+  GlobResult,
+  FetchOptions,
+  FetchResult,
+  EvalOptions,
+  EvalResult,
+  ResolveKind,
 } from "./operations.ts";
-export { useFileContentGuard, useGlobContentGuard, useCodeFreshnessGuard,
-} from "./guards.ts";
+export { useFileContentGuard, useGlobContentGuard, useCodeFreshnessGuard } from "./guards.ts";
 export type { CellSource } from "./guards.ts";
 export { computeSHA256 } from "./hash.ts";
 ```

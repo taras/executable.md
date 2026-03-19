@@ -126,11 +126,7 @@ export function scanSegments(text: string): Segment[] {
     }
 
     // Check for component invocation: `<` followed by uppercase letter
-    if (
-      text[pos] === "<" &&
-      pos + 1 < text.length &&
-      /[A-Z]/.test(text[pos + 1]!)
-    ) {
+    if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       // Make sure we're not inside a fenced code block (handled above)
       const component = parseComponentTag(text, pos);
       if (component) {
@@ -205,8 +201,7 @@ function matchFenceOpen(text: string, pos: number): FenceOpen | null {
 
   // Info string goes to end of line
   const lineEnd = text.indexOf("\n", i);
-  const infoString =
-    lineEnd === -1 ? text.slice(i).trim() : text.slice(i, lineEnd).trim();
+  const infoString = lineEnd === -1 ? text.slice(i).trim() : text.slice(i, lineEnd).trim();
 
   // Backtick fences: info string must not contain backticks
   if (fenceChar === "`" && infoString.includes("`")) return null;
@@ -357,10 +352,7 @@ interface ParsedAttributes {
   end: number; // position after last attribute, before /> or >
 }
 
-function parseAttributes(
-  text: string,
-  pos: number,
-): ParsedAttributes {
+function parseAttributes(text: string, pos: number): ParsedAttributes {
   const props: Record<string, Json> = {};
   const expressions: Record<string, string> = {};
 
@@ -374,7 +366,12 @@ function parseAttributes(
     }
 
     // Spread props: {...expr}
-    if (text[pos] === "{" && pos + 2 < text.length && text[pos + 1] === "." && text[pos + 2] === ".") {
+    if (
+      text[pos] === "{" &&
+      pos + 2 < text.length &&
+      text[pos + 1] === "." &&
+      text[pos + 2] === "."
+    ) {
       // Skip spread — consume the expression
       const exprEnd = findMatchingBrace(text, pos);
       if (exprEnd === -1) return { props, expressions, end: -1 };
@@ -385,10 +382,7 @@ function parseAttributes(
 
     // Attribute name
     const attrNameStart = pos;
-    while (
-      pos < text.length &&
-      /[A-Za-z0-9_-]/.test(text[pos]!)
-    ) {
+    while (pos < text.length && /[A-Za-z0-9_-]/.test(text[pos]!)) {
       pos++;
     }
     const attrName = text.slice(attrNameStart, pos);
@@ -601,11 +595,7 @@ interface ParsedChildren {
   end: number; // position after closing tag
 }
 
-function parseChildren(
-  text: string,
-  start: number,
-  tagName: string,
-): ParsedChildren {
+function parseChildren(text: string, start: number, tagName: string): ParsedChildren {
   let pos = start;
   let textStart = pos;
   const children: Segment[] = [];
@@ -667,11 +657,7 @@ function parseChildren(
     }
 
     // Check for nested component
-    if (
-      text[pos] === "<" &&
-      pos + 1 < text.length &&
-      /[A-Z]/.test(text[pos + 1]!)
-    ) {
+    if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       const nested = parseComponentTag(text, pos);
       if (nested) {
         if (pos > textStart) {

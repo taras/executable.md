@@ -6,11 +6,7 @@
  * During replay, the stored result is returned without executing.
  */
 
-import {
-  type Json,
-  type Workflow,
-  createDurableOperation,
-} from "@executablemd/durable-streams";
+import { type Json, type Workflow, createDurableOperation } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { canonicalJson } from "./canonical-json.ts";
 import { computeSHA256 } from "./hash.ts";
@@ -35,10 +31,7 @@ export interface EvalResult {
  */
 export function* durableEval(
   name: string,
-  evaluator: (
-    source: string,
-    bindings: Record<string, Json>,
-  ) => Operation<Json>,
+  evaluator: (source: string, bindings: Record<string, Json>) => Operation<Json>,
   options: EvalOptions,
 ): Workflow<EvalResult> {
   const { source, language, bindings = {} } = options;

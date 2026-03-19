@@ -247,9 +247,7 @@ describe("divergence detection", () => {
     try {
       yield* durableRun(
         function* (): Workflow<string> {
-          return yield* durableCall<string>("fetchUser", () =>
-            Promise.resolve("user-data"),
-          );
+          return yield* durableCall<string>("fetchUser", () => Promise.resolve("user-data"));
         },
         { stream },
       );
@@ -295,9 +293,7 @@ describe("divergence detection", () => {
     try {
       yield* durableRun(
         function* (): Workflow<string> {
-          const a = yield* durableCall<string>("stepA", () =>
-            Promise.resolve("alpha"),
-          );
+          const a = yield* durableCall<string>("stepA", () => Promise.resolve("alpha"));
           // Steps B and C were removed
           return a;
         },
@@ -350,9 +346,8 @@ describe("divergence detection", () => {
     expect(result).toBe("alpha");
   });
 
-  it("ContinuePastCloseDivergenceError can be constructed",
+  it("ContinuePastCloseDivergenceError can be constructed", function* () {
     // deno-lint-ignore require-yield
-    function* () {
     // Verify the error class exists and can be constructed.
     const err = new ContinuePastCloseDivergenceError("root.0", 2);
     expect(err.name).toBe("ContinuePastCloseDivergenceError");
@@ -379,9 +374,7 @@ describe("divergence detection", () => {
       yield* durableRun(
         function* (): Workflow<number> {
           // Journal has action("doSomething"), code has call("doSomething")
-          return yield* durableCall<number>("doSomething", () =>
-            Promise.resolve(42),
-          );
+          return yield* durableCall<number>("doSomething", () => Promise.resolve(42));
         },
         { stream },
       );

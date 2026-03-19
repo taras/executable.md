@@ -44,14 +44,8 @@ export function interpolate(
 /**
  * Access a nested value via dot-separated path.
  */
-export function getNestedValue(
-  obj: Record<string, unknown>,
-  path: string,
-): unknown {
+export function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   return path
     .split(".")
-    .reduce(
-      (current, key) => (current as Record<string, unknown>)?.[key],
-      obj as unknown,
-    );
+    .reduce((current, key) => (current as Record<string, unknown>)?.[key], obj as unknown);
 }

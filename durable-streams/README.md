@@ -45,13 +45,13 @@ type DurableEvent = Yield | Close;
 ```typescript
 interface Yield {
   type: "yield";
-  coroutineId: string;        // e.g. "root.0.1"
+  coroutineId: string; // e.g. "root.0.1"
   description: {
-    type: string;             // "call", "sleep", "action", etc.
-    name: string;             // the stable effect name
-    [key: string]: Json;      // extra input fields, stored verbatim
+    type: string; // "call", "sleep", "action", etc.
+    name: string; // the stable effect name
+    [key: string]: Json; // extra input fields, stored verbatim
   };
-  result: Result;             // { status: "ok", value } | { status: "err" } | { status: "cancelled" }
+  result: Result; // { status: "ok", value } | { status: "err" } | { status: "cancelled" }
 }
 ```
 
@@ -96,10 +96,10 @@ A `Workflow<T>` is a generator that only yields `DurableEffect` values. TypeScri
 
 ```typescript
 function* safeWorkflow(): Workflow<void> {
-  yield* durableSleep(1000);         // ✓ DurableEffect
-  yield* durableCall("fetch", fn);   // ✓ DurableEffect
-  yield* sleep(1000);                // ✗ TypeError — use durableSleep
-  yield* call(fn);                   // ✗ TypeError — use durableCall
+  yield* durableSleep(1000); // ✓ DurableEffect
+  yield* durableCall("fetch", fn); // ✓ DurableEffect
+  yield* sleep(1000); // ✗ TypeError — use durableSleep
+  yield* call(fn); // ✗ TypeError — use durableCall
 }
 ```
 
@@ -109,23 +109,23 @@ Every `Workflow<T>` is structurally compatible with `Operation<T>`, so you can a
 
 ### Core workflow effects
 
-| Effect | Description |
-|--------|-------------|
-| `durableCall(name, fn)` | Call a function returning a `Promise` or `Operation` |
-| `durableSleep(ms)` | Wait for a duration |
-| `durableAction(name, executor)` | Custom callback-based effect |
-| `versionCheck(name, { minVersion, maxVersion })` | Version gate for code evolution |
-| `durableEach(name, source)` | Durable iteration with per-item checkpointing |
+| Effect                                           | Description                                          |
+| ------------------------------------------------ | ---------------------------------------------------- |
+| `durableCall(name, fn)`                          | Call a function returning a `Promise` or `Operation` |
+| `durableSleep(ms)`                               | Wait for a duration                                  |
+| `durableAction(name, executor)`                  | Custom callback-based effect                         |
+| `versionCheck(name, { minVersion, maxVersion })` | Version gate for code evolution                      |
+| `durableEach(name, source)`                      | Durable iteration with per-item checkpointing        |
 
 ### Concurrency combinators
 
 Combinators return `Workflow<T>` and delegate to Effection's native structured concurrency primitives. Children must themselves be `Workflow<T>`.
 
-| Combinator | Behavior |
-|------------|----------|
-| `durableSpawn(workflow)` | Spawn a concurrent child, returns `Task<T>` |
-| `durableAll([...workflows])` | Run all concurrently, wait for all to complete |
-| `durableRace([...workflows])` | Run all, return first winner, cancel the rest |
+| Combinator                    | Behavior                                       |
+| ----------------------------- | ---------------------------------------------- |
+| `durableSpawn(workflow)`      | Spawn a concurrent child, returns `Task<T>`    |
+| `durableAll([...workflows])`  | Run all concurrently, wait for all to complete |
+| `durableRace([...workflows])` | Run all, return first winner, cancel the rest  |
 
 ### Prefer Operations over async/await
 
@@ -137,9 +137,7 @@ function fetchUser(id: string): Operation<User> {
   return resource(function* (provide) {
     const controller = new AbortController();
     try {
-      const response = yield* call(() =>
-        fetch(`/users/${id}`, { signal: controller.signal })
-      );
+      const response = yield* call(() => fetch(`/users/${id}`, { signal: controller.signal }));
       yield* provide(yield* call(() => response.json()));
     } finally {
       controller.abort();
@@ -154,7 +152,7 @@ async function fetchUser(id: string): Promise<User> {
 }
 
 // Both work with durableCall, but the Operation version is cancellable:
-const user = yield* durableCall("fetchUser", () => fetchUser(id));
+const user = yield * durableCall("fetchUser", () => fetchUser(id));
 ```
 
 When the parent scope is cancelled (e.g., a race loser), an `Operation`-returning function cleans up immediately. A `Promise`-returning function keeps the network request open until it settles.
@@ -209,10 +207,7 @@ await run(function* () {
     epoch: 1,
   });
 
-  const result = yield* durableRun(
-    () => processOrder("order-42"),
-    { stream }
-  );
+  const result = yield* durableRun(() => processOrder("order-42"), { stream });
 });
 ```
 
@@ -287,7 +282,7 @@ When `durableRun` starts, it reads the full event stream, builds an in-memory `R
 
 1. **Replay path** — if the index has an entry for this coroutine at this position, the stored result is fed directly to the generator via `iterator.next(value)` or `iterator.throw(error)`. The effect's live executor is never called.
 
-2. **Live path** — if the index has no entry, the effect executes normally. Once it resolves, the result is persisted to the stream *before* the generator is resumed (`persist-before-resume`).
+2. **Live path** — if the index has no entry, the effect executes normally. Once it resolves, the result is persisted to the stream _before_ the generator is resumed (`persist-before-resume`).
 
 The transition from replay to live happens **per-coroutine**, not globally. In a fork/join workflow where two children ran before a crash and a third didn't, the first two replay their stored results while the third executes live — all simultaneously, within the same `durableAll`.
 
@@ -342,7 +337,7 @@ scope.around(Divergence, {
       return { type: "run-live" };
     }
     return next(info);
-  }
+  },
 });
 ```
 
@@ -352,7 +347,7 @@ The `run-live` decision tells the runtime to disable replay for that coroutine a
 
 ## Replay guards
 
-Divergence detection catches *structural* mismatches — the effect sequence changed. Replay guards catch *staleness* mismatches — the effect sequence is the same, but the external world has changed since the journal entry was recorded.
+Divergence detection catches _structural_ mismatches — the effect sequence changed. Replay guards catch _staleness_ mismatches — the effect sequence is the same, but the external world has changed since the journal entry was recorded.
 
 The canonical example is a file-backed effect. If the workflow previously read `./component.mdx` and that file has since been edited, replaying the stored result would silently use stale content. A replay guard detects this and can halt replay with an error.
 
@@ -406,7 +401,7 @@ function* useMyGuard(): Operation<void> {
         return {
           outcome: "error",
           error: new Error(
-            `Resource changed: ${resourceId} (stored: ${storedVersion}, current: ${currentVersion})`
+            `Resource changed: ${resourceId} (stored: ${storedVersion}, current: ${currentVersion})`,
           ),
         };
       }
@@ -442,7 +437,8 @@ function* durableReadFile(path: string): Workflow<string> {
     const content = await readFile(path, "utf8");
     const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
     const contentHash = Array.from(new Uint8Array(hashBuffer))
-      .map(b => b.toString(16).padStart(2, "0")).join("");
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
 
     return { content, contentHash };
     //  ↑ content hash returned alongside the actual content
@@ -486,9 +482,9 @@ Multiple guards compose naturally. Each guard either returns an outcome or calls
 import { useFileContentGuard, useGlobContentGuard } from "@effectionx/durable-effects";
 
 function* supervisedPipeline(): Operation<void> {
-  yield* useFileContentGuard();      // checks file-backed effects
-  yield* useGlobContentGuard();      // checks directory scan results
-  yield* useMyCustomGuard();         // your own guard
+  yield* useFileContentGuard(); // checks file-backed effects
+  yield* useGlobContentGuard(); // checks directory scan results
+  yield* useMyCustomGuard(); // your own guard
 
   yield* durableRun(() => pipeline(), { stream });
 }
@@ -529,12 +525,14 @@ Backed by the [Durable Streams](https://durable.run) protocol — an append-only
 ```typescript
 import { useHttpDurableStream } from "@effectionx/durable-streams";
 
-const stream = yield* useHttpDurableStream({
-  baseUrl: "http://localhost:4437",
-  streamId: "workflow-abc-123",
-  producerId: "scheduler-worker-1",
-  epoch: 1, // increment this on scheduler restart to fence zombie writers
-});
+const stream =
+  yield *
+  useHttpDurableStream({
+    baseUrl: "http://localhost:4437",
+    streamId: "workflow-abc-123",
+    producerId: "scheduler-worker-1",
+    epoch: 1, // increment this on scheduler restart to fence zombie writers
+  });
 ```
 
 Appends are serialized via an internal queue and worker — concurrent `append()` calls from `durableAll` children are safely sequenced without application-level coordination. Every append is synchronous (no `lingerMs` batching) to preserve `persist-before-resume`.
@@ -547,14 +545,15 @@ Implement `DurableStream` directly. The only requirements are append-only semant
 class PostgresStream implements DurableStream {
   *readAll(): Operation<DurableEvent[]> {
     return yield* call(() =>
-      db.query("SELECT event FROM events WHERE stream_id = $1 ORDER BY position", [this.streamId])
-        .then(r => r.rows.map(r => r.event))
+      db
+        .query("SELECT event FROM events WHERE stream_id = $1 ORDER BY position", [this.streamId])
+        .then((r) => r.rows.map((r) => r.event)),
     );
   }
 
   *append(event: DurableEvent): Operation<void> {
     yield* call(() =>
-      db.query("INSERT INTO events (stream_id, event) VALUES ($1, $2)", [this.streamId, event])
+      db.query("INSERT INTO events (stream_id, event) VALUES ($1, $2)", [this.streamId, event]),
     );
   }
 }

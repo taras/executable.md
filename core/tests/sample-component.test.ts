@@ -97,8 +97,6 @@ function stubProvider(componentName: string): string {
   ].join("\n");
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Tier SC — Sample component tests
 // ---------------------------------------------------------------------------
@@ -128,12 +126,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       // The stub provider echoes back the model and the prompt
       expect(output).toContain("[sampled-by-test-model:hello world]");
@@ -172,12 +172,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       // The children exec block produces "children-output-here\n"
       // The stub provider echoes it back with the model name
@@ -207,7 +209,7 @@ describe("Tier SC — Sample component", () => {
           "",
           '<InnerProv model="inner">',
           "",
-          '<!-- Target the outer provider explicitly -->',
+          "<!-- Target the outer provider explicitly -->",
           '<Sample model="outer" prompt="routed-to-outer" />',
           "",
           "</InnerProv>",
@@ -217,12 +219,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       // The outer provider should handle the call
       expect(output).toContain("[sampled-by-outer:routed-to-outer]");
@@ -248,12 +252,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       // Should contain error about missing Sample Api provider
       expect(output).toContain("ERROR");
@@ -287,22 +293,26 @@ describe("Tier SC — Sample component", () => {
 
       // First run
       const stream = new InMemoryStream();
-      const output1 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output1 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output1).toContain("[sampled-by-test-model:replay-test]");
 
       // Second run (replay) — same stream
-      const output2 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output2 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output2).toContain("[sampled-by-test-model:replay-test]");
       expect(output1).toEqual(output2);
@@ -334,12 +344,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("[sampled-by-test-model:self-closing-prompt]");
     } finally {
@@ -377,12 +389,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       // The inner Sample should resolve first (via renderChildren),
       // producing [sampled-by-test-model:inner-prompt].
@@ -428,12 +442,14 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       // Inner Samples should route to their respective providers
       // The rendered children output contains both provider responses
@@ -459,11 +475,13 @@ describe("Tier EO — eval output() function", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("hello from eval");
   });
@@ -477,20 +495,24 @@ describe("Tier EO — eval output() function", () => {
     yield* useEchoExec();
 
     // First run
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output1).toContain("journaled-output");
 
     // Replay
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output2).toContain("journaled-output");
     expect(output1).toEqual(output2);
@@ -504,11 +526,13 @@ describe("Tier EO — eval output() function", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // No output from eval block — should see "after-eval" but no "42"
     expect(output).toContain("after-eval");
@@ -523,11 +547,13 @@ describe("Tier EO — eval output() function", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("line1\nline2\nline3");
   });
@@ -540,11 +566,13 @@ describe("Tier EO — eval output() function", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("12345");
   });
@@ -574,11 +602,13 @@ describe("Tier RC — renderChildren and render closures", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("children:[]");
   });
@@ -598,21 +628,17 @@ describe("Tier RC — renderChildren and render closures", () => {
         "output('children:[' + result.trim() + ']');",
         "```",
       ].join("\n"),
-      "test.md": [
-        "<TestComp>",
-        "",
-        "hello from children",
-        "",
-        "</TestComp>",
-      ].join("\n"),
+      "test.md": ["<TestComp>", "", "hello from children", "", "</TestComp>"].join("\n"),
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("children:[hello from children]");
   });
@@ -636,11 +662,13 @@ describe("Tier RC — renderChildren and render closures", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("rendered:[arbitrary **markdown** content]");
   });
@@ -681,12 +709,14 @@ describe("Tier IN — Instruction component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("system:You are a pirate. Respond in pirate speak.");
       expect(output).not.toContain("ERROR");
@@ -718,12 +748,14 @@ describe("Tier IN — Instruction component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("system:none");
       expect(output).not.toContain("ERROR");
@@ -765,12 +797,14 @@ describe("Tier IN — Instruction component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("Some visible text before the sample.");
       expect(output).toContain("system:Be a pirate.");
@@ -801,12 +835,14 @@ describe("Tier IN — Instruction component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("Just some text");
       expect(output).not.toContain("ERROR");
@@ -867,12 +903,14 @@ describe("Tier AG — Agent component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("system:You are a code reviewer. Be concise.");
       expect(output).toContain("def add(a, b): return a - b");
@@ -951,12 +989,14 @@ describe("Tier AG — Agent component pattern", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
 
       expect(output).toContain("You are a code reviewer.");
       expect(output).toContain("Focus on security vulnerabilities.");

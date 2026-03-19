@@ -63,9 +63,7 @@ export type DivergenceInfo =
  * - "run-live": Disable replay for this coroutine and execute live from
  *   this point forward. Previous replay entries are ignored.
  */
-export type DivergenceDecision =
-  | { type: "throw"; error: Error }
-  | { type: "run-live" };
+export type DivergenceDecision = { type: "throw"; error: Error } | { type: "run-live" };
 
 // ---------------------------------------------------------------------------
 // API shape (synchronous — not generator-based)
@@ -97,20 +95,12 @@ function defaultDecide(info: DivergenceInfo): DivergenceDecision {
   if (info.kind === "description-mismatch") {
     return {
       type: "throw",
-      error: new DivergenceError(
-        info.coroutineId,
-        info.cursor,
-        info.expected,
-        info.actual,
-      ),
+      error: new DivergenceError(info.coroutineId, info.cursor, info.expected, info.actual),
     };
   } else {
     return {
       type: "throw",
-      error: new ContinuePastCloseDivergenceError(
-        info.coroutineId,
-        info.yieldCount,
-      ),
+      error: new ContinuePastCloseDivergenceError(info.coroutineId, info.yieldCount),
     };
   }
 }

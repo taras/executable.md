@@ -52,7 +52,7 @@ function writeFiles(dir: string, files: Record<string, string>): void {
 
 /** Node one-liner HTTP server that responds "ok" on any request. */
 const NODE_HTTP_SERVER =
-  'node -e "require(\'http\').createServer((q,s)=>{s.writeHead(200);s.end(\'ok\')}).listen({port},\'127.0.0.1\')"';
+  "node -e \"require('http').createServer((q,s)=>{s.writeHead(200);s.end('ok')}).listen({port},'127.0.0.1')\"";
 
 /**
  * Build a provider component file with standard eval→daemon→when→children.
@@ -99,13 +99,13 @@ function sampleComponent(): string {
     "inputs:",
     "  prompt:",
     "    type: string",
-    "    default: \"\"",
+    '    default: ""',
     "  model:",
     "    type: string",
-    "    default: \"\"",
+    '    default: ""',
     "  params:",
     "    type: string",
-    "    default: \"\"",
+    '    default: ""',
     "---",
     "",
     "```js persist eval",
@@ -122,865 +122,869 @@ function sampleComponent(): string {
   ].join("\n");
 }
 
-describe("Tier S — Provider component pattern", { sanitizeOps: false, sanitizeResources: false }, () => {
-  // S1: Full provider golden run
-  // eval → daemon → when → children → cleanup
-  it("S1: full provider golden run — children rendered after daemon ready", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "children-rendered",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      expect(output).toContain("children-rendered");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S2: Port flows from eval to daemon
-  // {port} in daemon content matches findFreePort() result.
-  // Verified by: daemon starts (readiness check passes), which means
-  // the interpolated port was valid.
-  it("S2: port flows from eval to daemon — interpolation works", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "port-flowed",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // Readiness check passed → port was correctly interpolated
-      expect(output).toContain("port-flowed");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S3: Children can call Sample component after daemon ready
-  // Uses Sample Api middleware stub to verify the <Sample> component works
-  // within the provider's children.
-  it("S3: children can call Sample component after daemon ready", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "components/Sample.md": sampleComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "<Sample>raw-output</Sample>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      // Install stub Sample Api middleware — returns "[sampled]" for any call
-      yield* Sample.around({
-        *sample(_args, _next) {
-          return "[sampled]";
-        },
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // The stub sample middleware replaces content with "[sampled]"
-      expect(output).toContain("[sampled]");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S4: Daemon terminated after children expand
-  // After runDocument completes, the daemon process is not running.
-  // Verified by: runDocument returns (doesn't hang), proving structured
-  // concurrency cleaned up the daemon.
-  it("S4: daemon terminated after children expand — runDocument completes", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "expansion-done",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // runDocument returned — daemon was cleaned up by structured concurrency.
-      // If daemon wasn't terminated, the process would hang indefinitely.
-      expect(output).toContain("expansion-done");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S5: Provider crash during when — daemon exits before ready
-  // Daemon exits immediately (exit 0), the port is never bound,
-  // when() polls a port that never responds → timeout → error.
-  it("S5: provider crash during when — daemon exits before ready", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/CrashProvider.md": [
-          "---",
-          "meta:",
-          "  componentName: CrashProvider",
-          "---",
-          "",
-          "```js eval",
-          "const port = yield* findFreePort();",
-          "const baseUrl = 'http://127.0.0.1:' + port;",
-          "```",
-          "",
-          // Daemon exits immediately — port is never bound
-          "```bash daemon exec",
-          "exit 0",
-          "```",
-          "",
-          "```js eval",
-          "yield* when(function*() {",
-          "  yield* fetch(baseUrl + '/health').expect();",
-          "}, { timeout: 500, interval: 50 });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n"),
-        "doc.md": [
-          "<CrashProvider>",
-          "",
-          "should-not-appear",
-          "",
-          "</CrashProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // when() should timeout or get connection errors — error in output
-      // Children may or may not appear depending on error handling
-      expect(output).toMatch(/error|Error|ECONNREFUSED|timeout|Timeout/i);
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S6: Provider crash during children — daemon exits mid-expansion
-  // Daemon starts but exits after a short delay while children are
-  // still expanding. Error should propagate.
-  it("S6: provider crash during children — error propagated", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/UnstableProvider.md": [
-          "---",
-          "meta:",
-          "  componentName: UnstableProvider",
-          "---",
-          "",
-          "```js eval",
-          "const port = yield* findFreePort();",
-          "const baseUrl = `http://127.0.0.1:${port}`;",
-          "```",
-          "",
-          // Daemon serves for 0.2s then exits
-          "```bash daemon exec",
-          `node -e "const s=require('http').createServer((q,r)=>{r.writeHead(200);r.end('ok')}).listen({port},'127.0.0.1');setTimeout(()=>process.exit(1),200)"`,
-          "```",
-          "",
-          "```js eval",
-          "yield* when(function*() {",
-          "  yield* fetch(`${baseUrl}/health`).expect();",
-          "}, { timeout: 5000, interval: 50 });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n"),
-        "doc.md": [
-          "<UnstableProvider>",
-          "",
-          // Slow child that outlives the daemon
-          "```bash exec",
-          "sleep 1 && echo child-done",
-          "```",
-          "",
-          "</UnstableProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // The daemon crashed during children expansion.
-      // The output should contain some indication of the error
-      // (DaemonExitError) or the child output, depending on timing.
-      // Key property: runDocument completed (didn't hang).
-      expect(output).toBeTruthy();
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S7: Nested providers — outer + inner, inner tears down first
-  // Uses two distinct component names to avoid cycle detection.
-  it("S7: nested providers — both start, inner tears down first", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/OuterProvider.md": providerComponent("OuterProvider"),
-        "components/InnerProvider.md": providerComponent("InnerProvider"),
-        "doc.md": [
-          "<OuterProvider>",
-          "",
-          "outer-before",
-          "",
-          "<InnerProvider>",
-          "",
-          "inner-content",
-          "",
-          "</InnerProvider>",
-          "",
-          "outer-after",
-          "",
-          "</OuterProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // Both providers started and tore down correctly.
-      // Inner content appeared between outer content.
-      expect(output).toContain("outer-before");
-      expect(output).toContain("inner-content");
-      expect(output).toContain("outer-after");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S8: Nested providers, no model specified — innermost handles
-  // Two stub providers (OuterProvider, InnerProvider) install
-  // Sample middleware via Sample.around(). A <Sample> component with
-  // no model should be handled by the innermost provider.
-  it("S8: nested providers, no model — innermost handles", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      // Provider component body — installs Sample middleware returning "[handled-by-{model}]"
-      // Uses { at: "min" } so that child (inner) scope middleware runs before
-      // parent (outer) scope middleware — achieving innermost-wins semantics.
-      const stubProviderBody = (componentName: string) =>
-        [
-          "---",
-          "meta:",
-          `  componentName: ${componentName}`,
-          "inputs:",
-          "  model:",
-          "    type: string",
-          "    required: true",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    if (context.model !== undefined && context.model !== model) {",
-          "      return yield* next(context);",
-          "    }",
-          "    return '[handled-by-' + model + ']';",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n");
-
-      writeFiles(tmpDir, {
-        "components/OuterProvider.md": stubProviderBody("OuterProvider"),
-        "components/InnerProvider.md": stubProviderBody("InnerProvider"),
-        "components/Sample.md": sampleComponent(),
-        "doc.md": [
-          '<OuterProvider model="outer-model">',
-          "",
-          '<InnerProvider model="inner-model">',
-          "",
-          '<Sample prompt="test content" />',
-          "",
-          "</InnerProvider>",
-          "",
-          "</OuterProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // No model specified → innermost provider handles
-      expect(output).toContain("[handled-by-inner-model]");
-      expect(output).not.toContain("[handled-by-outer-model]");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S9: Nested providers, explicit model matching outer
-  // Inner provider passes through via next(), outer handles.
-  it("S9: nested providers, explicit model matching outer", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      const stubProviderBody = (componentName: string) =>
-        [
-          "---",
-          "meta:",
-          `  componentName: ${componentName}`,
-          "inputs:",
-          "  model:",
-          "    type: string",
-          "    required: true",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    if (context.model !== undefined && context.model !== model) {",
-          "      return yield* next(context);",
-          "    }",
-          "    return '[handled-by-' + model + ']';",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n");
-
-      writeFiles(tmpDir, {
-        "components/OuterProvider.md": stubProviderBody("OuterProvider"),
-        "components/InnerProvider.md": stubProviderBody("InnerProvider"),
-        "components/Sample.md": sampleComponent(),
-        "doc.md": [
-          '<OuterProvider model="outer-model">',
-          "",
-          '<InnerProvider model="inner-model">',
-          "",
-          '<Sample prompt="test content" model="outer-model" />',
-          "",
-          "</InnerProvider>",
-          "",
-          "</OuterProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // Explicit model=outer-model → inner passes through, outer handles
-      expect(output).toContain("[handled-by-outer-model]");
-      expect(output).not.toContain("[handled-by-inner-model]");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S10: Nested providers, explicit model matching inner
-  // Inner provider handles regardless of nesting depth.
-  it("S10: nested providers, explicit model matching inner", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      const stubProviderBody = (componentName: string) =>
-        [
-          "---",
-          "meta:",
-          `  componentName: ${componentName}`,
-          "inputs:",
-          "  model:",
-          "    type: string",
-          "    required: true",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    if (context.model !== undefined && context.model !== model) {",
-          "      return yield* next(context);",
-          "    }",
-          "    return '[handled-by-' + model + ']';",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n");
-
-      writeFiles(tmpDir, {
-        "components/OuterProvider.md": stubProviderBody("OuterProvider"),
-        "components/InnerProvider.md": stubProviderBody("InnerProvider"),
-        "components/Sample.md": sampleComponent(),
-        "doc.md": [
-          '<OuterProvider model="outer-model">',
-          "",
-          '<InnerProvider model="inner-model">',
-          "",
-          '<Sample prompt="test content" model="inner-model" />',
-          "",
-          "</InnerProvider>",
-          "",
-          "</OuterProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // Explicit model=inner-model → inner handles directly
-      expect(output).toContain("[handled-by-inner-model]");
-      expect(output).not.toContain("[handled-by-outer-model]");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S11: Unmatched model → chain exhausted → error
-  // No provider handles the requested model → falls through to the
-  // core Sample handler which throws a descriptive error.
-  it("S11: unmatched model — descriptive error", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      const stubProvider = () =>
-        [
-          "---",
-          "meta:",
-          "  componentName: StubProvider",
-          "inputs:",
-          "  model:",
-          "    type: string",
-          "    required: true",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    if (context.model !== undefined && context.model !== model) {",
-          "      return yield* next(context);",
-          "    }",
-          "    return '[handled-by-' + model + ']';",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n");
-
-      writeFiles(tmpDir, {
-        "components/StubProvider.md": stubProvider(),
-        "components/Sample.md": sampleComponent(),
-        "doc.md": [
-          '<StubProvider model="known-model">',
-          "",
-          '<Sample prompt="test" model="unknown-model" />',
-          "",
-          "</StubProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // Chain exhausted → core handler throws → error in output
-      expect(output).toMatch(/error|Error|Sample/i);
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S12: Full replay of provider component
-  // All eval journal entries replayed; daemon starts fresh (ephemeral);
-  // no live HTTP calls on replay.
-  it("S12: full replay — eval replayed, daemon starts fresh", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "replay-test",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const componentDirs = [path.join(tmpDir, "components"), tmpDir];
-
-      // Golden run
-      const output1 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs,
-        freshness: false,
-      }));
-
-      expect(output1).toContain("replay-test");
-      expect(output1).not.toContain("ERROR");
-
-      // Replay — eval blocks replay from journal, daemon spawns fresh
-      const output2 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs,
-        freshness: false,
-      }));
-
-      // Replay produces same output
-      expect(output2).toContain("replay-test");
-      expect(output2).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S13: Modified doc with new children — fresh run produces new output
-  // First run journals. Second run uses a fresh stream and a modified doc
-  // with an additional child exec block. The provider starts a new daemon
-  // and the new child runs live.
-  it("S13: modified doc with new children — fresh run includes new output", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "original-child",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      const componentDirs = [path.join(tmpDir, "components"), tmpDir];
-
-      // Golden run
-      const stream1 = new InMemoryStream();
-      const output1 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream: stream1,
-        componentDirs,
-        freshness: false,
-      }));
-
-      expect(output1).toContain("original-child");
-
-      // Modify the doc — add a new exec block in children
-      writeFiles(tmpDir, {
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "original-child",
-          "",
-          "```bash exec",
-          "echo new-child",
-          "```",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      // Fresh stream — provider starts a new daemon, new child runs live
-      const stream2 = new InMemoryStream();
-      const output2 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream: stream2,
-        componentDirs,
-        freshness: false,
-      }));
-
-      // Both original text and new exec block output appear
-      expect(output2).toContain("original-child");
-      expect(output2).toContain("new-child");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S14: Multiple provider instances — two sibling providers with different ports
-  it("S14: multiple provider instances — two siblings, different ports", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      writeFiles(tmpDir, {
-        "components/TestProvider.md": providerComponent(),
-        "doc.md": [
-          "<TestProvider>",
-          "",
-          "first-provider",
-          "",
-          "</TestProvider>",
-          "",
-          "<TestProvider>",
-          "",
-          "second-provider",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // Both providers expanded successfully with different ports
-      expect(output).toContain("first-provider");
-      expect(output).toContain("second-provider");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S13: Expression prop from root env visible through provider nesting
-  // Root document defines `pr` in an eval block, wraps ReviewBody in
-  // a provider chain. The {pr} expression prop should resolve from the
-  // root scope, not the provider's scope.
-  it("S13: expression prop from root env resolves through provider nesting", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      // Middleware component — installs Sample middleware and renders <Content />
-      const wrapper = () =>
-        [
-          "---",
-          "meta:",
-          "  componentName: Wrapper",
-          "inputs:",
-          "  label:",
-          "    type: string",
-          "    required: true",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    return '[wrapped-by-' + label + ']';",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n");
-
-      // Consumer component — receives pr as a prop and renders it
-      const consumer = () =>
-        [
-          "---",
-          "meta:",
-          "  componentName: Consumer",
-          "inputs:",
-          "  data:",
-          "    type: object",
-          "    required: true",
-          "---",
-          "",
-          "Received: {props.data.value}",
-        ].join("\n");
-
-      writeFiles(tmpDir, {
-        "components/Wrapper.md": wrapper(),
-        "components/Consumer.md": consumer(),
-        "doc.md": [
-          "```js eval",
-          "const pr = { value: 'hello-from-root' };",
-          "```",
-          "",
-          '<Wrapper label="test-wrapper">',
-          "",
-          "<Consumer data={pr} />",
-          "",
-          "</Wrapper>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      // The expression prop {pr} should resolve from the root env
-      expect(output).toContain("hello-from-root");
-      expect(output).not.toContain("ERROR");
-      expect(output).not.toContain("pr is not defined");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
-  // S15: Expression prop resolves through double nesting (Root → W1 → W2 → Consumer)
-  // This mirrors the code review agent: Root → OllamaProvider → Instruction → ReviewBody
-  it("S15: expression prop resolves through double-nested wrappers", function* () {
-    const tmpDir = makeTempDir();
-
-    try {
-      const passthrough = (name: string) =>
-        [
-          "---",
-          "meta:",
-          `  componentName: ${name}`,
-          "inputs:",
-          "  label:",
-          "    type: string",
-          "    required: true",
-          "---",
-          "",
-          "<Content />",
-        ].join("\n");
-
-      const consumer = () =>
-        [
-          "---",
-          "meta:",
-          "  componentName: Consumer",
-          "inputs:",
-          "  data:",
-          "    type: object",
-          "    required: true",
-          "---",
-          "",
-          "Received: {props.data.value}",
-        ].join("\n");
-
-      writeFiles(tmpDir, {
-        "components/Outer.md": passthrough("Outer"),
-        "components/Inner.md": passthrough("Inner"),
-        "components/Consumer.md": consumer(),
-        "doc.md": [
-          "```js eval",
-          "const pr = { value: 'deep-hello' };",
-          "```",
-          "",
-          '<Outer label="outer">',
-          '<Inner label="inner">',
-          "<Consumer data={pr} />",
-          "</Inner>",
-          "</Outer>",
-        ].join("\n"),
-      });
-
-      const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
-
-      expect(output).toContain("deep-hello");
-      expect(output).not.toContain("ERROR");
-      expect(output).not.toContain("pr is not defined");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-});
+describe(
+  "Tier S — Provider component pattern",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    // S1: Full provider golden run
+    // eval → daemon → when → children → cleanup
+    it("S1: full provider golden run — children rendered after daemon ready", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "doc.md": ["<TestProvider>", "", "children-rendered", "", "</TestProvider>"].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        expect(output).toContain("children-rendered");
+        expect(output).not.toContain("ERROR");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S2: Port flows from eval to daemon
+    // {port} in daemon content matches findFreePort() result.
+    // Verified by: daemon starts (readiness check passes), which means
+    // the interpolated port was valid.
+    it("S2: port flows from eval to daemon — interpolation works", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "doc.md": ["<TestProvider>", "", "port-flowed", "", "</TestProvider>"].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // Readiness check passed → port was correctly interpolated
+        expect(output).toContain("port-flowed");
+        expect(output).not.toContain("ERROR");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S3: Children can call Sample component after daemon ready
+    // Uses Sample Api middleware stub to verify the <Sample> component works
+    // within the provider's children.
+    it("S3: children can call Sample component after daemon ready", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "components/Sample.md": sampleComponent(),
+          "doc.md": [
+            "<TestProvider>",
+            "",
+            "<Sample>raw-output</Sample>",
+            "",
+            "</TestProvider>",
+          ].join("\n"),
+        });
+
+        // Install stub Sample Api middleware — returns "[sampled]" for any call
+        yield* Sample.around({
+          *sample(_args, _next) {
+            return "[sampled]";
+          },
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // The stub sample middleware replaces content with "[sampled]"
+        expect(output).toContain("[sampled]");
+        expect(output).not.toContain("ERROR");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S4: Daemon terminated after children expand
+    // After runDocument completes, the daemon process is not running.
+    // Verified by: runDocument returns (doesn't hang), proving structured
+    // concurrency cleaned up the daemon.
+    it("S4: daemon terminated after children expand — runDocument completes", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "doc.md": ["<TestProvider>", "", "expansion-done", "", "</TestProvider>"].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // runDocument returned — daemon was cleaned up by structured concurrency.
+        // If daemon wasn't terminated, the process would hang indefinitely.
+        expect(output).toContain("expansion-done");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S5: Provider crash during when — daemon exits before ready
+    // Daemon exits immediately (exit 0), the port is never bound,
+    // when() polls a port that never responds → timeout → error.
+    it("S5: provider crash during when — daemon exits before ready", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/CrashProvider.md": [
+            "---",
+            "meta:",
+            "  componentName: CrashProvider",
+            "---",
+            "",
+            "```js eval",
+            "const port = yield* findFreePort();",
+            "const baseUrl = 'http://127.0.0.1:' + port;",
+            "```",
+            "",
+            // Daemon exits immediately — port is never bound
+            "```bash daemon exec",
+            "exit 0",
+            "```",
+            "",
+            "```js eval",
+            "yield* when(function*() {",
+            "  yield* fetch(baseUrl + '/health').expect();",
+            "}, { timeout: 500, interval: 50 });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n"),
+          "doc.md": ["<CrashProvider>", "", "should-not-appear", "", "</CrashProvider>"].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // when() should timeout or get connection errors — error in output
+        // Children may or may not appear depending on error handling
+        expect(output).toMatch(/error|Error|ECONNREFUSED|timeout|Timeout/i);
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S6: Provider crash during children — daemon exits mid-expansion
+    // Daemon starts but exits after a short delay while children are
+    // still expanding. Error should propagate.
+    it("S6: provider crash during children — error propagated", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/UnstableProvider.md": [
+            "---",
+            "meta:",
+            "  componentName: UnstableProvider",
+            "---",
+            "",
+            "```js eval",
+            "const port = yield* findFreePort();",
+            "const baseUrl = `http://127.0.0.1:${port}`;",
+            "```",
+            "",
+            // Daemon serves for 0.2s then exits
+            "```bash daemon exec",
+            `node -e "const s=require('http').createServer((q,r)=>{r.writeHead(200);r.end('ok')}).listen({port},'127.0.0.1');setTimeout(()=>process.exit(1),200)"`,
+            "```",
+            "",
+            "```js eval",
+            "yield* when(function*() {",
+            "  yield* fetch(`${baseUrl}/health`).expect();",
+            "}, { timeout: 5000, interval: 50 });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n"),
+          "doc.md": [
+            "<UnstableProvider>",
+            "",
+            // Slow child that outlives the daemon
+            "```bash exec",
+            "sleep 1 && echo child-done",
+            "```",
+            "",
+            "</UnstableProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // The daemon crashed during children expansion.
+        // The output should contain some indication of the error
+        // (DaemonExitError) or the child output, depending on timing.
+        // Key property: runDocument completed (didn't hang).
+        expect(output).toBeTruthy();
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S7: Nested providers — outer + inner, inner tears down first
+    // Uses two distinct component names to avoid cycle detection.
+    it("S7: nested providers — both start, inner tears down first", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/OuterProvider.md": providerComponent("OuterProvider"),
+          "components/InnerProvider.md": providerComponent("InnerProvider"),
+          "doc.md": [
+            "<OuterProvider>",
+            "",
+            "outer-before",
+            "",
+            "<InnerProvider>",
+            "",
+            "inner-content",
+            "",
+            "</InnerProvider>",
+            "",
+            "outer-after",
+            "",
+            "</OuterProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // Both providers started and tore down correctly.
+        // Inner content appeared between outer content.
+        expect(output).toContain("outer-before");
+        expect(output).toContain("inner-content");
+        expect(output).toContain("outer-after");
+        expect(output).not.toContain("ERROR");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S8: Nested providers, no model specified — innermost handles
+    // Two stub providers (OuterProvider, InnerProvider) install
+    // Sample middleware via Sample.around(). A <Sample> component with
+    // no model should be handled by the innermost provider.
+    it("S8: nested providers, no model — innermost handles", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        // Provider component body — installs Sample middleware returning "[handled-by-{model}]"
+        // Uses { at: "min" } so that child (inner) scope middleware runs before
+        // parent (outer) scope middleware — achieving innermost-wins semantics.
+        const stubProviderBody = (componentName: string) =>
+          [
+            "---",
+            "meta:",
+            `  componentName: ${componentName}`,
+            "inputs:",
+            "  model:",
+            "    type: string",
+            "    required: true",
+            "---",
+            "",
+            "```js persist eval",
+            "yield* Sample.around({",
+            "  *sample([context], next) {",
+            "    if (context.model !== undefined && context.model !== model) {",
+            "      return yield* next(context);",
+            "    }",
+            "    return '[handled-by-' + model + ']';",
+            "  },",
+            "}, { at: 'min' });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n");
+
+        writeFiles(tmpDir, {
+          "components/OuterProvider.md": stubProviderBody("OuterProvider"),
+          "components/InnerProvider.md": stubProviderBody("InnerProvider"),
+          "components/Sample.md": sampleComponent(),
+          "doc.md": [
+            '<OuterProvider model="outer-model">',
+            "",
+            '<InnerProvider model="inner-model">',
+            "",
+            '<Sample prompt="test content" />',
+            "",
+            "</InnerProvider>",
+            "",
+            "</OuterProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // No model specified → innermost provider handles
+        expect(output).toContain("[handled-by-inner-model]");
+        expect(output).not.toContain("[handled-by-outer-model]");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S9: Nested providers, explicit model matching outer
+    // Inner provider passes through via next(), outer handles.
+    it("S9: nested providers, explicit model matching outer", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        const stubProviderBody = (componentName: string) =>
+          [
+            "---",
+            "meta:",
+            `  componentName: ${componentName}`,
+            "inputs:",
+            "  model:",
+            "    type: string",
+            "    required: true",
+            "---",
+            "",
+            "```js persist eval",
+            "yield* Sample.around({",
+            "  *sample([context], next) {",
+            "    if (context.model !== undefined && context.model !== model) {",
+            "      return yield* next(context);",
+            "    }",
+            "    return '[handled-by-' + model + ']';",
+            "  },",
+            "}, { at: 'min' });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n");
+
+        writeFiles(tmpDir, {
+          "components/OuterProvider.md": stubProviderBody("OuterProvider"),
+          "components/InnerProvider.md": stubProviderBody("InnerProvider"),
+          "components/Sample.md": sampleComponent(),
+          "doc.md": [
+            '<OuterProvider model="outer-model">',
+            "",
+            '<InnerProvider model="inner-model">',
+            "",
+            '<Sample prompt="test content" model="outer-model" />',
+            "",
+            "</InnerProvider>",
+            "",
+            "</OuterProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // Explicit model=outer-model → inner passes through, outer handles
+        expect(output).toContain("[handled-by-outer-model]");
+        expect(output).not.toContain("[handled-by-inner-model]");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S10: Nested providers, explicit model matching inner
+    // Inner provider handles regardless of nesting depth.
+    it("S10: nested providers, explicit model matching inner", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        const stubProviderBody = (componentName: string) =>
+          [
+            "---",
+            "meta:",
+            `  componentName: ${componentName}`,
+            "inputs:",
+            "  model:",
+            "    type: string",
+            "    required: true",
+            "---",
+            "",
+            "```js persist eval",
+            "yield* Sample.around({",
+            "  *sample([context], next) {",
+            "    if (context.model !== undefined && context.model !== model) {",
+            "      return yield* next(context);",
+            "    }",
+            "    return '[handled-by-' + model + ']';",
+            "  },",
+            "}, { at: 'min' });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n");
+
+        writeFiles(tmpDir, {
+          "components/OuterProvider.md": stubProviderBody("OuterProvider"),
+          "components/InnerProvider.md": stubProviderBody("InnerProvider"),
+          "components/Sample.md": sampleComponent(),
+          "doc.md": [
+            '<OuterProvider model="outer-model">',
+            "",
+            '<InnerProvider model="inner-model">',
+            "",
+            '<Sample prompt="test content" model="inner-model" />',
+            "",
+            "</InnerProvider>",
+            "",
+            "</OuterProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // Explicit model=inner-model → inner handles directly
+        expect(output).toContain("[handled-by-inner-model]");
+        expect(output).not.toContain("[handled-by-outer-model]");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S11: Unmatched model → chain exhausted → error
+    // No provider handles the requested model → falls through to the
+    // core Sample handler which throws a descriptive error.
+    it("S11: unmatched model — descriptive error", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        const stubProvider = () =>
+          [
+            "---",
+            "meta:",
+            "  componentName: StubProvider",
+            "inputs:",
+            "  model:",
+            "    type: string",
+            "    required: true",
+            "---",
+            "",
+            "```js persist eval",
+            "yield* Sample.around({",
+            "  *sample([context], next) {",
+            "    if (context.model !== undefined && context.model !== model) {",
+            "      return yield* next(context);",
+            "    }",
+            "    return '[handled-by-' + model + ']';",
+            "  },",
+            "}, { at: 'min' });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n");
+
+        writeFiles(tmpDir, {
+          "components/StubProvider.md": stubProvider(),
+          "components/Sample.md": sampleComponent(),
+          "doc.md": [
+            '<StubProvider model="known-model">',
+            "",
+            '<Sample prompt="test" model="unknown-model" />',
+            "",
+            "</StubProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // Chain exhausted → core handler throws → error in output
+        expect(output).toMatch(/error|Error|Sample/i);
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S12: Full replay of provider component
+    // All eval journal entries replayed; daemon starts fresh (ephemeral);
+    // no live HTTP calls on replay.
+    it("S12: full replay — eval replayed, daemon starts fresh", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "doc.md": ["<TestProvider>", "", "replay-test", "", "</TestProvider>"].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const componentDirs = [path.join(tmpDir, "components"), tmpDir];
+
+        // Golden run
+        const output1 = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs,
+            freshness: false,
+          }),
+        );
+
+        expect(output1).toContain("replay-test");
+        expect(output1).not.toContain("ERROR");
+
+        // Replay — eval blocks replay from journal, daemon spawns fresh
+        const output2 = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs,
+            freshness: false,
+          }),
+        );
+
+        // Replay produces same output
+        expect(output2).toContain("replay-test");
+        expect(output2).not.toContain("ERROR");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S13: Modified doc with new children — fresh run produces new output
+    // First run journals. Second run uses a fresh stream and a modified doc
+    // with an additional child exec block. The provider starts a new daemon
+    // and the new child runs live.
+    it("S13: modified doc with new children — fresh run includes new output", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "doc.md": ["<TestProvider>", "", "original-child", "", "</TestProvider>"].join("\n"),
+        });
+
+        const componentDirs = [path.join(tmpDir, "components"), tmpDir];
+
+        // Golden run
+        const stream1 = new InMemoryStream();
+        const output1 = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream: stream1,
+            componentDirs,
+            freshness: false,
+          }),
+        );
+
+        expect(output1).toContain("original-child");
+
+        // Modify the doc — add a new exec block in children
+        writeFiles(tmpDir, {
+          "doc.md": [
+            "<TestProvider>",
+            "",
+            "original-child",
+            "",
+            "```bash exec",
+            "echo new-child",
+            "```",
+            "",
+            "</TestProvider>",
+          ].join("\n"),
+        });
+
+        // Fresh stream — provider starts a new daemon, new child runs live
+        const stream2 = new InMemoryStream();
+        const output2 = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream: stream2,
+            componentDirs,
+            freshness: false,
+          }),
+        );
+
+        // Both original text and new exec block output appear
+        expect(output2).toContain("original-child");
+        expect(output2).toContain("new-child");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S14: Multiple provider instances — two sibling providers with different ports
+    it("S14: multiple provider instances — two siblings, different ports", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        writeFiles(tmpDir, {
+          "components/TestProvider.md": providerComponent(),
+          "doc.md": [
+            "<TestProvider>",
+            "",
+            "first-provider",
+            "",
+            "</TestProvider>",
+            "",
+            "<TestProvider>",
+            "",
+            "second-provider",
+            "",
+            "</TestProvider>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // Both providers expanded successfully with different ports
+        expect(output).toContain("first-provider");
+        expect(output).toContain("second-provider");
+        expect(output).not.toContain("ERROR");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S13: Expression prop from root env visible through provider nesting
+    // Root document defines `pr` in an eval block, wraps ReviewBody in
+    // a provider chain. The {pr} expression prop should resolve from the
+    // root scope, not the provider's scope.
+    it("S13: expression prop from root env resolves through provider nesting", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        // Middleware component — installs Sample middleware and renders <Content />
+        const wrapper = () =>
+          [
+            "---",
+            "meta:",
+            "  componentName: Wrapper",
+            "inputs:",
+            "  label:",
+            "    type: string",
+            "    required: true",
+            "---",
+            "",
+            "```js persist eval",
+            "yield* Sample.around({",
+            "  *sample([context], next) {",
+            "    return '[wrapped-by-' + label + ']';",
+            "  },",
+            "}, { at: 'min' });",
+            "```",
+            "",
+            "<Content />",
+          ].join("\n");
+
+        // Consumer component — receives pr as a prop and renders it
+        const consumer = () =>
+          [
+            "---",
+            "meta:",
+            "  componentName: Consumer",
+            "inputs:",
+            "  data:",
+            "    type: object",
+            "    required: true",
+            "---",
+            "",
+            "Received: {props.data.value}",
+          ].join("\n");
+
+        writeFiles(tmpDir, {
+          "components/Wrapper.md": wrapper(),
+          "components/Consumer.md": consumer(),
+          "doc.md": [
+            "```js eval",
+            "const pr = { value: 'hello-from-root' };",
+            "```",
+            "",
+            '<Wrapper label="test-wrapper">',
+            "",
+            "<Consumer data={pr} />",
+            "",
+            "</Wrapper>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        // The expression prop {pr} should resolve from the root env
+        expect(output).toContain("hello-from-root");
+        expect(output).not.toContain("ERROR");
+        expect(output).not.toContain("pr is not defined");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    // S15: Expression prop resolves through double nesting (Root → W1 → W2 → Consumer)
+    // This mirrors the code review agent: Root → OllamaProvider → Instruction → ReviewBody
+    it("S15: expression prop resolves through double-nested wrappers", function* () {
+      const tmpDir = makeTempDir();
+
+      try {
+        const passthrough = (name: string) =>
+          [
+            "---",
+            "meta:",
+            `  componentName: ${name}`,
+            "inputs:",
+            "  label:",
+            "    type: string",
+            "    required: true",
+            "---",
+            "",
+            "<Content />",
+          ].join("\n");
+
+        const consumer = () =>
+          [
+            "---",
+            "meta:",
+            "  componentName: Consumer",
+            "inputs:",
+            "  data:",
+            "    type: object",
+            "    required: true",
+            "---",
+            "",
+            "Received: {props.data.value}",
+          ].join("\n");
+
+        writeFiles(tmpDir, {
+          "components/Outer.md": passthrough("Outer"),
+          "components/Inner.md": passthrough("Inner"),
+          "components/Consumer.md": consumer(),
+          "doc.md": [
+            "```js eval",
+            "const pr = { value: 'deep-hello' };",
+            "```",
+            "",
+            '<Outer label="outer">',
+            '<Inner label="inner">',
+            "<Consumer data={pr} />",
+            "</Inner>",
+            "</Outer>",
+          ].join("\n"),
+        });
+
+        const stream = new InMemoryStream();
+        const output = yield* collect(
+          yield* runDocument({
+            docPath: path.join(tmpDir, "doc.md"),
+            stream,
+            componentDirs: [path.join(tmpDir, "components"), tmpDir],
+            freshness: false,
+          }),
+        );
+
+        expect(output).toContain("deep-hello");
+        expect(output).not.toContain("ERROR");
+        expect(output).not.toContain("pr is not defined");
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+  },
+);

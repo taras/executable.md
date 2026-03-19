@@ -34,9 +34,7 @@ export const EvalCtxKey = createEffectionContext<EvalContext>("evalContext");
  * The eval context is set on the Effection scope so eval blocks
  * can verify the eval system is initialized.
  */
-export function createEvalContext(
-  _globals: Record<string, unknown> = {},
-): EvalContext {
+export function createEvalContext(_globals: Record<string, unknown> = {}): EvalContext {
   return { initialized: true };
 }
 

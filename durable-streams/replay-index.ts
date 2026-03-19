@@ -5,13 +5,7 @@
  * to Close events. See spec §4.1.
  */
 
-import type {
-  Close,
-  CoroutineId,
-  DurableEvent,
-  EffectDescription,
-  Result,
-} from "./types.ts";
+import type { Close, CoroutineId, DurableEvent, EffectDescription, Result } from "./types.ts";
 
 export interface YieldEntry {
   description: EffectDescription;
@@ -146,9 +140,7 @@ export class ReplayIndex {
    */
   isFullyReplayed(coroutineId: CoroutineId): boolean {
     if (this.disabled.has(coroutineId)) return false;
-    return (
-      this.peekYield(coroutineId) === undefined && this.hasClose(coroutineId)
-    );
+    return this.peekYield(coroutineId) === undefined && this.hasClose(coroutineId);
   }
 
   /** Returns the total number of yield entries for this coroutine. */

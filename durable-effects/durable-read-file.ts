@@ -6,11 +6,7 @@
  * During replay, the stored result is returned without executing.
  */
 
-import {
-  type Json,
-  type Workflow,
-  createDurableOperation,
-} from "@executablemd/durable-streams";
+import { type Json, type Workflow, createDurableOperation } from "@executablemd/durable-streams";
 import { readTextFile } from "@executablemd/runtime";
 import { computeSHA256 } from "./hash.ts";
 

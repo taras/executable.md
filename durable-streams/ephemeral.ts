@@ -23,12 +23,7 @@
  */
 
 import type { Operation } from "effection";
-import type {
-  DurableEffect,
-  EffectionResult,
-  Resolve,
-  Workflow,
-} from "./types.ts";
+import type { DurableEffect, EffectionResult, Resolve, Workflow } from "./types.ts";
 
 /** Effection void-ok result, used for no-op teardowns. */
 const VOID_OK: EffectionResult<void> = {

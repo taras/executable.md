@@ -11,13 +11,7 @@
 import type { Result as EffectionResult, Resolve, Scope } from "effection";
 
 /** Any JSON-serializable value. */
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | Json[]
-  | { [key: string]: Json };
+export type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 // biome-ignore lint/suspicious/noConfusingVoidType: Workflows may intentionally return no value.
 export type WorkflowValue = Json | void;

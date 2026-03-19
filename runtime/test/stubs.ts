@@ -35,9 +35,7 @@ import type { StatResult } from "../apis.ts";
  * operations changes what `readTextFile`/`stat` see. This is useful for
  * testing file changes between runs.
  */
-export function* useStubFs(
-  files: Record<string, string>,
-): Operation<void> {
+export function* useStubFs(files: Record<string, string>): Operation<void> {
   yield* API.Fs.around({
     *readTextFile([path], _next) {
       const content = files[path];
@@ -79,10 +77,7 @@ export function* useEchoExec(): Operation<void> {
  *
  * Useful for testing error handling paths.
  */
-export function* useFailingExec(
-  exitCode: number,
-  stderr = "command failed",
-): Operation<void> {
+export function* useFailingExec(exitCode: number, stderr = "command failed"): Operation<void> {
   yield* API.Process.around({
     *exec(_args, _next) {
       return { exitCode, stdout: "", stderr };

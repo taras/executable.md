@@ -20,11 +20,13 @@ describe("Tier T7 — timeout modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toBe("");
     expect(output).not.toContain("ERROR");
@@ -60,11 +62,13 @@ describe("Tier T7 — timeout modifier", () => {
     yield* useEchoExec();
 
     // Should work with default timeout
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).not.toContain("timed out");
   });

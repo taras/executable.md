@@ -83,7 +83,9 @@ async function getPrimitives(): Promise<TestPrimitives> {
 // the dynamic import resolves before any test registration.
 const primitivesPromise = getPrimitives();
 let p: TestPrimitives | undefined;
-primitivesPromise.then((v) => { p = v; });
+primitivesPromise.then((v) => {
+  p = v;
+});
 
 function prims(): TestPrimitives {
   if (!p) {
@@ -115,7 +117,11 @@ export interface DescribeOptions {
 
 export function describe(name: string, body: () => void): void;
 export function describe(name: string, options: DescribeOptions, body: () => void): void;
-export function describe(name: string, optionsOrBody: DescribeOptions | (() => void), maybeBody?: () => void): void {
+export function describe(
+  name: string,
+  optionsOrBody: DescribeOptions | (() => void),
+  maybeBody?: () => void,
+): void {
   const options = typeof optionsOrBody === "function" ? {} : optionsOrBody;
   const body = typeof optionsOrBody === "function" ? optionsOrBody : maybeBody!;
   const parent = current;
@@ -159,10 +165,7 @@ export function beforeEach(body: () => Operation<void>): void {
   current?.addSetup(body);
 }
 
-export function it(
-  desc: string,
-  body?: () => Operation<void>,
-): void {
+export function it(desc: string, body?: () => Operation<void>): void {
   if (!current) {
     throw new Error("it() must be called within a describe() block");
   }
@@ -184,10 +187,7 @@ it.skip = (...args: Parameters<typeof it>): ReturnType<typeof it> => {
   prims().itSkip(desc, () => {});
 };
 
-it.only = (
-  desc: string,
-  body: () => Operation<void>,
-): void => {
+it.only = (desc: string, body: () => Operation<void>): void => {
   if (!current) {
     throw new Error("it.only() must be called within a describe() block");
   }

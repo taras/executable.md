@@ -117,22 +117,17 @@ describe("Tier T1 — Source transform", () => {
 
   // T15: yield inside nested function → does NOT set mode to "generator"
   it("T15: yield inside nested function → not generator", function* () {
-    const result = transformBlock(
-      "const fn = function*() { yield 1; };",
-      "block-15",
-      [],
-    );
+    const result = transformBlock("const fn = function*() { yield 1; };", "block-15", []);
     expect(result.mode).toBe("sync");
   });
 
   // T16: Both top-level yield and await → transform-time error
   it("T16: both yield and await → error", function* () {
     expect(() =>
-      transformBlock(
-        "const x = yield* op();\nconst y = await fetch();",
-        "block-16",
-        ["op", "fetch"],
-      ),
+      transformBlock("const x = yield* op();\nconst y = await fetch();", "block-16", [
+        "op",
+        "fetch",
+      ]),
     ).toThrow("Cannot mix");
   });
 });
@@ -190,11 +185,7 @@ describe("User import extraction", () => {
 
   // T20: dynamic import() expression → NOT extracted, stays in code
   it("T20: dynamic import() not extracted", function* () {
-    const result = transformBlock(
-      'const mod = await import("pkg");',
-      "block-20",
-      [],
-    );
+    const result = transformBlock('const mod = await import("pkg");', "block-20", []);
     expect(result.userImports).toHaveLength(0);
     expect(result.code).toContain('import("pkg")');
     expect(result.mode).toBe("async");

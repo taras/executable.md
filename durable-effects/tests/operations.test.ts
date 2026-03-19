@@ -17,12 +17,7 @@ import { type ExecResult, durableExec } from "../durable-exec.ts";
 import { type FetchResult, durableFetch } from "../durable-fetch.ts";
 import { type GlobResult, durableGlob } from "../durable-glob.ts";
 import { type ReadFileResult, durableReadFile } from "../durable-read-file.ts";
-import {
-  durableEnv,
-  durableNow,
-  durableResolve,
-  durableUUID,
-} from "../durable-resolve.ts";
+import { durableEnv, durableNow, durableResolve, durableUUID } from "../durable-resolve.ts";
 
 function warmupEvents(): DurableEvent[] {
   return [
@@ -39,10 +34,7 @@ function warmupEvents(): DurableEvent[] {
   ];
 }
 
-function* expectDivergence(
-  workflow: () => Workflow<Json>,
-  event: DurableEvent,
-): Operation<void> {
+function* expectDivergence(workflow: () => Workflow<Json>, event: DurableEvent): Operation<void> {
   const stream = new InMemoryStream([event]);
   try {
     yield* durableRun(workflow, { stream });
@@ -220,10 +212,7 @@ describe("durable operations", () => {
       });
 
       function* workflow(): Workflow<Json> {
-        return (yield* durableReadFile(
-          "read-input",
-          "src/input.txt",
-        )) as unknown as Json;
+        return (yield* durableReadFile("read-input", "src/input.txt")) as unknown as Json;
       }
 
       const result = (yield* durableRun(workflow, {
@@ -248,8 +237,7 @@ describe("durable operations", () => {
     it("full replay: returns stored read result without reading disk", function* () {
       const stored: ReadFileResult = {
         content: "journaled content",
-        contentHash:
-          "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        contentHash: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       };
       const stream = new InMemoryStream([
         {
@@ -271,10 +259,7 @@ describe("durable operations", () => {
       ]);
 
       function* workflow(): Workflow<Json> {
-        return (yield* durableReadFile(
-          "read-input",
-          "different/path.txt",
-        )) as unknown as Json;
+        return (yield* durableReadFile("read-input", "different/path.txt")) as unknown as Json;
       }
 
       const result = (yield* durableRun(workflow, {
@@ -354,10 +339,7 @@ describe("durable operations", () => {
       const result = (yield* durableRun(workflow, {
         stream,
       })) as unknown as GlobResult;
-      expect(result.matches.map((m) => m.path)).toEqual([
-        "src/a.ts",
-        "src/b.ts",
-      ]);
+      expect(result.matches.map((m) => m.path)).toEqual(["src/a.ts", "src/b.ts"]);
       for (const match of result.matches) {
         expect(match.contentHash).toMatch(/^sha256:[0-9a-f]{64}$/);
       }
@@ -382,12 +364,10 @@ describe("durable operations", () => {
         matches: [
           {
             path: "src/main.ts",
-            contentHash:
-              "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            contentHash: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
           },
         ],
-        scanHash:
-          "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        scanHash: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       };
       const stream = new InMemoryStream([
         {
@@ -490,11 +470,7 @@ describe("durable operations", () => {
             status: 200,
             headers: {
               get: (key: string) =>
-                key === "content-type"
-                  ? "text/plain"
-                  : key === "etag"
-                    ? '"v1"'
-                    : null,
+                key === "content-type" ? "text/plain" : key === "etag" ? '"v1"' : null,
             },
             *text() {
               return "response body";
@@ -552,8 +528,7 @@ describe("durable operations", () => {
         status: 200,
         headers: { "content-type": "application/json" },
         body: '{"ok":true}',
-        bodyHash:
-          "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        bodyHash: "sha256:4444444444444444444444444444444444444444444444444444444444444444",
       };
       const stream = new InMemoryStream([
         {
@@ -680,10 +655,8 @@ describe("durable operations", () => {
     it("full replay: returns stored eval result without invoking evaluator", function* () {
       const stored: EvalResult = {
         value: { answer: 42 },
-        sourceHash:
-          "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-        bindingsHash:
-          "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        sourceHash: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        bindingsHash: "sha256:6666666666666666666666666666666666666666666666666666666666666666",
       };
       const stream = new InMemoryStream([
         {

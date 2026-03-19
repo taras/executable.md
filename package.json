@@ -28,6 +28,8 @@
   },
   "devDependencies": {
     "@effectionx/bdd": "workspace:*",
+    "oxlint": "^1",
+    "oxfmt": "^0.41.0",
     "tsx": "^4.19.0",
     "typescript": "^5.0.0",
     "expect": "^30.0.0",
@@ -36,7 +38,9 @@
   "scripts": {
     "test:node": "tsx --tsconfig tsconfig.node.json --test durable-streams/tests/*.test.ts durable-effects/tests/*.test.ts core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
     "test:bun": "bun test durable-streams/tests/ durable-effects/tests/ core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
-    "test:deno": "deno task test"
+    "test:deno": "deno task test",
+    "lint": "oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ && oxfmt --check core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ vendor/ test-support/",
+    "fmt": "oxfmt --write core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ vendor/ test-support/ core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/"
   },
   "workspaces": [
     "core",

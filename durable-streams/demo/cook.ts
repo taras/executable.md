@@ -40,11 +40,7 @@ const PRODUCER_ID = `cook-${randomUUID().slice(0, 8)}`;
 // ---------------------------------------------------------------------------
 
 /** Fake async work — simulate the named cooking step. */
-function fakeWork<T extends Json>(
-  _name: string,
-  value: T,
-  ms = 50,
-): () => Promise<T> {
+function fakeWork<T extends Json>(_name: string, value: T, ms = 50): () => Promise<T> {
   return async () => {
     // Tiny delay to simulate real async I/O
     await new Promise((r) => setTimeout(r, ms));
@@ -75,10 +71,7 @@ function* makeSauce(): Workflow<string> {
   yield* durableSleep(2000);
 
   log("👅", "Tasting sauce...");
-  const taste = yield* durableCall(
-    "taste-sauce",
-    fakeWork("taste-sauce", "perfetto"),
-  );
+  const taste = yield* durableCall("taste-sauce", fakeWork("taste-sauce", "perfetto"));
   log("👅", `Sauce verdict: ${taste}`);
 
   return "sauce-done";

@@ -6,11 +6,7 @@
  * During replay, the stored result is returned without executing.
  */
 
-import {
-  type Json,
-  type Workflow,
-  createDurableOperation,
-} from "@executablemd/durable-streams";
+import { type Json, type Workflow, createDurableOperation } from "@executablemd/durable-streams";
 import { glob, readTextFile } from "@executablemd/runtime";
 import { computeSHA256 } from "./hash.ts";
 
@@ -36,10 +32,7 @@ export interface GlobResult {
  * Sorted matches with per-file hashes. Composite scanHash for
  * replay guard staleness detection.
  */
-export function* durableGlob(
-  name: string,
-  options: GlobOptions,
-): Workflow<GlobResult> {
+export function* durableGlob(name: string, options: GlobOptions): Workflow<GlobResult> {
   const { baseDir, include, exclude = [] } = options;
 
   return (yield createDurableOperation<Json>(

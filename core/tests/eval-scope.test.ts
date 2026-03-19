@@ -16,16 +16,17 @@ describe("Tier T10 — eval-scope hierarchy", () => {
   it("T61: eval blocks run within document scope", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "test.md":
-        "```js eval\nconst a = 1;\n```\n\n```js eval\nconst b = a + 1;\n```\n",
+      "test.md": "```js eval\nconst a = 1;\n```\n\n```js eval\nconst b = a + 1;\n```\n",
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // Both blocks should execute without error
     // Text between two adjacent eval blocks may produce a newline
@@ -42,11 +43,13 @@ describe("Tier T10 — eval-scope hierarchy", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // Exec output should be present
     expect(output).toContain("hello");

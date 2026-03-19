@@ -32,10 +32,11 @@ virtual document tree inline.
 ```ts
 import { useStubFs } from "@executablemd/runtime/test";
 
-yield* useStubFs({
-  "doc.md": "# Hello\n",
-  "components/Greeting.md": "Hello, {props.name}!\n",
-});
+yield *
+  useStubFs({
+    "doc.md": "# Hello\n",
+    "components/Greeting.md": "Hello, {props.name}!\n",
+  });
 ```
 
 ### `useEchoExec()`
@@ -52,7 +53,7 @@ without running a real subprocess.
 ```ts
 import { useEchoExec } from "@executablemd/runtime/test";
 
-yield* useEchoExec();
+yield * useEchoExec();
 ```
 
 ### `useFailingExec(exitCode, stderr)`
@@ -67,23 +68,19 @@ paths.
 ```ts
 import { useFailingExec } from "@executablemd/runtime/test";
 
-yield* useFailingExec(127, "command not found");
+yield * useFailingExec(127, "command not found");
 ```
 
 ## Composition
 
 The helpers are designed to compose.
 
-```ts
-import {
-  useStubFs,
-  useEchoExec,
-  useFailingExec,
-} from "@executablemd/runtime/test";
+````ts
+import { useStubFs, useEchoExec, useFailingExec } from "@executablemd/runtime/test";
 
-yield* useStubFs({ "doc.md": "```bash exec\necho hi\n```\n" });
-yield* useEchoExec();
-```
+yield * useStubFs({ "doc.md": "```bash exec\necho hi\n```\n" });
+yield * useEchoExec();
+````
 
 Typical combinations:
 
@@ -119,7 +116,7 @@ That means you can mutate the object between runs to simulate file changes:
 ```ts
 const files = { "doc.md": "version 1\n" };
 
-yield* useStubFs(files);
+yield * useStubFs(files);
 
 // first run...
 
@@ -144,11 +141,12 @@ Common examples:
 ```ts
 import { API } from "@executablemd/runtime";
 
-yield* API.Fs.around({
-  *glob([options], _next) {
-    return [{ path: "a.md", isFile: true }];
-  },
-});
+yield *
+  API.Fs.around({
+    *glob([options], _next) {
+      return [{ path: "a.md", isFile: true }];
+    },
+  });
 ```
 
 ## Guidelines
