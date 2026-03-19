@@ -22,10 +22,10 @@ import {
 import {
   computeSHA256,
 } from "@executablemd/durable-effects";
-import { exec, readTextFile, stat } from "@executablemd/runtime";
+import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
-import process from "node:process";
+import { useDenoCompiler } from "./deno-compiler.ts";
 import type {
   ComponentDefinition,
   FunctionComponent,
@@ -120,9 +120,10 @@ function* durableImportComponent(
   // Function component: .ts file — import() the module
   if (result.path.endsWith(".ts")) {
     // Resolve to absolute path for dynamic import
+    const currentDir = yield* ephemeral(cwd());
     const absolutePath = result.path.startsWith("/")
       ? result.path
-      : `${process.cwd()}/${result.path}`;
+      : `${currentDir}/${result.path}`;
     const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`)))) as {
       default?: unknown;
       inputs?: unknown;
@@ -504,6 +505,9 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   yield* spawn(function* () {
     const scope = yield* useScope();
     let emitted = false;
+
+    // Install Deno compiler middleware
+    yield* useDenoCompiler();
 
     // Install replay guards
     if (freshness) {

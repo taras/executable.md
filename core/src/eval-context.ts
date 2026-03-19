@@ -4,7 +4,7 @@
 
 import { createContext as createEffectionContext } from "effection";
 import type { Operation } from "effection";
-import { compileBlock as runtimeCompileBlock } from "@executablemd/runtime";
+import { compile as runtimeCompile } from "@executablemd/runtime";
 
 // ---------------------------------------------------------------------------
 // EvalContext — lightweight context for the eval system
@@ -43,12 +43,12 @@ export function createEvalContext(
 /**
  * Compile transformed source code into a generator function.
  *
- * Delegates to `@executablemd/runtime` so platform-specific eval
- * compilation can be provided via runtime API middleware.
+ * Delegates to `@executablemd/runtime` so platform-specific
+ * compilation can be provided via API.Compiler middleware.
  */
 export function* compileBlock(
   transformedBodyCode: string,
   userImports: string[],
 ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
-  return yield* runtimeCompileBlock(transformedBodyCode, userImports);
+  return yield* runtimeCompile(transformedBodyCode, { imports: userImports });
 }

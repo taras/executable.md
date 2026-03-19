@@ -68,7 +68,7 @@ import {
   walk,
 } from "@effectionx/fs";
 import { exec as processExec } from "@effectionx/process";
-import { call, each, race, sleep } from "effection";
+import { each, race, sleep } from "effection";
 import type { Operation } from "effection";
 
 // ---------------------------------------------------------------------------
@@ -172,14 +172,15 @@ interface FetchHandler {
 }
 
 interface EnvHandler {
+  cwd(): Operation<string>;
   env(name: string): Operation<string | undefined>;
   platform(): Operation<{ os: string; arch: string }>;
 }
 
-interface EvalHandler {
-  compileBlock(
-    transformedBodyCode: string,
-    userImports: string[],
+interface CompilerHandler {
+  compile(
+    source: string,
+    options?: { imports: string[] },
   ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>>;
 }
 
@@ -192,7 +193,7 @@ export const API: {
   Fs: Api<FsHandler>;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
-  Eval: Api<EvalHandler>;
+  Compiler: Api<CompilerHandler>;
 } = {
   /**
    * Subprocess execution.
@@ -345,6 +346,11 @@ export const API: {
    */
   Env: createApi("runtime.env", {
     // deno-lint-ignore require-yield
+    *cwd(): Operation<string> {
+      return process.cwd();
+    },
+
+    // deno-lint-ignore require-yield
     *env(name: string): Operation<string | undefined> {
       return process.env[name];
     },
@@ -358,44 +364,22 @@ export const API: {
     },
   }),
 
-  Eval: createApi("runtime.eval", {
-    *compileBlock(
-      transformedBodyCode: string,
-      userImports: string[],
+  /**
+   * Block compilation.
+   *
+   * Default handler throws — platform-specific middleware must be
+   * installed via `yield* API.Compiler.around(...)` before use.
+   * See `core/src/deno-compiler.ts` for the Deno implementation.
+   */
+  Compiler: createApi("runtime.compiler", {
+    // deno-lint-ignore require-yield
+    *compile(
+      _source: string,
+      _options?: { imports: string[] },
     ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
-      const standardImports = [
-        'import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";',
-        'import { when } from "@effectionx/converge";',
-        'import { fetch } from "@effectionx/fetch";',
-        'import { useContent, Sample } from "@executablemd/core";',
-        'import { findFreePort } from "@executablemd/runtime";',
-      ].join("\n");
-
-      const userImportLines = userImports.length > 0
-        ? userImports.join("\n") + "\n"
-        : "";
-
-      const moduleSource = [
-        standardImports,
-        userImportLines,
-        `export default function*(env) {`,
-        transformedBodyCode,
-        `}`,
-      ].join("\n");
-
-      const dataUri =
-        `data:application/typescript,${encodeURIComponent(moduleSource)}`;
-      const mod: {
-        default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
-      } = yield* call(() => import(dataUri));
-
-      if (typeof mod.default !== "function") {
-        throw new Error(
-          `compileBlock: expected default export to be a generator function, got ${typeof mod.default}`,
-        );
-      }
-
-      return mod.default;
+      throw new Error(
+        "compiler not installed — install platform-specific middleware via API.Compiler.around()",
+      );
     },
   }),
 };
@@ -425,8 +409,11 @@ export const fetch: typeof API.Fetch.operations.fetch =
 export const env: typeof API.Env.operations.env =
   API.Env.operations.env;
 
+export const cwd: typeof API.Env.operations.cwd =
+  API.Env.operations.cwd;
+
 export const platform: typeof API.Env.operations.platform =
   API.Env.operations.platform;
 
-export const compileBlock: typeof API.Eval.operations.compileBlock =
-  API.Eval.operations.compileBlock;
+export const compile: typeof API.Compiler.operations.compile =
+  API.Compiler.operations.compile;

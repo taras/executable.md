@@ -9,8 +9,10 @@
  * override this behavior per-scope via Effection's around() middleware
  * to implement custom policies (e.g., switching to live execution).
  *
- * Uses createApi() from effection/experimental for middleware
- * dispatch with scope-local caching and invoke() support.
+ * Uses createApi() from effection/experimental (not @effectionx/context-api)
+ * because it requires synchronous Api.invoke() dispatch, which the
+ * vendored context-api does not yet support. Will migrate once invoke()
+ * lands in @effectionx/context-api.
  *
  * The core decide() function is synchronous (not a generator) because
  * it is called from inside Effect.enter(), which is a synchronous

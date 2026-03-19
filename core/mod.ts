@@ -97,6 +97,7 @@ export { useTerminalOutput } from "./src/output/terminal.ts";
 
 export { runDocument } from "./src/run-document.ts";
 export type { RunDocumentOptions, DocumentExecution } from "./src/run-document.ts";
+export { useDenoCompiler } from "./src/deno-compiler.ts";
 
 // ---------------------------------------------------------------------------
 // Stream consumption
