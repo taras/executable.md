@@ -6,7 +6,6 @@
  */
 
 import type { Operation } from "effection";
-import { useScope } from "effection";
 import { Marked } from "marked";
 // @ts-ignore -- marked-terminal has no type declarations
 import { markedTerminal } from "marked-terminal";
@@ -15,9 +14,7 @@ import { EMA } from "../api.ts";
 export function* useTerminalOutput(): Operation<void> {
   // markedTerminal() returns a marked extension object ({ renderer, useNewRenderer })
   const marked = new Marked(markedTerminal());
-  const scope = yield* useScope();
-
-  scope.around(EMA, {
+  yield* EMA.around({
     *output([text], next) {
       const formatted = marked.parse(text, { async: false }) as string;
       yield* next(formatted);

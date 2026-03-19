@@ -159,7 +159,7 @@ function* run(config: {
   // ---------------------------------------------------------------------------
   // Output middleware (spec §9).
   //
-  // Middleware is installed on the EMA Api via scope.around() before
+  // Middleware is installed on the EMA Api via Api.around() before
   // runDocument is called. runDocument owns the channel internally —
   // the CLI just installs transformations and consumes the returned stream.
   // ---------------------------------------------------------------------------

@@ -55,6 +55,7 @@ export { EvalCtxKey, createEvalContext, compileBlock } from "./src/eval-context.
 // EMA Globals (for generated eval modules)
 // ---------------------------------------------------------------------------
 
+export { useContent } from "./src/content-context.ts";
 export { Sample } from "./src/sample-api.ts";
 
 export { evalFactory } from "./src/eval-handler.ts";
@@ -72,7 +73,7 @@ export { interpolateEvalBindings } from "./src/eval-interpolate.ts";
 // Port allocation
 // ---------------------------------------------------------------------------
 
-export { findFreePort } from "./src/find-free-port.ts";
+export { findFreePort } from "@executablemd/runtime";
 
 export type { TransformResult } from "./src/eval-transform.ts";
 export {
@@ -96,6 +97,7 @@ export { useTerminalOutput } from "./src/output/terminal.ts";
 
 export { runDocument } from "./src/run-document.ts";
 export type { RunDocumentOptions, DocumentExecution } from "./src/run-document.ts";
+export { useDenoCompiler } from "./src/deno-compiler.ts";
 
 // ---------------------------------------------------------------------------
 // Stream consumption

@@ -2,13 +2,13 @@
  * EMA Output Api — Effection Api for streaming document output (spec §9).
  *
  * A single Api with one operation: `output`. The core handler is a no-op.
- * Behavior comes from middleware installed via `scope.around(EMA, ...)`
+ * Behavior comes from middleware installed via `yield* EMA.around(...)`
  * and channel delivery.
  *
  * Call sites use `EMA.operations.output(text)` inside `yield* ephemeral(...)`.
  */
 
-import { createApi } from "effection/experimental";
+import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ export interface EMAApi {
  *
  * Usage in middleware:
  * ```js
- * scope.around(EMA, {
+ * yield* EMA.around({
  *   *output([text], next) {
  *     const transformed = transform(text);
  *     yield* next(transformed);

@@ -9,10 +9,10 @@
  * override this behavior per-scope via Effection's around() middleware
  * to implement custom policies (e.g., switching to live execution).
  *
- * Uses createApi() from @effection/effection/experimental to get
- * proper middleware dispatch with caching and invalidation. The
- * circular initialization bug that prevented this in alpha.5 was
- * fixed in alpha.6 (see DEC-031).
+ * Uses createApi() from effection/experimental (not @effectionx/context-api)
+ * because it requires synchronous Api.invoke() dispatch, which the
+ * vendored context-api does not yet support. Will migrate once invoke()
+ * lands in @effectionx/context-api.
  *
  * The core decide() function is synchronous (not a generator) because
  * it is called from inside Effect.enter(), which is a synchronous
@@ -75,14 +75,14 @@ export type DivergenceDecision =
  * The core shape of the Divergence API.
  *
  * decide() is synchronous because it is called from Effect.enter(),
- * which cannot yield. Middleware installed via scope.around() also
+ * which cannot yield. Middleware installed via Api.around() also
  * runs synchronously in the chain.
  *
  * Usage from Effect.enter() (synchronous):
  *   Divergence.invoke(scope, "decide", [info])
  *
  * Middleware installation (from a generator):
- *   scope.around(Divergence, { decide: ([info], next) => { ... } })
+ *   yield* Divergence.around({ decide: ([info], next) => next(info) })
  */
 interface DivergenceApi {
   decide(info: DivergenceInfo): DivergenceDecision;
@@ -124,7 +124,7 @@ function defaultDecide(info: DivergenceInfo): DivergenceDecision {
  *
  * Created via Effection's createApi() which provides proper middleware
  * dispatch with WeakMap-based handle caching, automatic cache
- * invalidation on scope.around(), and a fast-path that skips
+ * invalidation on Api.around(), and a fast-path that skips
  * middleware dispatch entirely when no middleware is installed.
  *
  * Default behavior is strict: all divergences produce a throw decision

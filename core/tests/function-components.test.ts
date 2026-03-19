@@ -87,7 +87,7 @@ describe("Tier FC — Function components", () => {
     try {
       writeFiles(tmpDir, {
         "components/Wrapper.ts": [
-          'import { useContent } from "@executablemd/core/globals";',
+          'import { useContent } from "@executablemd/core";',
           "",
           "export default function*() {",
           "  const childContent = yield* useContent();",

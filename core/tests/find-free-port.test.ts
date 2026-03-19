@@ -4,15 +4,16 @@
  * Verifies findFreePort returns a usable port and that VM sandbox
  * globals are accessible — both standalone and inside eval blocks.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { race } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";
 import { createServer } from "node:net";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { findFreePort } from "../src/find-free-port.ts";
+import { findFreePort } from "@executablemd/runtime";
 import { compileBlock } from "../src/eval-context.ts";
+import { useDenoCompiler } from "../src/deno-compiler.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import * as fs from "node:fs";
@@ -89,6 +90,7 @@ describe("Tier R — findFreePort", () => {
 });
 
 describe("Tier R — Eval module globals", () => {
+  beforeAll(() => useDenoCompiler());
   // R6: when is accessible via generated module imports
   it("R6: when is accessible in eval sandbox", function* () {
     // Verify that a compiled block can reference 'when' — it's imported

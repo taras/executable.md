@@ -1,7 +1,7 @@
 /**
  * Runtime Context APIs — platform I/O operations with pluggable middleware.
  *
- * Four domain-specific context APIs built on `@effectionx/context-api`.
+ * Five domain-specific context APIs built on `@effectionx/context-api`.
  * Each API provides default Node.js implementations. Use `.around()` to
  * install middleware (mocking, instrumentation, sandboxing) scoped to the
  * current Effection scope.
@@ -172,8 +172,16 @@ interface FetchHandler {
 }
 
 interface EnvHandler {
+  cwd(): Operation<string>;
   env(name: string): Operation<string | undefined>;
   platform(): Operation<{ os: string; arch: string }>;
+}
+
+interface CompilerHandler {
+  compile(
+    source: string,
+    options?: { imports: string[] },
+  ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +193,7 @@ export const API: {
   Fs: Api<FsHandler>;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
+  Compiler: Api<CompilerHandler>;
 } = {
   /**
    * Subprocess execution.
@@ -337,6 +346,11 @@ export const API: {
    */
   Env: createApi("runtime.env", {
     // deno-lint-ignore require-yield
+    *cwd(): Operation<string> {
+      return process.cwd();
+    },
+
+    // deno-lint-ignore require-yield
     *env(name: string): Operation<string | undefined> {
       return process.env[name];
     },
@@ -347,6 +361,25 @@ export const API: {
         os: process.platform,
         arch: process.arch,
       };
+    },
+  }),
+
+  /**
+   * Block compilation.
+   *
+   * Default handler throws — platform-specific middleware must be
+   * installed via `yield* API.Compiler.around(...)` before use.
+   * See `core/src/deno-compiler.ts` for the Deno implementation.
+   */
+  Compiler: createApi("runtime.compiler", {
+    // deno-lint-ignore require-yield
+    *compile(
+      _source: string,
+      _options?: { imports: string[] },
+    ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
+      throw new Error(
+        "compiler not installed — install platform-specific middleware via API.Compiler.around()",
+      );
     },
   }),
 };
@@ -376,5 +409,11 @@ export const fetch: typeof API.Fetch.operations.fetch =
 export const env: typeof API.Env.operations.env =
   API.Env.operations.env;
 
+export const cwd: typeof API.Env.operations.cwd =
+  API.Env.operations.cwd;
+
 export const platform: typeof API.Env.operations.platform =
   API.Env.operations.platform;
+
+export const compile: typeof API.Compiler.operations.compile =
+  API.Compiler.operations.compile;

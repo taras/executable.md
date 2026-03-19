@@ -8,11 +8,13 @@
  * After the Deno migration, compileBlock is async (returns Operation)
  * and generates data: URI modules instead of using node:vm.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
 import { expect } from "@std/expect";
 import { compileBlock } from "../src/eval-context.ts";
+import { useDenoCompiler } from "../src/deno-compiler.ts";
 
 describe("Tier T2 — VM context and compiled generator", () => {
+  beforeAll(() => useDenoCompiler());
   // T17: Compiled generator can yield* Effection globals from imports
   it("T17: compiled generator can use Effection globals from sandbox", function* () {
     const fn = yield* compileBlock("yield* sleep(0);", []);
@@ -97,6 +99,7 @@ describe("Tier T2 — VM context and compiled generator", () => {
 });
 
 describe("compileBlock edge cases", () => {
+  beforeAll(() => useDenoCompiler());
   it("throws on syntax error in code", function* () {
     let threw = false;
     try {

@@ -148,7 +148,7 @@ export interface ImportResult {
  *
  * Children are available via `useContent()` on the Effection scope:
  * ```ts
- * import { useContent } from "@executablemd/core/globals";
+ * import { useContent } from "@executablemd/core";
  * import { ephemeral } from "@executablemd/core";
  * export default function*(props) {
  *   const content = yield* ephemeral(useContent());

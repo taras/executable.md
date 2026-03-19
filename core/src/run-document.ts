@@ -22,9 +22,10 @@ import {
 import {
   computeSHA256,
 } from "@executablemd/durable-effects";
-import { exec, readTextFile, stat } from "@executablemd/runtime";
+import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
+import { useDenoCompiler } from "./deno-compiler.ts";
 import type {
   ComponentDefinition,
   FunctionComponent,
@@ -119,9 +120,10 @@ function* durableImportComponent(
   // Function component: .ts file — import() the module
   if (result.path.endsWith(".ts")) {
     // Resolve to absolute path for dynamic import
+    const currentDir = yield* ephemeral(cwd());
     const absolutePath = result.path.startsWith("/")
       ? result.path
-      : `${Deno.cwd()}/${result.path}`;
+      : `${currentDir}/${result.path}`;
     const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`)))) as {
       default?: unknown;
       inputs?: unknown;
@@ -229,10 +231,9 @@ function normalizePath(path: string): string {
 // ---------------------------------------------------------------------------
 
 function* useImportComponentGuard(): Operation<void> {
-  const scope = yield* useScope();
   const cache = new Map<string, string>();
 
-  scope.around(ReplayGuard, {
+  yield* ReplayGuard.around({
     *check([event], next) {
       if (
         event.description["type"] === "import_component" &&
@@ -505,6 +506,9 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     const scope = yield* useScope();
     let emitted = false;
 
+    // Install Deno compiler middleware
+    yield* useDenoCompiler();
+
     // Install replay guards
     if (freshness) {
       yield* useImportComponentGuard();
@@ -512,7 +516,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
 
     // EMA → channel bridge (innermost middleware — output flows through
     // caller-installed normalize/terminal middleware first, then here).
-    scope.around(EMA, {
+    yield* EMA.around({
       *output([text]) {
         emitted = true;
         yield* channel.send(text);
