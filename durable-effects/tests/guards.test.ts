@@ -20,7 +20,7 @@ import {
   type Workflow,
   durableRun,
 } from "@executablemd/durable-streams";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { API } from "@executablemd/runtime";
 import { durableEval } from "../durable-eval.ts";
 import { durableGlob } from "../durable-glob.ts";

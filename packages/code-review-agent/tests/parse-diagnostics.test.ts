@@ -3,7 +3,7 @@
  * Covers PD1-PD8 from the oxlint-sensor-spec.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { parseDiagnostics } from "../src/parse-diagnostics.ts";
 import type { DoctorResult, OxlintDiagnostic, PR } from "../src/types.ts";
 

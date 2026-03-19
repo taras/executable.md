@@ -5,6 +5,7 @@
     "@types/node": "npm:@types/node@^24.5.2",
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
     "@effectionx/bdd/node": "./test-support/bdd.ts",
+    "@effectionx/bdd/expect": "./test-support/expect.ts",
     "@effectionx/test-adapter": "npm:@effectionx/test-adapter@^0.7.3",
     "effection": "npm:effection@4.1.0-alpha.7",
     "effection/experimental": "npm:effection@4.1.0-alpha.7/experimental",

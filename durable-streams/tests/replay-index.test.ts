@@ -8,7 +8,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { ReplayIndex } from "../replay-index.ts";
 import type { DurableEvent, Json } from "../types.ts";
 

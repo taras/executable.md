@@ -2,5 +2,9 @@
   "name": "@executablemd/durable-effects",
   "version": "0.1.0",
   "type": "module",
-  "exports": "./mod.ts"
+  "exports": "./mod.ts",
+  "dependencies": {
+    "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*"
+  }
 }

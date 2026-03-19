@@ -13,7 +13,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { useScope } from "effection";
 import type { Operation } from "effection";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import {
   type DurableEvent,
   InMemoryStream,

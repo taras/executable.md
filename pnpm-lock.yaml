@@ -75,6 +75,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@effectionx/bdd':
+        specifier: workspace:*
+        version: link:test-support
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
@@ -90,15 +93,42 @@ importers:
 
   cli: {}
 
-  core: {}
+  core:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: workspace:*
+        version: link:../vendor/context-api
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
-  durable-effects: {}
+  durable-effects:
+    dependencies:
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   durable-streams: {}
 
   packages/code-review-agent: {}
 
-  runtime: {}
+  runtime:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: workspace:*
+        version: link:../vendor/context-api
+
+  test-support:
+    dependencies:
+      expect:
+        specifier: ^30.0.0
+        version: 30.3.0
 
   vendor/context-api: {}
 

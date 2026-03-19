@@ -118,17 +118,18 @@ export function describe(name: string, options: DescribeOptions, body: () => voi
 export function describe(name: string, optionsOrBody: DescribeOptions | (() => void), maybeBody?: () => void): void {
   const options = typeof optionsOrBody === "function" ? {} : optionsOrBody;
   const body = typeof optionsOrBody === "function" ? optionsOrBody : maybeBody!;
-  const original = current;
-  try {
-    const child = createTestAdapter({ name, parent: original });
+  const parent = current;
+  const child = createTestAdapter({ name, parent });
+  prims().describe(name, options, () => {
+    const saved = current;
     current = child;
-    prims().describe(name, options, () => {
+    try {
       prims().afterAll(() => child.destroy());
       body();
-    });
-  } finally {
-    current = original;
-  }
+    } finally {
+      current = saved;
+    }
+  });
 }
 
 describe.skip = (name: string, fn: () => void): void => {
@@ -136,17 +137,18 @@ describe.skip = (name: string, fn: () => void): void => {
 };
 
 describe.only = (name: string, fn: () => void): void => {
-  const original = current;
-  try {
-    const child = createTestAdapter({ name, parent: original });
+  const parent = current;
+  const child = createTestAdapter({ name, parent });
+  prims().describeOnly(name, () => {
+    const saved = current;
     current = child;
-    prims().describeOnly(name, () => {
+    try {
       prims().afterAll(() => child.destroy());
       fn();
-    });
-  } finally {
-    current = original;
-  }
+    } finally {
+      current = saved;
+    }
+  });
 };
 
 export function beforeAll(body: () => Operation<void>): void {

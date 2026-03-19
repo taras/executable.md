@@ -5,7 +5,7 @@
  * from the eval binding environment (env.values).
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { interpolateEvalBindings } from "../src/eval-interpolate.ts";
 
 describe("Tier P — Eval binding interpolation", () => {

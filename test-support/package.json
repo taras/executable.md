@@ -1,0 +1,13 @@
+{
+  "name": "@effectionx/bdd",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./node": "./bdd.ts",
+    "./expect": "./expect.ts"
+  },
+  "dependencies": {
+    "expect": "^30.0.0"
+  }
+}

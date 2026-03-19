@@ -1,5 +1,5 @@
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { parseFrontmatter, normalizeInputDef, inferType } from "../src/frontmatter.ts";
 
 describe("parseFrontmatter", () => {

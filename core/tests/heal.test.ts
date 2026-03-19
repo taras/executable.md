@@ -1,5 +1,5 @@
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { healSegment } from "../src/heal.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { expandSegments } from "../src/expand.ts";

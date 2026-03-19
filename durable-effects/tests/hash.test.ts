@@ -3,7 +3,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { computeSHA256 } from "../hash.ts";
 
 describe("computeSHA256", () => {

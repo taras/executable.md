@@ -5,7 +5,7 @@
  * globals are accessible — both standalone and inside eval blocks.
  */
 import { describe, it, beforeAll } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { race } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";
