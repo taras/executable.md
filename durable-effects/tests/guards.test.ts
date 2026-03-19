@@ -26,11 +26,7 @@ import { durableEval } from "../durable-eval.ts";
 import { durableGlob } from "../durable-glob.ts";
 import { durableReadFile } from "../durable-read-file.ts";
 import { durableResolve } from "../durable-resolve.ts";
-import {
-  useCodeFreshnessGuard,
-  useFileContentGuard,
-  useGlobContentGuard,
-} from "../guards.ts";
+import { useCodeFreshnessGuard, useFileContentGuard, useGlobContentGuard } from "../guards.ts";
 import { computeSHA256 } from "../hash.ts";
 
 // ---------------------------------------------------------------------------
@@ -79,10 +75,7 @@ describe("useFileContentGuard", () => {
     yield* useFileContentGuard();
 
     function* workflow(): Workflow<Json> {
-      return (yield* durableReadFile(
-        "read-input",
-        "src/input.txt",
-      )) as unknown as Json;
+      return (yield* durableReadFile("read-input", "src/input.txt")) as unknown as Json;
     }
 
     const result = yield* durableRun(workflow, { stream });
@@ -127,10 +120,7 @@ describe("useFileContentGuard", () => {
     yield* useFileContentGuard();
 
     function* workflow(): Workflow<Json> {
-      return (yield* durableReadFile(
-        "read-input",
-        "src/input.txt",
-      )) as unknown as Json;
+      return (yield* durableReadFile("read-input", "src/input.txt")) as unknown as Json;
     }
 
     try {
@@ -311,9 +301,7 @@ describe("useGlobContentGuard", () => {
     // Original scan found 1 file, current scan finds 2
     const fileA = { path: "a.ts", contentHash: yield* computeSHA256("A") };
     const originalMatches = [fileA];
-    const originalScanHash = yield* computeSHA256(
-      JSON.stringify(originalMatches),
-    );
+    const originalScanHash = yield* computeSHA256(JSON.stringify(originalMatches));
 
     // No Close event — so durableRun enters workflow and replays effects
     const events: DurableEvent[] = [

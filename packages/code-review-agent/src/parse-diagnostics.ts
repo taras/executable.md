@@ -7,13 +7,7 @@
  */
 
 import { categorizeRule } from "./categories.ts";
-import type {
-  Diagnostics,
-  DiagnosticGroup,
-  DoctorResult,
-  OxlintDiagnostic,
-  PR,
-} from "./types.ts";
+import type { Diagnostics, DiagnosticGroup, DoctorResult, OxlintDiagnostic, PR } from "./types.ts";
 
 function emptyDiagnostics(): Diagnostics {
   return {
@@ -66,41 +60,46 @@ function normalizeDiagnostic(entry: unknown): OxlintDiagnostic | null {
 
   const diagnostic = entry as Record<string, unknown>;
 
-  const ruleId = typeof diagnostic.ruleId === "string"
-    ? diagnostic.ruleId
-    : typeof diagnostic.code === "string"
-    ? parseRuleId(diagnostic.code)
-    : "unknown";
+  const ruleId =
+    typeof diagnostic.ruleId === "string"
+      ? diagnostic.ruleId
+      : typeof diagnostic.code === "string"
+        ? parseRuleId(diagnostic.code)
+        : "unknown";
 
   const severity = diagnostic.severity === "error" ? "error" : "warning";
   const message = typeof diagnostic.message === "string" ? diagnostic.message : "";
 
-  const file = typeof diagnostic.file === "string"
-    ? diagnostic.file
-    : typeof diagnostic.filename === "string"
-    ? diagnostic.filename
-    : "";
+  const file =
+    typeof diagnostic.file === "string"
+      ? diagnostic.file
+      : typeof diagnostic.filename === "string"
+        ? diagnostic.filename
+        : "";
 
-  const firstLabel = Array.isArray(diagnostic.labels)
-    ? diagnostic.labels[0]
-    : undefined;
-  const firstSpan = firstLabel && typeof firstLabel === "object"
-    ? (firstLabel as { span?: unknown }).span
-    : undefined;
+  const firstLabel = Array.isArray(diagnostic.labels) ? diagnostic.labels[0] : undefined;
+  const firstSpan =
+    firstLabel && typeof firstLabel === "object"
+      ? (firstLabel as { span?: unknown }).span
+      : undefined;
 
-  const line = typeof diagnostic.line === "number"
-    ? diagnostic.line
-    : (firstSpan && typeof firstSpan === "object"
-        && typeof (firstSpan as { line?: unknown }).line === "number")
-    ? (firstSpan as { line: number }).line
-    : 0;
+  const line =
+    typeof diagnostic.line === "number"
+      ? diagnostic.line
+      : firstSpan &&
+          typeof firstSpan === "object" &&
+          typeof (firstSpan as { line?: unknown }).line === "number"
+        ? (firstSpan as { line: number }).line
+        : 0;
 
-  const column = typeof diagnostic.column === "number"
-    ? diagnostic.column
-    : (firstSpan && typeof firstSpan === "object"
-        && typeof (firstSpan as { column?: unknown }).column === "number")
-    ? (firstSpan as { column: number }).column
-    : 0;
+  const column =
+    typeof diagnostic.column === "number"
+      ? diagnostic.column
+      : firstSpan &&
+          typeof firstSpan === "object" &&
+          typeof (firstSpan as { column?: unknown }).column === "number"
+        ? (firstSpan as { column: number }).column
+        : 0;
 
   return {
     ruleId,
@@ -115,11 +114,7 @@ function normalizeDiagnostic(entry: unknown): OxlintDiagnostic | null {
 /**
  * Parse raw Oxlint JSON output into structured diagnostics.
  */
-export function parseDiagnostics(
-  rawJson: string,
-  pr: PR,
-  doctor: DoctorResult,
-): Diagnostics {
+export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
   let raw: OxlintDiagnostic[];
   try {
     const parsed = JSON.parse(rawJson);
@@ -130,12 +125,13 @@ export function parseDiagnostics(
     return emptyDiagnostics();
   }
 
-  const filtered = doctor.recommendation === "type-aware-filtered"
-    ? raw.filter((d) => {
-      const msg = d.message ?? "";
-      return !msg.includes("Cannot find module") && !msg.includes("cannot find");
-    })
-    : raw;
+  const filtered =
+    doctor.recommendation === "type-aware-filtered"
+      ? raw.filter((d) => {
+          const msg = d.message ?? "";
+          return !msg.includes("Cannot find module") && !msg.includes("cannot find");
+        })
+      : raw;
 
   const groupMap = new Map<string, OxlintDiagnostic[]>();
   for (const d of filtered) {
@@ -176,9 +172,8 @@ export function parseDiagnostics(
   const allFiles = new Set(filtered.map((d) => d.file).filter(Boolean));
   const fileCount = allFiles.size;
   const ruleCount = groups.length;
-  const density = pr.stats.additions > 0
-    ? Math.round((total / pr.stats.additions) * 1000) / 1000
-    : 0;
+  const density =
+    pr.stats.additions > 0 ? Math.round((total / pr.stats.additions) * 1000) / 1000 : 0;
 
   const lines: string[] = [];
   lines.push(
@@ -206,9 +201,7 @@ export function parseDiagnostics(
     lines.push(
       `Note: ${doctor.nativeSpecifiers.count} source files use scheme specifiers (jsr:, npm:).`,
     );
-    lines.push(
-      "Run `deno lint --fix` with no-scheme-specifiers plugin to migrate.",
-    );
+    lines.push("Run `deno lint --fix` with no-scheme-specifiers plugin to migrate.");
   }
 
   return {

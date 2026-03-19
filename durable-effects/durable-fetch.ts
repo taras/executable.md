@@ -6,11 +6,7 @@
  * During replay, the stored result is returned without executing.
  */
 
-import {
-  type Json,
-  type Workflow,
-  createDurableOperation,
-} from "@executablemd/durable-streams";
+import { type Json, type Workflow, createDurableOperation } from "@executablemd/durable-streams";
 import { fetch } from "@executablemd/runtime";
 import { computeSHA256 } from "./hash.ts";
 
@@ -50,10 +46,7 @@ const SAFE_REQUEST_HEADERS = new Set([
  * when a request body is present, so different payloads to the same URL
  * produce distinct journal entries.
  */
-export function* durableFetch(
-  name: string,
-  options: FetchOptions,
-): Workflow<FetchResult> {
+export function* durableFetch(name: string, options: FetchOptions): Workflow<FetchResult> {
   const { url, method = "GET", headers = {}, body, timeout = 30_000 } = options;
 
   // Record only safe header names + values; redact sensitive ones to key-only
@@ -89,12 +82,7 @@ export function* durableFetch(
 
       // Filter response headers to keep only useful ones
       const responseHeaders: Record<string, string> = {};
-      for (const key of [
-        "content-type",
-        "etag",
-        "last-modified",
-        "cache-control",
-      ]) {
+      for (const key of ["content-type", "etag", "last-modified", "cache-control"]) {
         const val = response.headers.get(key);
         if (val) responseHeaders[key] = val;
       }

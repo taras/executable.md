@@ -50,10 +50,7 @@ function makeCtx(
       if (!comp) throw new Error(`Component not found: ${name}`);
       return comp;
     },
-    runModifierChain: function* (
-      _modifiers: Modifier[],
-      _context: CodeBlockContext,
-    ) {
+    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
       return (
         codeResult ?? {
           output: "mock output\n",
@@ -73,13 +70,7 @@ function expand(
 ): Operation<string> {
   function* op() {
     return yield* EvalEnvCtx.with({ values: {} }, function* () {
-      const expanded = yield* expandSegments(
-        segments,
-        meta,
-        props,
-        new Set(),
-        ctx,
-      );
+      const expanded = yield* expandSegments(segments, meta, props, new Set(), ctx);
       return renderSegments(expanded);
     });
   }
@@ -93,13 +84,7 @@ function expandWithEnv(
   function* op() {
     const env = { values: {} as Record<string, unknown> };
     const output = yield* EvalEnvCtx.with(env, function* () {
-      const expanded = yield* expandSegments(
-        segments,
-        {},
-        {},
-        new Set(),
-        ctx,
-      );
+      const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
       return renderSegments(expanded);
     });
     return { output, env: env.values };
@@ -113,7 +98,7 @@ function expandWithEnv(
 
 describe("expansion", () => {
   // C1: Basic expansion
-  it("C1: basic expansion — component body in output", function*() {
+  it("C1: basic expansion — component body in output", function* () {
     const comp = makeComponent("Greeting", "Hello world!");
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments("<Greeting />");
@@ -122,7 +107,7 @@ describe("expansion", () => {
   });
 
   // C2: Content slot
-  it("C2: content slot — children at <Content /> position", function*() {
+  it("C2: content slot — children at <Content /> position", function* () {
     const comp = makeComponent("Wrap", "Before <Content /> After");
     const ctx = makeCtx({ Wrap: comp });
     const segments = scanSegments("<Wrap>middle</Wrap>");
@@ -131,7 +116,7 @@ describe("expansion", () => {
   });
 
   // C3: Nested expansion
-  it("C3: nested expansion — A contains B", function*() {
+  it("C3: nested expansion — A contains B", function* () {
     const compB = makeComponent("B", "inner");
     const compA = makeComponent("A", "outer <B /> end");
     const ctx = makeCtx({ A: compA, B: compB });
@@ -141,7 +126,7 @@ describe("expansion", () => {
   });
 
   // C4: Transitive expansion — A→B→C
-  it("C4: transitive expansion — A references B references C", function*() {
+  it("C4: transitive expansion — A references B references C", function* () {
     const compC = makeComponent("C", "leaf");
     const compB = makeComponent("B", "mid(<C />)");
     const compA = makeComponent("A", "top(<B />)");
@@ -152,7 +137,7 @@ describe("expansion", () => {
   });
 
   // C5: Direct cycle
-  it("C5: direct cycle — A contains A → ErrorSegment", function*() {
+  it("C5: direct cycle — A contains A → ErrorSegment", function* () {
     const compA = makeComponent("A", "start <A /> end");
     const ctx = makeCtx({ A: compA });
     const segments = scanSegments("<A />");
@@ -162,7 +147,7 @@ describe("expansion", () => {
   });
 
   // C6: Mutual cycle — A→B→A
-  it("C6: mutual cycle — A→B→A → ErrorSegment", function*() {
+  it("C6: mutual cycle — A→B→A → ErrorSegment", function* () {
     const compA = makeComponent("A", "a(<B />)");
     const compB = makeComponent("B", "b(<A />)");
     const ctx = makeCtx({ A: compA, B: compB });
@@ -173,7 +158,7 @@ describe("expansion", () => {
   });
 
   // C8: Frontmatter interpolation
-  it("C8: frontmatter interpolation — {meta.title}", function*() {
+  it("C8: frontmatter interpolation — {meta.title}", function* () {
     const comp = makeComponent("Page", "Title: {meta.title}", {
       meta: { title: "My Page" },
     });
@@ -184,7 +169,7 @@ describe("expansion", () => {
   });
 
   // C9: Props interpolation
-  it("C9: props interpolation — {props.name}", function*() {
+  it("C9: props interpolation — {props.name}", function* () {
     const comp = makeComponent("Greeting", "Hello, {props.name}!", {
       inputs: { name: { type: "string", required: true } },
     });
@@ -195,7 +180,7 @@ describe("expansion", () => {
   });
 
   // C10: Missing interpolation key → empty string
-  it("C10: missing interpolation key → empty string", function*() {
+  it("C10: missing interpolation key → empty string", function* () {
     const comp = makeComponent("Comp", "value: {meta.nonexistent}");
     const ctx = makeCtx({ Comp: comp });
     const segments = scanSegments("<Comp />");
@@ -204,7 +189,7 @@ describe("expansion", () => {
   });
 
   // C11: Nested key access
-  it("C11: nested key access — {meta.config.db.host}", function*() {
+  it("C11: nested key access — {meta.config.db.host}", function* () {
     const comp = makeComponent("Comp", "host: {meta.config.db.host}", {
       meta: { config: { db: { host: "localhost" } } },
     });
@@ -215,7 +200,7 @@ describe("expansion", () => {
   });
 
   // C12: No Content slot — children silently discarded
-  it("C12: no Content slot — children silently discarded", function*() {
+  it("C12: no Content slot — children silently discarded", function* () {
     const comp = makeComponent("NoSlot", "fixed content");
     const ctx = makeCtx({ NoSlot: comp });
     const segments = scanSegments("<NoSlot>ignored</NoSlot>");
@@ -224,11 +209,8 @@ describe("expansion", () => {
   });
 
   // C13: Multiple Content slots
-  it("C13: multiple Content slots — each replaced with same children", function*() {
-    const comp = makeComponent(
-      "Multi",
-      "first: <Content /> second: <Content />",
-    );
+  it("C13: multiple Content slots — each replaced with same children", function* () {
+    const comp = makeComponent("Multi", "first: <Content /> second: <Content />");
     const ctx = makeCtx({ Multi: comp });
     const segments = scanSegments("<Multi>stuff</Multi>");
     const output = yield* expand(segments, ctx);
@@ -236,7 +218,7 @@ describe("expansion", () => {
   });
 
   // C16: Default applied
-  it("C16: default applied — props.greeting resolves to default", function*() {
+  it("C16: default applied — props.greeting resolves to default", function* () {
     const comp = makeComponent("Greeting", "{props.greeting}, world!", {
       inputs: { greeting: { type: "string", default: "Hello" } },
     });
@@ -247,7 +229,7 @@ describe("expansion", () => {
   });
 
   // C20: No inputs, no props — valid
-  it("C20: no inputs, no props — valid", function*() {
+  it("C20: no inputs, no props — valid", function* () {
     const comp = makeComponent("Badge", "badge");
     const ctx = makeCtx({ Badge: comp });
     const segments = scanSegments("<Badge />");
@@ -256,7 +238,7 @@ describe("expansion", () => {
   });
 
   // C22: Optional with no default, not passed → empty string
-  it("C22: optional with no default, not passed → empty in interpolation", function*() {
+  it("C22: optional with no default, not passed → empty in interpolation", function* () {
     const comp = makeComponent("Comp", "val:{props.opt}", {
       inputs: { opt: { type: "string", required: false } },
     });
@@ -267,22 +249,16 @@ describe("expansion", () => {
   });
 
   // Code block expansion
-  it("code block expansion via modifier chain", function*() {
-    const ctx = makeCtx(
-      {},
-      { output: "hello\n", exitCode: 0, stderr: "" },
-    );
+  it("code block expansion via modifier chain", function* () {
+    const ctx = makeCtx({}, { output: "hello\n", exitCode: 0, stderr: "" });
     const segments = scanSegments("```bash exec\necho hello\n```\n");
     const output = yield* expand(segments, ctx);
     expect(output).toBe("hello\n");
   });
 
   // Code block with non-zero exit
-  it("code block with non-zero exit → error", function*() {
-    const ctx = makeCtx(
-      {},
-      { output: "", exitCode: 1, stderr: "not found" },
-    );
+  it("code block with non-zero exit → error", function* () {
+    const ctx = makeCtx({}, { output: "", exitCode: 1, stderr: "not found" });
     const segments = scanSegments("```bash exec\nfoo\n```\n");
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
@@ -290,36 +266,31 @@ describe("expansion", () => {
   });
 
   // Silent code block → no output
-  it("silent code block produces no output", function*() {
-    const ctx = makeCtx(
-      {},
-      { output: "", exitCode: 0, stderr: "" },
-    );
+  it("silent code block produces no output", function* () {
+    const ctx = makeCtx({}, { output: "", exitCode: 0, stderr: "" });
     const segments = scanSegments("```bash silent exec\necho hello\n```\n");
     const output = yield* expand(segments, ctx);
     expect(output).toBe("");
   });
 
-  it("captures component output with as", function*() {
+  it("captures component output with as", function* () {
     const comp = makeComponent("Greeting", "Hello world!");
     const ctx = makeCtx({ Greeting: comp });
-    const segments = scanSegments("<Greeting as=\"saved\" />");
+    const segments = scanSegments('<Greeting as="saved" />');
     const { output, env } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["saved"]).toBe("Hello world!");
   });
 
-  it("Capture stores children output into env and stays silent", function*() {
+  it("Capture stores children output into env and stays silent", function* () {
     const ctx = makeCtx({});
-    const segments = scanSegments(
-      "<Capture as=\"x\">hello\n</Capture>",
-    );
+    const segments = scanSegments('<Capture as="x">hello\n</Capture>');
     const { output, env } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["x"]).toBe("hello");
   });
 
-  it("Capture rejects expression as prop", function*() {
+  it("Capture rejects expression as prop", function* () {
     const ctx = makeCtx({});
     const segments = scanSegments("<Capture as={name}>text</Capture>");
     const output = yield* expand(segments, ctx);
@@ -327,23 +298,23 @@ describe("expansion", () => {
     expect(output).toContain("must be a string literal");
   });
 
-  it("Capture rejects self-closing usage", function*() {
+  it("Capture rejects self-closing usage", function* () {
     const ctx = makeCtx({});
-    const segments = scanSegments("<Capture as=\"x\" />");
+    const segments = scanSegments('<Capture as="x" />');
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
     expect(output).toContain("must have content");
   });
 
-  it("Capture rejects extra props", function*() {
+  it("Capture rejects extra props", function* () {
     const ctx = makeCtx({});
-    const segments = scanSegments("<Capture as=\"x\" slot=\"y\">text</Capture>");
+    const segments = scanSegments('<Capture as="x" slot="y">text</Capture>');
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
     expect(output).toContain('only accepts "as" and "select" props');
   });
 
-  it("Capture with select extracts code block by CSS selector", function*() {
+  it("Capture with select extracts code block by CSS selector", function* () {
     const ctx = makeCtx({});
     const segments = scanSegments(
       '<Capture as="data" select="code[lang=json]">prose text\n\n```json\n{"key":"val"}\n```\n\nmore prose\n</Capture>',
@@ -353,7 +324,7 @@ describe("expansion", () => {
     expect(env["data"]).toBe('{"key":"val"}');
   });
 
-  it("Capture with select falls back to full content when no match", function*() {
+  it("Capture with select falls back to full content when no match", function* () {
     const ctx = makeCtx({});
     const segments = scanSegments(
       '<Capture as="data" select="code[lang=json]">no code here\n</Capture>',
@@ -363,26 +334,22 @@ describe("expansion", () => {
     expect(env["data"]).toBe("no code here");
   });
 
-  it("Capture with select extracts paragraph text", function*() {
+  it("Capture with select extracts paragraph text", function* () {
     const ctx = makeCtx({});
-    const segments = scanSegments(
-      '<Capture as="data" select="paragraph">Hello world\n</Capture>',
-    );
+    const segments = scanSegments('<Capture as="data" select="paragraph">Hello world\n</Capture>');
     const { output, env } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe("Hello world");
   });
 
-  it("Capture accepts select alongside as without error", function*() {
+  it("Capture accepts select alongside as without error", function* () {
     const ctx = makeCtx({});
-    const segments = scanSegments(
-      '<Capture as="x" select="paragraph">text\n</Capture>',
-    );
+    const segments = scanSegments('<Capture as="x" select="paragraph">text\n</Capture>');
     const output = yield* expand(segments, ctx);
     expect(output).not.toContain("ERROR");
   });
 
-  it("component as rejects expression prop", function*() {
+  it("component as rejects expression prop", function* () {
     const comp = makeComponent("Greeting", "Hello world!");
     const ctx = makeCtx({ Greeting: comp });
     const segments = scanSegments("<Greeting as={name} />");
@@ -398,54 +365,74 @@ describe("expansion", () => {
 
 describe("validateProps", () => {
   // C14: Undeclared prop rejected
-  it("C14: undeclared prop → PropValidationError", function*() {
+  it("C14: undeclared prop → PropValidationError", function* () {
     expect(() => validateProps("Comp", { foo: "bar" }, {})).toThrow('Unknown prop "foo"');
   });
 
   // C15: Required prop missing
-  it("C15: required prop missing → PropValidationError", function*() {
+  it("C15: required prop missing → PropValidationError", function* () {
     expect(() =>
-      validateProps("Comp", {}, {
-        name: { type: "string", required: true },
-      }),
+      validateProps(
+        "Comp",
+        {},
+        {
+          name: { type: "string", required: true },
+        },
+      ),
     ).toThrow('Required prop "name"');
   });
 
   // C17: Type mismatch rejected
-  it("C17: type mismatch → PropValidationError", function*() {
+  it("C17: type mismatch → PropValidationError", function* () {
     expect(() =>
-      validateProps("Comp", { count: "abc" }, {
-        count: { type: "number" },
-      }),
+      validateProps(
+        "Comp",
+        { count: "abc" },
+        {
+          count: { type: "number" },
+        },
+      ),
     ).toThrow("expected number");
   });
 
   // C18: Enum validated — invalid value
-  it("C18: enum invalid value → PropValidationError", function*() {
+  it("C18: enum invalid value → PropValidationError", function* () {
     expect(() =>
-      validateProps("Comp", { model: "bad" }, {
-        model: { type: "string", enum: ["a", "b"] },
-      }),
+      validateProps(
+        "Comp",
+        { model: "bad" },
+        {
+          model: { type: "string", enum: ["a", "b"] },
+        },
+      ),
     ).toThrow("must be one of");
   });
 
   // C19: Enum accepted — valid value
-  it("C19: enum valid value → accepted", function*() {
-    const result = validateProps("Comp", { model: "a" }, {
-      model: { type: "string", enum: ["a", "b"] },
-    });
+  it("C19: enum valid value → accepted", function* () {
+    const result = validateProps(
+      "Comp",
+      { model: "a" },
+      {
+        model: { type: "string", enum: ["a", "b"] },
+      },
+    );
     expect(result["model"]).toBe("a");
   });
 
   // C21: No inputs, some props → error
-  it("C21: no inputs, some props → PropValidationError", function*() {
+  it("C21: no inputs, some props → PropValidationError", function* () {
     expect(() => validateProps("Badge", { size: "lg" }, {})).toThrow(PropValidationError);
   });
 
-  it("applies default when prop not provided", function*() {
-    const result = validateProps("Comp", {}, {
-      greeting: { type: "string", default: "Hello" },
-    });
+  it("applies default when prop not provided", function* () {
+    const result = validateProps(
+      "Comp",
+      {},
+      {
+        greeting: { type: "string", default: "Hello" },
+      },
+    );
     expect(result["greeting"]).toBe("Hello");
   });
 });
@@ -455,33 +442,27 @@ describe("validateProps", () => {
 // ---------------------------------------------------------------------------
 
 describe("interpolate", () => {
-  it("replaces meta references", function*() {
+  it("replaces meta references", function* () {
     expect(interpolate("{meta.title}", { title: "Hello" }, {})).toBe("Hello");
   });
 
-  it("replaces props references", function*() {
+  it("replaces props references", function* () {
     expect(interpolate("{props.name}", {}, { name: "world" })).toBe("world");
   });
 
-  it("missing key → empty string", function*() {
+  it("missing key → empty string", function* () {
     expect(interpolate("{meta.nope}", {}, {})).toBe("");
   });
 
-  it("array → comma-joined", function*() {
-    expect(
-      interpolate("{meta.tags}", { tags: ["a", "b", "c"] }, {}),
-    ).toBe("a, b, c");
+  it("array → comma-joined", function* () {
+    expect(interpolate("{meta.tags}", { tags: ["a", "b", "c"] }, {})).toBe("a, b, c");
   });
 
-  it("nested access", function*() {
-    expect(
-      interpolate("{meta.a.b.c}", { a: { b: { c: "deep" } } }, {}),
-    ).toBe("deep");
+  it("nested access", function* () {
+    expect(interpolate("{meta.a.b.c}", { a: { b: { c: "deep" } } }, {})).toBe("deep");
   });
 
-  it("escaped braces → literal", function*() {
-    expect(
-      interpolate("\\{meta.title}", { title: "Hello" }, {}),
-    ).toBe("{meta.title}");
+  it("escaped braces → literal", function* () {
+    expect(interpolate("\\{meta.title}", { title: "Hello" }, {})).toBe("{meta.title}");
   });
 });

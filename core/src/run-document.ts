@@ -19,9 +19,7 @@ import {
   ReplayGuard,
   StaleInputError,
 } from "@executablemd/durable-streams";
-import {
-  computeSHA256,
-} from "@executablemd/durable-effects";
+import { computeSHA256 } from "@executablemd/durable-effects";
 import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
@@ -121,9 +119,7 @@ function* durableImportComponent(
   if (result.path.endsWith(".ts")) {
     // Resolve to absolute path for dynamic import
     const currentDir = yield* ephemeral(cwd());
-    const absolutePath = result.path.startsWith("/")
-      ? result.path
-      : `${currentDir}/${result.path}`;
+    const absolutePath = result.path.startsWith("/") ? result.path : `${currentDir}/${result.path}`;
     const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`)))) as {
       default?: unknown;
       inputs?: unknown;
@@ -152,9 +148,7 @@ function* durableImportComponent(
 
   // Markdown component: parse at runtime — deterministic from content
   const parsed = matter(result.content);
-  const { meta, inputs } = parseFrontmatter(
-    parsed.data as Record<string, unknown>,
-  );
+  const { meta, inputs } = parseFrontmatter(parsed.data as Record<string, unknown>);
   const bodySegments = scanSegments(parsed.content);
 
   return {
@@ -172,26 +166,19 @@ function* durableImportComponent(
 // Component path resolution — runs inside Operation context (not Workflow)
 // ---------------------------------------------------------------------------
 
-function* resolveComponentPath(
-  name: string,
-  searchPaths: string[],
-): Operation<string> {
+function* resolveComponentPath(name: string, searchPaths: string[]): Operation<string> {
   const baseName = name.replace(/\./g, "/");
 
   for (const dir of searchPaths) {
     // Try {dir}/{Name}.md (backward compat — .md wins over .ts)
-    const mdCandidate = normalizePath(
-      dir === "." ? `${baseName}.md` : `${dir}/${baseName}.md`,
-    );
+    const mdCandidate = normalizePath(dir === "." ? `${baseName}.md` : `${dir}/${baseName}.md`);
     const mdStat = yield* stat(mdCandidate);
     if (mdStat.exists && mdStat.isFile) {
       return mdCandidate;
     }
 
     // Try {dir}/{Name}.ts (function component)
-    const tsCandidate = normalizePath(
-      dir === "." ? `${baseName}.ts` : `${dir}/${baseName}.ts`,
-    );
+    const tsCandidate = normalizePath(dir === "." ? `${baseName}.ts` : `${dir}/${baseName}.ts`);
     const tsStat = yield* stat(tsCandidate);
     if (tsStat.exists && tsStat.isFile) {
       return tsCandidate;
@@ -216,9 +203,7 @@ function* resolveComponentPath(
     }
   }
 
-  throw new Error(
-    `Cannot resolve component: ${name} (searched: ${searchPaths.join(", ")})`,
-  );
+  throw new Error(`Cannot resolve component: ${name} (searched: ${searchPaths.join(", ")})`);
 }
 
 /** Strip leading ./ from paths for workspace-relative normalization. */
@@ -235,10 +220,7 @@ function* useImportComponentGuard(): Operation<void> {
 
   yield* ReplayGuard.around({
     *check([event], next) {
-      if (
-        event.description["type"] === "import_component" &&
-        event.result.status === "ok"
-      ) {
+      if (event.description["type"] === "import_component" && event.result.status === "ok") {
         const result = event.result.value as unknown as ImportResult | undefined;
         const storedPath = result?.path;
         if (storedPath && !cache.has(storedPath)) {
@@ -254,10 +236,7 @@ function* useImportComponentGuard(): Operation<void> {
       yield* next(event);
     },
     decide([event], next) {
-      if (
-        event.description["type"] === "import_component" &&
-        event.result.status === "ok"
-      ) {
+      if (event.description["type"] === "import_component" && event.result.status === "ok") {
         const result = event.result.value as unknown as ImportResult | undefined;
         if (result) {
           const currentHash = cache.get(result.path);
@@ -283,8 +262,8 @@ function* useImportComponentGuard(): Operation<void> {
 // handlers (exec) yield DurableEffects. See DEC-003 in specs/decisions.md.
 // ---------------------------------------------------------------------------
 
-const execFactory: ModifierFactory = (_params) =>
-  (_args, _next) => function* () {
+const execFactory: ModifierFactory = (_params) => (_args, _next) =>
+  (function* () {
     const context = yield* useCodeBlock();
     const command = buildCommand(context.language, context.content);
     const result = (yield createDurableOperation<Json>(
@@ -307,13 +286,13 @@ const execFactory: ModifierFactory = (_params) =>
       exitCode: result.exitCode,
       stderr: result.stderr,
     };
-  }();
+  })();
 
-const silentFactory: ModifierFactory = (_params) =>
-  (_args, next) => function* () {
+const silentFactory: ModifierFactory = (_params) => (_args, next) =>
+  (function* () {
     yield* next(); // inner chain runs — exec journals its result
     return { output: "", exitCode: 0, stderr: "" };
-  }();
+  })();
 
 // ---------------------------------------------------------------------------
 // Document workflow (spec §7.1)
@@ -330,16 +309,10 @@ function* documentWorkflow(
   modifierRegistry: ModifierRegistry,
 ): Workflow<string> {
   // Import root — same pipeline as any component
-  const root = yield* durableImportComponent(
-    "__root__",
-    docPath,
-    searchPaths,
-  );
+  const root = yield* durableImportComponent("__root__", docPath, searchPaths);
 
   if (root.kind === "function") {
-    throw new Error(
-      "Root document must be a markdown file, not a function component",
-    );
+    throw new Error("Root document must be a markdown file, not a function component");
   }
 
   // Create per-document binding environment (spec §3.2).
@@ -351,16 +324,9 @@ function* documentWorkflow(
   // Build the expansion context
   const ctx: ExpansionContext = {
     importComponent: function* (name: string) {
-      return yield* durableImportComponent(
-        name,
-        undefined,
-        searchPaths,
-      );
+      return yield* durableImportComponent(name, undefined, searchPaths);
     },
-    runModifierChain: function* (
-      modifiers: Modifier[],
-      context: CodeBlockContext,
-    ) {
+    runModifierChain: function* (modifiers: Modifier[], context: CodeBlockContext) {
       const chain = composeModifierChain(modifiers, context, modifierRegistry);
       return yield* chain();
     },
@@ -379,37 +345,27 @@ function* documentWorkflow(
   //
   // The EvalEnvCtx.with() wraps the entire loop so all segments share
   // the same binding environment.
-  const scopedExpansion: Operation<string> = EvalEnvCtx.with(
-    env,
-    function* () {
-      const chunks: string[] = [];
+  const scopedExpansion: Operation<string> = EvalEnvCtx.with(env, function* () {
+    const chunks: string[] = [];
 
-      for (const segment of root.bodySegments) {
-        const expanded = yield* expandSegments(
-          [segment],
-          root.meta,
-          {},
-          new Set(),
-          ctx,
-          counter,
-        );
+    for (const segment of root.bodySegments) {
+      const expanded = yield* expandSegments([segment], root.meta, {}, new Set(), ctx, counter);
 
-        for (const resolved of expanded) {
-          const text = renderSegment(resolved);
-          if (text) {
-            // Emit through the EMA Output Api (spec §9).
-            // ephemeral() bridges from Workflow (durable) to Operation
-            // (non-durable) — output emission is a derived side effect,
-            // not journaled.
-            yield* ephemeral(EMA.operations.output(text));
-            chunks.push(text);
-          }
+      for (const resolved of expanded) {
+        const text = renderSegment(resolved);
+        if (text) {
+          // Emit through the EMA Output Api (spec §9).
+          // ephemeral() bridges from Workflow (durable) to Operation
+          // (non-durable) — output emission is a derived side effect,
+          // not journaled.
+          yield* ephemeral(EMA.operations.output(text));
+          chunks.push(text);
         }
       }
+    }
 
-      return chunks.join("");
-    },
-  );
+    return chunks.join("");
+  });
 
   return yield* ephemeral(scopedExpansion);
 }

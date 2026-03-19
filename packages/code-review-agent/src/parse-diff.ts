@@ -82,7 +82,12 @@ function isConfigFile(filePath: string): boolean {
   const base = lower.split("/").pop() ?? "";
   return (
     base.includes(".config.") ||
-    base.startsWith(".") && (base.endsWith("rc") || base.endsWith("rc.json") || base.endsWith("rc.js") || base.endsWith("rc.yml") || base.endsWith("rc.yaml")) ||
+    (base.startsWith(".") &&
+      (base.endsWith("rc") ||
+        base.endsWith("rc.json") ||
+        base.endsWith("rc.js") ||
+        base.endsWith("rc.yml") ||
+        base.endsWith("rc.yaml"))) ||
     base.startsWith("tsconfig") ||
     base === "package.json" ||
     base === "package-lock.json" ||
@@ -130,7 +135,10 @@ function parseNameStatus(raw: string): Map<string, "A" | "M" | "D" | "R" | "C"> 
 /**
  * Parse a unified diff (`git diff`) into DiffFile objects.
  */
-function parseDiffContent(rawDiff: string, statusMap: Map<string, "A" | "M" | "D" | "R" | "C">): DiffFile[] {
+function parseDiffContent(
+  rawDiff: string,
+  statusMap: Map<string, "A" | "M" | "D" | "R" | "C">,
+): DiffFile[] {
   const files: DiffFile[] = [];
 
   // Split on `diff --git` headers
@@ -255,9 +263,8 @@ export function parseDiff(
   const removed = allLines.filter((l) => l.type === "remove");
 
   const addedSource = added.map((l) => l.content).join("\n");
-  const diffPreview = addedSource.length > DIFF_PREVIEW_MAX
-    ? addedSource.slice(0, DIFF_PREVIEW_MAX)
-    : addedSource;
+  const diffPreview =
+    addedSource.length > DIFF_PREVIEW_MAX ? addedSource.slice(0, DIFF_PREVIEW_MAX) : addedSource;
 
   return {
     files,

@@ -19,11 +19,7 @@ export const STRUCTURAL_RULES = [
   "no-unnecessary-boolean-literal-compare",
 ] as const;
 
-export const VERBOSITY_RULES = [
-  "no-inferrable-types",
-  "no-console",
-  "no-debugger",
-] as const;
+export const VERBOSITY_RULES = ["no-inferrable-types", "no-console", "no-debugger"] as const;
 
 export const TYPE_AWARE_RULES = [
   "no-unnecessary-type-assertion",
@@ -46,8 +42,7 @@ export function categorizeRule(
   // Strip plugin prefix (e.g., "eslint/no-unused-vars" → "no-unused-vars")
   const bare = ruleId.includes("/") ? ruleId.split("/").pop()! : ruleId;
 
-  const categories: ("structural" | "verbosity" | "typeAware" | "other")[] =
-    [];
+  const categories: ("structural" | "verbosity" | "typeAware" | "other")[] = [];
 
   if (structuralSet.has(bare)) categories.push("structural");
   if (verbositySet.has(bare)) categories.push("verbosity");

@@ -21,11 +21,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("hello from eval");
   });
@@ -38,11 +40,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("42");
   });
@@ -55,11 +59,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // No output from the eval block
     expect(output).toBe("before\nafter");
@@ -73,11 +79,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toBe("before\nafter");
   });
@@ -90,11 +98,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("explicit");
     expect(output).not.toContain("ignored");
@@ -108,11 +118,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("persisted output");
   });
@@ -125,11 +137,13 @@ describe("Eval block return value", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // Eval block with no return produces no output
     expect(output).toBe("before\nafter");
@@ -144,20 +158,24 @@ describe("Eval block return value", () => {
     yield* useEchoExec();
 
     // Golden run
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output1).toContain("replay-me");
 
     // Replay
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output2).toContain("replay-me");
   });

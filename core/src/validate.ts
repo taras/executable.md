@@ -15,9 +15,7 @@ export class PropValidationError extends Error {
   errors: string[];
 
   constructor(componentName: string, errors: string[]) {
-    super(
-      `Prop validation failed for <${componentName} />:\n  - ${errors.join("\n  - ")}`,
-    );
+    super(`Prop validation failed for <${componentName} />:\n  - ${errors.join("\n  - ")}`);
     this.name = "PropValidationError";
     this.componentName = componentName;
     this.errors = errors;
@@ -58,8 +56,7 @@ export function validateProps(
       // Type check
       if (def.type !== "any" && !checkType(value, def.type)) {
         errors.push(
-          `Prop "${key}" on <${componentName} /> expected ${def.type}, ` +
-            `got ${typeof value}`,
+          `Prop "${key}" on <${componentName} /> expected ${def.type}, ` + `got ${typeof value}`,
         );
       }
 
@@ -99,9 +96,7 @@ function checkType(value: Json, type: InputDefinition["type"]): boolean {
     case "array":
       return Array.isArray(value);
     case "object":
-      return (
-        typeof value === "object" && value !== null && !Array.isArray(value)
-      );
+      return typeof value === "object" && value !== null && !Array.isArray(value);
     case "any":
       return true;
   }

@@ -7,12 +7,7 @@
  * - Error ↔ SerializedError
  */
 
-import type {
-  EffectionResult,
-  Json,
-  Result,
-  SerializedError,
-} from "./types.ts";
+import type { EffectionResult, Json, Result, SerializedError } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Error serialization

@@ -8,18 +8,16 @@ import { InMemoryStream, ReplayIndex } from "../mod.ts";
 import type { DurableEvent } from "../mod.ts";
 
 describe("smoke tests", () => {
-  it("ReplayIndex can be constructed with empty events", 
+  it("ReplayIndex can be constructed with empty events", function* () {
     // deno-lint-ignore require-yield
-    function* () {
     const index = new ReplayIndex([]);
     expect(index.peekYield("root")).toBeUndefined();
     expect(index.hasClose("root")).toBe(false);
     expect(index.isFullyReplayed("root")).toBe(false);
   });
 
-  it("InMemoryStream starts empty", 
+  it("InMemoryStream starts empty", function* () {
     // deno-lint-ignore require-yield
-    function* () {
     const stream = new InMemoryStream();
     expect(stream.snapshot()).toEqual([]);
   });

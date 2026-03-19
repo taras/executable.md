@@ -41,19 +41,11 @@ export function* useDenoCompiler(): Operation<void> {
 
       const importLines = allImports.join("\n");
 
-      const moduleSource = [
-        importLines,
-        `export default function*(env) {`,
-        source,
-        `}`,
-      ].join("\n");
+      const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
 
-      const dataUri =
-        `data:application/typescript,${encodeURIComponent(moduleSource)}`;
+      const dataUri = `data:application/typescript,${encodeURIComponent(moduleSource)}`;
       const mod: {
-        default: (
-          env: Record<string, unknown>,
-        ) => Generator<unknown, unknown, unknown>;
+        default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
       } = yield* call(() => import(dataUri));
 
       if (typeof mod.default !== "function") {

@@ -110,7 +110,7 @@ export function transformBlock(
   }
 
   const userImports = importNodes.map((node: AstNode) =>
-    source.slice(node.start - offset, node.end - offset)
+    source.slice(node.start - offset, node.end - offset),
   );
 
   // Build AST with only body nodes for mode detection, export collection, etc.
@@ -343,10 +343,7 @@ function extractPatternNames(pattern: AstNode): string[] {
  * and is not declared within the block itself. Only names that are in
  * the current env keys set will be injected as imports.
  */
-function collectFreeVariables(
-  ast: AstNode,
-  declaredNames: Set<string>,
-): string[] {
+function collectFreeVariables(ast: AstNode, declaredNames: Set<string>): string[] {
   const references = new Set<string>();
   const localDecls = new Set(declaredNames);
 
@@ -368,11 +365,7 @@ function collectFreeVariables(
 /**
  * Walk the AST collecting identifier references that are not local declarations.
  */
-function collectReferences(
-  node: AstNode,
-  references: Set<string>,
-  localDecls: Set<string>,
-): void {
+function collectReferences(node: AstNode, references: Set<string>, localDecls: Set<string>): void {
   if (!node || typeof node !== "object") return;
 
   if (node.type === "Identifier") {

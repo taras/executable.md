@@ -16,11 +16,7 @@ import { ephemeral } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import type { Middleware } from "@effectionx/middleware";
 import { combine } from "@effectionx/middleware";
-import type {
-  CodeBlockContext,
-  CodeBlockResult,
-  Modifier,
-} from "./types.ts";
+import type { CodeBlockContext, CodeBlockResult, Modifier } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // CodeBlock context — Effection scope-inherited value
@@ -104,9 +100,7 @@ export type ModifierRegistry = Map<string, ModifierFactory>;
 /**
  * Create a new modifier registry, optionally inheriting from a parent.
  */
-export function createModifierRegistry(
-  parent?: ModifierRegistry,
-): ModifierRegistry {
+export function createModifierRegistry(parent?: ModifierRegistry): ModifierRegistry {
   const registry = new Map<string, ModifierFactory>();
   if (parent) {
     for (const [name, factory] of parent) {

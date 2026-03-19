@@ -139,13 +139,8 @@ export function clusterByFile(diagnostics: Diagnostics): FileCluster[] {
     }
 
     const coOccurrence = ruleIds.length;
-    const kindWeight = kind === "production"
-      ? 1
-      : kind === "test"
-      ? 0.3
-      : kind === "demo"
-      ? 0.2
-      : 0.1;
+    const kindWeight =
+      kind === "production" ? 1 : kind === "test" ? 0.3 : kind === "demo" ? 0.2 : 0.1;
     const score = Math.round(coOccurrence * instances.length * kindWeight);
 
     clusters.push({
@@ -192,10 +187,7 @@ export function extractEvidence(
   return evidence;
 }
 
-export function buildCleanupAnalysis(
-  diagnostics: Diagnostics,
-  topN = 10,
-): CleanupAnalysis {
+export function buildCleanupAnalysis(diagnostics: Diagnostics, topN = 10): CleanupAnalysis {
   const fileClusters = clusterByFile(diagnostics);
   const evidence = extractEvidence(diagnostics, fileClusters, topN);
   const top = fileClusters.slice(0, topN);

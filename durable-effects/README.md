@@ -19,11 +19,7 @@ npm install @executablemd/durable-effects @executablemd/durable-streams effectio
 
 ```typescript
 import { durableRun, InMemoryStream } from "@executablemd/durable-streams";
-import {
-  durableExec,
-  durableReadFile,
-  useFileContentGuard,
-} from "@executablemd/durable-effects";
+import { durableExec, durableReadFile, useFileContentGuard } from "@executablemd/durable-effects";
 import { run } from "effection";
 
 await run(function* () {
@@ -32,13 +28,16 @@ await run(function* () {
 
   // Run a durable workflow
   const stream = new InMemoryStream();
-  yield* durableRun(function* () {
-    const result = yield* durableExec("build", {
-      command: ["npm", "run", "build"],
-    });
-    const config = yield* durableReadFile("config", "./config.json");
-    return { result, config };
-  }, { stream });
+  yield* durableRun(
+    function* () {
+      const result = yield* durableExec("build", {
+        command: ["npm", "run", "build"],
+      });
+      const config = yield* durableReadFile("config", "./config.json");
+      return { result, config };
+    },
+    { stream },
+  );
 });
 ```
 

@@ -64,10 +64,7 @@ function makeCtx(
       if (!comp) throw new Error(`Component not found: ${name}`);
       return comp;
     },
-    runModifierChain: function* (
-      _modifiers: Modifier[],
-      _context: CodeBlockContext,
-    ) {
+    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
       return (
         codeResult ?? {
           output: "mock output\n",
@@ -160,11 +157,7 @@ function cleanup(dir: string): void {
 describe("Tier NS-A — Slot partitioning", () => {
   // deno-lint-ignore require-yield
   it("NS-A1: no slot props — all in default", function* () {
-    const children = [
-      textSeg("hello"),
-      compSeg("Widget"),
-      textSeg("world"),
-    ];
+    const children = [textSeg("hello"), compSeg("Widget"), textSeg("world")];
     const result = partitionBySlot(children);
     expect(result.default).toHaveLength(3);
     expect(result.named.size).toBe(0);
@@ -173,9 +166,7 @@ describe("Tier NS-A — Slot partitioning", () => {
 
   // deno-lint-ignore require-yield
   it("NS-A2: single named slot", function* () {
-    const children = [
-      compSeg("Nav", { slot: "sidebar" }),
-    ];
+    const children = [compSeg("Nav", { slot: "sidebar" })];
     const result = partitionBySlot(children);
     expect(result.default).toHaveLength(0);
     expect(result.named.size).toBe(1);
@@ -215,11 +206,7 @@ describe("Tier NS-A — Slot partitioning", () => {
 
   // deno-lint-ignore require-yield
   it("NS-A5: text segments always default", function* () {
-    const children = [
-      textSeg("before"),
-      compSeg("Nav", { slot: "sidebar" }),
-      textSeg("after"),
-    ];
+    const children = [textSeg("before"), compSeg("Nav", { slot: "sidebar" }), textSeg("after")];
     const result = partitionBySlot(children);
     expect(result.default).toHaveLength(2);
     expect(result.default[0]).toEqual(textSeg("before"));
@@ -228,10 +215,7 @@ describe("Tier NS-A — Slot partitioning", () => {
 
   // deno-lint-ignore require-yield
   it("NS-A6: code blocks always default", function* () {
-    const children = [
-      codeSeg("echo hello"),
-      compSeg("Nav", { slot: "sidebar" }),
-    ];
+    const children = [codeSeg("echo hello"), compSeg("Nav", { slot: "sidebar" })];
     const result = partitionBySlot(children);
     expect(result.default).toHaveLength(1);
     expect(result.default[0]).toEqual(codeSeg("echo hello"));
@@ -246,8 +230,12 @@ describe("Tier NS-A — Slot partitioning", () => {
     const result = partitionBySlot(children);
     const bodySlot = result.named.get("body")!;
     expect(bodySlot).toHaveLength(2);
-    expect((bodySlot[0] as { type: "component"; props: Record<string, Json> }).props.id).toBe("first");
-    expect((bodySlot[1] as { type: "component"; props: Record<string, Json> }).props.id).toBe("second");
+    expect((bodySlot[0] as { type: "component"; props: Record<string, Json> }).props.id).toBe(
+      "first",
+    );
+    expect((bodySlot[1] as { type: "component"; props: Record<string, Json> }).props.id).toBe(
+      "second",
+    );
   });
 
   // deno-lint-ignore require-yield
@@ -260,10 +248,7 @@ describe("Tier NS-A — Slot partitioning", () => {
 
   // deno-lint-ignore require-yield
   it("NS-A9: slot name case sensitivity", function* () {
-    const children = [
-      compSeg("A", { slot: "Header" }),
-      compSeg("B", { slot: "header" }),
-    ];
+    const children = [compSeg("A", { slot: "Header" }), compSeg("B", { slot: "header" })];
     const result = partitionBySlot(children);
     expect(result.named.size).toBe(2);
     expect(result.named.get("Header")!).toHaveLength(1);
@@ -288,7 +273,7 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B2: named slot projection", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"header\" />\n---\n<Content />");
+    const layout = makeComponent("Layout", '<Content slot="header" />\n---\n<Content />');
     const ctx = makeCtx({ Layout: layout, Header: makeComponent("Header", "HEADER") });
     const segments = scanSegments('<Layout>\n<Header slot="header" />\ndefault text\n</Layout>');
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
@@ -298,7 +283,7 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B3: default slot projection", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"nav\" />\n---\n<Content />");
+    const layout = makeComponent("Layout", '<Content slot="nav" />\n---\n<Content />');
     const nav = makeComponent("Nav", "NAV");
     const ctx = makeCtx({ Layout: layout, Nav: nav });
     const segments = scanSegments('<Layout>\n<Nav slot="nav" />\ndefault text\n</Layout>');
@@ -310,7 +295,7 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B4: named + default together", function* () {
-    const layout = makeComponent("Layout", "NAV: <Content slot=\"nav\" />\nBODY: <Content />");
+    const layout = makeComponent("Layout", 'NAV: <Content slot="nav" />\nBODY: <Content />');
     const nav = makeComponent("Nav", "I-AM-NAV");
     const ctx = makeCtx({ Layout: layout, Nav: nav });
     const segments = scanSegments('<Layout>\n<Nav slot="nav" />\nbody content\n</Layout>');
@@ -321,7 +306,7 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B5: missing named slot — empty expansion", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"footer\" />\n<Content />");
+    const layout = makeComponent("Layout", '<Content slot="footer" />\n<Content />');
     const ctx = makeCtx({ Layout: layout });
     const segments = scanSegments("<Layout>\nbody only\n</Layout>");
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
@@ -343,7 +328,10 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B7: multiple projections same slot", function* () {
-    const layout = makeComponent("Layout", "FIRST: <Content slot=\"header\" />\nSECOND: <Content slot=\"header\" />");
+    const layout = makeComponent(
+      "Layout",
+      'FIRST: <Content slot="header" />\nSECOND: <Content slot="header" />',
+    );
     const header = makeComponent("Header", "H");
     const ctx = makeCtx({ Layout: layout, Header: header });
     const segments = scanSegments('<Layout>\n<Header slot="header" />\n</Layout>');
@@ -356,7 +344,7 @@ describe("Tier NS-B — Content substitution", () => {
 
   it("NS-B8: slot prop stripped", function* () {
     // Widget declares "title" as an input but NOT "slot"
-    const layout = makeComponent("Layout", "<Content slot=\"main\" />");
+    const layout = makeComponent("Layout", '<Content slot="main" />');
     const widget = makeComponent("Widget", "WIDGET:{props.title}", {
       inputs: { title: { type: "string", required: true } },
     });
@@ -371,9 +359,13 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B9: interpolation still works", function* () {
-    const layout = makeComponent("Layout", "Title: {meta.title}\n<Content slot=\"body\" />\n<Content />", {
-      meta: { title: "MyLayout" },
-    });
+    const layout = makeComponent(
+      "Layout",
+      'Title: {meta.title}\n<Content slot="body" />\n<Content />',
+      {
+        meta: { title: "MyLayout" },
+      },
+    );
     const body = makeComponent("Body", "BODY-CONTENT");
     const ctx = makeCtx({ Layout: layout, Body: body });
     const segments = scanSegments('<Layout>\n<Body slot="body" />\ndefault content\n</Layout>');
@@ -385,11 +377,13 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B10: multiple children in one slot", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"items\" />");
+    const layout = makeComponent("Layout", '<Content slot="items" />');
     const itemA = makeComponent("ItemA", "A");
     const itemB = makeComponent("ItemB", "B");
     const ctx = makeCtx({ Layout: layout, ItemA: itemA, ItemB: itemB });
-    const segments = scanSegments('<Layout>\n<ItemA slot="items" />\n<ItemB slot="items" />\n</Layout>');
+    const segments = scanSegments(
+      '<Layout>\n<ItemA slot="items" />\n<ItemB slot="items" />\n</Layout>',
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("A");
@@ -405,13 +399,16 @@ describe("Tier NS-B — Content substitution", () => {
 
 describe("Tier NS-C — Expansion integration", () => {
   it("NS-C1: basic named slot expansion", function* () {
-    const report = makeComponent("Report",
-      "<Content slot=\"header\" />\n---\n<Content slot=\"body\" />\n---\n<Content />");
+    const report = makeComponent(
+      "Report",
+      '<Content slot="header" />\n---\n<Content slot="body" />\n---\n<Content />',
+    );
     const header = makeComponent("Header", "HEADER-TEXT");
     const body = makeComponent("Body", "BODY-TEXT");
     const ctx = makeCtx({ Report: report, Header: header, Body: body });
     const segments = scanSegments(
-      '<Report>\n<Header slot="header" />\n<Body slot="body" />\ndefault text\n</Report>');
+      '<Report>\n<Header slot="header" />\n<Body slot="body" />\ndefault text\n</Report>',
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("HEADER-TEXT");
@@ -423,12 +420,11 @@ describe("Tier NS-C — Expansion integration", () => {
   });
 
   it("NS-C2: slotted child is expanded", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"main\" />");
+    const layout = makeComponent("Layout", '<Content slot="main" />');
     const inner = makeComponent("Inner", "INNER-EXPANDED");
     const wrapper = makeComponent("Wrapper", "WRAP:<Content />");
     const ctx = makeCtx({ Layout: layout, Wrapper: wrapper, Inner: inner });
-    const segments = scanSegments(
-      '<Layout>\n<Wrapper slot="main"><Inner /></Wrapper>\n</Layout>');
+    const segments = scanSegments('<Layout>\n<Wrapper slot="main"><Inner /></Wrapper>\n</Layout>');
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("WRAP:");
@@ -437,21 +433,35 @@ describe("Tier NS-C — Expansion integration", () => {
 
   it("NS-C3: nested component with slots", function* () {
     // Outer uses slots, Inner also uses slots
-    const outer = makeComponent("Outer", "OUTER-HEAD:<Content slot=\"head\" />\nOUTER-BODY:<Content />");
-    const inner = makeComponent("Inner", "INNER-LEFT:<Content slot=\"left\" />\nINNER-RIGHT:<Content slot=\"right\" />");
+    const outer = makeComponent(
+      "Outer",
+      'OUTER-HEAD:<Content slot="head" />\nOUTER-BODY:<Content />',
+    );
+    const inner = makeComponent(
+      "Inner",
+      'INNER-LEFT:<Content slot="left" />\nINNER-RIGHT:<Content slot="right" />',
+    );
     const leftComp = makeComponent("Left", "L");
     const rightComp = makeComponent("Right", "R");
     const headComp = makeComponent("Head", "H");
-    const ctx = makeCtx({ Outer: outer, Inner: inner, Left: leftComp, Right: rightComp, Head: headComp });
-    const segments = scanSegments([
-      "<Outer>",
-      '<Head slot="head" />',
-      "<Inner>",
-      '<Left slot="left" />',
-      '<Right slot="right" />',
-      "</Inner>",
-      "</Outer>",
-    ].join("\n"));
+    const ctx = makeCtx({
+      Outer: outer,
+      Inner: inner,
+      Left: leftComp,
+      Right: rightComp,
+      Head: headComp,
+    });
+    const segments = scanSegments(
+      [
+        "<Outer>",
+        '<Head slot="head" />',
+        "<Inner>",
+        '<Left slot="left" />',
+        '<Right slot="right" />',
+        "</Inner>",
+        "</Outer>",
+      ].join("\n"),
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("OUTER-HEAD:");
@@ -466,17 +476,19 @@ describe("Tier NS-C — Expansion integration", () => {
     // Provider passes all children through via <Content />
     // Report uses named slots
     const provider = makeComponent("Provider", "<Content />");
-    const report = makeComponent("Report", "HEAD:<Content slot=\"header\" />\nBODY:<Content />");
+    const report = makeComponent("Report", 'HEAD:<Content slot="header" />\nBODY:<Content />');
     const header = makeComponent("Header", "H");
     const ctx = makeCtx({ Provider: provider, Report: report, Header: header });
-    const segments = scanSegments([
-      "<Provider>",
-      "<Report>",
-      '<Header slot="header" />',
-      "body text",
-      "</Report>",
-      "</Provider>",
-    ].join("\n"));
+    const segments = scanSegments(
+      [
+        "<Provider>",
+        "<Report>",
+        '<Header slot="header" />',
+        "body text",
+        "</Report>",
+        "</Provider>",
+      ].join("\n"),
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("HEAD:");
@@ -486,7 +498,7 @@ describe("Tier NS-C — Expansion integration", () => {
   });
 
   it("NS-C5: props on slotted child", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"main\" />");
+    const layout = makeComponent("Layout", '<Content slot="main" />');
     const comp = makeComponent("Comp", "title={props.title}", {
       inputs: { title: { type: "string", required: true } },
     });
@@ -501,7 +513,7 @@ describe("Tier NS-C — Expansion integration", () => {
 
   it("NS-C6: default slot with no explicit default children", function* () {
     // All children carry slot props — default <Content /> expands to nothing
-    const layout = makeComponent("Layout", "HEAD:<Content slot=\"header\" />\nDEFAULT:<Content />");
+    const layout = makeComponent("Layout", 'HEAD:<Content slot="header" />\nDEFAULT:<Content />');
     const header = makeComponent("Header", "H");
     const ctx = makeCtx({ Layout: layout, Header: header });
     const segments = scanSegments('<Layout>\n<Header slot="header" />\n</Layout>');
@@ -514,17 +526,19 @@ describe("Tier NS-C — Expansion integration", () => {
   });
 
   it("NS-C7: Fragment passthrough", function* () {
-    const layout = makeComponent("Layout", "SLOT:<Content slot=\"header\" />\nDEFAULT:<Content />");
+    const layout = makeComponent("Layout", 'SLOT:<Content slot="header" />\nDEFAULT:<Content />');
     const fragment = makeComponent("Fragment", "<Content />");
     const ctx = makeCtx({ Layout: layout, Fragment: fragment });
-    const segments = scanSegments([
-      "<Layout>",
-      '<Fragment slot="header">',
-      "raw text in header slot",
-      "</Fragment>",
-      "default text",
-      "</Layout>",
-    ].join("\n"));
+    const segments = scanSegments(
+      [
+        "<Layout>",
+        '<Fragment slot="header">',
+        "raw text in header slot",
+        "</Fragment>",
+        "default text",
+        "</Layout>",
+      ].join("\n"),
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("raw text in header slot");
@@ -532,16 +546,15 @@ describe("Tier NS-C — Expansion integration", () => {
   });
 
   it("NS-C8: slotted child with own children", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"sidebar\" />\n<Content />");
+    const layout = makeComponent("Layout", '<Content slot="sidebar" />\n<Content />');
     const wrapper = makeComponent("Wrapper", "WRAP:<Content />");
     const nav = makeComponent("Nav", "NAV");
     const ctx = makeCtx({ Layout: layout, Wrapper: wrapper, Nav: nav });
-    const segments = scanSegments([
-      "<Layout>",
-      '<Wrapper slot="sidebar"><Nav /></Wrapper>',
-      "main content",
-      "</Layout>",
-    ].join("\n"));
+    const segments = scanSegments(
+      ["<Layout>", '<Wrapper slot="sidebar"><Nav /></Wrapper>', "main content", "</Layout>"].join(
+        "\n",
+      ),
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("WRAP:");
@@ -550,19 +563,21 @@ describe("Tier NS-C — Expansion integration", () => {
   });
 
   it("NS-C9: exec block in default slot", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"header\" />\n<Content />");
+    const layout = makeComponent("Layout", '<Content slot="header" />\n<Content />');
     const header = makeComponent("Header", "H");
     const ctx = makeCtx({ Layout: layout, Header: header });
-    const segments = scanSegments([
-      "<Layout>",
-      '<Header slot="header" />',
-      "",
-      "```bash exec",
-      "echo hello",
-      "```",
-      "",
-      "</Layout>",
-    ].join("\n"));
+    const segments = scanSegments(
+      [
+        "<Layout>",
+        '<Header slot="header" />',
+        "",
+        "```bash exec",
+        "echo hello",
+        "```",
+        "",
+        "</Layout>",
+      ].join("\n"),
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("H");
@@ -571,7 +586,7 @@ describe("Tier NS-C — Expansion integration", () => {
 
   it("NS-C10: cycle detection unaffected", function* () {
     // A uses slots but A slot="x" where A's body references A → cycle
-    const a = makeComponent("A", "<Content slot=\"x\" />\n<A />");
+    const a = makeComponent("A", '<Content slot="x" />\n<A />');
     const ctx = makeCtx({ A: a });
     const segments = scanSegments('<A>\n<A slot="x" />\n</A>');
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
@@ -613,7 +628,7 @@ describe("Tier NS-D — slot prop reservation", () => {
 
   it("NS-D3: Content slot prop not validated as input", function* () {
     // Content is special-cased — slot on Content should not cause validation error
-    const comp = makeComponent("Comp", "<Content slot=\"header\" />\n<Content />");
+    const comp = makeComponent("Comp", '<Content slot="header" />\n<Content />');
     const header = makeComponent("Header", "H");
     const ctx = makeCtx({ Comp: comp, Header: header });
     const segments = scanSegments('<Comp>\n<Header slot="header" />\nbody\n</Comp>');
@@ -666,12 +681,14 @@ describe("Tier NS-E — renderChildren interaction", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
       // renderChildren() should capture both the slotted Header and body content
       expect(output).toContain("[sampled-by-test-model:");
       expect(output).not.toContain("ERROR");
@@ -702,12 +719,14 @@ describe("Tier NS-E — renderChildren interaction", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
       // Both X and Y should be included in renderChildren output
       expect(output).toContain("[sampled-by-test-model:");
       expect(output).not.toContain("ERROR");
@@ -739,12 +758,14 @@ describe("Tier NS-E — renderChildren interaction", () => {
         ].join("\n"),
       });
       const stream = new InMemoryStream();
-      const output = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
       // renderChildren renders ALL children in source order
       expect(output).toContain("[sampled-by-test-model:");
       expect(output).not.toContain("ERROR");
@@ -760,7 +781,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
 
 describe("Tier NS-F — Edge cases", () => {
   it("NS-F1: slot on self-closing component", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"icon\" />\n<Content />");
+    const layout = makeComponent("Layout", '<Content slot="icon" />\n<Content />');
     const badge = makeComponent("Badge", "BADGE");
     const ctx = makeCtx({ Layout: layout, Badge: badge });
     const segments = scanSegments('<Layout>\n<Badge slot="icon" />\nbody\n</Layout>');
@@ -771,7 +792,7 @@ describe("Tier NS-F — Edge cases", () => {
   });
 
   it("NS-F2: slot on component with children", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"main\" />");
+    const layout = makeComponent("Layout", '<Content slot="main" />');
     const card = makeComponent("Card", "CARD:<Content />");
     const text = makeComponent("Text", "TEXT");
     const ctx = makeCtx({ Layout: layout, Card: card, Text: text });
@@ -783,21 +804,26 @@ describe("Tier NS-F — Edge cases", () => {
   });
 
   it("NS-F3: deeply nested slots", function* () {
-    const a = makeComponent("A", "A-HEAD:<Content slot=\"head\" />\nA-BODY:<Content />");
-    const b = makeComponent("B", "B-LEFT:<Content slot=\"left\" />\nB-RIGHT:<Content slot=\"right\" />");
+    const a = makeComponent("A", 'A-HEAD:<Content slot="head" />\nA-BODY:<Content />');
+    const b = makeComponent(
+      "B",
+      'B-LEFT:<Content slot="left" />\nB-RIGHT:<Content slot="right" />',
+    );
     const c = makeComponent("C", "C");
     const d = makeComponent("D", "D");
     const h = makeComponent("H", "HEAD");
     const ctx = makeCtx({ A: a, B: b, C: c, D: d, H: h });
-    const segments = scanSegments([
-      "<A>",
-      '<H slot="head" />',
-      "<B>",
-      '<C slot="left" />',
-      '<D slot="right" />',
-      "</B>",
-      "</A>",
-    ].join("\n"));
+    const segments = scanSegments(
+      [
+        "<A>",
+        '<H slot="head" />',
+        "<B>",
+        '<C slot="left" />',
+        '<D slot="right" />',
+        "</B>",
+        "</A>",
+      ].join("\n"),
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("A-HEAD:");
@@ -821,10 +847,12 @@ describe("Tier NS-F — Edge cases", () => {
   });
 
   it("NS-F5: body with only named Content slots — default children discarded", function* () {
-    const layout = makeComponent("Layout", "<Content slot=\"a\" />\n<Content slot=\"b\" />");
+    const layout = makeComponent("Layout", '<Content slot="a" />\n<Content slot="b" />');
     const a = makeComponent("A", "A-CONTENT");
     const ctx = makeCtx({ Layout: layout, A: a });
-    const segments = scanSegments('<Layout>\n<A slot="a" />\ndefault text should be discarded\n</Layout>');
+    const segments = scanSegments(
+      '<Layout>\n<A slot="a" />\ndefault text should be discarded\n</Layout>',
+    );
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("A-CONTENT");
@@ -837,7 +865,7 @@ describe("Tier NS-F — Edge cases", () => {
     const layout = makeComponent("Layout", '<Content slot="main" />\n<Content />');
     const ctx = makeCtx({ Layout: layout });
     // Unclosed bold in text — text goes to default slot, healing runs on it
-    const segments = scanSegments('<Layout>\n**unclosed bold\n</Layout>');
+    const segments = scanSegments("<Layout>\n**unclosed bold\n</Layout>");
     const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
     const output = renderSegments(expanded);
     // Text should be healed — no dangling markers
@@ -859,19 +887,19 @@ describe("Tier NS-F — Edge cases", () => {
         "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
       });
       const stream = new InMemoryStream();
-      yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
       const events = yield* stream.readAll();
       // Should have import_component events and a close — no new event types
       for (const event of events) {
         if (event.type === "yield") {
-          expect(["import_component", "exec", "eval"]).toContain(
-            event.description.type,
-          );
+          expect(["import_component", "exec", "eval"]).toContain(event.description.type);
         }
       }
     } finally {
@@ -894,19 +922,23 @@ describe("Tier NS-F — Edge cases", () => {
         "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
       });
       const stream = new InMemoryStream();
-      const output1 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output1 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
       // Replay — same stream, same output
-      const output2 = yield* collect(yield* runDocument({
-        docPath: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        freshness: false,
-      }));
+      const output2 = yield* collect(
+        yield* runDocument({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+          freshness: false,
+        }),
+      );
       expect(output2).toBe(output1);
     } finally {
       cleanup(tmpDir);

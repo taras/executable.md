@@ -25,11 +25,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toBe("");
     expect(output).not.toContain("ERROR");
@@ -43,11 +45,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toBe("");
     expect(output).not.toContain("ERROR");
@@ -62,11 +66,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output.trim()).toBe("");
     expect(output).not.toContain("ERROR");
@@ -80,17 +86,21 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output2).toBe(output1);
   });
@@ -130,7 +140,7 @@ describe("Tier T6 — persist modifier", () => {
         "```",
         "",
         "```js eval",
-        'yield* when(function*() {',
+        "yield* when(function*() {",
         '  if (!status.ready) throw new Error("not ready");',
         "});",
         "const serverReady = status.ready;",
@@ -139,11 +149,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output.trim()).toBe("");
     expect(output).not.toContain("ERROR");

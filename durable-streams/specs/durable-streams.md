@@ -1,6 +1,6 @@
 # Durable Streams as a durable execution log backend
 
-**Durable Streams provides a strong but not perfect fit for backing a generator-based durable execution log.** The protocol's append-only semantics, monotonic opaque offsets, idempotent producer model with epoch-based zombie fencing, and "catch up then tail" read pattern align well with the core invariants of a Yield/Close event journal. Two critical gaps require application-layer mitigation: the protocol defines durability as a *logical contract* without prescribing fsync or replication, meaning "persist-before-resume" depends entirely on your server implementation; and there is no multi-event atomic append, so causal ordering of Close events relative to parent yields must be enforced by the client through sequencing discipline rather than transactional batches. The protocol emerged from 1.5 years of production use at ElectricSQL for Postgres sync and was publicly released in December 2025 (v0.2.0 shipped January 2026 with idempotent producers).
+**Durable Streams provides a strong but not perfect fit for backing a generator-based durable execution log.** The protocol's append-only semantics, monotonic opaque offsets, idempotent producer model with epoch-based zombie fencing, and "catch up then tail" read pattern align well with the core invariants of a Yield/Close event journal. Two critical gaps require application-layer mitigation: the protocol defines durability as a _logical contract_ without prescribing fsync or replication, meaning "persist-before-resume" depends entirely on your server implementation; and there is no multi-event atomic append, so causal ordering of Close events relative to parent yields must be enforced by the client through sequencing discipline rather than transactional batches. The protocol emerged from 1.5 years of production use at ElectricSQL for Postgres sync and was publicly released in December 2025 (v0.2.0 shipped January 2026 with idempotent producers).
 
 ---
 
@@ -43,7 +43,7 @@ This provides **exactly-once within an epoch**. The sequence number is per-batch
 **Causal ordering requires a stream-per-coroutine or careful global sequencing strategy.** The protocol guarantees total order within a single stream. Two viable architectures exist:
 
 - **One stream per coroutine**: Each coroutine writes to its own stream. Per-coroutine cursors map directly to per-stream offsets. Causal ordering across coroutines (Close before parent yield) is enforced by the client: append child Close, await ack, then append parent Yield. This provides natural isolation but creates many streams.
-- **Single stream with framed events**: All coroutines append to one stream using JSON mode (which preserves message boundaries). Each event includes a `coroutineId` field. The single-stream total order automatically captures causal relationships *if* the client sequences appends correctly. Per-coroutine replay uses a filtered cursor over the shared stream.
+- **Single stream with framed events**: All coroutines append to one stream using JSON mode (which preserves message boundaries). Each event includes a `coroutineId` field. The single-stream total order automatically captures causal relationships _if_ the client sequences appends correctly. Per-coroutine replay uses a filtered cursor over the shared stream.
 
 For structured concurrency, the **single-stream model** is likely superior because it naturally captures cross-coroutine causal order in the global offset sequence. The ordering constraint for Close events — that a child's Close must appear in the stream before the parent's Yield that consumes the child's result — is enforced by the runtime: complete the child, append its Close event, await ack, then resume the parent and append its Yield.
 
@@ -63,23 +63,23 @@ For structured concurrency, the **single-stream model** is likely superior becau
 
 ## Durable Streams ↔ durable execution mapping table
 
-| Execution requirement | Durable Streams feature | Gaps | Mitigation |
-|---|---|---|---|
-| **Append-only log** | Core model — streams are append-only, immutable by position | None | Direct fit |
-| **Monotonic offsets** | Opaque, lexicographically sortable, server-generated offsets | Offsets are opaque (can't derive sequence numbers) | Store logical sequence in event payload; use offset only for resumption |
-| **Prefix-closure / no gaps** | Inherent from append-only + acknowledged durability | None | Direct fit |
-| **Single writer** | Producer-Id + Epoch fencing (403 on stale epoch) | Protocol allows multiple Producer-Ids per stream | Use one Producer-Id per stream; rely on epoch fencing for failover |
-| **Single source of truth** | "Once written and acknowledged, bytes persist until deleted" | Durability is implementation-dependent (no fsync mandate) | Choose a server with crash-durable storage; verify with IMPLEMENTATION_TESTING suite |
-| **Persist-before-resume** | 200 response = server considers data durable | No guarantee of fsync/replication at protocol level; fire-and-forget API not safe | Await 200 on every critical append; disable lingerMs batching for Yield/Close events; verify server's durability semantics |
-| **Exactly-once Yield recording** | IdempotentProducer deduplicates via (Id, Epoch, Seq) | At-least-once across epoch boundaries for non-atomic stores | Use atomic store; or make replay idempotent w.r.t. duplicate final event at epoch boundary |
-| **Causal Close ordering** | Total order within a stream guaranteed | No multi-event atomic append; no cross-stream ordering | Enforce client-side: append child Close → await ack → append parent Yield. Single-stream model preferred |
-| **Per-coroutine cursor** | Client-side offset tracking with Stream-Next-Offset | Protocol has no built-in per-entity cursor within a stream | Application layer: store `{coroutineId → lastOffset}` map; filter events during replay |
-| **Catch up then tail (replay)** | GET with offset → catch-up; live=long-poll/sse → tail; Stream-Up-To-Date header signals transition | No server-side filtered subscription (e.g., by coroutineId) | Client-side filtering during replay; or use per-coroutine streams |
-| **Crash recovery without duplicates** | Epoch bump + autoClaim; seq restart at 0 | One potential duplicate at epoch boundary | Replay engine must tolerate/dedup one duplicate Yield at recovery point |
-| **Batch append (multiple Yields)** | lingerMs-based batching in IdempotentProducer | Batch is one sequence number — partial batch failure = full retry | Acceptable for non-critical batching; use synchronous append for Close events |
-| **Retention / compaction** | Server MAY implement TTL-based retention | No log compaction (Kafka-style); no snapshot support | Build snapshot/compaction at application layer; use Continue-As-New pattern to bound log size |
-| **Auth / tenant isolation** | HTTPS + delegated auth; Bearer tokens on hosted | No built-in auth in protocol | API gateway or reverse proxy; path-based tenant scoping |
-| **Observability** | Response headers, onError callback, test UI, conformance tests | No metrics, tracing, or structured logging | Build custom observability layer around HTTP headers and error callbacks |
+| Execution requirement                 | Durable Streams feature                                                                            | Gaps                                                                              | Mitigation                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Append-only log**                   | Core model — streams are append-only, immutable by position                                        | None                                                                              | Direct fit                                                                                                                 |
+| **Monotonic offsets**                 | Opaque, lexicographically sortable, server-generated offsets                                       | Offsets are opaque (can't derive sequence numbers)                                | Store logical sequence in event payload; use offset only for resumption                                                    |
+| **Prefix-closure / no gaps**          | Inherent from append-only + acknowledged durability                                                | None                                                                              | Direct fit                                                                                                                 |
+| **Single writer**                     | Producer-Id + Epoch fencing (403 on stale epoch)                                                   | Protocol allows multiple Producer-Ids per stream                                  | Use one Producer-Id per stream; rely on epoch fencing for failover                                                         |
+| **Single source of truth**            | "Once written and acknowledged, bytes persist until deleted"                                       | Durability is implementation-dependent (no fsync mandate)                         | Choose a server with crash-durable storage; verify with IMPLEMENTATION_TESTING suite                                       |
+| **Persist-before-resume**             | 200 response = server considers data durable                                                       | No guarantee of fsync/replication at protocol level; fire-and-forget API not safe | Await 200 on every critical append; disable lingerMs batching for Yield/Close events; verify server's durability semantics |
+| **Exactly-once Yield recording**      | IdempotentProducer deduplicates via (Id, Epoch, Seq)                                               | At-least-once across epoch boundaries for non-atomic stores                       | Use atomic store; or make replay idempotent w.r.t. duplicate final event at epoch boundary                                 |
+| **Causal Close ordering**             | Total order within a stream guaranteed                                                             | No multi-event atomic append; no cross-stream ordering                            | Enforce client-side: append child Close → await ack → append parent Yield. Single-stream model preferred                   |
+| **Per-coroutine cursor**              | Client-side offset tracking with Stream-Next-Offset                                                | Protocol has no built-in per-entity cursor within a stream                        | Application layer: store `{coroutineId → lastOffset}` map; filter events during replay                                     |
+| **Catch up then tail (replay)**       | GET with offset → catch-up; live=long-poll/sse → tail; Stream-Up-To-Date header signals transition | No server-side filtered subscription (e.g., by coroutineId)                       | Client-side filtering during replay; or use per-coroutine streams                                                          |
+| **Crash recovery without duplicates** | Epoch bump + autoClaim; seq restart at 0                                                           | One potential duplicate at epoch boundary                                         | Replay engine must tolerate/dedup one duplicate Yield at recovery point                                                    |
+| **Batch append (multiple Yields)**    | lingerMs-based batching in IdempotentProducer                                                      | Batch is one sequence number — partial batch failure = full retry                 | Acceptable for non-critical batching; use synchronous append for Close events                                              |
+| **Retention / compaction**            | Server MAY implement TTL-based retention                                                           | No log compaction (Kafka-style); no snapshot support                              | Build snapshot/compaction at application layer; use Continue-As-New pattern to bound log size                              |
+| **Auth / tenant isolation**           | HTTPS + delegated auth; Bearer tokens on hosted                                                    | No built-in auth in protocol                                                      | API gateway or reverse proxy; path-based tenant scoping                                                                    |
+| **Observability**                     | Response headers, onError callback, test UI, conformance tests                                     | No metrics, tracing, or structured logging                                        | Build custom observability layer around HTTP headers and error callbacks                                                   |
 
 ---
 
@@ -92,14 +92,14 @@ Use **one `IdempotentProducer` per execution run** (i.e., per top-level workflow
 ```typescript
 const producer = new IdempotentProducer(stream, executionId, {
   autoClaim: true,
-  lingerMs: 0,  // Disable batching for durable execution — every append is synchronous
+  lingerMs: 0, // Disable batching for durable execution — every append is synchronous
   onError: (err) => {
     if (err instanceof StaleEpochError) {
       // Another scheduler took over this execution — halt gracefully
-      haltExecution(executionId)
+      haltExecution(executionId);
     }
   },
-})
+});
 ```
 
 ### Append API usage pattern
@@ -109,22 +109,24 @@ For **persist-before-resume correctness**, do not use the fire-and-forget `appen
 ```typescript
 // After resolving an effect for a coroutine:
 function* runWithDurability(operation, producer) {
-  const result = yield* executeEffect(operation)
-  
+  const result = yield* executeEffect(operation);
+
   // 1. Append Yield event
-  producer.append(JSON.stringify({
-    type: "Yield",
-    coroutineId,
-    seq: localSeq++,
-    effect: describeEffect(operation),
-    result: serializeResult(result),
-  }))
-  
+  producer.append(
+    JSON.stringify({
+      type: "Yield",
+      coroutineId,
+      seq: localSeq++,
+      effect: describeEffect(operation),
+      result: serializeResult(result),
+    }),
+  );
+
   // 2. Await durable persistence BEFORE resuming the generator
-  await producer.flush()
-  
+  await producer.flush();
+
   // 3. Now safe to resume
-  return result
+  return result;
 }
 ```
 
@@ -132,23 +134,27 @@ For **Close events**, the ordering discipline is:
 
 ```typescript
 // Child coroutine terminates
-producer.append(JSON.stringify({
-  type: "Close",
-  coroutineId: childId,
-  state: "ok",  // or "err" or "cancelled"
-  value: serializeResult(childResult),
-}))
-await producer.flush()  // Child Close is durable
+producer.append(
+  JSON.stringify({
+    type: "Close",
+    coroutineId: childId,
+    state: "ok", // or "err" or "cancelled"
+    value: serializeResult(childResult),
+  }),
+);
+await producer.flush(); // Child Close is durable
 
 // NOW parent can resume and record its Yield that depends on child
-producer.append(JSON.stringify({
-  type: "Yield",
-  coroutineId: parentId,
-  seq: parentSeq++,
-  effect: { type: "awaitChild", childId },
-  result: serializeResult(childResult),
-}))
-await producer.flush()  // Parent Yield is durable
+producer.append(
+  JSON.stringify({
+    type: "Yield",
+    coroutineId: parentId,
+    seq: parentSeq++,
+    effect: { type: "awaitChild", childId },
+    result: serializeResult(childResult),
+  }),
+);
+await producer.flush(); // Parent Yield is durable
 ```
 
 ### Read/catch-up/tail pattern for replay
@@ -157,36 +163,36 @@ Replay reads the full stream from offset `-1` and filters by coroutine ID:
 
 ```typescript
 async function replayCoroutine(stream, coroutineId) {
-  const events = []
-  let offset = "-1"
-  
+  const events = [];
+  let offset = "-1";
+
   // Catch-up read — fetch all historical events
   while (true) {
-    const response = await stream.read({ offset, live: false })
+    const response = await stream.read({ offset, live: false });
     for (const event of response.messages) {
       if (event.coroutineId === coroutineId) {
-        events.push(event)
+        events.push(event);
       }
     }
-    offset = response.nextOffset
-    if (response.upToDate) break
+    offset = response.nextOffset;
+    if (response.upToDate) break;
   }
-  
+
   // Replay: feed stored results back into the generator
-  const gen = createGenerator(coroutineId)
+  const gen = createGenerator(coroutineId);
   for (const event of events) {
     if (event.type === "Yield") {
-      const yielded = gen.next(deserializeResult(event.result))
+      const yielded = gen.next(deserializeResult(event.result));
       // Verify determinism: yielded.value should match event.effect
-      assertDeterministic(yielded.value, event.effect)
+      assertDeterministic(yielded.value, event.effect);
     } else if (event.type === "Close") {
       // Coroutine terminated — restore terminal state
-      return restoreTerminalState(event)
+      return restoreTerminalState(event);
     }
   }
-  
+
   // Past end of log — switch to live execution
-  return { generator: gen, producer, tailOffset: offset }
+  return { generator: gen, producer, tailOffset: offset };
 }
 ```
 
@@ -194,9 +200,9 @@ For **live tailing** (watching for new events during concurrent execution), tran
 
 ```typescript
 // After catch-up completes, tail for new events
-const tailStream = stream.read({ offset: tailOffset, live: "long-poll" })
+const tailStream = stream.read({ offset: tailOffset, live: "long-poll" });
 for await (const chunk of tailStream) {
-  processNewEvents(chunk.messages)
+  processNewEvents(chunk.messages);
 }
 ```
 

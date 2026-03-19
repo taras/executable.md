@@ -22,10 +22,7 @@ function yieldEvent<T extends Json>(
   name: string,
   value?: T,
 ): DurableEvent {
-  const result =
-    value === undefined
-      ? { status: "ok" as const }
-      : { status: "ok" as const, value };
+  const result = value === undefined ? { status: "ok" as const } : { status: "ok" as const, value };
 
   return {
     type: "yield",
@@ -42,9 +39,7 @@ function closeEvent<T extends Json>(
 ): DurableEvent {
   if (status === "ok") {
     const result =
-      value === undefined
-        ? { status: "ok" as const }
-        : { status: "ok" as const, value };
+      value === undefined ? { status: "ok" as const } : { status: "ok" as const, value };
 
     return {
       type: "close",
@@ -106,18 +101,14 @@ describe("ReplayIndex", () => {
 
   describe("single yield", () => {
     it("peekYield returns the entry", function* () {
-      const idx = new ReplayIndex([
-        yieldEvent("root.0", "call", "fetchOrder", 42),
-      ]);
+      const idx = new ReplayIndex([yieldEvent("root.0", "call", "fetchOrder", 42)]);
       const entry = idx.peekYield("root.0");
       expect(entry?.description).toEqual({ type: "call", name: "fetchOrder" });
       expect(entry?.result).toEqual({ status: "ok", value: 42 });
     });
 
     it("consumeYield advances cursor", function* () {
-      const idx = new ReplayIndex([
-        yieldEvent("root.0", "call", "fetchOrder", 42),
-      ]);
+      const idx = new ReplayIndex([yieldEvent("root.0", "call", "fetchOrder", 42)]);
       expect(idx.getCursor("root.0")).toBe(0);
       idx.consumeYield("root.0");
       expect(idx.getCursor("root.0")).toBe(1);
@@ -233,10 +224,7 @@ describe("ReplayIndex", () => {
     });
 
     it("false when close exists but yields not consumed", function* () {
-      const idx = new ReplayIndex([
-        yieldEvent("root.0", "call", "fetch", 1),
-        closeEvent("root.0"),
-      ]);
+      const idx = new ReplayIndex([yieldEvent("root.0", "call", "fetch", 1), closeEvent("root.0")]);
 
       expect(idx.isFullyReplayed("root.0")).toBe(false);
     });

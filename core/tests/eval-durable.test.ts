@@ -23,11 +23,13 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     const events = stream.snapshot();
     // Should have root import + eval entry
@@ -44,18 +46,22 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     yield* useEchoExec();
 
     // Golden run
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // Replay
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output2).toBe(output1);
   });
@@ -64,24 +70,27 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
   it("T33: multiple eval blocks — replay works", function* () {
     const stream = new InMemoryStream();
     const files = {
-      "test.md":
-        "```js eval\nconst a = 10;\n```\n\n```js eval\nconst b = a + 5;\n```\n",
+      "test.md": "```js eval\nconst a = 10;\n```\n\n```js eval\nconst b = a + 5;\n```\n",
     };
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // Replay
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output2).toBe(output1);
   });
@@ -95,11 +104,13 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("ERROR");
     expect(output).toContain("eval failure");
@@ -114,11 +125,13 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     const events = stream.snapshot();
     expect(events.length).toBeGreaterThan(1);
@@ -133,11 +146,13 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // The eval should succeed even with non-serializable values
     const events = stream.snapshot();
@@ -163,11 +178,13 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("baz.txt");
   });

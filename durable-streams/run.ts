@@ -21,13 +21,7 @@ import { ReplayGuard } from "./replay-guard.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
-import type {
-  Close,
-  DurableEvent,
-  Json,
-  Workflow,
-  WorkflowValue,
-} from "./types.ts";
+import type { Close, DurableEvent, Json, Workflow, WorkflowValue } from "./types.ts";
 
 /**
  * Run the ReplayGuard check phase over all Yield events.
@@ -166,9 +160,7 @@ export function* durableRun<T extends WorkflowValue>(
       yield* stream.append(closeEvent);
     } catch (appendError) {
       const appendFailure =
-        appendError instanceof Error
-          ? appendError
-          : new Error(String(appendError));
+        appendError instanceof Error ? appendError : new Error(String(appendError));
       throw new AggregateError(
         [primary, appendFailure],
         "Workflow failed and Close append also failed",

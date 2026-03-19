@@ -45,9 +45,7 @@ describe("Divergence API", () => {
     try {
       yield* durableRun(
         function* (): Workflow<string> {
-          return yield* durableCall<string>("stepX", () =>
-            Promise.resolve("x"),
-          );
+          return yield* durableCall<string>("stepX", () => Promise.resolve("x"));
         },
         { stream },
       );
@@ -168,9 +166,7 @@ describe("Divergence API", () => {
 
     const result1 = yield* durableRun(
       function* (): Workflow<string> {
-        return yield* durableCall<string>("stepX", () =>
-          Promise.resolve("x-live"),
-        );
+        return yield* durableCall<string>("stepX", () => Promise.resolve("x-live"));
       },
       { stream: stream1 },
     );
@@ -183,9 +179,7 @@ describe("Divergence API", () => {
         run(() =>
           durableRun(
             function* (): Workflow<string> {
-              return yield* durableCall<string>("stepX", () =>
-                Promise.resolve("x-live"),
-              );
+              return yield* durableCall<string>("stepX", () => Promise.resolve("x-live"));
             },
             { stream: stream2 },
           ),

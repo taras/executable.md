@@ -49,9 +49,7 @@ import type { Yield } from "./types.ts";
  * - "reexecute": Re-execute the effect and replace the journal entry.
  * - "fork": Create a new execution branch from this point.
  */
-export type ReplayOutcome =
-  | { outcome: "replay" }
-  | { outcome: "error"; error?: Error };
+export type ReplayOutcome = { outcome: "replay" } | { outcome: "error"; error?: Error };
 
 // ---------------------------------------------------------------------------
 // API shape

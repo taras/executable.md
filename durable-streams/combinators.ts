@@ -18,13 +18,7 @@
  * See protocol spec §7 (structured concurrency), §10 (race semantics).
  */
 
-import {
-  all as effectionAll,
-  race as effectionRace,
-  spawn,
-  suspend,
-  useScope,
-} from "effection";
+import { all as effectionAll, race as effectionRace, spawn, suspend, useScope } from "effection";
 import type { Operation, Task } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
 import { ephemeral } from "./ephemeral.ts";
@@ -121,9 +115,7 @@ function* runDurableChild<T extends WorkflowValue>(
       coroutineId: childId,
       result: {
         status: "err",
-        error: serializeError(
-          error instanceof Error ? error : new Error(String(error)),
-        ),
+        error: serializeError(error instanceof Error ? error : new Error(String(error))),
       },
     };
 

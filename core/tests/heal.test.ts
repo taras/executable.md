@@ -38,19 +38,14 @@ function makeComponent(
   };
 }
 
-function makeCtx(
-  components: Record<string, ComponentDefinition>,
-): ExpansionContext {
+function makeCtx(components: Record<string, ComponentDefinition>): ExpansionContext {
   return {
     importComponent: function* (name: string) {
       const comp = components[name];
       if (!comp) throw new Error(`Component not found: ${name}`);
       return comp;
     },
-    runModifierChain: function* (
-      _modifiers: Modifier[],
-      _context: CodeBlockContext,
-    ) {
+    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
       return { output: "", exitCode: 0, stderr: "" };
     },
   };
@@ -71,13 +66,7 @@ function expand(
   props: Record<string, Json> = {},
 ): Operation<string> {
   function* op() {
-    const expanded = yield* expandSegments(
-      segments,
-      meta,
-      props,
-      new Set(),
-      ctx,
-    );
+    const expanded = yield* expandSegments(segments, meta, props, new Set(), ctx);
     return renderSegments(expanded);
   }
   return op() as unknown as Operation<string>;
@@ -136,9 +125,7 @@ describe("healSegment", () => {
     const texts = getTextSegments("Hello ![alt](url\n<Comp />");
     const healed = healSegment(texts[0]!);
     // remend removes incomplete images entirely
-    expect(
-      !healed.includes("![alt]") || healed.includes("![alt]("),
-    ).toBeTruthy();
+    expect(!healed.includes("![alt]") || healed.includes("![alt](")).toBeTruthy();
   });
 
   it("F8: unclosed code fence — scanner suppresses JSX inside", function* () {
@@ -293,9 +280,7 @@ describe("healSegment", () => {
     const ctx = makeCtx({ Wrap: comp });
     const segments = scanSegments("<Wrap>child</Wrap>");
     const output = yield* expand(segments, ctx);
-    expect(
-      output.includes("*intro*") || output.includes("*intro"),
-    ).toBeTruthy();
+    expect(output.includes("*intro*") || output.includes("*intro")).toBeTruthy();
     expect(output).toContain("child");
   });
 

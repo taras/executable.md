@@ -22,13 +22,10 @@ import type { Json, Workflow } from "./types.ts";
  * Description: { type: "sleep", name: "sleep" }
  */
 export function* durableSleep(ms: number): Workflow<void> {
-  yield createDurableEffect<void>(
-    { type: "sleep", name: "sleep" },
-    (resolve) => {
-      const id = setTimeout(() => resolve({ status: "ok" }), ms);
-      return () => clearTimeout(id);
-    },
-  );
+  yield createDurableEffect<void>({ type: "sleep", name: "sleep" }, (resolve) => {
+    const id = setTimeout(() => resolve({ status: "ok" }), ms);
+    return () => clearTimeout(id);
+  });
 }
 
 /**
@@ -73,20 +70,11 @@ export function* durableCall<T extends Json>(
  */
 export function* durableAction<T extends Json>(
   name: string,
-  executor: (
-    resolve: (value: T) => void,
-    reject: (error: Error) => void,
-  ) => () => void,
+  executor: (resolve: (value: T) => void, reject: (error: Error) => void) => () => void,
 ): Workflow<T> {
-  return (yield createDurableEffect<T>(
-    { type: "action", name },
-    (protocolResolve, reject) => {
-      return executor(
-        (value: T) => protocolResolve({ status: "ok", value: value as Json }),
-        reject,
-      );
-    },
-  )) as T;
+  return (yield createDurableEffect<T>({ type: "action", name }, (protocolResolve, reject) => {
+    return executor((value: T) => protocolResolve({ status: "ok", value: value as Json }), reject);
+  })) as T;
 }
 
 /**
@@ -110,13 +98,10 @@ export function* versionCheck(
     );
   }
 
-  const version = (yield createDurableEffect<number>(
-    { type: "version_gate", name },
-    (resolve) => {
-      resolve({ status: "ok", value: opts.maxVersion });
-      return () => {};
-    },
-  )) as number;
+  const version = (yield createDurableEffect<number>({ type: "version_gate", name }, (resolve) => {
+    resolve({ status: "ok", value: opts.maxVersion });
+    return () => {};
+  })) as number;
 
   if (version < opts.minVersion || version > opts.maxVersion) {
     throw new Error(

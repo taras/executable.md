@@ -5,10 +5,7 @@
  * modifier system types, and shared interfaces.
  */
 
-import type {
-  Json as DurableJson,
-  Workflow,
-} from "@executablemd/durable-streams";
+import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
 
 // ---------------------------------------------------------------------------
 // JSON-serializable value type

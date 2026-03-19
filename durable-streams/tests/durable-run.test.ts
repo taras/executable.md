@@ -334,9 +334,7 @@ describe("durableRun", () => {
     const stream = new InMemoryStream();
 
     function* workflow(): Workflow<string> {
-      yield* durableCall("failingStep", () =>
-        Promise.reject(new Error("boom")),
-      );
+      yield* durableCall("failingStep", () => Promise.reject(new Error("boom")));
       return "unreachable";
     }
 

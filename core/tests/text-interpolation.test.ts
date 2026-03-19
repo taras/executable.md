@@ -57,10 +57,7 @@ function makeCtx(
       if (!comp) throw new Error(`Component not found: ${name}`);
       return comp;
     },
-    runModifierChain: function* (
-      _modifiers: Modifier[],
-      _context: CodeBlockContext,
-    ) {
+    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
       return (
         codeResult ?? {
           output: "mock output\n",
@@ -84,13 +81,7 @@ function expandWithBindings(
 ): Operation<string> {
   function* op() {
     return yield* EvalEnvCtx.with({ values: bindings }, function* () {
-      const expanded = yield* expandSegments(
-        segments,
-        meta,
-        props,
-        new Set(),
-        ctx,
-      );
+      const expanded = yield* expandSegments(segments, meta, props, new Set(), ctx);
       return renderSegments(expanded);
     });
   }
@@ -107,13 +98,7 @@ function expandWithoutEnv(
   props: Record<string, Json> = {},
 ): Operation<string> {
   function* op() {
-    const expanded = yield* expandSegments(
-      segments,
-      meta,
-      props,
-      new Set(),
-      ctx,
-    );
+    const expanded = yield* expandSegments(segments, meta, props, new Set(), ctx);
     return renderSegments(expanded);
   }
   return op() as unknown as Operation<string>;
@@ -246,23 +231,15 @@ describe("Text interpolation — eval bindings in text segments", () => {
   // TI12: <Capture> text uses current env
   it("TI12: Capture text uses current component env", function* () {
     const ctx = makeCtx({});
-    const segments = scanSegments(
-      '<Capture as="captured">value is {port}\n</Capture>',
-    );
+    const segments = scanSegments('<Capture as="captured">value is {port}\n</Capture>');
     const env = { values: { port: 8080 } as Record<string, unknown> };
     function* op() {
       return yield* EvalEnvCtx.with(env, function* () {
-        const expanded = yield* expandSegments(
-          segments,
-          {},
-          {},
-          new Set(),
-          ctx,
-        );
+        const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
         return renderSegments(expanded);
       });
     }
-    const output = yield* (op() as unknown as Operation<string>);
+    const output = yield* op() as unknown as Operation<string>;
     expect(output).toBe("");
     expect(env.values["captured"]).toBe("value is 8080");
   });
@@ -316,10 +293,7 @@ describe("Text interpolation — eval bindings in text segments", () => {
       importComponent: function* () {
         throw new Error("not needed");
       },
-      runModifierChain: function* (
-        _modifiers: Modifier[],
-        context: CodeBlockContext,
-      ) {
+      runModifierChain: function* (_modifiers: Modifier[], context: CodeBlockContext) {
         capturedContext.push(context);
         return { output: "ok\n", exitCode: 0, stderr: "" };
       },
@@ -342,18 +316,12 @@ describe("interpolateEvalBindings — escaping", () => {
   });
 
   it("escaped brace alongside normal interpolation", function* () {
-    const result = interpolateEvalBindings(
-      "\\{name} and {port}",
-      { name: "val", port: 8080 },
-    );
+    const result = interpolateEvalBindings("\\{name} and {port}", { name: "val", port: 8080 });
     expect(result).toBe("{name} and 8080");
   });
 
   it("multiple escaped braces", function* () {
-    const result = interpolateEvalBindings(
-      "\\{a} \\{b} {c}",
-      { a: 1, b: 2, c: 3 },
-    );
+    const result = interpolateEvalBindings("\\{a} \\{b} {c}", { a: 1, b: 2, c: 3 });
     expect(result).toBe("{a} {b} 3");
   });
 });

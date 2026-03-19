@@ -33,17 +33,11 @@
     "unist-util-select": "npm:unist-util-select@^5",
     "mdast-util-to-string": "npm:mdast-util-to-string@^4"
   },
-  "lint": {
-    "plugins": ["./lint-plugins/no-scheme-specifiers.ts"],
-    "rules": {
-      "include": ["no-scheme-specifiers/no-scheme-specifiers"]
-    }
-  },
   "tasks": {
     "ema": "deno run --allow-all cli/src/cli.ts",
     "test": "deno test --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/tests/",
     "check": "deno check core/mod.ts",
-    "lint": "deno lint core/src/ cli/src/ durable-streams/ durable-effects/ runtime/",
+    "lint": "npx oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ && npx oxfmt --check core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ vendor/ test-support/",
     "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.jsonl",
     "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.jsonl",

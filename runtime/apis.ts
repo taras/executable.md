@@ -61,12 +61,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import { relative, sep } from "node:path";
 import process from "node:process";
 import { fetch as effectionFetch } from "@effectionx/fetch";
-import {
-  readTextFile as fsReadTextFile,
-  stat as fsStat,
-  globToRegExp,
-  walk,
-} from "@effectionx/fs";
+import { readTextFile as fsReadTextFile, stat as fsStat, globToRegExp, walk } from "@effectionx/fs";
 import { exec as processExec } from "@effectionx/process";
 import { each, race, sleep } from "effection";
 import type { Operation } from "effection";
@@ -270,10 +265,10 @@ export const API: {
       // Convert include/exclude patterns to RegExp for matching
       // against relative paths from root
       const includeRegexes = patterns.map((p) =>
-        globToRegExp(p, { extended: true, globstar: true })
+        globToRegExp(p, { extended: true, globstar: true }),
       );
       const excludeRegexes = exclude.map((e) =>
-        globToRegExp(e, { extended: true, globstar: true })
+        globToRegExp(e, { extended: true, globstar: true }),
       );
 
       // Walk the directory tree and match relative paths
@@ -328,11 +323,7 @@ export const API: {
         status: response.status,
         headers: response.headers,
         *text() {
-          return yield* withTimeout(
-            `fetch(${input}).text()`,
-            timeout,
-            response.text(),
-          );
+          return yield* withTimeout(`fetch(${input}).text()`, timeout, response.text());
         },
       } as RuntimeFetchResponse;
     },
@@ -391,29 +382,20 @@ export const API: {
 // middleware with .around().
 // ---------------------------------------------------------------------------
 
-export const exec: typeof API.Process.operations.exec =
-  API.Process.operations.exec;
+export const exec: typeof API.Process.operations.exec = API.Process.operations.exec;
 
-export const readTextFile: typeof API.Fs.operations.readTextFile =
-  API.Fs.operations.readTextFile;
+export const readTextFile: typeof API.Fs.operations.readTextFile = API.Fs.operations.readTextFile;
 
-export const stat: typeof API.Fs.operations.stat =
-  API.Fs.operations.stat;
+export const stat: typeof API.Fs.operations.stat = API.Fs.operations.stat;
 
-export const glob: typeof API.Fs.operations.glob =
-  API.Fs.operations.glob;
+export const glob: typeof API.Fs.operations.glob = API.Fs.operations.glob;
 
-export const fetch: typeof API.Fetch.operations.fetch =
-  API.Fetch.operations.fetch;
+export const fetch: typeof API.Fetch.operations.fetch = API.Fetch.operations.fetch;
 
-export const env: typeof API.Env.operations.env =
-  API.Env.operations.env;
+export const env: typeof API.Env.operations.env = API.Env.operations.env;
 
-export const cwd: typeof API.Env.operations.cwd =
-  API.Env.operations.cwd;
+export const cwd: typeof API.Env.operations.cwd = API.Env.operations.cwd;
 
-export const platform: typeof API.Env.operations.platform =
-  API.Env.operations.platform;
+export const platform: typeof API.Env.operations.platform = API.Env.operations.platform;
 
-export const compile: typeof API.Compiler.operations.compile =
-  API.Compiler.operations.compile;
+export const compile: typeof API.Compiler.operations.compile = API.Compiler.operations.compile;

@@ -25,8 +25,7 @@
  * `interpolate()` which handles `\{meta.key}` the same way.
  */
 
-const BARE_BINDING_RE =
-  /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g;
+const BARE_BINDING_RE = /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g;
 
 /**
  * Unicode private-use placeholder for escaped opening braces.
@@ -51,23 +50,20 @@ export function interpolateEvalBindings(
 
   // Run interpolation on the protected content.
   // Supports dotted paths: {pr.meta.number} traverses bindings.pr.meta.number
-  const interpolated = escaped.replace(
-    BARE_BINDING_RE,
-    (match, key: string) => {
-      const parts = key.split(".");
-      if (!(parts[0] in bindings)) return match;
+  const interpolated = escaped.replace(BARE_BINDING_RE, (match, key: string) => {
+    const parts = key.split(".");
+    if (!(parts[0] in bindings)) return match;
 
-      let value: unknown = bindings;
-      for (let i = 0; i < parts.length; i++) {
-        if (value == null || typeof value !== "object") return match;
-        const obj = value as Record<string, unknown>;
-        if (i < parts.length - 1 && !(parts[i] in obj)) return match;
-        value = obj[parts[i]];
-      }
+    let value: unknown = bindings;
+    for (let i = 0; i < parts.length; i++) {
+      if (value == null || typeof value !== "object") return match;
+      const obj = value as Record<string, unknown>;
+      if (i < parts.length - 1 && !(parts[i] in obj)) return match;
+      value = obj[parts[i]];
+    }
 
-      return String(value);
-    },
-  );
+    return String(value);
+  });
 
   // Restore escaped braces: placeholder → literal {
   return interpolated.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{");

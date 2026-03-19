@@ -6,11 +6,7 @@
  * During replay, the stored result is returned without executing.
  */
 
-import {
-  type Json,
-  type Workflow,
-  createDurableOperation,
-} from "@executablemd/durable-streams";
+import { type Json, type Workflow, createDurableOperation } from "@executablemd/durable-streams";
 import { exec } from "@executablemd/runtime";
 
 export interface ExecOptions {
@@ -37,10 +33,7 @@ export interface ExecResult {
  * The `throwOnError` flag is captured in the description so replay
  * behavior matches the original execution.
  */
-export function* durableExec(
-  name: string,
-  options: ExecOptions,
-): Workflow<ExecResult> {
+export function* durableExec(name: string, options: ExecOptions): Workflow<ExecResult> {
   const { command, cwd, env, timeout = 300_000, throwOnError = true } = options;
 
   return (yield createDurableOperation<Json>(

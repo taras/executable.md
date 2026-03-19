@@ -50,17 +50,14 @@ export function parseDuration(s: string): number {
  * inner next() call returns a CodeBlockWorkflow which is cast to
  * Operation for timebox compatibility.
  */
-export const timeoutFactory: ModifierFactory = (params) =>
-  (_args, next) =>
-    (function* () {
-      const ms = parseDuration(params ?? "30s");
-      const result = yield* ephemeral(
-        timebox(ms, () =>
-          next() as unknown as Operation<CodeBlockResult>,
-        ),
-      );
-      if (result.timeout) {
-        throw new Error(`eval block timed out after ${params ?? "30s"}`);
-      }
-      return result.value;
-    })();
+export const timeoutFactory: ModifierFactory = (params) => (_args, next) =>
+  (function* () {
+    const ms = parseDuration(params ?? "30s");
+    const result = yield* ephemeral(
+      timebox(ms, () => next() as unknown as Operation<CodeBlockResult>),
+    );
+    if (result.timeout) {
+      throw new Error(`eval block timed out after ${params ?? "30s"}`);
+    }
+    return result.value;
+  })();

@@ -144,22 +144,13 @@ describe("structured concurrency", () => {
       function* () {
         const results = yield* durableAll([
           function* () {
-            return yield* durableCall(
-              "fetchA",
-              goldenTracker.fn("fetchA", "alpha"),
-            );
+            return yield* durableCall("fetchA", goldenTracker.fn("fetchA", "alpha"));
           },
           function* () {
-            return yield* durableCall(
-              "fetchB",
-              goldenTracker.fn("fetchB", "beta"),
-            );
+            return yield* durableCall("fetchB", goldenTracker.fn("fetchB", "beta"));
           },
           function* () {
-            return yield* durableCall(
-              "fetchC",
-              goldenTracker.fn("fetchC", "gamma"),
-            );
+            return yield* durableCall("fetchC", goldenTracker.fn("fetchC", "gamma"));
           },
         ]);
         return results.join("-");
@@ -242,13 +233,7 @@ describe("structured concurrency", () => {
     // Verify nested coroutine IDs
     const events = stream.snapshot();
     const coroutineIds = [...new Set(events.map((e) => e.coroutineId))].sort();
-    expect(coroutineIds).toEqual([
-      "root",
-      "root.0",
-      "root.0.0",
-      "root.0.1",
-      "root.1",
-    ]);
+    expect(coroutineIds).toEqual(["root", "root.0", "root.0.0", "root.0.1", "root.1"]);
   });
 
   // ---------------------------------------------------------------------------
@@ -266,14 +251,8 @@ describe("structured concurrency", () => {
             return yield* durableCall("fast", tracker.fn("fast", "winner"));
           },
           function* () {
-            yield* durableCall(
-              "slow-step1",
-              tracker.fn("slow-step1", "partial"),
-            );
-            return yield* durableCall(
-              "slow-step2",
-              tracker.fn("slow-step2", "would-not-reach"),
-            );
+            yield* durableCall("slow-step1", tracker.fn("slow-step1", "partial"));
+            return yield* durableCall("slow-step2", tracker.fn("slow-step2", "would-not-reach"));
           },
         ]);
       },
@@ -308,14 +287,8 @@ describe("structured concurrency", () => {
             return yield* durableCall("fast", tracker1.fn("fast", "winner"));
           },
           function* () {
-            yield* durableCall(
-              "slow-step1",
-              tracker1.fn("slow-step1", "partial"),
-            );
-            return yield* durableCall(
-              "slow-step2",
-              tracker1.fn("slow-step2", "loser"),
-            );
+            yield* durableCall("slow-step1", tracker1.fn("slow-step1", "partial"));
+            return yield* durableCall("slow-step2", tracker1.fn("slow-step2", "loser"));
           },
         ]);
       },
@@ -333,14 +306,8 @@ describe("structured concurrency", () => {
             return yield* durableCall("fast", tracker2.fn("fast", "WRONG"));
           },
           function* () {
-            yield* durableCall(
-              "slow-step1",
-              tracker2.fn("slow-step1", "WRONG"),
-            );
-            return yield* durableCall(
-              "slow-step2",
-              tracker2.fn("slow-step2", "WRONG"),
-            );
+            yield* durableCall("slow-step1", tracker2.fn("slow-step1", "WRONG"));
+            return yield* durableCall("slow-step2", tracker2.fn("slow-step2", "WRONG"));
           },
         ]);
       },
@@ -363,14 +330,10 @@ describe("structured concurrency", () => {
         function* () {
           const results = yield* durableAll([
             function* () {
-              return yield* durableCall<string>("good", () =>
-                Promise.resolve("ok"),
-              );
+              return yield* durableCall<string>("good", () => Promise.resolve("ok"));
             },
             function* () {
-              yield* durableCall<string>("failStep", () =>
-                Promise.reject(new Error("child-boom")),
-              );
+              yield* durableCall<string>("failStep", () => Promise.reject(new Error("child-boom")));
               return "unreachable";
             },
           ]);
@@ -386,9 +349,7 @@ describe("structured concurrency", () => {
 
     // The stream should contain Close(err) for the failing child
     const events = stream.snapshot();
-    const errCloses = events.filter(
-      (e) => e.type === "close" && e.result.status === "err",
-    );
+    const errCloses = events.filter((e) => e.type === "close" && e.result.status === "err");
     expect(errCloses.length >= 1).toBe(true);
   });
 
@@ -405,10 +366,7 @@ describe("structured concurrency", () => {
         try {
           yield* durableAll([
             function* () {
-              return yield* durableCall<string>(
-                "good",
-                tracker.fn("good", "ok"),
-              );
+              return yield* durableCall<string>("good", tracker.fn("good", "ok"));
             },
             function* (): Workflow<string> {
               yield* durableCall<string>("failStep", () =>
@@ -420,10 +378,7 @@ describe("structured concurrency", () => {
         } catch {
           // Error caught — continue
         }
-        const recovery = yield* durableCall(
-          "recovery",
-          tracker.fn("recovery", "recovered"),
-        );
+        const recovery = yield* durableCall("recovery", tracker.fn("recovery", "recovered"));
         return recovery;
       },
       { stream },
@@ -554,10 +509,7 @@ describe("structured concurrency", () => {
           },
           function* () {
             yield* durableCall("slowStep", tracker.fn("slowStep", "partial"));
-            return yield* durableCall(
-              "slowStep2",
-              tracker.fn("slowStep2", "never"),
-            );
+            return yield* durableCall("slowStep2", tracker.fn("slowStep2", "never"));
           },
         ]);
       },
@@ -582,10 +534,7 @@ describe("structured concurrency", () => {
           },
           function* () {
             yield* durableCall("slowStep", tracker2.fn("slowStep", "WRONG"));
-            return yield* durableCall(
-              "slowStep2",
-              tracker2.fn("slowStep2", "WRONG"),
-            );
+            return yield* durableCall("slowStep2", tracker2.fn("slowStep2", "WRONG"));
           },
         ]);
       },
@@ -608,10 +557,7 @@ describe("structured concurrency", () => {
 
     const result = yield* durableRun(
       function* () {
-        const prefix = yield* durableCall(
-          "prefix",
-          tracker.fn("prefix", "PRE"),
-        );
+        const prefix = yield* durableCall("prefix", tracker.fn("prefix", "PRE"));
         const results = yield* durableAll([
           function* () {
             return yield* durableCall("A", tracker.fn("A", "a"));
@@ -633,10 +579,7 @@ describe("structured concurrency", () => {
 
     const result2 = yield* durableRun(
       function* () {
-        const prefix = yield* durableCall(
-          "prefix",
-          tracker2.fn("prefix", "WRONG"),
-        );
+        const prefix = yield* durableCall("prefix", tracker2.fn("prefix", "WRONG"));
         const results = yield* durableAll([
           function* () {
             return yield* durableCall("A", tracker2.fn("A", "WRONG"));

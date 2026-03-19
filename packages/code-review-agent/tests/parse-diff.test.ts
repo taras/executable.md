@@ -216,16 +216,27 @@ describe("parseDiff", () => {
 
   it("infers languages correctly", function* () {
     const files = [
-      "a.ts", "b.js", "c.py", "d.go", "e.md", "f.json",
-      "g.yaml", "Dockerfile", "h.unknown",
+      "a.ts",
+      "b.js",
+      "c.py",
+      "d.go",
+      "e.md",
+      "f.json",
+      "g.yaml",
+      "Dockerfile",
+      "h.unknown",
     ];
-    const rawDiff = files.map((f) => [
-      `diff --git a/${f} b/${f}`,
-      `--- /dev/null`,
-      `+++ b/${f}`,
-      `@@ -0,0 +1,1 @@`,
-      `+content`,
-    ].join("\n")).join("\n");
+    const rawDiff = files
+      .map((f) =>
+        [
+          `diff --git a/${f} b/${f}`,
+          `--- /dev/null`,
+          `+++ b/${f}`,
+          `@@ -0,0 +1,1 @@`,
+          `+content`,
+        ].join("\n"),
+      )
+      .join("\n");
     const rawFiles = files.map((f) => `A\t${f}`).join("\n");
 
     const pr = parseDiff(rawDiff, rawFiles, META);

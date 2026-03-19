@@ -86,10 +86,7 @@ export function useHttpDurableStream(
     if (!baseUrl.pathname.endsWith("/")) {
       baseUrl.pathname = `${baseUrl.pathname}/`;
     }
-    const streamUrl = new URL(
-      encodeURIComponent(opts.streamId),
-      baseUrl,
-    ).toString();
+    const streamUrl = new URL(encodeURIComponent(opts.streamId), baseUrl).toString();
     const producerId = opts.producerId;
     const epoch = opts.epoch;
     const fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
@@ -112,10 +109,7 @@ export function useHttpDurableStream(
     let lastOffset: string | undefined;
 
     // ── Append worker queue ──
-    const queue: Queue<AppendRequest, void> = createQueue<
-      AppendRequest,
-      void
-    >();
+    const queue: Queue<AppendRequest, void> = createQueue<AppendRequest, void>();
 
     // ── Spawn the serial append worker ──
     // Processes one append at a time in FIFO order. Each HTTP POST
@@ -190,9 +184,7 @@ export function useHttpDurableStream(
         }
         case 403: {
           // Stale epoch — fatal error
-          const currentEpoch = Number(
-            res.headers.get(PRODUCER_EPOCH_HEADER) ?? 0,
-          );
+          const currentEpoch = Number(res.headers.get(PRODUCER_EPOCH_HEADER) ?? 0);
           const error = new StaleEpochError(currentEpoch);
           fatalError = error;
           throw error;
@@ -200,12 +192,8 @@ export function useHttpDurableStream(
         case 409: {
           // Sequence gap — fatal (should never happen due to serialization,
           // but if it does, sequence state is irrecoverably desynchronized)
-          const expected = Number(
-            res.headers.get(PRODUCER_EXPECTED_SEQ_HEADER) ?? 0,
-          );
-          const received = Number(
-            res.headers.get(PRODUCER_RECEIVED_SEQ_HEADER) ?? 0,
-          );
+          const expected = Number(res.headers.get(PRODUCER_EXPECTED_SEQ_HEADER) ?? 0);
+          const received = Number(res.headers.get(PRODUCER_RECEIVED_SEQ_HEADER) ?? 0);
           const error = new SequenceGapError(expected, received);
           fatalError = error;
           throw error;
@@ -214,9 +202,7 @@ export function useHttpDurableStream(
           // Unexpected status — fatal, write outcome is uncertain.
           // TODO: Transient errors (500, 503) could be retried with the
           // same seq in a future version. See DEC-026 rationale.
-          const error = new Error(
-            `Unexpected append response: HTTP ${res.status}`,
-          );
+          const error = new Error(`Unexpected append response: HTTP ${res.status}`);
           fatalError = error;
           throw error;
         }

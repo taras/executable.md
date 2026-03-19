@@ -28,9 +28,7 @@ describe("computeSHA256", () => {
     const hash = yield* computeSHA256("");
     expect(hash).toMatch(/^sha256:[0-9a-f]{64}$/);
     // SHA-256 of empty string is well-known
-    expect(hash).toBe(
-      "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    );
+    expect(hash).toBe("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   });
 
   it("handles unicode content", function* () {

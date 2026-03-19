@@ -22,11 +22,13 @@ describe("Tier T5 — Binding environment", () => {
     yield* useEchoExec();
 
     // Should not throw — port is available in block 2
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     // Eval blocks produce no rendered output (only text between blocks remains)
     expect(output.trim()).toBe("");
@@ -44,11 +46,13 @@ describe("Tier T5 — Binding environment", () => {
     yield* useEchoExec();
 
     // Should succeed — x is 2 in block 3 (shadowed by block 2)
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).not.toContain("ERROR");
   });
@@ -61,11 +65,13 @@ describe("Tier T5 — Binding environment", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toBe("");
   });
@@ -78,11 +84,13 @@ describe("Tier T5 — Binding environment", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("ERROR");
   });
@@ -95,11 +103,13 @@ describe("Tier T5 — Binding environment", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output).toContain("ERROR");
   });

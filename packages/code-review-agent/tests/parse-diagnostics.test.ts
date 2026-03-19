@@ -23,9 +23,7 @@ function makePR(additions = 100): PR {
   };
 }
 
-function makeDoctor(
-  overrides: Partial<DoctorResult> = {},
-): DoctorResult {
+function makeDoctor(overrides: Partial<DoctorResult> = {}): DoctorResult {
   return {
     oxlintInstalled: true,
     oxlintVersion: "0.16.0",
@@ -45,12 +43,7 @@ function makeDoctor(
   };
 }
 
-function makeDiag(
-  ruleId: string,
-  file: string,
-  line = 1,
-  message = "",
-): OxlintDiagnostic {
+function makeDiag(ruleId: string, file: string, line = 1, message = ""): OxlintDiagnostic {
   return {
     ruleId,
     severity: "warning",
@@ -98,9 +91,7 @@ describe("parseDiagnostics", () => {
   });
 
   it("PD2b: density is 0 when additions is 0", function* () {
-    const raw = JSON.stringify([
-      makeDiag("no-unused-vars", "src/a.ts"),
-    ]);
+    const raw = JSON.stringify([makeDiag("no-unused-vars", "src/a.ts")]);
 
     const result = parseDiagnostics(raw, makePR(0), makeDoctor());
 
@@ -117,35 +108,24 @@ describe("parseDiagnostics", () => {
 
     const result = parseDiagnostics(raw, makePR(), makeDoctor());
 
-    expect(result.byCategory.structural.map((g) => g.ruleId))
-      .toContain("no-unused-vars");
-    expect(result.byCategory.structural.map((g) => g.ruleId))
-      .toContain("no-unnecessary-type-assertion");
+    expect(result.byCategory.structural.map((g) => g.ruleId)).toContain("no-unused-vars");
+    expect(result.byCategory.structural.map((g) => g.ruleId)).toContain(
+      "no-unnecessary-type-assertion",
+    );
 
-    expect(result.byCategory.verbosity.map((g) => g.ruleId))
-      .toContain("no-console");
-    expect(result.byCategory.verbosity.map((g) => g.ruleId))
-      .toContain("no-inferrable-types");
+    expect(result.byCategory.verbosity.map((g) => g.ruleId)).toContain("no-console");
+    expect(result.byCategory.verbosity.map((g) => g.ruleId)).toContain("no-inferrable-types");
 
-    expect(result.byCategory.typeAware.map((g) => g.ruleId))
-      .toContain("no-unnecessary-type-assertion");
+    expect(result.byCategory.typeAware.map((g) => g.ruleId)).toContain(
+      "no-unnecessary-type-assertion",
+    );
   });
 
   it("PD4: filters import noise in type-aware-filtered mode", function* () {
     const raw = JSON.stringify([
       makeDiag("no-unused-vars", "src/a.ts"),
-      makeDiag(
-        "import/no-unresolved",
-        "src/b.ts",
-        1,
-        'Cannot find module "jsr:@std/assert"',
-      ),
-      makeDiag(
-        "import/no-unresolved",
-        "src/c.ts",
-        1,
-        "cannot find module foo",
-      ),
+      makeDiag("import/no-unresolved", "src/b.ts", 1, 'Cannot find module "jsr:@std/assert"'),
+      makeDiag("import/no-unresolved", "src/c.ts", 1, "cannot find module foo"),
     ]);
 
     const filtered = parseDiagnostics(
@@ -162,12 +142,7 @@ describe("parseDiagnostics", () => {
   it("PD4b: does NOT filter noise in type-aware mode", function* () {
     const raw = JSON.stringify([
       makeDiag("no-unused-vars", "src/a.ts"),
-      makeDiag(
-        "import/no-unresolved",
-        "src/b.ts",
-        1,
-        'Cannot find module "jsr:@std/assert"',
-      ),
+      makeDiag("import/no-unresolved", "src/b.ts", 1, 'Cannot find module "jsr:@std/assert"'),
     ]);
 
     const unfiltered = parseDiagnostics(
@@ -180,18 +155,13 @@ describe("parseDiagnostics", () => {
   });
 
   it("PD5: annotates missing rules in summary", function* () {
-    const raw = JSON.stringify([
-      makeDiag("no-unused-vars", "src/a.ts"),
-    ]);
+    const raw = JSON.stringify([makeDiag("no-unused-vars", "src/a.ts")]);
 
     const result = parseDiagnostics(
       raw,
       makePR(),
       makeDoctor({
-        bloatRulesMissing: [
-          "no-unnecessary-type-assertion",
-          "no-redundant-type-constituents",
-        ],
+        bloatRulesMissing: ["no-unnecessary-type-assertion", "no-redundant-type-constituents"],
       }),
     );
 
@@ -200,9 +170,7 @@ describe("parseDiagnostics", () => {
   });
 
   it("PD6: annotates scheme specifiers in summary", function* () {
-    const raw = JSON.stringify([
-      makeDiag("no-unused-vars", "src/a.ts"),
-    ]);
+    const raw = JSON.stringify([makeDiag("no-unused-vars", "src/a.ts")]);
 
     const result = parseDiagnostics(
       raw,
@@ -233,27 +201,19 @@ describe("parseDiagnostics", () => {
 
   it("accepts oxlint object shape with diagnostics array", function* () {
     const raw = JSON.stringify({
-      diagnostics: [
-        makeDiag("no-unused-vars", "src/a.ts"),
-        makeDiag("no-console", "src/b.ts"),
-      ],
+      diagnostics: [makeDiag("no-unused-vars", "src/a.ts"), makeDiag("no-console", "src/b.ts")],
     });
 
     const result = parseDiagnostics(raw, makePR(), makeDoctor());
 
     expect(result.total).toBe(2);
-    expect(result.groups.map((g) => g.ruleId)).toEqual([
-      "no-unused-vars",
-      "no-console",
-    ]);
+    expect(result.groups.map((g) => g.ruleId)).toEqual(["no-unused-vars", "no-console"]);
   });
 
   it("accepts nested diagnostics wrapper shape", function* () {
     const raw = JSON.stringify({
       diagnostics: {
-        diagnostics: [
-          makeDiag("no-unused-vars", "src/a.ts"),
-        ],
+        diagnostics: [makeDiag("no-unused-vars", "src/a.ts")],
       },
     });
 
@@ -282,17 +242,11 @@ describe("parseDiagnostics", () => {
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0].ruleId).toBe("no-unused-vars");
     expect(result.groups[0].files).toEqual(["src/example.ts"]);
-    expect(result.byCategory.structural.map((g) => g.ruleId)).toContain(
-      "no-unused-vars",
-    );
+    expect(result.byCategory.structural.map((g) => g.ruleId)).toContain("no-unused-vars");
   });
 
   it("PD8: malformed JSON returns empty diagnostics", function* () {
-    const result = parseDiagnostics(
-      "not valid json {{{",
-      makePR(),
-      makeDoctor(),
-    );
+    const result = parseDiagnostics("not valid json {{{", makePR(), makeDoctor());
 
     expect(result.total).toBe(0);
     expect(result.density).toBe(0);
@@ -338,9 +292,9 @@ describe("parseDiagnostics", () => {
 
     const result = parseDiagnostics(raw, makePR(), makeDoctor());
 
-    expect(result.byCategory.structural.map((g) => g.ruleId))
-      .toContain("eslint/no-unused-vars");
-    expect(result.byCategory.verbosity.map((g) => g.ruleId))
-      .toContain("typescript/no-inferrable-types");
+    expect(result.byCategory.structural.map((g) => g.ruleId)).toContain("eslint/no-unused-vars");
+    expect(result.byCategory.verbosity.map((g) => g.ruleId)).toContain(
+      "typescript/no-inferrable-types",
+    );
   });
 });

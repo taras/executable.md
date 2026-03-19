@@ -2,11 +2,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import assert from "node:assert/strict";
 import { scanSegments, parseInfoString } from "../src/scanner.ts";
-import type {
-  ComponentInvocation,
-  ExecutableCodeBlock,
-  TextSegment,
-} from "../src/types.ts";
+import type { ComponentInvocation, ExecutableCodeBlock, TextSegment } from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Tier A — Boundary scanner tests (spec §11)
@@ -14,7 +10,7 @@ import type {
 
 describe("scanSegments", () => {
   // A1: Self-closing component
-  it("A1: self-closing component", function*() {
+  it("A1: self-closing component", function* () {
     const segments = scanSegments("Hello <Comp /> world");
     expect(segments).toMatchObject([
       { type: "text", content: "Hello " },
@@ -30,7 +26,7 @@ describe("scanSegments", () => {
   });
 
   // A2: Block component with text children
-  it("A2: block component with text children", function*() {
+  it("A2: block component with text children", function* () {
     const segments = scanSegments("<Comp>hello world</Comp>");
     expect(segments).toMatchObject([
       {
@@ -43,70 +39,56 @@ describe("scanSegments", () => {
   });
 
   // A3: Dotted component name
-  it("A3: dotted component name", function*() {
+  it("A3: dotted component name", function* () {
     const segments = scanSegments("<Ns.Sub />");
-    expect(segments).toMatchObject([
-      { name: "Ns.Sub", selfClosing: true },
-    ]);
+    expect(segments).toMatchObject([{ name: "Ns.Sub", selfClosing: true }]);
   });
 
   // A4: String attribute with `>`
-  it("A4: string attribute containing >", function*() {
+  it("A4: string attribute containing >", function* () {
     const segments = scanSegments('<Comp title="a > b" />');
-    expect(segments).toMatchObject([
-      { props: { title: "a > b" } },
-    ]);
+    expect(segments).toMatchObject([{ props: { title: "a > b" } }]);
   });
 
   // A5: Expression attribute with nested braces
-  it("A5: expression attribute with nested braces", function*() {
-    const segments = scanSegments('<Comp data={{ a: 1 }} />');
-    expect(segments).toMatchObject([
-      { props: { data: { a: 1 } } },
-    ]);
+  it("A5: expression attribute with nested braces", function* () {
+    const segments = scanSegments("<Comp data={{ a: 1 }} />");
+    expect(segments).toMatchObject([{ props: { data: { a: 1 } } }]);
   });
 
   // A6: Template literal attribute
-  it("A6: template literal attribute", function*() {
+  it("A6: template literal attribute", function* () {
     const segments = scanSegments("<Comp label={`hello`} />");
-    expect(segments).toMatchObject([
-      { type: "component" },
-    ]);
+    expect(segments).toMatchObject([{ type: "component" }]);
     // Scanner completes without error
   });
 
   // A7: Spread props
-  it("A7: spread props", function*() {
+  it("A7: spread props", function* () {
     const segments = scanSegments("<Comp {...props} />");
-    expect(segments).toMatchObject([
-      { type: "component", selfClosing: true },
-    ]);
+    expect(segments).toMatchObject([{ type: "component", selfClosing: true }]);
     // Spread props are skipped, no crash
   });
 
   // A8: Not a component — comparison expression
-  it("A8: not a component — comparison expression", function*() {
+  it("A8: not a component — comparison expression", function* () {
     const _segments = scanSegments("a < B && c > d");
     // '<' followed by ' B' (space before B) — not a tag
     // Or if B is right after <, it would be `<B` which IS uppercase
     // Let's use lowercase to be safe
     const segments2 = scanSegments("a < b && c > d");
-    expect(segments2).toMatchObject([
-      { type: "text" },
-    ]);
+    expect(segments2).toMatchObject([{ type: "text" }]);
   });
 
   // A9: Incomplete tag at end of input
-  it("A9: incomplete tag at end of input", function*() {
+  it("A9: incomplete tag at end of input", function* () {
     const segments = scanSegments("Hello <MyComp");
     // Should be treated as text since tag is incomplete
-    expect(segments).toMatchObject([
-      { type: "text" },
-    ]);
+    expect(segments).toMatchObject([{ type: "text" }]);
   });
 
   // A10: Code block with `exec` modifier
-  it("A10: code block with exec modifier", function*() {
+  it("A10: code block with exec modifier", function* () {
     const segments = scanSegments("```bash exec\nls -la\n```\n");
     expect(segments).toMatchObject([
       {
@@ -120,7 +102,7 @@ describe("scanSegments", () => {
   });
 
   // A11: Code block with `silent exec`
-  it("A11: code block with silent exec", function*() {
+  it("A11: code block with silent exec", function* () {
     const segments = scanSegments("```bash silent exec\nls\n```\n");
     expect(segments).toMatchObject([
       {
@@ -133,7 +115,7 @@ describe("scanSegments", () => {
   });
 
   // A12: Code block without `exec`
-  it("A12: code block without exec is text", function*() {
+  it("A12: code block without exec is text", function* () {
     const segments = scanSegments("```bash\nls -la\n```\n");
     expect(segments.length).toBe(1);
     expect(segments[0]!.type).toBe("text");
@@ -141,15 +123,13 @@ describe("scanSegments", () => {
   });
 
   // A13: Code block with modifiers but no exec
-  it("A13: code block with modifiers but no exec", function*() {
+  it("A13: code block with modifiers but no exec", function* () {
     const segments = scanSegments("```bash silent\nls\n```\n");
-    expect(segments).toMatchObject([
-      { type: "text" },
-    ]);
+    expect(segments).toMatchObject([{ type: "text" }]);
   });
 
   // A14: Component inside fenced code block
-  it("A14: component inside fenced code block is text", function*() {
+  it("A14: component inside fenced code block is text", function* () {
     const segments = scanSegments("```jsx\n<Component />\n```\n");
     expect(segments.length).toBe(1);
     expect(segments[0]!.type).toBe("text");
@@ -157,7 +137,7 @@ describe("scanSegments", () => {
   });
 
   // A14b: Component inside inline code span is text
-  it("A14b: component inside inline code span is text", function*() {
+  it("A14b: component inside inline code span is text", function* () {
     const segments = scanSegments("Use `<Content />` for slot");
     assert.equal(segments.length, 1);
     assert.equal(segments[0]!.type, "text");
@@ -165,7 +145,7 @@ describe("scanSegments", () => {
   });
 
   // A14c: Component inside double-backtick code span is text
-  it("A14c: component inside double-backtick code span is text", function*() {
+  it("A14c: component inside double-backtick code span is text", function* () {
     const segments = scanSegments("Use ``<Content />`` for slot");
     assert.equal(segments.length, 1);
     assert.equal(segments[0]!.type, "text");
@@ -173,7 +153,7 @@ describe("scanSegments", () => {
   });
 
   // A14d: Component after inline code span with other content
-  it("A14d: component inside code span with surrounding text", function*() {
+  it("A14d: component inside code span with surrounding text", function* () {
     const segments = scanSegments("hello `see <Content />` world");
     assert.equal(segments.length, 1);
     assert.equal(segments[0]!.type, "text");
@@ -181,7 +161,7 @@ describe("scanSegments", () => {
   });
 
   // A14e: Exec code block inside component children
-  it("A14e: exec code block inside component children produces codeBlock segment", function*() {
+  it("A14e: exec code block inside component children produces codeBlock segment", function* () {
     const input = '<Section title="test">\n\n```bash exec\necho hello\n```\n\n</Section>';
     const segments = scanSegments(input);
     assert.equal(segments.length, 1);
@@ -197,7 +177,7 @@ describe("scanSegments", () => {
   });
 
   // A14f: Non-executable code block inside component children stays as text
-  it("A14f: non-exec code block inside component children is text", function*() {
+  it("A14f: non-exec code block inside component children is text", function* () {
     const input = '<Section title="test">\n\n```yaml\nkey: value\n```\n\n</Section>';
     const segments = scanSegments(input);
     assert.equal(segments.length, 1);
@@ -215,7 +195,7 @@ describe("scanSegments", () => {
   });
 
   // A14g: Inline code span inside component children
-  it("A14g: inline code span inside component children protects component syntax", function*() {
+  it("A14g: inline code span inside component children protects component syntax", function* () {
     const input = '<Section title="test">\n\nUse `<Content />` here\n\n</Section>';
     const segments = scanSegments(input);
     assert.equal(segments.length, 1);
@@ -231,36 +211,29 @@ describe("scanSegments", () => {
   });
 
   // A15: Boolean prop
-  it("A15: boolean prop", function*() {
+  it("A15: boolean prop", function* () {
     const segments = scanSegments("<Comp verbose />");
-    expect(segments).toMatchObject([
-      { props: { verbose: true } },
-    ]);
+    expect(segments).toMatchObject([{ props: { verbose: true } }]);
   });
 
   // A16: Numeric expression prop
-  it("A16: numeric expression prop", function*() {
+  it("A16: numeric expression prop", function* () {
     const segments = scanSegments("<Comp count={42} />");
-    expect(segments).toMatchObject([
-      { props: { count: 42 } },
-    ]);
+    expect(segments).toMatchObject([{ props: { count: 42 } }]);
   });
 
   // A17: Modifier with params
-  it("A17: modifier with params", function*() {
+  it("A17: modifier with params", function* () {
     const segments = scanSegments("```bash timeout=30s exec\nls\n```\n");
     expect(segments).toMatchObject([
       {
-        modifiers: [
-          { name: "timeout", params: "30s" },
-          { name: "exec" },
-        ],
+        modifiers: [{ name: "timeout", params: "30s" }, { name: "exec" }],
       },
     ]);
   });
 
   // Additional edge cases
-  it("mixed content: text + component + code block", function*() {
+  it("mixed content: text + component + code block", function* () {
     const input = `# Hello
 
 <Greeting name="world" />
@@ -278,28 +251,24 @@ echo hi
     ]);
   });
 
-  it("nested components", function*() {
+  it("nested components", function* () {
     const segments = scanSegments("<Outer><Inner /></Outer>");
     expect(segments).toMatchObject([
       {
         name: "Outer",
-        children: [
-          { name: "Inner", selfClosing: true },
-        ],
+        children: [{ name: "Inner", selfClosing: true }],
       },
     ]);
   });
 
-  it("component with multiple string props", function*() {
+  it("component with multiple string props", function* () {
     const segments = scanSegments('<Comp name="alice" role="admin" />');
-    expect(segments).toMatchObject([
-      { props: { name: "alice", role: "admin" } },
-    ]);
+    expect(segments).toMatchObject([{ props: { name: "alice", role: "admin" } }]);
   });
 });
 
 describe("parseInfoString", () => {
-  it("parses language only", function*() {
+  it("parses language only", function* () {
     const result = parseInfoString("bash");
     expect(result).toMatchObject({
       language: "bash",
@@ -308,7 +277,7 @@ describe("parseInfoString", () => {
     });
   });
 
-  it("parses language + exec", function*() {
+  it("parses language + exec", function* () {
     const result = parseInfoString("bash exec");
     expect(result).toMatchObject({
       language: "bash",
@@ -317,7 +286,7 @@ describe("parseInfoString", () => {
     });
   });
 
-  it("parses language + silent + exec", function*() {
+  it("parses language + silent + exec", function* () {
     const result = parseInfoString("bash silent exec");
     expect(result).toMatchObject({
       language: "bash",
@@ -326,22 +295,19 @@ describe("parseInfoString", () => {
     });
   });
 
-  it("parses modifier with params", function*() {
+  it("parses modifier with params", function* () {
     const result = parseInfoString("bash timeout=30s exec");
     expect(result).toMatchObject({
-      modifiers: [
-        { name: "timeout", params: "30s" },
-        { name: "exec" },
-      ],
+      modifiers: [{ name: "timeout", params: "30s" }, { name: "exec" }],
     });
   });
 
-  it("eval makes executable", function*() {
+  it("eval makes executable", function* () {
     const result = parseInfoString("js eval");
     expect(result.executable).toBe(true);
   });
 
-  it("empty string", function*() {
+  it("empty string", function* () {
     const result = parseInfoString("");
     expect(result).toMatchObject({
       language: "",
@@ -351,35 +317,26 @@ describe("parseInfoString", () => {
   });
 
   // Bracket param tests
-  it("parses bracket params: sample[model=phi3-mini]", function*() {
+  it("parses bracket params: sample[model=phi3-mini]", function* () {
     const result = parseInfoString("bash sample[model=phi3-mini] exec");
     expect(result).toMatchObject({
       language: "bash",
-      modifiers: [
-        { name: "sample", params: "model=phi3-mini" },
-        { name: "exec" },
-      ],
+      modifiers: [{ name: "sample", params: "model=phi3-mini" }, { name: "exec" }],
       executable: true,
     });
   });
 
-  it("parses bracket params with different key", function*() {
+  it("parses bracket params with different key", function* () {
     const result = parseInfoString("bash sample[temperature=0.7] exec");
     expect(result).toMatchObject({
-      modifiers: [
-        { name: "sample", params: "temperature=0.7" },
-        { name: "exec" },
-      ],
+      modifiers: [{ name: "sample", params: "temperature=0.7" }, { name: "exec" }],
     });
   });
 
-  it("bracket params without value treated as params", function*() {
+  it("bracket params without value treated as params", function* () {
     const result = parseInfoString("bash sample[brief] exec");
     expect(result).toMatchObject({
-      modifiers: [
-        { name: "sample", params: "brief" },
-        { name: "exec" },
-      ],
+      modifiers: [{ name: "sample", params: "brief" }, { name: "exec" }],
     });
   });
 });

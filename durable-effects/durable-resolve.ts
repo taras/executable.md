@@ -6,11 +6,7 @@
  * During replay, the stored result is returned without executing.
  */
 
-import {
-  type Json,
-  type Workflow,
-  createDurableOperation,
-} from "@executablemd/durable-streams";
+import { type Json, type Workflow, createDurableOperation } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { env, platform } from "@executablemd/runtime";
 
@@ -49,9 +45,7 @@ export function* durableResolve<T extends Json>(
         );
       }
       if (!Number.isInteger(resolver.min) || !Number.isInteger(resolver.max)) {
-        throw new Error(
-          `durableResolve("${name}"): random_int min and max must be integers`,
-        );
+        throw new Error(`durableResolve("${name}"): random_int min and max must be integers`);
       }
       descExtras.min = resolver.min;
       descExtras.max = resolver.max;
@@ -75,8 +69,7 @@ export function* durableResolve<T extends Json>(
         }
         case "random_int": {
           const range = resolver.max - resolver.min + 1;
-          return (Math.floor(Math.random() * range) +
-            resolver.min) as unknown as Json;
+          return (Math.floor(Math.random() * range) + resolver.min) as unknown as Json;
         }
         case "uuid":
           return crypto.randomUUID() as unknown as Json;
@@ -110,10 +103,7 @@ export function* durableUUID(name?: string): Workflow<string> {
  * journal. Do NOT use this for secrets (API keys, tokens, passwords).
  * For secrets, read them ephemerally on each run instead.
  */
-export function* durableEnv(
-  varName: string,
-  name?: string,
-): Workflow<string | null> {
+export function* durableEnv(varName: string, name?: string): Workflow<string | null> {
   return yield* durableResolve(name ?? `env:${varName}`, {
     kind: "env_var",
     name: varName,

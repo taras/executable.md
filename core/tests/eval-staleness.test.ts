@@ -19,17 +19,21 @@ describe("Tier T8 — Staleness detection", () => {
     });
     yield* useEchoExec();
 
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: false,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: false,
+      }),
+    );
 
     expect(output2).toBe(output1);
   });
@@ -46,18 +50,22 @@ describe("Tier T8 — Staleness detection", () => {
     yield* useEchoExec();
 
     // Golden run with freshness
-    yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
     // Same source — replay should work
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
     expect(output2).toBe("");
   });
@@ -72,22 +80,26 @@ describe("Tier T8 — Staleness detection", () => {
     yield* useEchoExec();
 
     // Golden run
-    yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
     // Change the file
     files["test.md"] = "Different content\n";
 
     // Replay with stale file — should produce stale error
     try {
-      yield* collect(yield* runDocument({
-        docPath: "test.md",
-        stream,
-        freshness: true,
-      }));
+      yield* collect(
+        yield* runDocument({
+          docPath: "test.md",
+          stream,
+          freshness: true,
+        }),
+      );
       // If we get here, the guard didn't fire (might replay and not read file)
     } catch (e) {
       expect(e).toBeInstanceOf(StaleInputError);
@@ -102,17 +114,21 @@ describe("Tier T8 — Staleness detection", () => {
     });
     yield* useEchoExec();
 
-    const output1 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    const output1 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
-    const output2 = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    const output2 = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
     expect(output2).toBe(output1);
     expect(output1).toContain("hello");
@@ -126,18 +142,22 @@ describe("Tier T8 — Staleness detection", () => {
     });
     yield* useEchoExec();
 
-    yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
     // Replay — should work fine
-    const output = yield* collect(yield* runDocument({
-      docPath: "test.md",
-      stream,
-      freshness: true,
-    }));
+    const output = yield* collect(
+      yield* runDocument({
+        docPath: "test.md",
+        stream,
+        freshness: true,
+      }),
+    );
 
     expect(output).toBe("");
   });

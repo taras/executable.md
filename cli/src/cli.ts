@@ -12,7 +12,11 @@
  */
 
 import { main, exit, spawn, each, createSignal, type Operation } from "effection";
-import { InMemoryStream, type DurableEvent, type DurableStream } from "@executablemd/durable-streams";
+import {
+  InMemoryStream,
+  type DurableEvent,
+  type DurableStream,
+} from "@executablemd/durable-streams";
 
 import { forEach } from "@effectionx/stream-helpers";
 import { inspect } from "node:util";
@@ -27,7 +31,9 @@ import { loadJournal } from "./load-journal.ts";
 // Workaround: field.default exists at runtime but is missing from the .d.ts
 // ---------------------------------------------------------------------------
 
-const defaults = <T>(value: T) => (mods: Mods): Mods => ({ ...mods, default: value });
+const defaults =
+  <T>(value: T) =>
+  (mods: Mods): Mods => ({ ...mods, default: value });
 
 // ---------------------------------------------------------------------------
 // Program schema
@@ -69,7 +75,13 @@ const ema = program({
 // ---------------------------------------------------------------------------
 
 const pretty = (value: unknown): string =>
-  inspect(value, { colors: true, compact: true, breakLength: Infinity, depth: 2, maxStringLength: 200 });
+  inspect(value, {
+    colors: true,
+    compact: true,
+    breakLength: Infinity,
+    depth: 2,
+    maxStringLength: 200,
+  });
 
 function formatYieldResult(event: DurableEvent & { type: "yield" }): string {
   const { result, description } = event;
@@ -92,15 +104,15 @@ function summarizeEvent(event: DurableEvent): string {
   if (event.type === "yield") {
     const desc = event.description;
     const status = event.result.status;
-    const detail = status === "err" && "error" in event.result
-      ? ` (${event.result.error.message})`
-      : formatYieldResult(event);
+    const detail =
+      status === "err" && "error" in event.result
+        ? ` (${event.result.error.message})`
+        : formatYieldResult(event);
     return `[yield] ${desc.type}:${desc.name} → ${status}${detail}`;
   }
   const status = event.result.status;
-  const detail = status === "err" && "error" in event.result
-    ? ` (${event.result.error.message})`
-    : "";
+  const detail =
+    status === "err" && "error" in event.result ? ` (${event.result.error.message})` : "";
   return `[close] ${event.coroutineId} → ${status}${detail}`;
 }
 
@@ -136,9 +148,7 @@ function* run(config: {
   // FileStream.onAppend fires after each persist; the signal fans out
   // to the stderr writer below. Persistence is handled by FileStream
   // itself — the signal is purely for observability.
-  const signal = verbose
-    ? createSignal<DurableEvent, void>()
-    : undefined;
+  const signal = verbose ? createSignal<DurableEvent, void>() : undefined;
 
   if (signal && stream instanceof FileStream) {
     stream.onAppend = (event: DurableEvent) => signal.send(event);

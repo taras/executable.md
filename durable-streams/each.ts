@@ -263,9 +263,6 @@ function* _durableEachNext<T extends Json>(): Workflow<void> {
  * @param source Operation-native source of items
  */
 export const durableEach: {
-  <T extends Json>(
-    name: string,
-    source: DurableSource<T>,
-  ): Workflow<Iterable<T>>;
+  <T extends Json>(name: string, source: DurableSource<T>): Workflow<Iterable<T>>;
   next<T extends Json>(): Workflow<void>;
 } = Object.assign(_durableEach, { next: _durableEachNext });

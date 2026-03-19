@@ -295,9 +295,7 @@ describe("deterministic IDs", () => {
     const events = stream.snapshot();
 
     // Winner should be root.0
-    const winnerYield = events.find(
-      (e) => e.type === "yield" && e.coroutineId === "root.0",
-    );
+    const winnerYield = events.find((e) => e.type === "yield" && e.coroutineId === "root.0");
     expect(winnerYield !== undefined).toBe(true);
 
     // Verify IDs include root.0 (winner)

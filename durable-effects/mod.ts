@@ -35,22 +35,13 @@ export type { FetchOptions, FetchResult } from "./durable-fetch.ts";
 export { durableEval } from "./durable-eval.ts";
 export type { EvalOptions, EvalResult } from "./durable-eval.ts";
 
-export {
-  durableResolve,
-  durableNow,
-  durableUUID,
-  durableEnv,
-} from "./durable-resolve.ts";
+export { durableResolve, durableNow, durableUUID, durableEnv } from "./durable-resolve.ts";
 export type { ResolveKind } from "./durable-resolve.ts";
 
 // ---------------------------------------------------------------------------
 // Replay guards
 // ---------------------------------------------------------------------------
 
-export {
-  useFileContentGuard,
-  useGlobContentGuard,
-  useCodeFreshnessGuard,
-} from "./guards.ts";
+export { useFileContentGuard, useGlobContentGuard, useCodeFreshnessGuard } from "./guards.ts";
 
 export type { CellSource } from "./guards.ts";

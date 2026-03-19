@@ -100,10 +100,7 @@ function checkReplay<T>(
       // but do not participate in divergence detection.
       // The current desc is passed to the Divergence API as `actual` so
       // guards can compare both sides if needed.
-      if (
-        entry.description.type !== desc.type ||
-        entry.description.name !== desc.name
-      ) {
+      if (entry.description.type !== desc.type || entry.description.name !== desc.name) {
         // Delegate divergence policy to the Divergence API.
         const cursor = ctx.replayIndex.getCursor(ctx.coroutineId);
         const decision = Divergence.invoke(routine.scope, "decide", [
@@ -140,10 +137,10 @@ function checkReplay<T>(
         ctx.replayIndex.consumeYield(ctx.coroutineId);
         const error =
           outcome.error ??
-          new StaleInputError(
-            `Stale input detected for ${desc.type}("${desc.name}")`,
-            { coroutineId: ctx.coroutineId, description: desc },
-          );
+          new StaleInputError(`Stale input detected for ${desc.type}("${desc.name}")`, {
+            coroutineId: ctx.coroutineId,
+            description: desc,
+          });
         resolve({ ok: false, error });
         return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
       }
