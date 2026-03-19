@@ -12,7 +12,7 @@
 
 import { describe, it } from "@effectionx/bdd/node";
 import { run } from "effection";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import {
   type DurableEvent,
   InMemoryStream,

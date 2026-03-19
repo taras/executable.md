@@ -10,7 +10,7 @@ import {
   durableRun,
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { API } from "@executablemd/runtime";
 import { type EvalResult, durableEval } from "../durable-eval.ts";
 import { type ExecResult, durableExec } from "../durable-exec.ts";

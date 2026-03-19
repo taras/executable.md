@@ -8,7 +8,7 @@
  * resource retention via evalScope.eval() is deferred to v2.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { runDocument } from "../src/run-document.ts";

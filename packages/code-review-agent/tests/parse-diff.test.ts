@@ -2,7 +2,7 @@
  * Tests for parseDiff — unified diff parser.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { parseDiff } from "../src/parse-diff.ts";
 
 const META = { title: "Test PR", body: "Test body", number: "42" };

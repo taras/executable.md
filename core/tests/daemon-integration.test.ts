@@ -15,7 +15,7 @@
  * - error propagation via component-scoped daemon + children
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { race, sleep } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { runDocument } from "../src/run-document.ts";

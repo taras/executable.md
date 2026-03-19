@@ -2,7 +2,7 @@
  * Tier WN — Whitespace normalization middleware tests (spec §9.4).
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { createChannel, type Operation } from "effection";
 import { EMA } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
