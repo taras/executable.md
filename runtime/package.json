@@ -1,0 +1,9 @@
+{
+  "name": "@executablemd/runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts",
+    "./test": "./test/mod.ts"
+  }
+}

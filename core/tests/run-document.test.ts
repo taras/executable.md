@@ -10,7 +10,7 @@
  *   Staleness — golden run, mutate file, rerun with freshness:true → StaleInputError
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";

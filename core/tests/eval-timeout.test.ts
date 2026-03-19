@@ -4,7 +4,7 @@
  * Tests timeout behavior and duration parsing.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { parseDuration } from "../src/modifiers/timeout.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";

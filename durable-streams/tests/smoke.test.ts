@@ -3,7 +3,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { InMemoryStream, ReplayIndex } from "../mod.ts";
 import type { DurableEvent } from "../mod.ts";
 

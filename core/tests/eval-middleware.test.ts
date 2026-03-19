@@ -5,7 +5,7 @@
  * satisfy the ModifierFactory type and compose correctly via combine().
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { evalFactory } from "../src/eval-handler.ts";
 import { persistFactory } from "../src/modifiers/persist.ts";
 import { timeoutFactory } from "../src/modifiers/timeout.ts";

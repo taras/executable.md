@@ -1,5 +1,5 @@
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { expandSegments } from "../src/expand.ts";
 import type { ExpansionContext } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";

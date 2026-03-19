@@ -10,7 +10,7 @@
  * bracket params, provider pattern, and nested providers.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";

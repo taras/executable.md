@@ -1,0 +1,6 @@
+{
+  "name": "@effectionx/context-api",
+  "version": "0.5.0-vendored",
+  "type": "module",
+  "exports": "./mod.ts"
+}

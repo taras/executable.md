@@ -7,7 +7,7 @@
  * Its next() delegates to the second-installed, and so on to the core.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { createChannel } from "effection";
 import { EMA } from "../src/api.ts";
 import { subscribe } from "../src/subscribe.ts";

@@ -1,5 +1,5 @@
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import assert from "node:assert/strict";
 import { scanSegments, parseInfoString } from "../src/scanner.ts";
 import type {

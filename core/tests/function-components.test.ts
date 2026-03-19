@@ -5,7 +5,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";

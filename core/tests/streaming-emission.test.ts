@@ -5,7 +5,7 @@
  * runDocument, and blockId stability across per-segment expansion calls.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@std/expect";
+import { expect } from "expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { createBlockCounter } from "../src/expand.ts";
