@@ -1,0 +1,9 @@
+{
+  "name": "@executablemd/internal",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*"
+  }
+}

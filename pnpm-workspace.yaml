@@ -7,3 +7,5 @@ packages:
   - vendor/context-api
   - packages/code-review-agent
   - test-support
+  - .internal
+  - .opencode
