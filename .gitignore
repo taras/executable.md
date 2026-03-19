@@ -1,3 +1,4 @@
 node_modules/
 .vscode/
 .reviews/journal*.jsonl
+.ema-eval/

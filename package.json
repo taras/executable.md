@@ -50,6 +50,8 @@
     "runtime",
     "vendor/context-api",
     "packages/code-review-agent",
-    "test-support"
+    "test-support",
+    ".internal",
+    ".opencode"
   ]
 }

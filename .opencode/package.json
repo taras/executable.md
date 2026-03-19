@@ -1,0 +1,11 @@
+{
+  "name": "@executablemd/opencode-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "1.2.27",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-effects": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*"
+  }
+}

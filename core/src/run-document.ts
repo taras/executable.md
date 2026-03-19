@@ -24,6 +24,7 @@ import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { call } from "effection";
 import { useDenoCompiler } from "./deno-compiler.ts";
+import { useTempFileCompiler } from "./temp-file-compiler.ts";
 import type {
   ComponentDefinition,
   FunctionComponent,
@@ -462,8 +463,13 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     const scope = yield* useScope();
     let emitted = false;
 
-    // Install Deno compiler middleware
-    yield* useDenoCompiler();
+    // Install platform-appropriate compiler middleware
+    // deno-lint-ignore no-explicit-any
+    if (typeof (globalThis as any).Deno !== "undefined") {
+      yield* useDenoCompiler();
+    } else {
+      yield* useTempFileCompiler();
+    }
 
     // Install replay guards
     if (freshness) {
