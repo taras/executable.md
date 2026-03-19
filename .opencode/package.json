@@ -5,6 +5,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "1.2.27",
     "@executablemd/core": "workspace:*",
+    "@executablemd/durable-effects": "workspace:*",
     "@executablemd/durable-streams": "workspace:*"
   }
 }

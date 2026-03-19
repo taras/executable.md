@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@executablemd/core": "workspace:*",
+    "@executablemd/durable-effects": "workspace:*",
     "@executablemd/durable-streams": "workspace:*"
   }
 }
