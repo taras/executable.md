@@ -8,7 +8,7 @@
  * and uses timebox to prevent hangs from blocking the test suite.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { timebox } from "@effectionx/timebox";
 import { spawn, each } from "effection";
 import { exec } from "@effectionx/process";

@@ -4,7 +4,7 @@
  * Tests the code freshness guard behavior for eval blocks.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { runDocument } from "../src/run-document.ts";

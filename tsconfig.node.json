@@ -19,7 +19,8 @@
       "@executablemd/durable-effects": ["./durable-effects/mod.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
       "@effectionx/context-api": ["./vendor/context-api/mod.ts"],
-      "@effectionx/bdd/node": ["./test-support/bdd.ts"]
+      "@effectionx/bdd/node": ["./test-support/bdd.ts"],
+      "@effectionx/bdd/expect": ["./test-support/expect.ts"]
     }
   },
   "include": [

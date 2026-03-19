@@ -8,7 +8,7 @@
  * - Execution mode detection (generator, async, sync)
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { transformBlock, isJson, serializeExports } from "../src/eval-transform.ts";
 
 describe("Tier T1 — Source transform", () => {

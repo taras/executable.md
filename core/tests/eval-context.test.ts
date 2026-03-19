@@ -9,7 +9,7 @@
  * and generates data: URI modules instead of using node:vm.
  */
 import { describe, it, beforeAll } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { compileBlock } from "../src/eval-context.ts";
 import { useDenoCompiler } from "../src/deno-compiler.ts";
 

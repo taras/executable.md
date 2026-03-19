@@ -5,7 +5,7 @@
  * undeclared references, and syntax errors.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { runDocument } from "../src/run-document.ts";

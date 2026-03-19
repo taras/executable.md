@@ -7,7 +7,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { partitionBySlot, stripSlotProp } from "../src/expand.ts";
 import { expandSegments, createBlockCounter } from "../src/expand.ts";
 import type { ExpansionContext } from "../src/expand.ts";

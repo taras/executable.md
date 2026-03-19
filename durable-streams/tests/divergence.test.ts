@@ -7,7 +7,7 @@
  */
 
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,

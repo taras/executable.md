@@ -5,5 +5,8 @@
   "exports": {
     ".": "./mod.ts",
     "./test": "./test/mod.ts"
+  },
+  "dependencies": {
+    "@effectionx/context-api": "workspace:*"
   }
 }

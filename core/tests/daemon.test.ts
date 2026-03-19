@@ -5,7 +5,7 @@
  * and composes correctly in the modifier chain.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { daemonFactory } from "../src/modifiers/daemon.ts";
 import { combine } from "@effectionx/middleware";
 import { CodeBlockCtx } from "../src/modifiers.ts";

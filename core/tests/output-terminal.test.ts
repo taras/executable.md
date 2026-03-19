@@ -7,7 +7,7 @@
  * rather than checking for specific ANSI codes.
  */
 import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "expect";
+import { expect } from "@effectionx/bdd/expect";
 import { createChannel, type Operation } from "effection";
 import { EMA } from "../src/api.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";

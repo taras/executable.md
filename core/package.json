@@ -4,5 +4,10 @@
   "type": "module",
   "exports": {
     ".": "./mod.ts"
+  },
+  "dependencies": {
+    "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "@effectionx/context-api": "workspace:*"
   }
 }

@@ -6,3 +6,4 @@ packages:
   - runtime
   - vendor/context-api
   - packages/code-review-agent
+  - test-support
