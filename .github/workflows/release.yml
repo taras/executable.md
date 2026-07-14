@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Compile ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            artifact: xmd-aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            artifact: xmd-x86_64-apple-darwin
+          - target: x86_64-unknown-linux-gnu
+            artifact: xmd-x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+            artifact: xmd-aarch64-unknown-linux-gnu
+          - target: x86_64-pc-windows-msvc
+            artifact: xmd-x86_64-pc-windows-msvc.exe
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Compile ${{ matrix.target }}
+        run: |
+          deno compile \
+            --node-modules-dir=none \
+            --exclude-unused-npm \
+            --exclude .opencode \
+            --exclude .internal \
+            --allow-all \
+            --target ${{ matrix.target }} \
+            --output dist/${{ matrix.artifact }} \
+            cli/src/cli.ts
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum xmd-* > checksums.txt
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          draft: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/xmd-*
+            dist/checksums.txt
