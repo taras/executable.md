@@ -1,7 +1,7 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
 
-const CHAIN = "```bash silent sample exec\ngit diff --stat\n```";
+const CHAIN = "```bash silent timeout=30s exec\ngit diff --stat\n```";
 
 const EVAL = `\`\`\`ts eval
 const port = yield* findFreePort();
@@ -38,10 +38,6 @@ export default define.page(function ExecEval() {
           <code>silent</code> — execute but suppress rendered output.
         </li>
         <li>
-          <code>sample</code>{" "}
-          — send inner output through the Sample API (an LLM).
-        </li>
-        <li>
           <code>persist</code>{" "}
           — keep resources created by an eval block alive for the component
           lifetime.
@@ -54,6 +50,13 @@ export default define.page(function ExecEval() {
           — start a long-running subprocess tied to the component scope.
         </li>
       </ul>
+      <p class="muted">
+        LLM sampling is not a fence modifier — it happens through the{" "}
+        <a href="/docs/providers">
+          <code>&lt;Sample&gt;</code> component
+        </a>{" "}
+        installed by provider middleware.
+      </p>
 
       <h2>Eval blocks share bindings</h2>
       <p>

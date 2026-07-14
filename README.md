@@ -107,7 +107,7 @@ executable.md treats the root document like a component:
 The first word in a fence info string is the language. The remaining words form a modifier chain. Standard renderers only read the first word, so the modifiers stay invisible everywhere else.
 
 ````md
-```bash silent sample exec
+```bash silent timeout=30s exec
 git diff --stat
 ```
 ````
@@ -117,10 +117,11 @@ Built-in modifiers:
 - `exec` - run the block as a subprocess and render stdout.
 - `eval` - run JavaScript/TypeScript in-process as an Effection operation.
 - `silent` - execute but suppress rendered output.
-- `sample` - send inner output through the Sample API.
 - `persist` - keep resources created by an eval block alive for the component lifetime.
 - `timeout=30s` - cancel a long-running block.
 - `daemon` - start a long-running subprocess tied to the component scope.
+
+LLM sampling is not a fence modifier — it happens through the `<Sample>` component installed by provider middleware (see [Provider components](#provider-components)).
 
 ## Eval blocks
 

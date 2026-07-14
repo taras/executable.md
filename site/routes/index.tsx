@@ -21,7 +21,7 @@ const FEATURES: { title: string; body: string }[] = [
   {
     title: "Modifier chains",
     body:
-      "Compose behavior left-to-right: silent, sample, persist, timeout=30s, daemon. The fence info string is a middleware chain.",
+      "Compose behavior left-to-right: silent, persist, timeout=30s, daemon. The fence info string is a middleware chain.",
   },
   {
     title: "Durable replay",
@@ -126,7 +126,7 @@ export default define.page(function Home() {
         </div>
         <p class="muted" style="font-size:0.8rem;margin-top:1.25rem;">
           Standalone binary (built with{" "}
-          <code>deno compile</code>) · also installable via Deno &amp; JSR · CLI
+          <code>deno compile</code>) · also runs from source on Deno · CLI
           command: <code>xmd</code>
         </p>
       </section>
@@ -261,10 +261,10 @@ export default define.page(function Home() {
           <div class="card">
             <h3 style="font-weight:700;margin-bottom:0.5rem;">Deno users</h3>
             <p class="muted" style="font-size:0.9rem;margin-bottom:0.75rem;">
-              Install from JSR.
+              Run from source (a JSR package is coming soon).
             </p>
             <CodeBlock>
-              {"deno install -A -n xmd jsr:@executablemd/cli"}
+              {"git clone https://github.com/taras/executable.md\ncd executable.md && deno task xmd run doc.md"}
             </CodeBlock>
           </div>
           <div class="card">

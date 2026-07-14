@@ -21,7 +21,7 @@ import {
 import { forEach } from "@effectionx/stream-helpers";
 import { inspect } from "node:util";
 import process from "node:process";
-import { program, object, field, cli, commands, type Mods } from "@frontside/configliere";
+import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
 import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 import { FileStream } from "./file-stream.ts";

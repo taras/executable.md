@@ -44,7 +44,6 @@
     "npm:@effectionx/stream-helpers@~0.8.1": "0.8.1_effection@4.1.0-alpha.7",
     "npm:@effectionx/test-adapter@~0.7.3": "0.7.3_effection@4.1.0-alpha.7",
     "npm:@effectionx/timebox@~0.4.2": "0.4.2_effection@4.1.0-alpha.7",
-    "npm:@jsr/frontside__configliere@~0.2.3": "0.2.4",
     "npm:@opencode-ai/plugin@1.2.27": "1.2.27",
     "npm:@opentelemetry/api@^1.9.0": "1.9.1",
     "npm:@preact/signals@^2.5.1": "2.9.3_preact@10.29.7__preact-render-to-string@6.7.0_preact-render-to-string@6.7.0__preact@10.29.7",
@@ -56,6 +55,7 @@
     "npm:@types/node@22": "22.19.15",
     "npm:@types/node@^24.5.2": "24.13.3",
     "npm:acorn@^8.16.0": "8.16.0",
+    "npm:configliere@~0.2.3": "0.2.4",
     "npm:effection@4.1.0-alpha.7": "4.1.0-alpha.7",
     "npm:esbuild-wasm@~0.25.11": "0.25.12",
     "npm:esbuild@0.25.7": "0.25.7",
@@ -939,14 +939,6 @@
         "@jridgewell/sourcemap-codec"
       ]
     },
-    "@jsr/frontside__configliere@0.2.4": {
-      "integrity": "sha512-0b6mirZSsFUqe286Sd2ZFaeP6VW5Pd18+DBN79/SuY82GSZd7C4Pynz17CoDx8ofnA/XqH9UZP416lcrd/q2wQ==",
-      "dependencies": [
-        "@standard-schema/spec",
-        "ts-case-convert"
-      ],
-      "tarball": "https://npm.jsr.io/~/11/@jsr/frontside__configliere/0.2.4.tgz"
-    },
     "@microsoft/fetch-event-source@2.0.1": {
       "integrity": "sha512-W6CLUJ2eBMw3Rec70qrsEW0jOm/3twwJv21mrmj2yORiaVmVYGS4sSS5yUwvQc1ZlDLYGPnClVWmUUMagKNsfA=="
     },
@@ -1661,6 +1653,13 @@
     },
     "color-name@1.1.4": {
       "integrity": "sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA=="
+    },
+    "configliere@0.2.4": {
+      "integrity": "sha512-xGvxseKlsySjwXzB9HXNHe0/eqA9nCUUEo1227tTnhiBjlUrlMTN7CgpO4ufK9+TW/823dhjfOLY83fYqOh/hA==",
+      "dependencies": [
+        "@standard-schema/spec",
+        "ts-case-convert"
+      ]
     },
     "convert-source-map@2.0.0": {
       "integrity": "sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg=="
@@ -2851,8 +2850,8 @@
       "npm:@effectionx/stream-helpers@~0.8.1",
       "npm:@effectionx/test-adapter@~0.7.3",
       "npm:@effectionx/timebox@~0.4.2",
-      "npm:@jsr/frontside__configliere@~0.2.3",
       "npm:@types/node@^24.5.2",
+      "npm:configliere@~0.2.3",
       "npm:effection@4.1.0-alpha.7",
       "npm:expect@30",
       "npm:mdast-util-to-string@4",

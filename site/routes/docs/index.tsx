@@ -30,8 +30,13 @@ export default define.page(function GettingStarted() {
       <CodeBlock>
         {"curl -fsSL https://executable.md/install.sh | sh"}
       </CodeBlock>
-      <p>Or, for Deno users, install from JSR:</p>
-      <CodeBlock>{"deno install -A -n xmd jsr:@executablemd/cli"}</CodeBlock>
+      <p>
+        Or, for Deno users, run it from source (a published JSR package is
+        coming soon):
+      </p>
+      <CodeBlock>
+        {"git clone https://github.com/taras/executable.md\ncd executable.md && deno task xmd run doc.md"}
+      </CodeBlock>
       <p>
         Prebuilt binaries for every platform are on the{" "}
         <a

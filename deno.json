@@ -24,7 +24,7 @@
     "@effectionx/scope-eval": "npm:@effectionx/scope-eval@^0.1.2",
     "@effectionx/stream-helpers": "npm:@effectionx/stream-helpers@^0.8.1",
     "@effectionx/timebox": "npm:@effectionx/timebox@^0.4.2",
-    "@frontside/configliere": "npm:@jsr/frontside__configliere@^0.2.3",
+    "configliere": "npm:configliere@^0.2.3",
     "expect": "npm:expect@^30",
     "@std/expect": "npm:expect@^30",
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
