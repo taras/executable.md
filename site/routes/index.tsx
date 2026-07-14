@@ -112,12 +112,7 @@ export default define.page(function Home({ url }) {
           file that still renders as normal markdown anywhere.
         </p>
         <div style="max-width:30rem;margin:0 auto 1rem;">
-          <CopyCommand
-            lines={[
-              installCmd,
-              "xmd run hello-world.md",
-            ]}
-          />
+          <CopyCommand lines={[installCmd]} />
         </div>
         <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-top:1.25rem;">
           <a class="btn btn-ghost" href={GITHUB} rel="noopener">
