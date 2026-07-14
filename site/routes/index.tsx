@@ -87,7 +87,8 @@ title: Hello World
   </OllamaProvider>
 </AnthropicProvider>`;
 
-export default define.page(function Home() {
+export default define.page(function Home({ url }) {
+  const installCmd = `curl -fsSL ${url.origin}/install.sh | sh`;
   return (
     <>
       <Header />
@@ -111,12 +112,7 @@ export default define.page(function Home() {
           file that still renders as normal markdown anywhere.
         </p>
         <div style="max-width:30rem;margin:0 auto 1rem;">
-          <CopyCommand
-            lines={[
-              "curl -fsSL https://executable.md/install.sh | sh",
-              "xmd run hello-world.md",
-            ]}
-          />
+          <CopyCommand lines={[installCmd]} />
         </div>
         <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-top:1.25rem;">
           <a class="btn btn-ghost" href={GITHUB} rel="noopener">
@@ -254,9 +250,7 @@ export default define.page(function Home() {
             <p class="muted" style="font-size:0.9rem;margin-bottom:0.75rem;">
               Standalone binary, no runtime required.
             </p>
-            <CodeBlock>
-              {"curl -fsSL https://executable.md/install.sh | sh"}
-            </CodeBlock>
+            <CodeBlock>{installCmd}</CodeBlock>
           </div>
           <div class="card">
             <h3 style="font-weight:700;margin-bottom:0.5rem;">Deno users</h3>
