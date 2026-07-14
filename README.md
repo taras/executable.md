@@ -1,6 +1,8 @@
-# Executable Markdown Agents
+# executable.md
 
-Executable Markdown Agents (EMA) treats markdown documents as durable workflows. A document can expand markdown components, execute annotated code blocks, evaluate in-process Effection operations, and replay prior work from a journal after a crash or restart.
+**executable.md** treats markdown documents as durable, executable workflows. A document can expand markdown components, execute annotated code blocks, evaluate in-process [Effection](https://frontside.com/effection) operations, and replay prior work from a journal after a crash or restart — while staying a valid, readable markdown file in any viewer.
+
+The command-line tool is called **`xmd`** (eXecutable MarkDown).
 
 This project is an implementation of the draft spec in [`specs/executable-mdx-spec.md`](specs/executable-mdx-spec.md).
 
@@ -57,22 +59,24 @@ utils.ts
 
 ## Install
 
+Install the `xmd` binary (macOS/Linux):
+
 ```bash
-pnpm install
+curl -fsSL https://executable.md/install.sh | sh
 ```
+
+Prebuilt binaries for each platform are published on the [releases page](https://github.com/taras/executable.md/releases). The binary is self-contained — no Node or Deno required to run it.
 
 ## Run a document
 
-Use the CLI directly:
-
 ```bash
-pnpm ema examples/hello-world.md
+xmd run core/examples/hello-world.md
 ```
 
-Or keep a persistent journal for replay:
+Keep a persistent journal for replay:
 
 ```bash
-pnpm ema examples/hello-world.md --journal .ema/events.jsonl
+xmd run core/examples/hello-world.md --journal .xmd/events.jsonl
 ```
 
 Useful flags:
@@ -83,7 +87,7 @@ Useful flags:
 
 ## Document model
 
-EMA treats the root document like a component:
+executable.md treats the root document like a component:
 
 - Frontmatter becomes `meta`.
 - JSX tags with capitalized names become component invocations.
@@ -93,7 +97,7 @@ EMA treats the root document like a component:
 
 ## Executable code blocks
 
-The first word in a fence info string is the language. The remaining words form a modifier chain.
+The first word in a fence info string is the language. The remaining words form a modifier chain. Standard renderers only read the first word, so the modifiers stay invisible everywhere else.
 
 ````md
 ```bash silent sample exec
@@ -135,19 +139,25 @@ Highlights:
 
 ## Provider components
 
-The repo includes reusable markdown components that demonstrate the provider pattern:
+The repo includes reusable markdown components (in `core/components/`) that demonstrate the provider pattern:
 
-- `components/OllamaProvider.md`
-- `components/LlamafileProvider.md`
-- `components/Sample.md`
+- `AnthropicProvider.md`
+- `OllamaProvider.md`
+- `LlamafileProvider.md`
+- `Sample.md`
+- `Instruction.md`
 
-These components combine `eval`, `daemon`, readiness checks, and `Sample` middleware so a document can talk to a local model server without custom runtime wiring.
+These components combine `eval`, `daemon`, readiness checks, and `Sample` middleware so a document can talk to a cloud or local model server without custom runtime wiring.
 
-`examples/hello-world.md` shows the pattern with Ollama.
+[`core/examples/hello-world.md`](core/examples/hello-world.md) shows the pattern combining a cloud model (Claude) and a local model (Ollama). Provider docs currently need the built-in components on the search path:
+
+```bash
+xmd run core/examples/hello-world.md --component-dir core/components
+```
 
 ## Durable replay
 
-EMA stores workflow events in a durable stream. On rerun with the same journal:
+executable.md stores workflow events in a durable stream. On rerun with the same journal:
 
 - component imports replay from stored content,
 - completed `exec` and `eval` operations replay from stored results,
@@ -158,24 +168,30 @@ Journals store workspace-relative paths so they remain portable across machines 
 
 ## Project layout
 
-- `src/run-document.ts` - document entrypoint and durable import pipeline.
-- `src/scanner.ts` - boundary scanner for components and executable fences.
-- `src/expand.ts` - component expansion and executable block handling.
-- `src/eval-handler.ts` - `eval` execution and binding restoration.
-- `src/modifiers/` - built-in modifier factories.
-- `src/sample/` - sampling helpers and local model adapters.
-- `src/cli.ts` - `ema` command.
-- `examples/hello-world.md` - end-to-end example.
+- `core/src/run-document.ts` - document entrypoint and durable import pipeline.
+- `core/src/scanner.ts` - boundary scanner for components and executable fences.
+- `core/src/` - component expansion, eval/exec handling, modifiers, and sampling helpers.
+- `core/components/` - reusable provider and demo components.
+- `cli/src/cli.ts` - the `xmd` command.
+- `core/examples/hello-world.md` - end-to-end example.
 - `specs/executable-mdx-spec.md` - design and behavior spec.
 
 ## Development
 
+This is a Deno-first project. Run the tool from source and the checks with `deno`:
+
 ```bash
-pnpm test
-pnpm lint
-pnpm typecheck
+deno task xmd run core/examples/hello-world.md   # run a document from source
+deno task build                                  # compile the standalone xmd binary
+deno task lint                                   # oxlint + oxfmt
+deno check core/mod.ts                            # typecheck
+deno task test                                   # run the test suite
 ```
 
 ## Status
 
-This project is currently a draft implementation of the Executable MDX spec and is optimized for experimentation around durable markdown workflows, Effection-based evaluation, and provider-driven local AI documents.
+This is an early, first public release and a draft spec, optimized for experimentation around durable markdown workflows, Effection-based evaluation, and provider-driven AI documents. Feedback, issues, and contributions are very welcome — please [open an issue](https://github.com/taras/executable.md/issues).
+
+## License
+
+[MIT](LICENSE)

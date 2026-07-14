@@ -2,3 +2,5 @@ node_modules/
 .vscode/
 .reviews/journal*.jsonl
 .ema-eval/
+dist/
+.DS_Store

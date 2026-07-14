@@ -1,6 +1,26 @@
 {
   "private": true,
   "type": "module",
+  "description": "executable.md — treat markdown documents as durable, executable workflows.",
+  "homepage": "https://executable.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taras/executable.md.git"
+  },
+  "bugs": {
+    "url": "https://github.com/taras/executable.md/issues"
+  },
+  "keywords": [
+    "markdown",
+    "executable-markdown",
+    "durable-workflows",
+    "effection",
+    "cli",
+    "llm",
+    "agents"
+  ],
+  "author": "Taras Mankovski",
+  "license": "MIT",
   "packageManager": "pnpm@9.15.0",
   "dependencies": {
     "@durable-streams/client": "^0.2.2",

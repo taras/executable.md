@@ -2,13 +2,13 @@
  * CLI — run an executable markdown document.
  *
  * Usage:
- *   ema run <document.md> [options]
- *   ema <document.md> [options]        (run is the default command)
+ *   xmd run <document.md> [options]
+ *   xmd <document.md> [options]        (run is the default command)
  *
  * Examples:
- *   deno task ema run examples/hello-world.md
- *   deno task ema examples/hello-world.md --verbose
- *   deno task ema run examples/hello-world.md --journal events.jsonl
+ *   xmd run core/examples/hello-world.md
+ *   xmd core/examples/hello-world.md --verbose
+ *   xmd run core/examples/hello-world.md --journal events.jsonl
  */
 
 import { main, exit, spawn, each, createSignal, type Operation } from "effection";
@@ -64,8 +64,8 @@ const runConfig = object({
   },
 });
 
-const ema = program({
-  name: "ema",
+const xmd = program({
+  name: "xmd",
   version: "0.1.0",
   config: commands({ run: runConfig }, { default: "run" }),
 });
@@ -217,7 +217,7 @@ function* run(config: {
 // ---------------------------------------------------------------------------
 
 await main(function* (args) {
-  const parser = ema.createParser({ args });
+  const parser = xmd.createParser({ args });
 
   switch (parser.type) {
     case "help":
