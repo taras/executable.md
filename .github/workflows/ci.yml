@@ -33,7 +33,7 @@ jobs:
 
       - uses: denoland/setup-deno@v2.0.3
         with:
-          deno-version: v2.x
+          deno-version: v2.9.1
 
       - name: Typecheck
         run: deno task check
@@ -48,7 +48,7 @@ jobs:
 
       - uses: denoland/setup-deno@v2.0.3
         with:
-          deno-version: v2.x
+          deno-version: v2.9.1
 
       - name: Install workspace deps
         run: deno install
