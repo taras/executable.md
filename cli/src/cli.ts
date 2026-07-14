@@ -50,7 +50,7 @@ const runConfig = object({
     ...field(z.array(z.string()), defaults(["components", "."]), field.array()),
   },
   verbose: {
-    description: "log journal events to stderr",
+    description: "log journal entries to stderr",
     aliases: ["-V"],
     ...field(z.boolean(), defaults(false)),
   },
@@ -72,7 +72,7 @@ const xmd = program({
 });
 
 // ---------------------------------------------------------------------------
-// Journal event formatting
+// Journal entry formatting
 // ---------------------------------------------------------------------------
 
 const pretty = (value: unknown): string =>
@@ -150,7 +150,7 @@ function* run(config: {
 }): Operation<void> {
   const { docPath, componentDir, verbose, journal, raw } = config;
 
-  // Every CLI invocation starts from an empty stream. --journal records
+  // Every CLI invocation starts from an empty stream. --journal writes
   // current-run diagnostics only; existing traces are never loaded.
   let stream: DurableStream;
 

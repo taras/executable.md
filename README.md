@@ -10,7 +10,7 @@ This project is an implementation of the draft spec in [`specs/executable-mdx-sp
 
 - Expands JSX-style component invocations like `<Greeting name="world" />` from markdown files.
 - Executes fenced code blocks marked with `exec` or `eval`.
-- Optionally records component imports and command results to a diagnostic JSONL trace.
+- Optionally journals component imports and command results to a diagnostic JSONL trace.
 - Shares bindings across `eval` blocks inside a component.
 - Supports long-lived background processes with `daemon` and provider-style components for LLM-backed workflows.
 
@@ -88,8 +88,8 @@ xmd run core/examples/hello-world.md --journal .xmd/events.jsonl
 
 Useful flags:
 
-- `--journal`, `-j` - write current-run events to a new JSONL file for debugging. The path must not exist and is never replayed.
-- `--verbose`, `-V` - print durable journal events to stderr while running.
+- `--journal`, `-j` - write current-run journal entries to a new JSONL file for debugging. The path must not exist and is never replayed.
+- `--verbose`, `-V` - print durable journal entries to stderr while running.
 - `--component-dir` - add component search directories. Defaults to `components` and `.`.
 
 ## Document model
@@ -165,7 +165,7 @@ xmd run core/examples/hello-world.md --component-dir core/components
 
 ## Diagnostic journals
 
-`--journal` records internal workflow events for troubleshooting. A trace can include component source, command output, evaluated values, and errors, so treat it as potentially sensitive data.
+`--journal` writes internal workflow journal entries for troubleshooting. A trace can include component source, command output, evaluated values, and errors, so treat it as potentially sensitive data.
 
 Each invocation requires a new path. If the path already exists, `xmd` exits without executing the document or modifying the file. An interrupted process may leave a partial trace; the CLI preserves it for inspection and does not use it as recovery input.
 

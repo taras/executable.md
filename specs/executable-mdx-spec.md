@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Implementing agent
-**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (event protocol and recording), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
+**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (journal protocol and journaling), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
 
 ---
 
@@ -15,16 +15,16 @@ references are resolved from the file system and expanded recursively,
 and code blocks marked as executable are either run as subprocess
 commands, evaluated in-process as Effection generator operations, or spawned as long-running
 background processes via the `daemon` modifier. The journal records
-operation events as a diagnostic JSONL trace.
+operation journal entries as a diagnostic JSONL trace.
 
 `--journal` names a path that does not exist; the CLI creates it for the
 current run and fails rather than appending to or interpreting an existing
 trace.
 
 The execution boundary uses `createDurableOperation` from the internal
-`durable-streams` package to emit structured events. This is an
-event-recording implementation detail, not a durability guarantee. The main
-features are component import (a recorded operation that wraps the Resolve
+`durable-streams` package to write structured journal entries. This is a
+journaling implementation detail, not a durability guarantee. The main
+features are component import (a journaled operation that wraps the Resolve
 Api and runtime file read), the in-process evaluation system (source transform,
 module compilation, binding environment, and eval scope for resource
 lifetime management — see §4), daemon process management (the
@@ -484,7 +484,7 @@ function createExecFactory(): ModifierFactory {
 }
 ```
 
-**`eval`** — evaluates the code block in-process as a recorded Effection
+**`eval`** — evaluates the code block in-process as a journaled Effection
 generator operation. Also a terminal handler. Unlike
 `exec` (subprocess), `eval` executes code in the same Effection
 process, enabling direct access to live in-memory objects, native
@@ -998,7 +998,7 @@ Effection-native `Response` — `response.json()` is `Operation<T>`, not
 cancellation flows through structured concurrency automatically.
 
 Each CLI invocation makes the inference request once. Its result may be
-included in the enclosing operation's diagnostic event.
+included in the enclosing operation's diagnostic journal entry.
 
 #### Default message builder
 
@@ -1129,7 +1129,7 @@ Eval blocks run JavaScript **in-process** as Effection generator operations.
 Unlike `exec` blocks (which run shell commands in a subprocess), `eval`
 blocks execute in the same Effection process. This section describes the
 architecture: source transform, module compilation, binding environment,
-eval scope, and diagnostic event recording.
+eval scope, and diagnostic journaling.
 
 ### 4.1 Source transform
 
@@ -1270,7 +1270,7 @@ function serializeExports(
     }
     // Non-serializable values silently omitted.
     // They remain in env.values as live references during this run
-    // but are absent from the diagnostic event.
+    // but are absent from the diagnostic journal.
   }
   return result;
 }
@@ -1490,11 +1490,11 @@ processor. Instead:
 4. Resources spawned during that execution are retained until the
    eval scope is destroyed (when component expansion completes)
 
-### 4.5 Eval trace events
+### 4.5 Eval journal entries
 
 #### What is journaled
 
-`evalFactory` wraps execution in `createDurableOperation`. Diagnostic event
+`evalFactory` wraps execution in `createDurableOperation`. Diagnostic journal
 shape:
 
 ```json
@@ -1584,7 +1584,7 @@ itself won't pollute the journal.
 
 #### Journaling
 
-The output text is recorded alongside exports as `__output` in the eval event.
+The output text is journaled alongside exports as `__output` in the eval entry.
 It is extracted before exports are merged into `env.values` in the current
 run:
 
@@ -1894,7 +1894,7 @@ the `.md` file wins. This ensures backward compatibility — existing
 markdown components are not shadowed by TypeScript files.
 
 **Journaling.** Function components are imported via
-`durableImportComponent`, which records the resolved path and current file
+`durableImportComponent`, which journals the resolved path and current file
 content. The function component is imported from the current file on every
 run because the function itself is not serializable.
 
@@ -1968,12 +1968,12 @@ function* useDirectoryResolver(
 
 ### 5.3 Import: `durableImportComponent`
 
-Import is a single recorded operation that resolves a component name and
+Import is a single journaled operation that resolves a component name and
 reads the file during a CLI invocation.
 
 Parsing the current content into frontmatter and segments is a **runtime
-operation** that runs after the recorded operation returns. It is
-deterministic from the content, so it needs no separate trace event.
+operation** that runs after the journaled operation returns. It is
+deterministic from the content, so it needs no separate journal entry.
 
 ```typescript
 interface ImportResult {
@@ -2036,7 +2036,7 @@ function* durableImportComponent(
     "content": "---\nemoji: 👋\n..." } }
 ```
 
-One event per component. The entry captures both *which file was found*
+One journal entry per component. The entry captures both *which file was found*
 (path) and *what was in it* (content) for current-run diagnostics.
 
 ```typescript
@@ -3035,7 +3035,7 @@ them afterward. This is consistent with how `interpolate()` handles
 #### Serialization constraint
 
 Only JSON-serializable values in `env.values` are stored in the diagnostic
-event (§4.1). Non-serializable values (functions, class instances) remain in
+journal entry (§4.1). Non-serializable values (functions, class instances) remain in
 `env.values` as live references during the current run. Values used in
 `{name}` substitutions are normally primitives such as port numbers, URLs,
 and strings.
@@ -3146,7 +3146,7 @@ capture step in the component body. It is consistent with how
 
 **Block 1 — resource allocation:**
 `findFreePort()` is available as a VM global. The eval block exports
-`port` and `baseUrl` to `env.values`. The eval operation records the result.
+`port` and `baseUrl` to `env.values`. The eval operation journals the result.
 
 **Block 2 — daemon spawn:**
 `{port}` is substituted from `env.values` into the command content
@@ -3157,7 +3157,7 @@ No journal entry.
 
 **Block 3 — readiness:**
 `when` polls with retries until the server responds. The eval operation
-records the result.
+journals the result.
 
 **Block 4 — middleware install:**
 `callLlamafile` and `Sample` are standard imports in the generated
@@ -3328,7 +3328,7 @@ output(sampleResult);
    For self-closing invocations, this returns an empty string.
 2. `content` falls back to the `prompt` prop if children are empty.
 3. `Sample.operations.sample()` is called directly from the eval block. The
-   enclosing eval operation records the block result, including output.
+   enclosing eval operation journals the block result, including output.
 4. `output(sampleResult)` sets the block's rendered output to the
    LLM response.
 
@@ -3420,7 +3420,7 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
     const evalCtx = createEvalContext();
     yield* EvalCtxKey.set(evalCtx);
 
-    // Create eval scope before the recorded document workflow (§4.4).
+    // Create eval scope before the journaled document workflow (§4.4).
     const evalScope = yield* resource(useEvalScope());
     yield* EvalScopeCtx.set(evalScope);
 
@@ -3728,9 +3728,9 @@ The user sees progress incrementally at root-segment granularity.
 yield* ephemeral(output(text));
 ```
 
-This bridges from the recorded `Workflow` context to plain `Operation`
-context. Output emission is a derived side effect; recording `output()` calls
-would add redundant events.
+This bridges from the journaled `Workflow` context to plain `Operation`
+context. Output emission is a derived side effect; journaling `output()` calls
+would add redundant entries.
 
 All middleware and side effects triggered by `output()` (normalization,
 formatting, channel send) execute on the ephemeral side. No durable state
@@ -3802,8 +3802,8 @@ for the Api, `createChannel` from Effection, `forEach` from
 
 ### 10.1 Effect vocabulary for MDX execution
 
-The execution boundary records the following operation descriptions through
-`@executablemd/durable-streams`. These are diagnostic event types, not a
+The execution boundary journals the following operation descriptions through
+`@executablemd/durable-streams`. These are diagnostic journal-entry types, not a
 public replay contract.
 
 | Operation | Effect type | Effect name | Notes |
@@ -4143,7 +4143,7 @@ visible warning blocks, collect into a separate error report).
 | I6 | `persist timeout=10s eval` | Three modifiers compose: persist → timeout → eval |
 | I7 | `silent eval` | Silent wraps eval — both run, output empty |
 
-### Tier J — Eval event integration
+### Tier J — Eval journal-entry integration
 
 | # | Test | Verify |
 |---|------|--------|
@@ -4281,7 +4281,7 @@ visible warning blocks, collect into a separate error report).
 | # | Test | Verify |
 |---|------|--------|
 | EO1 | `output()` produces eval block output | Block calling `output("text")` → rendered output contains "text" |
-| EO2 | `output()` recorded in event | `__output` is present in the current eval result |
+| EO2 | `output()` journaled in entry | `__output` is present in the current eval result |
 | EO3 | eval block without `output()` produces no output | Standard eval block → empty output unchanged |
 | EO4 | `output()` with multiline content | Multiline string preserved through journal round-trip |
 | EO5 | `output()` converts non-string to string | `output(42)` → `"42"` via `String()` coercion |
@@ -4302,7 +4302,7 @@ visible warning blocks, collect into a separate error report).
 | SC2 | With children | `<Sample>children</Sample>` → children rendered then sampled |
 | SC3 | Model routing | `<Sample model="X">` → targets specific provider |
 | SC4 | No provider | `<Sample>` outside provider → descriptive error |
-| SC5 | Repeated run calls provider | Current provider response is used and recorded |
+| SC5 | Repeated run calls provider | Current provider response is used and journaled |
 | SC6 | Self-closing renderChildren returns empty | `<Sample prompt="X" />` → `renderChildren()` returns empty, prompt used |
 
 ### Tier OA — EMA Output Api
@@ -4377,7 +4377,7 @@ $ xmd README.md --journal ./run.jsonl
 ```
 
 The CLI atomically creates `run.jsonl`, executes against the current
-filesystem and process environment, and appends events as operations finish:
+filesystem and process environment, and appends journal entries as operations finish:
 
 ```
 [0] yield root  import_component __root__  → { path, content }
@@ -4400,7 +4400,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 1 | Root document treated as a component | Uniform resolution, parsing, and error handling |
 | 2 | All paths are workspace-relative | Diagnostic portability and no absolute-path leakage |
 | 3 | Resolution is an Effection Api | Pluggable middleware (search paths, aliases, glob) — runs inside `durableImportComponent` during live execution |
-| 4 | `durableImportComponent` is a single recorded operation | Resolve + read in one `createDurableOperation`; one diagnostic event per component |
+| 4 | `durableImportComponent` is a single journaled operation | Resolve + read in one `createDurableOperation`; one diagnostic journal entry per component |
 | 5 | Parsing is runtime | Deterministic from file content, no journal needed |
 | 6 | Info string modifiers are a middleware chain | `bash silent exec` — left-to-right wrapping, composable, extensible, compatible with all renderers |
 | 7 | Each modifier is a factory that returns `Middleware<[], CodeBlockWorkflow>` | Factory captures params in closure; context on Effection scope via `CodeBlockCtx.with()` + `useCodeBlock()`; aligns with Effection v4.1's `Middleware<TArgs, TReturn>` |
@@ -4418,7 +4418,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 21 | Prop validation is runtime, not durable | Deterministic from component definition + caller props — no journal entry needed |
 | 22 | Components are semantic boundaries for markdown constructs | Bold, italic, links, code spans cannot span across a component or exec block — each text segment is healed independently |
 | 23 | Remend runs after scanning, before interpolation | Heals incomplete markdown in text segments; `htmlTags: false` required — boundary scanner owns JSX completeness, remend owns markdown completeness |
-| 24 | Healing is runtime, not recorded | Pure function of current text content; no journal entry |
+| 24 | Healing is runtime, not journaled | Pure function of current text content; no journal entry |
 | 25 | `CodeBlockContext` delivered via Effection Context, not handler parameter | `CodeBlockCtx.with()` scopes the context to the chain execution; handlers read via `useCodeBlock()`; keeps middleware signature clean `Middleware<[], ...>` |
 | 26 | Reusable `Middleware<TArgs, TReturn>` primitive in `@effectionx/middleware` | Same type as Effection v4.1's Api middleware; `combine()` composes arrays; decoupled from modifier-specific types; originally `src/middleware.ts`, extracted to shared package |
 | 27 | `blockId` format: `eval:${componentName ?? "root"}:${index}` | Unique within a document run and stable enough to compare diagnostic traces |
@@ -4426,7 +4426,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 29 | Execution mode auto-detected from AST | No modifier needed — `yield` in body → generator, `await` → async, neither → sync; mixed yield+await is a transform error |
 | 30 | `data:` URI module compilation for eval blocks | Eval blocks are compiled into `data:application/typescript,...` URI modules and dynamically imported via `yield* call(() => import(dataUri))`. APIs are standard `import` statements in the generated module, resolved through Deno's import map. `new Function()` is used for expression props (simpler than `data:` URI for single expressions, no module imports needed) |
 | 31 | `persist` uses a context flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` sets `PersistFlagCtx`, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
-| 32 | `evalScope` created before the recorded workflow | The channel processor and eval sender share an ancestor scope |
+| 32 | `evalScope` created before the journaled workflow | The channel processor and eval sender share an ancestor scope |
 | 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the diagnostic trace |
 | 34 | Eval blocks produce no rendered output by default | Eval blocks primarily exist for bindings and side effects. The `output()` function (§4.7) optionally produces rendered output; without it, result is `{ output: "", exitCode: 0, stderr: "" }` |
 | 35 | `@effectionx/middleware` replaces local `src/middleware.ts` | The middleware primitive was extracted to a shared package for reuse across the monorepo; import paths updated throughout |
@@ -4436,7 +4436,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 39 | Eval binding interpolation uses bare `{name}` syntax | Distinct from `{meta.key}` and `{props.key}` namespaces; local eval bindings are local variables, not namespaced data; regex excludes names containing `.` to avoid conflicts |
 | 40 | Eval binding interpolation runs in the expansion engine, not inside modifier factories | Modifiers transform execution results — they are not responsible for preparing source text; one interpolation site in `expandSegments` is consistent with how text segment interpolation already works, and keeps modifier factories free of knowledge about the binding environment |
 | 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
-| 42 | `findFreePort` result recorded with its eval block | The port number is a scalar export; no separate event type is needed |
+| 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
 | 44 | Provider lifecycle expressed as a component, not a `RunDocumentOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
@@ -4447,7 +4447,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 50 | `renderChildren`/`render` are closures in `env.values`, not an Api | A Render Api would require middleware installation per component; closures are simpler and capture the expansion context at the injection point; they are non-serializable and silently omitted from the journal |
 | 51 | `renderChildren`/`render` use `parentEvalScope` wrapped in `EvalEnvCtx.with()` + `EvalScopeCtx.with()` | Children are caller-provided content and expand in the caller's scope context; the component's `childEvalScope` sequential channel is for its own `persist eval` blocks, not for expanding caller content; children may create resources (nested components, daemons) but their lifecycle is bound by their place in the expansion tree; wrapping ensures the correct scope is visible regardless of which task the closure runs in |
 | 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
-| 53 | Sample component calls `Sample.operations.sample()` directly | The enclosing eval operation records the complete block result |
+| 53 | Sample component calls `Sample.operations.sample()` directly | The enclosing eval operation journals the complete block result |
 | 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |
 | 55 | `daemon()` uses `shell: true` | Matches `bash exec` block semantics — the same command string passed to `bash -c` is passed to the shell; handles shell expansions and PATH lookups correctly |
 | 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where `EvalEnvCtx` has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
@@ -4472,13 +4472,13 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 75 | `useContent()` on Effection scope, not in function args | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same pattern as `EvalEnvCtx`, `EvalScopeCtx`; supports named slots via `useContent("header")` |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
 | 77 | Function component imported on every run | The current module must execute because functions are not serialized into a trace |
-| 78 | Internal durable-streams package | Provides event recording for the core runtime |
+| 78 | Internal durable-streams package | Provides journaling for the core runtime |
 | 79 | `as` is a reserved expansion prop | `as` is consumed by the expansion engine (not component inputs), stripped before validation, and used to bind rendered output into `env.values` |
 | 80 | `<Capture>` is the inline binding directive | Captures arbitrary inline rendered content while preserving JSX ergonomics and a single binding-target syntax (`as`) |
 | 81 | Component `as` writes to invocation-site env | Captured bindings must be visible to subsequent siblings/eval blocks where the invocation appears |
 | 82 | `<Capture>` does not create a new env/scope | Capture is structural (like `<Content />`), not a component boundary; middleware/scope behavior remains deterministic |
 | 83 | Capture trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
-| 84 | Capture assignment is not independently journaled | Captured value is derived during current expansion; no extra event is needed |
+| 84 | Capture assignment is not independently journaled | Captured value is derived during current expansion; no extra journal entry is needed |
 | 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
 | 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |

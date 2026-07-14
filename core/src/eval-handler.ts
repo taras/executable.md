@@ -23,7 +23,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     //   output("some text")
     // The mutable ref is block-local; serializeExports silently
     // omits non-JSON values (functions), so output won't pollute
-    // the journal. The output text itself is recorded alongside
+    // the journal. The output text itself is journaled alongside
     // exports as __output.
     const outputRef = { text: "" };
     env.values.output = (text: string) => {

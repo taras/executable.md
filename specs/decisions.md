@@ -136,7 +136,7 @@ See DEC-006 for the full rationale behind this signature change.
 
 Component resolution needs filesystem access (`runtime.stat()`).
 The spec says resolution runs inside `durableImportComponent`'s
-`createDurableOperation` body, so resolve and read form a single recorded
+`createDurableOperation` body, so resolve and read form a single journaled
 operation.
 
 ### Decision

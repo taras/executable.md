@@ -2,7 +2,7 @@
  * Entry point — runDocument (spec §7).
  *
  * Wires together the boundary scanner, component import, expansion engine,
- * modifier system, and journal event infrastructure.
+ * modifier system, and journal infrastructure.
  *
  * Journal runtime integration is concentrated at execution boundaries.
  * See DEC-005 in specs/decisions.md.

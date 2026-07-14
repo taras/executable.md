@@ -124,7 +124,7 @@ describe("CLI journal integration", () => {
     expect(result.stdout).toContain("Hello world");
   });
 
-  it("CJ3: --journal records parseable events for the current run", function* () {
+  it("CJ3: --journal writes parseable entries for the current run", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
 
@@ -196,7 +196,7 @@ describe("CLI journal integration", () => {
     }
   });
 
-  it("CJ6: journal records exec events", function* () {
+  it("CJ6: journal writes exec entries", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
 
