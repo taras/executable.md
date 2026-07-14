@@ -1,0 +1,45 @@
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+# Requires:
+#   secret  DENO_DEPLOY_TOKEN   — Deno Deploy access token
+#   var     DENO_DEPLOY_PROJECT — Deno Deploy project name
+# Prefer the Deno Deploy Git integration (console.deno.com); this workflow is
+# an explicit alternative. It is skipped unless the project variable is set.
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: ${{ vars.DENO_DEPLOY_PROJECT != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.1
+
+      - name: Install workspace deps
+        run: deno install
+
+      - name: Build site
+        run: deno task build
+        working-directory: site
+
+      - name: Deploy to Deno Deploy
+        uses: denoland/deployctl@v1
+        with:
+          project: ${{ vars.DENO_DEPLOY_PROJECT }}
+          entrypoint: server-entry.js
+          root: site/_fresh/server
+          token: ${{ secrets.DENO_DEPLOY_TOKEN }}

@@ -33,13 +33,36 @@ jobs:
 
       - uses: denoland/setup-deno@v2.0.3
         with:
-          deno-version: v2.x
+          deno-version: v2.9.1
 
       - name: Typecheck
         run: deno task check
 
       - name: Test
         run: deno task test
+
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: denoland/setup-deno@v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      - name: Install workspace deps
+        run: deno install
+
+      - name: install.sh is in sync with the served copy
+        run: diff install.sh site/static/install.sh
+
+      - name: Check (fmt + lint + typecheck)
+        run: deno task check
+        working-directory: site
+
+      - name: Production build (clean runner)
+        run: deno task build
+        working-directory: site
 
   test-node:
     runs-on: ubuntu-latest
