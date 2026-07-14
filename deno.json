@@ -1,5 +1,5 @@
 {
-  "workspace": ["core", "cli", "durable-streams", "durable-effects", "runtime", "packages/code-review-agent"],
+  "workspace": ["core", "cli", "durable-streams", "durable-effects", "runtime", "packages/code-review-agent", "site"],
   "nodeModulesDir": "auto",
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",

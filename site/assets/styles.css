@@ -1,0 +1,303 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ *
+ * executable.md — design tokens (theme-aware light / dark)
+ * ------------------------------------------------------------------ */
+:root {
+  --bg: #ffffff;
+  --bg-subtle: #f6f7f9;
+  --bg-code: #f6f8fa;
+  --fg: #1a1d21;
+  --fg-muted: #5b6470;
+  --border: #e3e6ea;
+  --accent: #2f9e63;
+  --accent-strong: #1f7d4c;
+  --accent-contrast: #ffffff;
+  --tok-str: #a8460f;
+  --tok-comment: #8a929c;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --bg-subtle: #161b22;
+  --bg-code: #161b22;
+  --fg: #e6edf3;
+  --fg-muted: #9aa5b1;
+  --border: #262c34;
+  --accent: #3fb984;
+  --accent-strong: #57c98f;
+  --accent-contrast: #08130c;
+  --tok-str: #e0a878;
+  --tok-comment: #7f8896;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117;
+    --bg-subtle: #161b22;
+    --bg-code: #161b22;
+    --fg: #e6edf3;
+    --fg-muted: #9aa5b1;
+    --border: #262c34;
+    --accent: #3fb984;
+    --accent-strong: #57c98f;
+    --accent-contrast: #08130c;
+    --tok-str: #e0a878;
+    --tok-comment: #7f8896;
+    color-scheme: dark;
+  }
+}
+
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* ------------------------------------------------------------------ *
+ * base
+ * ------------------------------------------------------------------ */
+html {
+  scroll-behavior: smooth;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ------------------------------------------------------------------ *
+ * wordmark
+ * ------------------------------------------------------------------ */
+.wordmark {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.05em;
+}
+.wordmark .md {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 0.3em;
+  padding: 0.05em 0.28em;
+  margin-left: 0.12em;
+}
+.wordmark .cursor {
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 0.15em;
+  background: var(--accent);
+  display: inline-block;
+  transform: translateY(0.12em);
+  animation: blink 1.1s step-end infinite;
+}
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wordmark .cursor {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * layout helpers
+ * ------------------------------------------------------------------ */
+.container {
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+.prose-w {
+  max-width: 72ch;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  padding: 0.6rem 1.1rem;
+  border-radius: 0.55rem;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.btn-primary:hover {
+  background: var(--accent-strong);
+  text-decoration: none;
+}
+.btn-ghost {
+  border-color: var(--border);
+  color: var(--fg);
+}
+.btn-ghost:hover {
+  background: var(--bg-subtle);
+  text-decoration: none;
+}
+
+/* cards */
+.card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+
+/* code */
+.code-panel {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  overflow: hidden;
+}
+.code-panel .filename {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  padding: 0.45rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-subtle) 60%, transparent);
+}
+.code-panel pre {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+pre,
+code {
+  font-family: var(--font-mono);
+}
+
+/* syntax tokens (hand-applied) */
+.tok-key {
+  color: var(--accent-strong);
+}
+.tok-str {
+  color: var(--tok-str);
+}
+.tok-comment {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+.tok-mod {
+  color: var(--accent);
+  font-weight: 600;
+}
+.tok-dim {
+  color: var(--fg-muted);
+}
+
+/* command block */
+.command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.7rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+.command code {
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+}
+.command .prompt {
+  color: var(--accent);
+  user-select: none;
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--accent-strong);
+  text-transform: uppercase;
+}
+
+/* section band */
+.band {
+  background: var(--bg-subtle);
+  border-block: 1px solid var(--border);
+}
+
+/* inline code in prose */
+.doc :not(pre) > code {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.08em 0.35em;
+  font-size: 0.88em;
+}
+.doc h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 2.2rem;
+  margin-bottom: 0.8rem;
+}
+.doc h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-top: 1.6rem;
+  margin-bottom: 0.5rem;
+}
+.doc p,
+.doc ul,
+.doc ol {
+  margin-block: 0.8rem;
+}
+.doc ul,
+.doc ol {
+  padding-left: 1.4rem;
+}
+.doc li {
+  margin-block: 0.3rem;
+}
+.doc ul {
+  list-style: disc;
+}
+.doc ol {
+  list-style: decimal;
+}
