@@ -22,10 +22,10 @@
  * ```
  */
 
-import { spawn, action } from "effection";
+import { action, spawn } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { runDocument, collect } from "@executablemd/core";
+import { collect, runDocument } from "@executablemd/core";
 
 export interface EmaRunOptions {
   /** Path to the EMA document to run. */
@@ -72,7 +72,8 @@ function* useSignal(signal: AbortSignal): Operation<void> {
  * ```
  */
 export function* emaRun(options: EmaRunOptions): Operation<string> {
-  const { docPath, componentDirs = [".internal/components"], env, signal } = options;
+  const { docPath, componentDirs = [".internal/components"], env, signal } =
+    options;
 
   if (env) {
     for (const [k, v] of Object.entries(env)) {
@@ -88,7 +89,6 @@ export function* emaRun(options: EmaRunOptions): Operation<string> {
     docPath,
     stream: new InMemoryStream(),
     componentDirs,
-    freshness: false,
   });
 
   return yield* collect(execution);
