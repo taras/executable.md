@@ -48,14 +48,6 @@
         "@executablemd/runtime": "workspace:*",
       },
     },
-    "durable-effects": {
-      "name": "@executablemd/durable-effects",
-      "version": "0.1.0",
-      "dependencies": {
-        "@executablemd/durable-streams": "workspace:*",
-        "@executablemd/runtime": "workspace:*",
-      },
-    },
     "durable-streams": {
       "name": "@executablemd/durable-streams",
       "version": "0.1.0",
@@ -175,8 +167,6 @@
     "@executablemd/code-review-agent": ["@executablemd/code-review-agent@workspace:packages/code-review-agent"],
 
     "@executablemd/core": ["@executablemd/core@workspace:core"],
-
-    "@executablemd/durable-effects": ["@executablemd/durable-effects@workspace:durable-effects"],
 
     "@executablemd/durable-streams": ["@executablemd/durable-streams@workspace:durable-streams"],
 

@@ -16,7 +16,6 @@
       "@executablemd/runtime": ["./runtime/mod.ts"],
       "@executablemd/runtime/test": ["./runtime/test/mod.ts"],
       "@executablemd/durable-streams": ["./durable-streams/mod.ts"],
-      "@executablemd/durable-effects": ["./durable-effects/mod.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
       "@effectionx/context-api": ["./vendor/context-api/mod.ts"],
       "@effectionx/bdd/node": ["./test-support/bdd.ts"],
@@ -26,7 +25,6 @@
   "include": [
     "core/**/*.ts",
     "durable-streams/**/*.ts",
-    "durable-effects/**/*.ts",
     "runtime/**/*.ts",
     "vendor/**/*.ts",
     "packages/**/*.ts",

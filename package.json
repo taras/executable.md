@@ -1,7 +1,7 @@
 {
   "private": true,
   "type": "module",
-  "description": "executable.md — treat markdown documents as durable, executable workflows.",
+  "description": "executable.md — treat markdown documents as executable workflows.",
   "homepage": "https://executable.md",
   "repository": {
     "type": "git",
@@ -13,7 +13,7 @@
   "keywords": [
     "markdown",
     "executable-markdown",
-    "durable-workflows",
+    "workflow-automation",
     "effection",
     "cli",
     "llm",
@@ -56,17 +56,16 @@
     "@types/node": "^22.0.0"
   },
   "scripts": {
-    "test:node": "tsx --tsconfig tsconfig.node.json --test durable-streams/tests/*.test.ts durable-effects/tests/*.test.ts core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
-    "test:bun": "bun test durable-streams/tests/ durable-effects/tests/ core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
+    "test:node": "tsx --tsconfig tsconfig.node.json --test durable-streams/tests/*.test.ts core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
+    "test:bun": "bun test durable-streams/tests/ core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/ema-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
     "test:deno": "deno task test",
-    "lint": "oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ && oxfmt --check core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ vendor/ test-support/",
-    "fmt": "oxfmt --write core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ vendor/ test-support/ core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/"
+    "lint": "oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ runtime/ && oxfmt --check core/src/ cli/src/ durable-streams/ runtime/ vendor/ test-support/",
+    "fmt": "oxfmt --write core/src/ cli/src/ durable-streams/ runtime/ vendor/ test-support/ core/tests/ durable-streams/tests/ packages/code-review-agent/"
   },
   "workspaces": [
     "core",
     "cli",
     "durable-streams",
-    "durable-effects",
     "runtime",
     "vendor/context-api",
     "packages/code-review-agent",

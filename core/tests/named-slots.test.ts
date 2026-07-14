@@ -50,7 +50,6 @@ function makeComponent(
     meta: opts.meta ?? {},
     inputs: opts.inputs ?? {},
     bodySegments: scanSegments(body),
-    contentHash: `sha256:fake-${name}`,
   };
 }
 
@@ -686,7 +685,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       // renderChildren() should capture both the slotted Header and body content
@@ -724,7 +722,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       // Both X and Y should be included in renderChildren output
@@ -763,7 +760,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       // renderChildren renders ALL children in source order
@@ -892,7 +888,6 @@ describe("Tier NS-F — Edge cases", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       const events = yield* stream.readAll();
@@ -927,7 +922,6 @@ describe("Tier NS-F — Edge cases", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       // Replay — same stream, same output
@@ -936,7 +930,6 @@ describe("Tier NS-F — Edge cases", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output2).toBe(output1);

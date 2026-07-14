@@ -45,7 +45,6 @@ function makeComponent(
     meta: opts.meta ?? {},
     inputs: opts.inputs ?? {},
     bodySegments: scanSegments(body),
-    contentHash: `sha256:fake-${name}`,
   };
 }
 
@@ -225,7 +224,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       // {props.data} will be interpolated — for objects, it uses toString
@@ -263,7 +261,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("length=3");
@@ -299,7 +296,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("active=true");
@@ -336,7 +332,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("total=30");
@@ -367,7 +362,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("count=42");
@@ -397,7 +391,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("hello world");
@@ -429,7 +422,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("Failed to evaluate expression prop");
@@ -466,7 +458,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("non-serializable");
@@ -497,7 +488,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("Failed to evaluate expression prop");
@@ -528,7 +518,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("Failed to evaluate expression prop");
@@ -570,7 +559,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("count=42");
@@ -604,7 +592,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("count=5");
@@ -637,7 +624,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("expected number");
@@ -677,7 +663,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("data=hello");
@@ -710,7 +695,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       const output2 = yield* collect(
@@ -718,7 +702,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output1).toContain("count=7");
@@ -759,7 +742,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("inner-data=from-outer");
@@ -799,7 +781,6 @@ describe("Tier EP — Expression prop evaluation", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("child-data=from-parent");

@@ -24,7 +24,6 @@ describe("Tier T10 — eval-scope hierarchy", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -47,7 +46,6 @@ describe("Tier T10 — eval-scope hierarchy", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

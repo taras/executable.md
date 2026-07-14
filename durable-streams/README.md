@@ -211,19 +211,7 @@ await run(function* () {
 });
 ```
 
-When `durableRun` is called as a generator inside another generator, it shares the parent's scope chain — middleware installed before the `yield*` is visible inside the workflow:
-
-```typescript
-import { useFileContentGuard } from "@effectionx/durable-effects";
-
-function* supervisedRun(): Operation<void> {
-  // Install middleware (see Replay Guards below)
-  yield* useFileContentGuard();
-
-  // All workflows run inside this durableRun inherit the guard
-  yield* durableRun(() => buildPipeline(), { stream });
-}
-```
+When `durableRun` is called as a generator inside another generator, it shares the parent's scope chain. Middleware installed before the `yield*` is visible inside the workflow.
 
 ---
 
@@ -457,34 +445,14 @@ function* durableReadFile(path: string): Workflow<string> {
 
 The guard's `check` phase reads `event.description.path` and computes the current hash. The `decide` phase reads `event.result.value.contentHash` and compares. No separate metadata or side-channel is needed.
 
-### Pre-built guards in `@effectionx/durable-effects`
-
-The `@effectionx/durable-effects` package provides ready-to-use guards for common staleness scenarios:
-
-- `useFileContentGuard()` — detects when a file's content has changed via hash comparison
-- `useGlobContentGuard()` — detects when a directory scan's results have changed
-- `useCodeFreshnessGuard(lookup)` — detects when eval source or bindings have changed
-
-```typescript
-import { useFileContentGuard } from "@effectionx/durable-effects";
-
-function* myPipeline(): Operation<void> {
-  yield* useFileContentGuard();
-  yield* durableRun(() => buildDocuments(), { stream });
-}
-```
-
 ### Guard composition
 
 Multiple guards compose naturally. Each guard either returns an outcome or calls `next(event)` to pass control to the next guard in the chain:
 
 ```typescript
-import { useFileContentGuard, useGlobContentGuard } from "@effectionx/durable-effects";
-
 function* supervisedPipeline(): Operation<void> {
-  yield* useFileContentGuard(); // checks file-backed effects
-  yield* useGlobContentGuard(); // checks directory scan results
-  yield* useMyCustomGuard(); // your own guard
+  yield* useResourceVersionGuard();
+  yield* useMyCustomGuard();
 
   yield* durableRun(() => pipeline(), { stream });
 }

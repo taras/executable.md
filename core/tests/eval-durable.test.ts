@@ -27,7 +27,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -50,7 +49,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -59,7 +57,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -79,7 +76,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -88,7 +84,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -108,7 +103,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -129,7 +123,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -150,7 +143,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -182,7 +174,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

@@ -24,7 +24,6 @@ describe("Tier T7 — timeout modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -66,7 +65,6 @@ describe("Tier T7 — timeout modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

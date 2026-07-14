@@ -131,7 +131,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -177,7 +176,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -224,7 +222,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -257,7 +254,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -298,7 +294,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -310,7 +305,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -349,7 +343,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -394,7 +387,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -447,7 +439,6 @@ describe("Tier SC — Sample component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -479,7 +470,6 @@ describe("Tier EO — eval output() function", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -499,7 +489,6 @@ describe("Tier EO — eval output() function", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -510,7 +499,6 @@ describe("Tier EO — eval output() function", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -530,7 +518,6 @@ describe("Tier EO — eval output() function", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -551,7 +538,6 @@ describe("Tier EO — eval output() function", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -570,7 +556,6 @@ describe("Tier EO — eval output() function", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -606,7 +591,6 @@ describe("Tier RC — renderChildren and render closures", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -636,7 +620,6 @@ describe("Tier RC — renderChildren and render closures", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -666,7 +649,6 @@ describe("Tier RC — renderChildren and render closures", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -714,7 +696,6 @@ describe("Tier IN — Instruction component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -753,7 +734,6 @@ describe("Tier IN — Instruction component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -802,7 +782,6 @@ describe("Tier IN — Instruction component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -840,7 +819,6 @@ describe("Tier IN — Instruction component", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -908,7 +886,6 @@ describe("Tier AG — Agent component pattern", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 
@@ -994,7 +971,6 @@ describe("Tier AG — Agent component pattern", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
 

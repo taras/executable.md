@@ -439,7 +439,7 @@ export function isJson(value: unknown): boolean {
  *
  * Non-serializable values are silently omitted. They remain in
  * env.values as live references during this run but are absent from
- * the journal and not restored on replay.
+ * the diagnostic event.
  */
 export function serializeExports(
   env: Record<string, unknown>,

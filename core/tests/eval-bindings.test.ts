@@ -26,7 +26,6 @@ describe("Tier T5 — Binding environment", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -50,7 +49,6 @@ describe("Tier T5 — Binding environment", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -69,7 +67,6 @@ describe("Tier T5 — Binding environment", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -88,7 +85,6 @@ describe("Tier T5 — Binding environment", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -107,7 +103,6 @@ describe("Tier T5 — Binding environment", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

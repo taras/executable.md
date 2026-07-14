@@ -67,12 +67,6 @@ Updated before completion of every phase and committed at the end of each phase.
   (e.g., supporting a second backend).
 - **Consequences:** All code lives under `lib/`. The module entry point is
   `lib/mod.ts`. Re-exports control the public API surface.
-- **Update:** The project has since been split into two packages in the
-  effectionx monorepo: `@effectionx/durable-streams` (core protocol, replay,
-  effects, combinators) and `@effectionx/durable-effects` (higher-level
-  durable operations like durableExec, durableFetch, etc.). Source files live
-  at the package root (e.g., `effect.ts`, `run.ts`) rather than under `lib/`.
-  The entry point is `mod.ts`.
 
 ## DEC-004: Use @std/assert for test assertions [SUPERSEDED]
 

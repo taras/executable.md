@@ -2,7 +2,6 @@ packages:
   - core
   - cli
   - durable-streams
-  - durable-effects
   - runtime
   - vendor/context-api
   - packages/code-review-agent

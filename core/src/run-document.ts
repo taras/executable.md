@@ -2,27 +2,22 @@
  * Entry point — runDocument (spec §7).
  *
  * Wires together the boundary scanner, component import, expansion engine,
- * modifier system, and durable execution infrastructure.
+ * modifier system, and journal event infrastructure.
  *
- * This is the only module that imports from @executablemd/durable-streams
- * and @executablemd/durable-effects — all other modules are dependency-free.
+ * Journal runtime integration is concentrated at execution boundaries.
  * See DEC-005 in specs/decisions.md.
  */
 
-import { useScope, spawn, createChannel, withResolvers } from "effection";
+import { useScope, spawn, createChannel, withResolvers, until } from "effection";
 import type { Operation, Stream } from "effection";
 import {
   durableRun,
   createDurableOperation,
   ephemeral,
   type DurableStream,
-  ReplayGuard,
-  StaleInputError,
 } from "@executablemd/durable-streams";
-import { computeSHA256 } from "@executablemd/durable-effects";
 import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
-import { call } from "effection";
 import { useDenoCompiler } from "./deno-compiler.ts";
 import { useTempFileCompiler } from "./temp-file-compiler.ts";
 import type {
@@ -72,9 +67,6 @@ export interface RunDocumentOptions {
   /** Component search directories (default: ["./components", "./"]) */
   componentDirs?: string[];
 
-  /** Install file content guard (default: true) */
-  freshness?: boolean;
-
   /** Custom modifier factories to register */
   modifiers?: Record<string, ModifierFactory>;
 }
@@ -85,8 +77,6 @@ export interface RunDocumentOptions {
 // This is a Workflow<ComponentDefinition | FunctionComponentDefinition> —
 // it yields durable import effects and returns either markdown or function
 // component definitions.
-// The execute body inside createDurableOperation is an Operation<Json> —
-// it uses yield* for Effection operations (runtime.readTextFile, computeSHA256).
 // See DEC-001, DEC-004 in specs/decisions.md.
 // ---------------------------------------------------------------------------
 
@@ -95,7 +85,6 @@ function* durableImportComponent(
   rootDocPath: string | undefined,
   searchPaths: string[],
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
-  // Single durable effect: resolve + read + hash
   const result = (yield createDurableOperation<Json>(
     { type: "import_component", name },
     function* (): Operation<Json> {
@@ -108,11 +97,9 @@ function* durableImportComponent(
         path = yield* resolveComponentPath(name, searchPaths);
       }
 
-      // Read file and hash
       const content = yield* readTextFile(path);
-      const contentHash = yield* computeSHA256(content);
 
-      return { path, content, contentHash } as unknown as Json;
+      return { path, content } as unknown as Json;
     },
   )) as unknown as ImportResult;
 
@@ -121,7 +108,7 @@ function* durableImportComponent(
     // Resolve to absolute path for dynamic import
     const currentDir = yield* ephemeral(cwd());
     const absolutePath = result.path.startsWith("/") ? result.path : `${currentDir}/${result.path}`;
-    const mod = (yield* ephemeral(call(() => import(`file://${absolutePath}`)))) as {
+    const mod = (yield* ephemeral(until(import(`file://${absolutePath}`)))) as {
       default?: unknown;
       inputs?: unknown;
     };
@@ -143,7 +130,6 @@ function* durableImportComponent(
       path: result.path,
       inputs,
       fn: typedFn,
-      contentHash: result.contentHash,
     };
   }
 
@@ -159,7 +145,6 @@ function* durableImportComponent(
     meta,
     inputs,
     bodySegments,
-    contentHash: result.contentHash,
   };
 }
 
@@ -210,50 +195,6 @@ function* resolveComponentPath(name: string, searchPaths: string[]): Operation<s
 /** Strip leading ./ from paths for workspace-relative normalization. */
 function normalizePath(path: string): string {
   return path.replace(/^\.\//, "");
-}
-
-// ---------------------------------------------------------------------------
-// useImportComponentGuard (spec §4.3, §6.1)
-// ---------------------------------------------------------------------------
-
-function* useImportComponentGuard(): Operation<void> {
-  const cache = new Map<string, string>();
-
-  yield* ReplayGuard.around({
-    *check([event], next) {
-      if (event.description["type"] === "import_component" && event.result.status === "ok") {
-        const result = event.result.value as unknown as ImportResult | undefined;
-        const storedPath = result?.path;
-        if (storedPath && !cache.has(storedPath)) {
-          try {
-            const content = yield* readTextFile(storedPath);
-            const currentHash = yield* computeSHA256(content);
-            cache.set(storedPath, currentHash);
-          } catch {
-            // File may not exist — leave uncached, decide will handle
-          }
-        }
-      }
-      yield* next(event);
-    },
-    decide([event], next) {
-      if (event.description["type"] === "import_component" && event.result.status === "ok") {
-        const result = event.result.value as unknown as ImportResult | undefined;
-        if (result) {
-          const currentHash = cache.get(result.path);
-          if (currentHash && currentHash !== result.contentHash) {
-            return {
-              outcome: "error" as const,
-              error: new StaleInputError(
-                `Component changed: ${event.description["name"]} at ${result.path}`,
-              ),
-            };
-          }
-        }
-      }
-      return next(event);
-    },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -316,10 +257,6 @@ function* documentWorkflow(
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
-  // Create per-document binding environment (spec §3.2).
-  // The EvalScope was already created in runDocument (before durableRun)
-  // and set on the scope via EvalScopeCtx — it's inherited by all child
-  // scopes including durableEval bodies.
   const env: EvalEnv = { values: {} };
 
   // Build the expansion context
@@ -419,7 +356,7 @@ export interface DocumentExecution extends Operation<string> {
  * try {
  *   const output = yield* execution;
  * } catch (e) {
- *   // workflow error (e.g., StaleInputError)
+ *   // workflow error
  * }
  * ```
  */
@@ -428,7 +365,6 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     docPath,
     stream,
     componentDirs = ["components", "."],
-    freshness = true,
     modifiers: customModifiers = {},
   } = options;
 
@@ -448,7 +384,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   // Document execution.
   //
   // The workflow runs in a spawned child scope that contains all
-  // execution state: replay guards, eval context/scope, and the
+  // execution state: eval context/scope and the
   // EMA→channel bridge. Nothing leaks onto the caller's scope.
   //
   // withResolvers captures the completion result so `yield* execution`
@@ -471,11 +407,6 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
       yield* useTempFileCompiler();
     }
 
-    // Install replay guards
-    if (freshness) {
-      yield* useImportComponentGuard();
-    }
-
     // EMA → channel bridge (innermost middleware — output flows through
     // caller-installed normalize/terminal middleware first, then here).
     yield* EMA.around({
@@ -493,21 +424,18 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
 
     // Run the durable workflow.
     try {
-      const storedOutput = yield* durableRun(
-        () => documentWorkflow(docPath, componentDirs, registry),
-        { stream },
-      );
+      const output = yield* durableRun(() => documentWorkflow(docPath, componentDirs, registry), {
+        stream,
+      });
 
-      // On replay, durableRun short-circuits and the workflow body never
-      // runs — no output() calls are made. Emit the stored result through
-      // the full Output Api pipeline (normalize, terminal format, channel)
-      // so replay output is consistent with fresh runs.
-      if (!emitted && storedOutput) {
-        yield* EMA.operations.output(storedOutput);
+      // Preserve output for any synchronous completion path that did not emit
+      // through the streaming API.
+      if (!emitted && output) {
+        yield* EMA.operations.output(output);
       }
 
-      yield* channel.close(storedOutput);
-      resolve(storedOutput);
+      yield* channel.close(output);
+      resolve(output);
     } catch (error) {
       yield* channel.close("");
       reject(error instanceof Error ? error : new Error(String(error)));

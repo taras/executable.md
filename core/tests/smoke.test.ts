@@ -28,7 +28,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
         docPath: "smoke-test/README.md",
         stream,
         componentDirs: ["smoke-test", "core/components"],
-        freshness: false,
       }),
     );
 
@@ -193,7 +192,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
         docPath: "smoke-test/README.md",
         stream,
         componentDirs: ["smoke-test", "core/components"],
-        freshness: false,
       }),
     );
 
@@ -204,7 +202,6 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
         docPath: "smoke-test/README.md",
         stream,
         componentDirs: ["smoke-test", "core/components"],
-        freshness: false,
       }),
     );
 

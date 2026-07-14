@@ -1,17 +1,5 @@
-/**
- * The `eval` terminal modifier factory (spec §6).
- *
- * Evaluates code blocks in-process as Effection generator operations.
- * Uses durableEval from @executablemd/durable-effects for journaling.
- *
- * Unlike `exec` (subprocess), `eval` executes code in the same Effection
- * process, enabling direct access to live in-memory objects, native
- * yield* of Effection operations, and shared state across blocks.
- */
-
-import { ephemeral } from "@executablemd/durable-streams";
+import { createDurableOperation, ephemeral } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { durableEval } from "@executablemd/durable-effects";
 import { unbox } from "@effectionx/scope-eval";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
@@ -24,28 +12,6 @@ import { transformBlock, serializeExports } from "./eval-transform.ts";
 // evalFactory — terminal modifier (spec §6.2)
 // ---------------------------------------------------------------------------
 
-/**
- * Terminal modifier factory for in-process code evaluation.
- *
- * Ignores `next` — this is the terminal handler (like `exec`).
- * Reads code block metadata via useCodeBlock(), the binding environment
- * via EvalEnvCtx, and the shared VM context via EvalCtxKey.
- *
- * The block's source code is transformed to export top-level declarations
- * to the shared env, then compiled and executed inside durableEval for
- * journaling support.
- *
- * When PersistFlagCtx is true (set by the persist modifier), the compiled
- * block executes inside evalScope.eval() — resources spawned during
- * execution are retained in the persistent EvalScope until the component
- * finishes expanding.
- *
- * Eval blocks can produce rendered output in two ways:
- * 1. `output("text")` — explicit side-effect function call
- * 2. `return "text"` — generator return value (if output() wasn't called)
- *
- * If both are used, output() wins. Null/undefined returns produce no output.
- */
 export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const ctx = yield* useCodeBlock();
@@ -57,7 +23,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     //   output("some text")
     // The mutable ref is block-local; serializeExports silently
     // omits non-JSON values (functions), so output won't pollute
-    // the journal. The output text itself is journaled alongside
+    // the journal. The output text itself is recorded alongside
     // exports as __output.
     const outputRef = { text: "" };
     env.values.output = (text: string) => {
@@ -66,16 +32,21 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
 
     const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(env.values));
 
-    const result = yield* durableEval(
-      `eval:${ctx.blockId}`,
-      function* (source: string, bindings: Record<string, Json>): Operation<Json> {
+    const bindings = serializeExports(env.values, transformed.imports);
+    const result = (yield createDurableOperation<Json>(
+      {
+        type: "eval",
+        name: `eval:${ctx.blockId}`,
+        ...(ctx.language ? { language: ctx.language } : {}),
+      },
+      function* (): Operation<Json> {
         // Merge incoming bindings snapshot into env before execution
         Object.assign(env.values, bindings);
 
         // Compile the eval block via data: URI module import.
         // compileBlock is async (returns Operation) — it generates a
         // TypeScript module and imports it via data: URI.
-        const fn = yield* compileBlock(source, transformed.userImports ?? []);
+        const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
 
         if (persist) {
           // Persist mode: run the compiled block inside evalScope.eval()
@@ -99,21 +70,14 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
 
         const exports = serializeExports(env.values, transformed.exports);
 
-        // Journal output text alongside exports so replay restores it
         if (outputRef.text) {
           (exports as Record<string, unknown>).__output = outputRef.text;
         }
 
-        return exports as unknown as Json;
+        return { value: exports as unknown as Json } as Json;
       },
-      {
-        source: transformed.code,
-        language: ctx.language,
-        bindings: serializeExports(env.values, transformed.imports),
-      },
-    );
+    )) as unknown as { value: Json };
 
-    // On replay, restore serializable exports from the journal
     if (result.value && typeof result.value === "object") {
       const restored = result.value as Record<string, unknown>;
       // Extract __output before merging into env

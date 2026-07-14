@@ -125,7 +125,7 @@ files["doc.md"] = "version 2\n";
 // second run sees updated contents
 ```
 
-This is especially useful for replay and freshness tests.
+This is especially useful for tests that perform multiple runtime reads.
 
 ## When to drop down to raw `API.*.around()`
 

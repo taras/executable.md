@@ -11,7 +11,7 @@
  *   xmd run core/examples/hello-world.md --journal events.jsonl
  */
 
-import { main, exit, spawn, each, createSignal, type Operation } from "effection";
+import { main, exit, spawn, each, createSignal, until, type Operation } from "effection";
 import {
   InMemoryStream,
   type DurableEvent,
@@ -19,13 +19,14 @@ import {
 } from "@executablemd/durable-streams";
 
 import { forEach } from "@effectionx/stream-helpers";
+import { open } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
 import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 import { FileStream } from "./file-stream.ts";
-import { loadJournal } from "./load-journal.ts";
 
 // ---------------------------------------------------------------------------
 // Workaround: field.default exists at runtime but is missing from the .d.ts
@@ -54,7 +55,7 @@ const runConfig = object({
     ...field(z.boolean(), defaults(false)),
   },
   journal: {
-    description: "JSONL journal file (creates if missing, replays if exists, retries on failure)",
+    description: "write a diagnostic JSONL trace (path must not exist)",
     aliases: ["-j"],
     ...field(z.string().optional()),
   },
@@ -120,6 +121,26 @@ function summarizeEvent(event: DurableEvent): string {
 // Document runner
 // ---------------------------------------------------------------------------
 
+function* createJournalFile(filePath: string): Operation<void> {
+  let handle: FileHandle;
+  try {
+    handle = yield* until(open(filePath, "wx"));
+  } catch (error) {
+    const isExistingFile =
+      error instanceof Error &&
+      (("code" in error && error.code === "EEXIST") || error.message.startsWith("EEXIST:"));
+    if (isExistingFile) {
+      throw new Error(
+        `Journal trace already exists: ${filePath}. Remove it or choose another path.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  yield* until(handle.close());
+}
+
 function* run(config: {
   docPath: string;
   componentDir: string[];
@@ -129,17 +150,13 @@ function* run(config: {
 }): Operation<void> {
   const { docPath, componentDir, verbose, journal, raw } = config;
 
-  // Build the durable stream:
-  // - With --journal: file-backed stream that persists events as JSONL.
-  //   If the file exists, events are loaded for replay. If the previous
-  //   run failed, the Close(err) is stripped so we retry from the last
-  //   successful point.
-  // - Without --journal: ephemeral in-memory stream (no persistence).
+  // Every CLI invocation starts from an empty stream. --journal records
+  // current-run diagnostics only; existing traces are never loaded.
   let stream: DurableStream;
 
   if (journal) {
-    const events = yield* loadJournal(journal);
-    stream = new FileStream(journal, events);
+    yield* createJournalFile(journal);
+    stream = new FileStream(journal);
   } else {
     stream = new InMemoryStream();
   }
@@ -188,7 +205,6 @@ function* run(config: {
     docPath,
     stream,
     componentDirs: componentDir,
-    freshness: false,
   });
 
   // Consume the output stream with forEach.

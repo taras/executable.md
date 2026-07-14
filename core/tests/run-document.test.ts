@@ -7,11 +7,10 @@
  * Test patterns:
  *   Golden run — InMemoryStream() (empty) + useStubFs(files) → assert output + journal
  *   Replay    — reuse same InMemoryStream (has events) + useNoIO() → zero I/O
- *   Staleness — golden run, mutate file, rerun with freshness:true → StaleInputError
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
 import type { Operation } from "effection";
@@ -48,7 +47,7 @@ function* useStubExec(): Operation<void> {
 
 describe("Tier B — durable import", () => {
   // B1: durableImportComponent golden run — journal shape
-  it("B1: import golden run — journal has import_component with path + contentHash", function* () {
+  it("B1: import golden run — journal has import_component with path and content", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": "Hello world\n" });
     yield* useStubExec();
@@ -57,7 +56,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -75,11 +73,9 @@ describe("Tier B — durable import", () => {
       result: { status: "ok", value: { path: "README.md" } },
     });
 
-    // Result should contain path and contentHash
     const result = rootImport.result;
     expect(result.status).toBe("ok");
     const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
-    expect(value.contentHash).toMatch(/^sha256:/);
     expect(value.content).toContain("Hello world");
   });
 
@@ -94,7 +90,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -103,7 +98,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -122,7 +116,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -130,7 +123,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -148,7 +140,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -156,86 +147,6 @@ describe("Tier B — durable import", () => {
     expect(
       result.includes("Cannot resolve component") || result.includes("Failed to import"),
     ).toBeTruthy();
-  });
-
-  // B10: stale import — file changed, guard installed → StaleInputError
-  //
-  // ReplayGuard.decide only fires when the workflow actually replays
-  // effects (inside each effect's enter()). durableRun short-circuits
-  // at the Close event for completed workflows, so we simulate an
-  // interrupted run by stripping the Close event from the journal.
-  it("B10: stale import — file changed with freshness:true → StaleInputError", function* () {
-    // Use a mutable file map so we can change content between runs
-    const files: Record<string, string> = { "README.md": "Hello original\n" };
-    const stream = new InMemoryStream();
-    yield* useStubFs(files);
-    yield* useStubExec();
-
-    // Golden run — produces Yield + Close events
-    yield* collect(
-      yield* runDocument({
-        docPath: "README.md",
-        stream,
-        freshness: false,
-      }),
-    );
-
-    // Build a new stream with only the Yield events (no Close).
-    // This simulates an interrupted workflow where replay must
-    // re-run each effect through the decide phase.
-    const yieldEvents = stream.snapshot().filter((e) => e.type === "yield");
-    const interruptedStream = new InMemoryStream(yieldEvents);
-
-    // Change the file content — middleware reads from the same mutable map
-    files["README.md"] = "Hello changed\n";
-
-    // Replay with freshness check — guard's decide phase detects hash mismatch.
-    // The error propagates through yield* execution via withResolvers reject.
-    let caught: unknown;
-    try {
-      yield* collect(
-        yield* runDocument({
-          docPath: "README.md",
-          stream: interruptedStream,
-          freshness: true,
-        }),
-      );
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(StaleInputError);
-  });
-
-  // B11: stale import — no guard → replay uses stored content silently
-  it("B11: stale import — no guard (freshness:false) → silent replay", function* () {
-    const files: Record<string, string> = { "README.md": "Hello original\n" };
-    const stream = new InMemoryStream();
-    yield* useStubFs(files);
-    yield* useStubExec();
-
-    // Golden run
-    const firstResult = yield* collect(
-      yield* runDocument({
-        docPath: "README.md",
-        stream,
-        freshness: false,
-      }),
-    );
-
-    // Change the file — replay WITHOUT guard still uses stored content
-    files["README.md"] = "Hello changed\n";
-
-    const secondResult = yield* collect(
-      yield* runDocument({
-        docPath: "README.md",
-        stream,
-        freshness: false,
-      }),
-    );
-
-    // Should use stored (original) content
-    expect(secondResult).toBe(firstResult);
-    expect(secondResult).toContain("original");
   });
 
   // B12: root document as component — __root__ import, same journal shape
@@ -248,7 +159,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "doc.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -278,7 +188,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -314,7 +223,6 @@ describe("Tier B — durable import", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -339,7 +247,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -368,7 +275,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -377,7 +283,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -395,7 +300,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -415,7 +319,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -454,7 +357,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -482,7 +384,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -508,7 +409,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -517,7 +417,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -537,7 +436,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -557,7 +455,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -578,7 +475,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
         modifiers: {
           uppercase: (_params) => (_args, next) =>
             (function* () {
@@ -610,7 +506,6 @@ describe("Tier D — code execution and modifiers", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
         modifiers: {
           timeout: (params) => (_args, next) => {
             receivedParams = params;
@@ -665,7 +560,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -705,7 +599,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -714,7 +607,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -743,7 +635,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -763,7 +654,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -786,7 +676,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -811,7 +700,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -840,7 +728,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -885,7 +772,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -906,83 +792,12 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream: partialStream,
-        freshness: false,
       }),
     );
 
     expect(result).toContain("Hello, world!");
     expect(result).toContain("done");
     expect(execCalled).toBeTruthy();
-  });
-
-  // E4: Component file changed, guard on → staleness detected
-  //
-  // Strip the Close event so durableRun actually replays effects through
-  // the decide phase. When the Greeting component's hash mismatches, the
-  // guard raises StaleInputError. The expansion engine catches import
-  // errors and renders them as ErrorSegments (the error doesn't propagate
-  // to the caller because expandComponent wraps all import failures).
-  //
-  // For the __root__ document, staleness throws at the top level (B10).
-  // For child components, it surfaces as an error in the rendered output.
-  it("E4: component file changed with guard → staleness error in output", function* () {
-    // Use mutable file map so we can change content between runs
-    const files: Record<string, string> = {
-      "README.md": '<Greeting name="world" />\n',
-      "components/Greeting.md": [
-        "---",
-        "inputs:",
-        "  name:",
-        "    type: string",
-        "    required: true",
-        "---",
-        "",
-        "Hello, {props.name}!",
-      ].join("\n"),
-    };
-
-    const stream = new InMemoryStream();
-    yield* useStubFs(files);
-    yield* useStubExec();
-
-    // Golden run — produces Yield + Close events
-    yield* collect(
-      yield* runDocument({
-        docPath: "README.md",
-        stream,
-        freshness: false,
-      }),
-    );
-
-    // Strip Close event — simulates interrupted workflow
-    const yieldEvents = stream.snapshot().filter((e) => e.type === "yield");
-    const interruptedStream = new InMemoryStream(yieldEvents);
-
-    // Change component file — mutable map seen by existing middleware
-    files["components/Greeting.md"] = [
-      "---",
-      "inputs:",
-      "  name:",
-      "    type: string",
-      "    required: true",
-      "---",
-      "",
-      "Hola, {props.name}!",
-    ].join("\n");
-
-    // Replay with guard — decide phase detects hash mismatch on Greeting.
-    // The expansion engine catches the StaleInputError and renders it as
-    // an ErrorSegment (same as any import failure for child components).
-    const result = yield* collect(
-      yield* runDocument({
-        docPath: "README.md",
-        stream: interruptedStream,
-        freshness: true,
-      }),
-    );
-
-    expect(result.includes("Component changed") || result.includes("Greeting")).toBeTruthy();
-    expect(result).toContain("ERROR");
   });
 
   // E5: new component added — replay existing, live for new
@@ -1001,7 +816,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -1015,7 +829,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream: newStream,
-        freshness: false,
       }),
     );
 
@@ -1036,7 +849,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -1089,7 +901,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -1101,7 +912,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -1128,7 +938,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -1157,7 +966,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -1186,7 +994,6 @@ describe("runDocument", () => {
       yield* runDocument({
         docPath: "README.md",
         stream,
-        freshness: false,
       }),
     );
 
