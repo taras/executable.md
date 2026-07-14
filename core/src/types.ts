@@ -128,7 +128,7 @@ export interface ComponentDefinition {
   bodySegments: Segment[];
 }
 
-export interface ImportResult {
+export interface ImportResult extends Record<string, Json> {
   path: string;
   content: string;
 }

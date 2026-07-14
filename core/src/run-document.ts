@@ -85,9 +85,9 @@ function* durableImportComponent(
   rootDocPath: string | undefined,
   searchPaths: string[],
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
-  const result = (yield createDurableOperation<Json>(
+  const result = (yield createDurableOperation<ImportResult>(
     { type: "import_component", name },
-    function* (): Operation<Json> {
+    function* (): Operation<ImportResult> {
       // Resolve the path — runs inside Operation context
       let path: string;
 
@@ -99,9 +99,9 @@ function* durableImportComponent(
 
       const content = yield* readTextFile(path);
 
-      return { path, content } as unknown as Json;
+      return { path, content };
     },
-  )) as unknown as ImportResult;
+  )) as ImportResult;
 
   // Function component: .ts file — import() the module
   if (result.path.endsWith(".ts")) {
