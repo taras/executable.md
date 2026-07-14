@@ -10,4 +10,6 @@ _fresh/
 # npm + other dependencies
 node_modules/
 vendor/
+# generated from repo-root install.sh by `deno task embed:install`
+lib/install-script.ts
 

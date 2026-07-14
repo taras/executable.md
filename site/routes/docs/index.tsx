@@ -13,7 +13,7 @@ title: My Project
 ls ./src
 \`\`\``;
 
-export default define.page(function GettingStarted() {
+export default define.page(function GettingStarted({ url }) {
   return (
     <>
       <h1 style="font-size:2rem;font-weight:800;">Getting started</h1>
@@ -27,9 +27,7 @@ export default define.page(function GettingStarted() {
       <p>
         Install the standalone <code>xmd</code> binary (macOS / Linux):
       </p>
-      <CodeBlock>
-        {"curl -fsSL https://executable.md/install.sh | sh"}
-      </CodeBlock>
+      <CodeBlock>{`curl -fsSL ${url.origin}/install.sh | sh`}</CodeBlock>
       <p>
         Or, for Deno users, run it from source (a published JSR package is
         coming soon):

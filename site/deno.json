@@ -1,8 +1,9 @@
 {
   "tasks": {
-    "check": "deno fmt --check . && deno lint . && deno check",
-    "dev": "vite",
-    "build": "vite build",
+    "embed:install": "deno run --allow-read --allow-write scripts/embed-install-script.ts",
+    "check": "deno task embed:install && deno fmt --check . && deno lint . && deno check",
+    "dev": "deno task embed:install && vite",
+    "build": "deno task embed:install && vite build",
     "start": "deno serve -A _fresh/server.js",
     "update": "deno run -A -r jsr:@fresh/update ."
   },
@@ -19,7 +20,8 @@
     }
   },
   "exclude": [
-    "**/_fresh/*"
+    "**/_fresh/*",
+    "lib/install-script.ts"
   ],
   "imports": {
     "@/": "./",
