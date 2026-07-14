@@ -48,25 +48,31 @@ fi
 base="https://github.com/${REPO}/releases/download/${version}"
 info "Installing ${BOLD}xmd ${version}${RESET}${DIM} (${target})"
 
-# --- download + verify -----------------------------------------------------
+# --- pick a SHA-256 tool (required — verification is mandatory) -------------
+if command -v sha256sum >/dev/null 2>&1; then
+  sha_cmd="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  sha_cmd="shasum -a 256"
+else
+  err "sha256sum or shasum is required to verify the download"
+fi
+
+# --- download --------------------------------------------------------------
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 curl -fsSL -o "${tmp}/${asset}" "${base}/${asset}" \
   || err "failed to download ${asset} for ${version}"
 
-if curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt" 2>/dev/null; then
-  info "Verifying checksum…"
-  expected="$(grep " ${asset}\$" "${tmp}/checksums.txt" | awk '{print $1}')"
-  if [ -n "$expected" ]; then
-    if command -v sha256sum >/dev/null 2>&1; then
-      actual="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
-    else
-      actual="$(shasum -a 256 "${tmp}/${asset}" | awk '{print $1}')"
-    fi
-    [ "$expected" = "$actual" ] || err "checksum mismatch for ${asset}"
-  fi
-fi
+# --- verify checksum (mandatory — fail closed) -----------------------------
+curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt" \
+  || err "could not download checksums.txt for ${version}; refusing to install unverified binary"
+
+info "Verifying checksum…"
+expected="$(awk -v a="$asset" '$2 == a { print $1 }' "${tmp}/checksums.txt")"
+[ -n "$expected" ] || err "no checksum entry for ${asset} in checksums.txt"
+actual="$($sha_cmd "${tmp}/${asset}" | awk '{print $1}')"
+[ "$expected" = "$actual" ] || err "checksum mismatch for ${asset}"
 
 # --- install ---------------------------------------------------------------
 install_dir="${XMD_INSTALL_DIR:-$HOME/.local/bin}"

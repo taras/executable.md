@@ -31,7 +31,12 @@ jobs:
           - target: x86_64-pc-windows-msvc
             artifact: xmd-x86_64-pc-windows-msvc.exe
     steps:
+      # For a tag push, github.ref is the tag. For workflow_dispatch, check out
+      # the requested tag explicitly so the built revision matches the release
+      # name (checkout fails if the tag does not exist — fail closed).
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: denoland/setup-deno@v2
         with:
