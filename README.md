@@ -67,6 +67,13 @@ curl -fsSL https://executable.md/install.sh | sh
 
 Prebuilt binaries for each platform are published on the [releases page](https://github.com/taras/executable.md/releases). The binary is self-contained — no Node or Deno required to run it.
 
+### Platform notes
+
+- **Size:** binaries are self-contained and fairly large (roughly 90–125 MB depending on platform) — the embedded Deno runtime dominates. Trimming this further is tracked in [#66](https://github.com/taras/executable.md/issues/66).
+- **Alpine / musl:** no musl build is published. On Alpine, run via `deno` or use the glibc binary under `gcompat`.
+- **macOS:** binaries are currently unsigned. The install script clears the Gatekeeper quarantine automatically; if you download a binary manually, run `xattr -d com.apple.quarantine ./xmd` before first use. Signing/notarization is tracked in [#68](https://github.com/taras/executable.md/issues/68).
+- **Windows:** the binary runs, but `exec` blocks that invoke shell commands need a shell (e.g. Git Bash or WSL) on `PATH`. Provider and `eval` documents work without one.
+
 ## Run a document
 
 ```bash
