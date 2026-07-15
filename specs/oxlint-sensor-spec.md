@@ -1,7 +1,7 @@
 # Specification: Oxlint Static Analysis Sensor
 
 **Extends**: `@executablemd/code-review-agent` spec  
-**Scope**: Oxlint as a structured signal source for the EMA review
+**Scope**: Oxlint as a structured signal source for the executable.md review
 pipeline, environment compatibility analysis, and import specifier
 enforcement for Deno/tsgo interoperability.
 
@@ -16,7 +16,7 @@ the density and pattern of violations rather than individual hits.
 
 Oxlint runs permissively — all bloat-relevant rules enabled at
 `"warn"`, zero rules at `"error"`. It collects signals, not
-verdicts. The EMA agent decides what matters.
+verdicts. The executable.md agent decides what matters.
 
 Individual Oxlint violations are weak signals. The composite
 metric is **density**: `diagnostics.total / pr.stats.additions`
@@ -327,7 +327,7 @@ require type information:
 
 | Role | Config | Severity | Blocks merge | Output |
 |---|---|---|---|---|
-| **Sensor** (EMA review job) | All 14 rules, `"warn"` | Advisory | No | JSON → LLM |
+| **Sensor** (executable.md review job) | All 14 rules, `"warn"` | Advisory | No | JSON → LLM |
 | **Gate** (separate lint job) | Curated subset, `"error"` | Blocking | Yes | Human-readable |
 
 ---
@@ -1342,7 +1342,7 @@ Calibration thresholds:
 | 0.02–0.08 | Normal — minor issues, typical development |
 | > 0.10 | Elevated — likely unreviewed generated code |
 
-The EMA journal is the natural calibration mechanism: after
+The executable.md journal is the natural calibration mechanism: after
 sufficient reviews, examine the journal to correlate density values
 with human reviewer agreement. Adjust thresholds based on observed
 false positive and false negative rates.

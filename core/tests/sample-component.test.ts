@@ -27,7 +27,7 @@ import * as os from "node:os";
 // ---------------------------------------------------------------------------
 
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ema-sc-test-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-sc-test-"));
 }
 
 function cleanup(dir: string): void {

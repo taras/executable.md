@@ -1,6 +1,6 @@
 ---
 inputs:
-  marker: "<!-- ema-review -->"
+  marker: "<!-- xmd-review -->"
 ---
 
 ```ts eval

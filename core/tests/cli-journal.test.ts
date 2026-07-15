@@ -26,7 +26,7 @@ const CLI_ARGS = ["run", "--allow-all", "cli/src/cli.ts", "run"];
 const TIMEOUT = 15_000;
 
 function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ema-cli-test-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-cli-test-"));
 }
 
 interface CliResult {

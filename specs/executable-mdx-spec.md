@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Implementing agent
-**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (journal protocol and journaling), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
+**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (journal protocol and journaling), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), Document Output Api specification (ui-improvement-spec)
 
 ---
 
@@ -30,7 +30,7 @@ module compilation, binding environment, and eval scope for resource
 lifetime management — see §4), daemon process management (the
 `daemon` terminal modifier, eval binding interpolation, and the
 provider component pattern — see §3.3 and §6.6–6.7), and the
-EMA Output Api (an Effection Api with composable middleware for
+Document Output Api (an Effection Api with composable middleware for
 streaming, whitespace-normalized, ANSI-formatted output — see §9).
 
 Expansion also supports binding capture: component invocations may
@@ -920,7 +920,7 @@ single `/v1/chat/completions` request via `@effectionx/fetch` and returns the
 response content as a string.
 
 It is available in eval blocks as a standard import via
-`executable-markdown-agents/globals`, alongside `Sample`, `findFreePort`,
+`@executablemd/core`, alongside `Sample`, `findFreePort`,
 `callOllama`, `callAnthropic`, and `useContent`.
 
 #### Signature
@@ -1310,16 +1310,16 @@ Every generated eval module is prepended with standard imports:
 import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";
 import { when } from "@effectionx/converge";
 import { fetch } from "@effectionx/fetch";
-import { useContent, findFreePort, Sample, callLlamafile, callOllama, callAnthropic } from "executable-markdown-agents/globals";
+import { useContent, findFreePort, Sample, callLlamafile, callOllama, callAnthropic } from "@executablemd/core";
 ```
 
 These imports resolve through Deno's import map (`deno.json`). The
-`executable-markdown-agents/globals` path is an export from the
-package that re-exports EMA-specific APIs.
+`@executablemd/core` package re-exports executable.md-specific APIs
+from its root barrel (`core/mod.ts`).
 
 #### `globals.ts`
 
-EMA-specific APIs are re-exported from `globals.ts` for use in
+executable.md-specific APIs are re-exported from `globals.ts` for use in
 generated eval modules and function components:
 
 ```typescript
@@ -1335,7 +1335,7 @@ export { callAnthropic } from "./src/sample/anthropic.ts";
 #### `findFreePort`
 
 `findFreePort` is available in eval blocks as a standard import
-(`executable-markdown-agents/globals`). It is an Effection
+(`@executablemd/core`). It is an Effection
 `Operation<number>`. It binds a `node:net` TCP server to
 port 0 (OS-assigned), reads the port number, and closes the server.
 It uses Effection's structured concurrency primitives (`once` from
@@ -1518,7 +1518,7 @@ run but are absent from the diagnostic trace.
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
 | `src/eval-context.ts` | `createEvalContext()`, `compileBlock()` (data: URI), `EvalCtxKey`, `EvalContext`, `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `ContentCtx`, `ContentHandle`, `useContent()` — content slot access for function components |
-| `globals.ts` | Re-exports EMA globals (`useContent`, `findFreePort`, `Sample`, `callLlamafile`, `callOllama`, `callAnthropic`) for generated eval modules and function components |
+| `globals.ts` | Re-exports executable.md globals (`useContent`, `findFreePort`, `Sample`, `callLlamafile`, `callOllama`, `callAnthropic`) for generated eval modules and function components |
 | `test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
 | `src/eval-env.ts` | `EvalEnv`, `EvalEnvCtx`, `EvalScopeCtx`, `PersistFlagCtx` |
 | `src/eval-handler.ts` | `evalFactory` |
@@ -1531,7 +1531,7 @@ run but are absent from the diagnostic trace.
 | `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` — inference HTTP utility |
 | `src/sample/ollama.ts` | `callOllama()` — Ollama inference HTTP utility |
 | `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
-| `src/api.ts` | EMA Output Api definition, exports `output` (§9.2) |
+| `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
@@ -1820,7 +1820,7 @@ validated props directly and return rendered output as a string.
 
 ```typescript
 // components/Greeting.ts
-import type { Json } from "executable-markdown-agents";
+import type { Json } from "@executablemd/core";
 
 export const inputs = {
   name: { type: "string" as const, required: true },
@@ -1860,7 +1860,7 @@ that need rendered children call `yield* useContent()`:
 
 ```typescript
 // components/Card.ts
-import { useContent } from "executable-markdown-agents/globals";
+import { useContent } from "@executablemd/core";
 
 export default function*(props: Record<string, Json>) {
   const content = yield* useContent();
@@ -2153,7 +2153,7 @@ function* documentWorkflow(docPath: string): Workflow<string> {
   const counter = createBlockCounter();
 
   // Per-root-segment emission loop — each root segment is expanded
-  // independently and its output emitted through the EMA Output Api (§9).
+  // independently and its output emitted through the Document Output Api (§9).
   // Root segments are sequential and independent in document order.
   // Component-internal expansion remains recursive and buffered.
   for (const segment of root.bodySegments) {
@@ -3064,9 +3064,9 @@ changes.
 
 **File:** `components/LlamafileProvider.md`
 
-This file is part of the EMA standard library and is distributed
-alongside the EMA package. It is a regular markdown component — no
-code changes to the EMA runtime are required to add it.
+This file is part of the executable.md standard library and is distributed
+alongside the executable.md package. It is a regular markdown component — no
+code changes to the executable.md runtime are required to add it.
 
 ````markdown
 ---
@@ -3161,7 +3161,7 @@ journals the result.
 
 **Block 4 — middleware install:**
 `callLlamafile` and `Sample` are standard imports in the generated
-eval module (via `executable-markdown-agents/globals`, §4.2). The
+eval module (via `@executablemd/core`, §4.2). The
 middleware closes over `baseUrl` and `model` at install time. Routing:
 if `context.model` matches the provider's model (or is unspecified),
 handle it; otherwise pass through via `next()`.
@@ -3399,7 +3399,7 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
 
   // Spawn the execution scope. Runtime state lives inside this
   // spawned task: runtime API middleware and eval scope,
-  // EMA→channel bridge. The channel and workflow share this scope;
+  // DocumentOutput→channel bridge. The channel and workflow share this scope;
   // scope teardown cancels the producer and closes the channel.
   yield* spawn(function* () {
 
@@ -3432,8 +3432,8 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
       registry.set(name, factory);
     }
 
-    // Channel delivery is the innermost EMA handler (installed first).
-    scope.around(EMA, {
+    // Channel delivery is the innermost DocumentOutput handler (installed first).
+    scope.around(DocumentOutput, {
       *output([text]) {
         yield* channel.send(text);
       },
@@ -3479,7 +3479,7 @@ await run(function* () {
 
 ---
 
-## 9. EMA Output Api
+## 9. Document Output Api
 
 ### 9.1 Problem
 
@@ -3499,9 +3499,9 @@ The output pipeline has three UX issues:
 3. **No terminal formatting.** Output is raw markdown text. No ANSI colors,
    no heading emphasis, no syntax highlighting.
 
-### 9.2 The EMA Api
+### 9.2 The Document Output Api
 
-A single Effection Api named `EMA` with one operation: `output`. The Api
+A single Effection Api named `DocumentOutput` with one operation: `output`. The Api
 is the system's public surface — extensible to progress, diagnostics, etc.
 as needs grow.
 
@@ -3511,20 +3511,20 @@ as needs grow.
 import type { Operation } from "effection";
 import { createApi } from "./api.ts";
 
-export interface EMAApi {
+export interface DocumentOutputApi {
   output(text: string): Operation<void>;
 }
 
-export const EMA = createApi<EMAApi>("EMA", {
+export const DocumentOutput = createApi<DocumentOutputApi>("DocumentOutput", {
   *output(_text: string): Operation<void> {},
 });
 
-export const { output } = EMA.operations;
+export const { output } = DocumentOutput.operations;
 ```
 
 Core handler is a no-op. Behavior comes from two sources:
 
-- **Middleware** installed via `scope.around(EMA, ...)` — intercepts and
+- **Middleware** installed via `scope.around(DocumentOutput, ...)` — intercepts and
   transforms text.
 - **Channel delivery** — the terminal handler sends transformed text into
   a `createChannel`.
@@ -3567,13 +3567,13 @@ full document.
 ```typescript
 import type { Operation } from "effection";
 import { useScope } from "effection";
-import { EMA } from "../api.ts";
+import { DocumentOutput } from "../api.ts";
 
 export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
   const scope = yield* useScope();
 
-  scope.around(EMA, {
+  scope.around(DocumentOutput, {
     *output([text], next) {
       let normalized = text;
 
@@ -3615,13 +3615,13 @@ import type { Operation } from "effection";
 import { useScope } from "effection";
 import { Marked } from "marked";
 import TerminalRenderer from "marked-terminal";
-import { EMA } from "../api.ts";
+import { DocumentOutput } from "../api.ts";
 
 export function* useTerminalOutput(): Operation<void> {
   const marked = new Marked({ renderer: new TerminalRenderer() });
   const scope = yield* useScope();
 
-  scope.around(EMA, {
+  scope.around(DocumentOutput, {
     *output([text], next) {
       const formatted = marked.parse(text, { async: false }) as string;
       yield* next(formatted);
@@ -3738,7 +3738,7 @@ capture occurs in the output pipeline.
 
 The entire workflow runs in a `spawn()` inside `runDocument`. The channel
 and all execution state (runtime API middleware and eval scope,
-EMA→channel bridge) share this spawned scope. The consumer
+DocumentOutput→channel bridge) share this spawned scope. The consumer
 (`forEach`/`collect` on `execution.output`) runs in the **caller's**
 scope. This cross-boundary communication is safe because scope teardown
 of the spawned task cancels the producer and closes the channel, which
@@ -3848,7 +3848,7 @@ coroutine ID.
 
 ### 11.1 Segment → output
 
-With the EMA Output Api (§9), segments are no longer batch-rendered
+With the Document Output Api (§9), segments are no longer batch-rendered
 into a single string. Instead, `renderSegment` (singular) is called
 per-segment in the emission loop (§5.4), and each rendered string
 flows through the Output Api via `yield* ephemeral(output(text))`.
@@ -4125,7 +4125,7 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | H1 | Eval context creation | `createEvalContext()` returns `EvalContext` with `initialized: true` |
 | H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block via standard imports |
-| H3 | EMA globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `executable-markdown-agents/globals` |
+| H3 | executable.md globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `@executablemd/core` |
 | H5 | `compileBlock` returns generator function | `yield* compileBlock(code, [])` returns a callable generator function |
 | H6 | Distinct modules per block | Each `compileBlock` call produces a separate module — no shared state between blocks |
 | H7 | `data:` URI encoding | Module source with special characters is correctly URI-encoded |
@@ -4305,13 +4305,13 @@ visible warning blocks, collect into a separate error report).
 | SC5 | Repeated run calls provider | Current provider response is used and journaled |
 | SC6 | Self-closing renderChildren returns empty | `<Sample prompt="X" />` → `renderChildren()` returns empty, prompt used |
 
-### Tier OA — EMA Output Api
+### Tier OA — Document Output Api
 
 | # | Test | Verify |
 |---|------|--------|
-| OA1 | Api creation | `EMA` Api created with `output` operation |
+| OA1 | Api creation | `DocumentOutput` Api created with `output` operation |
 | OA2 | Core handler is no-op | `output("text")` with no middleware installed → no error, no visible effect |
-| OA3 | Middleware intercepts output | `scope.around(EMA, ...)` receives text in middleware handler |
+| OA3 | Middleware intercepts output | `scope.around(DocumentOutput, ...)` receives text in middleware handler |
 | OA4 | Middleware transforms text | Middleware modifies text, `next()` receives modified text |
 | OA5 | Channel delivery | Channel delivery handler sends text via `yield* channel.send()` |
 | OA6 | Consumer collects all chunks | `forEach` consumer collects all emitted chunks in order |
@@ -4453,12 +4453,12 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where `EvalEnvCtx` has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
 | 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
-| 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import EMA globals from `executable-markdown-agents/globals`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
+| 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import executable.md globals from `@executablemd/core`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
 | 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
 | 61 | `callLlamafile()` uses `@effectionx/fetch` | The HTTP call is an Effection operation executed once per document run |
 | 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; the hardcoded path covers the supported targets |
-| 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the EMA `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
-| 64 | `EMA` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
+| 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the executable.md `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
+| 64 | `DocumentOutput` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
 | 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
 | 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |

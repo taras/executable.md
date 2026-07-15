@@ -2,10 +2,10 @@
  * Temp-file eval block compiler middleware for Node and Bun.
  *
  * Compiles eval block source into generator functions by writing
- * temporary .ts files to `.ema-eval/` and dynamically importing them.
+ * temporary .ts files to `.xmd-eval/` and dynamically importing them.
  * Bun handles .ts natively; Node requires tsx.
  *
- * Standard imports (Effection, EMA APIs) are captured in the middleware
+ * Standard imports (Effection, executable.md APIs) are captured in the middleware
  * closure — they are not part of the Compiler API interface.
  *
  * Installed automatically by `runDocument` when running on Node or Bun.
@@ -30,13 +30,13 @@ const STANDARD_IMPORTS = [
   'import { findFreePort } from "@executablemd/runtime";',
 ];
 
-const EVAL_DIR = ".ema-eval";
+const EVAL_DIR = ".xmd-eval";
 
 /**
  * Install the temp-file compiler as middleware on the current scope.
  *
  * Works on Node (via tsx) and Bun (native .ts support).
- * Writes each compiled module to `.ema-eval/<uuid>.ts`, imports it,
+ * Writes each compiled module to `.xmd-eval/<uuid>.ts`, imports it,
  * captures the default export, and deletes the file.
  */
 export function* useTempFileCompiler(): Operation<void> {

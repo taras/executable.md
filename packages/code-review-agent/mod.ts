@@ -2,7 +2,7 @@
  * @executablemd/code-review-agent
  *
  * Provides parsers for transforming raw git diff and Oxlint output
- * into typed structures for use by EMA review components.
+ * into typed structures for use by executable.md review components.
  */
 
 export { parseDiff } from "./src/parse-diff.ts";

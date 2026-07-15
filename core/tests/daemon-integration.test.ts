@@ -29,7 +29,7 @@ import * as os from "node:os";
 // ---------------------------------------------------------------------------
 
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ema-daemon-test-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-daemon-test-"));
 }
 
 function cleanup(dir: string): void {

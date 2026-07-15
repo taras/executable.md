@@ -15,7 +15,7 @@ gh auth token 2>/dev/null || echo ""
 
 ```ts eval
 const token = ghToken.trim();
-const api = "https://api.github.com/repos/taras/executable-markdown-agents";
+const api = "https://api.github.com/repos/taras/executable.md";
 const headers = {
   "Accept": "application/vnd.github+json",
 };
@@ -37,7 +37,7 @@ if (number && number > 0) {
   };
 } else {
   const resp = yield* fetch(
-    api + "/issues?labels=ema-cleanup&state=open&per_page=10",
+    api + "/issues?labels=cleanup&state=open&per_page=10",
     { headers },
   ).expect().json();
   result = resp.map(issue => ({

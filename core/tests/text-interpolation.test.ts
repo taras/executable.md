@@ -262,9 +262,9 @@ describe("Text interpolation — eval bindings in text segments", () => {
       segments,
       ctx,
       { subtitle: "a guide" },
-      { title: "EMA" },
+      { title: "xmd" },
     );
-    expect(output).toBe("EMA: a guide");
+    expect(output).toBe("xmd: a guide");
   });
 
   // TI15: Empty env.values — no crash
