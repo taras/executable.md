@@ -90,7 +90,7 @@ export default define.page(function ExecEval() {
       </p>
 
       <p style="margin-top:2rem;">
-        Next: <a href="/docs/durability">Durable replay →</a>
+        Next: <a href="/docs/providers">LLM providers →</a>
       </p>
     </>
   );

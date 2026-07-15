@@ -18,8 +18,9 @@ export default define.page(function GettingStarted({ url }) {
     <>
       <h1 style="font-size:2rem;font-weight:800;">Getting started</h1>
       <p class="muted">
-        executable.md runs markdown documents as durable, executable workflows
-        using the <code>xmd</code>{" "}
+        executable.md runs markdown documents as executable workflows using the
+        {" "}
+        <code>xmd</code>{" "}
         command. This page gets you from install to your first run.
       </p>
 
@@ -55,11 +56,11 @@ export default define.page(function GettingStarted({ url }) {
       <p>Run it:</p>
       <CodeBlock>{"xmd run README.md"}</CodeBlock>
 
-      <h2>Keep a durable journal</h2>
+      <h2>Write a diagnostic journal</h2>
       <p>
         Pass <code>--journal</code>{" "}
-        to persist every I/O operation. On rerun, completed steps replay from
-        the journal instead of redoing work — execution survives crashes.
+        to write a JSONL trace of the run to a new file for troubleshooting. The
+        path must not already exist, and the trace is never replayed.
       </p>
       <CodeBlock>{"xmd run README.md --journal .xmd/events.jsonl"}</CodeBlock>
 
@@ -67,11 +68,12 @@ export default define.page(function GettingStarted({ url }) {
       <ul>
         <li>
           <code>--journal</code>, <code>-j</code>{" "}
-          — persist JSONL journal events and replay on rerun.
+          — write current-run journal entries to a new JSONL file (the path must
+          not exist).
         </li>
         <li>
           <code>--verbose</code>, <code>-V</code>{" "}
-          — print durable journal events to stderr while running.
+          — print journal entries to stderr while running.
         </li>
         <li>
           <code>--component-dir</code>{" "}
