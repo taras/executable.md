@@ -3,7 +3,6 @@ packages:
   - cli
   - durable-streams
   - runtime
-  - vendor/context-api
   - packages/code-review-agent
   - test-support
   - .internal

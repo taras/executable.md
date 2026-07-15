@@ -34,16 +34,17 @@
     "npm:@babel/core@^7.28.0": "7.29.7",
     "npm:@babel/preset-react@^7.27.1": "7.29.7_@babel+core@7.29.7",
     "npm:@durable-streams/client@~0.2.2": "0.2.2",
-    "npm:@effectionx/converge@~0.1.3": "0.1.3_effection@4.1.0-alpha.7",
-    "npm:@effectionx/fetch@~0.1.2": "0.1.2_effection@4.1.0-alpha.7",
-    "npm:@effectionx/fs@0.2.2": "0.2.2_effection@4.1.0-alpha.7",
-    "npm:@effectionx/middleware@0.1.0": "0.1.0",
-    "npm:@effectionx/node@~0.2.2": "0.2.2_effection@4.1.0-alpha.7",
-    "npm:@effectionx/process@~0.7.3": "0.7.3_effection@4.1.0-alpha.7",
-    "npm:@effectionx/scope-eval@~0.1.2": "0.1.2_effection@4.1.0-alpha.7",
-    "npm:@effectionx/stream-helpers@~0.8.1": "0.8.1_effection@4.1.0-alpha.7",
-    "npm:@effectionx/test-adapter@~0.7.3": "0.7.3_effection@4.1.0-alpha.7",
-    "npm:@effectionx/timebox@~0.4.2": "0.4.2_effection@4.1.0-alpha.7",
+    "npm:@effectionx/context-api@0.6.0": "0.6.0_effection@4.1.0-alpha.7",
+    "npm:@effectionx/converge@0.1.4": "0.1.4_effection@4.1.0-alpha.7",
+    "npm:@effectionx/fetch@0.2.0": "0.2.0_effection@4.1.0-alpha.7",
+    "npm:@effectionx/fs@0.3.0": "0.3.0_effection@4.1.0-alpha.7",
+    "npm:@effectionx/middleware@0.1.1": "0.1.1",
+    "npm:@effectionx/node@0.2.4": "0.2.4_effection@4.1.0-alpha.7",
+    "npm:@effectionx/process@0.8.1": "0.8.1_effection@4.1.0-alpha.7",
+    "npm:@effectionx/scope-eval@0.1.3": "0.1.3_effection@4.1.0-alpha.7",
+    "npm:@effectionx/stream-helpers@0.8.3": "0.8.3_effection@4.1.0-alpha.7",
+    "npm:@effectionx/test-adapter@0.7.4": "0.7.4_effection@4.1.0-alpha.7",
+    "npm:@effectionx/timebox@0.4.3": "0.4.3_effection@4.1.0-alpha.7",
     "npm:@opencode-ai/plugin@1.2.27": "1.2.27",
     "npm:@opentelemetry/api@^1.9.0": "1.9.1",
     "npm:@preact/signals@^2.5.1": "2.9.3_preact@10.29.7__preact-render-to-string@6.7.0_preact-render-to-string@6.7.0__preact@10.29.7",
@@ -412,59 +413,70 @@
       ],
       "bin": true
     },
-    "@effectionx/converge@0.1.3_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-LPuDslL53kA8etLgO/sMmqv9v66txOAO5d6DUWLnwZa6CwA2MTYkHEnZAoIGCnQYbjKTbPxlKatHgF15ihB4zA==",
+    "@effectionx/context-api@0.6.0_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-t004qvlkJDMB6EhHP1lOQ97PeIn90m7cv4+wsRPnx4YBem+pJzTL+Sm1KWbKMjMeFJz4oqllUWuBJZsCi+nuTw==",
+      "dependencies": [
+        "@effectionx/middleware",
+        "effection"
+      ]
+    },
+    "@effectionx/converge@0.1.4_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-M11KU7jK3gOFGI4RT+Bf6ITMJntzzoGEO2KPx9r8uBoR+Rgwiyeuq+OeIHkuiHLUC+bB1g93KOj7aKR/G0F1/Q==",
       "dependencies": [
         "@effectionx/timebox",
         "effection"
       ]
     },
-    "@effectionx/fetch@0.1.2_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-CzoWkuulsEbROkYziCL58JYrUxLB+W1ALj1mCc3jwcX2Tt5OY2Aag06ofg8pEoXEQV/a9+05qQAi5Sq8uT07Sw==",
+    "@effectionx/fetch@0.2.0_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-0W15D9WuFUI6PEApaimxppacgk1WvJNxYwQ+P/tjWTzrPOUK8wrGlj6bqLrgfEaXqyOpdHbFI1eEz7wq1BDubw==",
+      "dependencies": [
+        "@effectionx/context-api",
+        "effection"
+      ]
+    },
+    "@effectionx/fs@0.3.0_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-I8RSIU80twN1WdeYRPD3utRD+niORiS08U0+LPNphwum94rwa/wHQNQUtNe19Bfbll+3GQxvJF+M95dYZSVxdQ==",
+      "dependencies": [
+        "@effectionx/context-api",
+        "effection"
+      ]
+    },
+    "@effectionx/middleware@0.1.1": {
+      "integrity": "sha512-ss/bZRkt/xzJNE59r8NR1+0K/xQcIyCm0y9n8FYC8jKdFn51SPe3m3t7EfPcK8zkdjCoTOU7k1UpIXRl26asYA=="
+    },
+    "@effectionx/node@0.2.4_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-cPnp3fvfBKjGWekmBHdhZr5ScAr3Mg+x5IXpO8uKFe7AZ8EPAT9Di6skuB4kuGFJtRtS0Z1e5G4+2eJyapKhYA==",
       "dependencies": [
         "effection"
       ]
     },
-    "@effectionx/fs@0.2.2_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-aTT7Rbl8r0/0EgX+qT36gvfJnzAfjQ/+sROPhV2Ms4VcPONqwbunClWwX7B6m0jCHsER/gg4E45s60h6yatVFw==",
+    "@effectionx/process@0.8.1_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-xyXlFja0Ill80lQ3IYfksXtJkqVmWuUOogRn/qlHWCAGlZj+MGGF8gOFbyzk/3Kx4pj14riVGgF/cyT5XCzqDw==",
       "dependencies": [
-        "effection"
-      ]
-    },
-    "@effectionx/middleware@0.1.0": {
-      "integrity": "sha512-xPpQIf1PQaox+H/e/yxZtop4kLxQkrEb8BUtmqcnmzVVbV8iJLNQeRzuSEAWQLAnVu8xa5SjGzLpb5UGYTLYgg=="
-    },
-    "@effectionx/node@0.2.2_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-bUwnCqzBsVERGzKZRTc6XMZ6yDLkRPgcxSvM6eAkuc2D5A7L0+nSu4J/x60y6geSYrAVv2UZBgAktukNtB6LxA==",
-      "dependencies": [
-        "effection"
-      ]
-    },
-    "@effectionx/process@0.7.3_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-ic+cv9aNeq0UgF+SO61jd8nYLiF3jFT2c6n+nOYstc4pmtUez70yFb0H5Rzppu21wql5QYCbQayVrRRUa5YRQQ==",
-      "dependencies": [
+        "@effectionx/context-api",
         "@effectionx/node",
+        "@effectionx/scope-eval",
         "cross-spawn",
         "ctrlc-windows",
         "effection",
         "shellwords-ts"
       ]
     },
-    "@effectionx/scope-eval@0.1.2_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-Jcy0vGdD3/8EGKf4FSICOKfJkjg3VnrxhM21pdum26du/odZ0ytX66/UcyvRW3b88E8HxsFPL1e6+7QRcJliDg==",
+    "@effectionx/scope-eval@0.1.3_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-Acn45lb3H94WYhNVHXYtXOZYzjpBGDPPlsyW1Talb/vYjQzCzus5lkxxOlPyphzvi7d+7mGNXiIVt4JLSZmLnQ==",
       "dependencies": [
         "effection"
       ]
     },
-    "@effectionx/signals@0.5.2_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-ftWU0/+LTafPjFQ4mOfwIBHT75BtA2T44YJP7+nR/d8S2kURCzkR04a2NHVbk274XRfh354qpukBULDTchZlQw==",
+    "@effectionx/signals@0.5.4_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-c3tnlq9qqjb4fb/4g+uf03ABbvaDbgcXqWZRuifXOFNeTyhnBy5t86Fpk0tVKBLQI2M9sStV0c62xxHXPhH2Pw==",
       "dependencies": [
         "effection",
         "immutable"
       ]
     },
-    "@effectionx/stream-helpers@0.8.1_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-17rocf3av2VId8uqZJxBREhQRSaowA7+MKAbu27P3ZboIhpuIu8jqoQ1+YfKWdMy/ORrApeIljgoJl+1hJ3fvQ==",
+    "@effectionx/stream-helpers@0.8.3_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-3yNSrdmW3ahOAXrEnBGmlzxp7k9Yzixtqzij98y167srYdAE8sm+V/WNtMLHYScShzw2hl6E8uCm9ghhQw7zKA==",
       "dependencies": [
         "@effectionx/signals",
         "@effectionx/timebox",
@@ -473,14 +485,14 @@
         "remeda"
       ]
     },
-    "@effectionx/test-adapter@0.7.3_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-OgGzsIhBN8XYsFDAETbeGqwwrW2sNdQukxHRNNngjJE0G6LiKkwDrXs8ANGzarPihoE02YANVMbyWAruBuUnYg==",
+    "@effectionx/test-adapter@0.7.4_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-zPA5dz2SKG1N/1WxIxYy4zBB1qjviLZy6o/u8PEQo82Tnjtch4rS+2zIrHriWGKX6KY+5VjPlryjtzcBaxvD3Q==",
       "dependencies": [
         "effection"
       ]
     },
-    "@effectionx/timebox@0.4.2_effection@4.1.0-alpha.7": {
-      "integrity": "sha512-CT1XCCXmYgxFjIJmz0kzBbDG0W1Jc/i8l4r2Hecu+gYXp22DW8bAkVPKYIDdR4acAC1flqevlWA8xWaNBUfb6w==",
+    "@effectionx/timebox@0.4.3_effection@4.1.0-alpha.7": {
+      "integrity": "sha512-cc7SLpL3svAYK8M5NS8kLQuL0lrZNoQb+Hi9NSaWOudzAW1HoewuDfUtfXLemPJnnLqLYhbghRhmpVqCm4Xg3Q==",
       "dependencies": [
         "effection"
       ]
@@ -2840,16 +2852,17 @@
     "dependencies": [
       "jsr:@std/testing@1",
       "npm:@durable-streams/client@~0.2.2",
-      "npm:@effectionx/converge@~0.1.3",
-      "npm:@effectionx/fetch@~0.1.2",
-      "npm:@effectionx/fs@0.2.2",
-      "npm:@effectionx/middleware@0.1.0",
-      "npm:@effectionx/node@~0.2.2",
-      "npm:@effectionx/process@~0.7.3",
-      "npm:@effectionx/scope-eval@~0.1.2",
-      "npm:@effectionx/stream-helpers@~0.8.1",
-      "npm:@effectionx/test-adapter@~0.7.3",
-      "npm:@effectionx/timebox@~0.4.2",
+      "npm:@effectionx/context-api@0.6.0",
+      "npm:@effectionx/converge@0.1.4",
+      "npm:@effectionx/fetch@0.2.0",
+      "npm:@effectionx/fs@0.3.0",
+      "npm:@effectionx/middleware@0.1.1",
+      "npm:@effectionx/node@0.2.4",
+      "npm:@effectionx/process@0.8.1",
+      "npm:@effectionx/scope-eval@0.1.3",
+      "npm:@effectionx/stream-helpers@0.8.3",
+      "npm:@effectionx/test-adapter@0.7.4",
+      "npm:@effectionx/timebox@0.4.3",
       "npm:@types/node@^24.5.2",
       "npm:configliere@~0.2.3",
       "npm:effection@4.1.0-alpha.7",
@@ -2862,16 +2875,17 @@
     "packageJson": {
       "dependencies": [
         "npm:@durable-streams/client@~0.2.2",
-        "npm:@effectionx/converge@~0.1.3",
-        "npm:@effectionx/fetch@~0.1.2",
-        "npm:@effectionx/fs@0.2.2",
-        "npm:@effectionx/middleware@0.1.0",
-        "npm:@effectionx/node@~0.2.2",
-        "npm:@effectionx/process@~0.7.3",
-        "npm:@effectionx/scope-eval@~0.1.2",
-        "npm:@effectionx/stream-helpers@~0.8.1",
-        "npm:@effectionx/test-adapter@~0.7.3",
-        "npm:@effectionx/timebox@~0.4.2",
+        "npm:@effectionx/context-api@0.6.0",
+        "npm:@effectionx/converge@0.1.4",
+        "npm:@effectionx/fetch@0.2.0",
+        "npm:@effectionx/fs@0.3.0",
+        "npm:@effectionx/middleware@0.1.1",
+        "npm:@effectionx/node@0.2.4",
+        "npm:@effectionx/process@0.8.1",
+        "npm:@effectionx/scope-eval@0.1.3",
+        "npm:@effectionx/stream-helpers@0.8.3",
+        "npm:@effectionx/test-adapter@0.7.4",
+        "npm:@effectionx/timebox@0.4.3",
         "npm:@types/node@22",
         "npm:acorn@^8.16.0",
         "npm:effection@4.1.0-alpha.7",
@@ -2906,6 +2920,7 @@
       },
       "core": {
         "dependencies": [
+          "npm:@effectionx/context-api@0.6.0",
           "npm:acorn@^8.16.0",
           "npm:gray-matter@^4.0.3",
           "npm:magic-string@~0.30.21",
@@ -2916,7 +2931,19 @@
           "npm:remend@^1.2.2",
           "npm:unist-util-select@5",
           "npm:zod@^4.3.6"
-        ]
+        ],
+        "packageJson": {
+          "dependencies": [
+            "npm:@effectionx/context-api@0.6.0"
+          ]
+        }
+      },
+      "runtime": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@effectionx/context-api@0.6.0"
+          ]
+        }
       },
       "site": {
         "dependencies": [

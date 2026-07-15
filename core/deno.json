@@ -7,7 +7,7 @@
   "imports": {
     "@executablemd/durable-streams": "../durable-streams/mod.ts",
     "@executablemd/runtime": "../runtime/mod.ts",
-    "@effectionx/context-api": "../vendor/context-api/mod.ts",
+    "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",
     "acorn": "npm:acorn@^8.16.0",
     "gray-matter": "npm:gray-matter@^4.0.3",
     "magic-string": "npm:magic-string@^0.30.21",
