@@ -652,38 +652,6 @@ const silentFactory: ModifierFactory = (_params) =>
   }();
 ```
 
-**`sample`** — calls `next()`, then sends the inner result's output
-to an LLM via `durableSample` (§3.4), which wraps the Sample Api in
-a durable effect. The modifier parses optional bracket params
-(`sample[model=phi3-mini]`) to extract model and text params:
-
-```typescript
-const sampleFactory: ModifierFactory = (params) =>
-  (_args, next) => function* () {
-    const ctx = yield* useCodeBlock();
-    const inner = yield* next();
-    const { model, textParams } = parseSampleParams(params);
-
-    const sampleContext: SampleContext = {
-      stdout: inner.output,
-      stderr: inner.stderr,
-      exitCode: inner.exitCode,
-      command: ctx.content,
-      language: ctx.language,
-      params: textParams,
-      componentName: ctx.componentName,
-      model,
-    };
-
-    const commandPreview = ctx.content.slice(0, 30).replace(/\n/g, " ");
-    const sampled = yield* durableSample(
-      sampleContext,
-      `sample:${commandPreview}`,
-    );
-    return { ...inner, output: sampled };
-  }();
-```
-
 **`persist`** — extends resource lifetime from block scope to the
 component's eval scope. Without `persist`, resources spawned inside an
 eval block are torn down when the block completes. With `persist`, the
@@ -771,18 +739,18 @@ function composeModifierChain(
 }
 ```
 
-For ```` ```bash silent sample exec ````:
+For ```` ```bash silent timeout[30s] exec ````:
 
 ```
 exec    = execFactory(undefined)       // terminal middleware
-sample  = sampleFactory("brief")       // wraps exec
-silent  = silentFactory(undefined)     // wraps sample
-composed = combine([silent, sample, exec])
+timeout = timeoutFactory("30s")        // wraps exec
+silent  = silentFactory(undefined)     // wraps timeout
+composed = combine([silent, timeout, exec])
 ```
 
-Calling `composed([], terminal)` runs silent → sample → exec. The
-exec handler journals the command result. The sample handler journals
-the LLM response. The silent handler discards the output.
+Calling `composed([], terminal)` runs silent → timeout → exec. The
+exec handler journals the command result. The timeout handler cancels
+the block if it overruns. The silent handler discards the output.
 
 #### Overriding per-scope
 
@@ -809,26 +777,30 @@ via middleware.
 
 ### 3.4 The Sample Api
 
-The `sample` modifier handler delegates LLM access to the
+The `<Sample>` component delegates LLM access to the
 **Sample Api** — an Effection Api with middleware that determines
 which model is called, what prompt is constructed, and how the
 response is post-processed.
 
+`SampleContext` is content-centric (DEC-87): providers receive the
+rendered content and build their own message arrays.
+
 ```typescript
+// src/types.ts
 interface SampleContext {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  command: string;
-  language: string;
-  params?: string;
-  componentName?: string;
+  /** The content to send to the LLM (rendered children or prompt text). */
+  content: string;
   /**
    * Model identifier requested by the sample call. Undefined if the author
    * did not specify a model — in which case the innermost active provider wins.
-   * Set from the sample modifier's bracket params: ```bash sample[model=phi3-mini] exec
    */
   model?: string;
+  /** Additional params for the sample call. */
+  params?: string;
+  /** System prompt set by enclosing `<Instructions>` components. */
+  system?: string;
+  /** Name of the component that initiated the sample call. */
+  componentName?: string;
 }
 
 interface SampleApi {
@@ -838,40 +810,18 @@ interface SampleApi {
 const Sample = createApi<SampleApi>("Sample", {
   *sample(context: SampleContext): Operation<string> {
     throw new Error(
-      "sample modifier requires Sample Api middleware — " +
-      "install via scope.around(Sample, ...) before calling runDocument"
+      "Sample Api requires provider middleware — " +
+      "install a provider (e.g., OllamaProvider) or " +
+      "install middleware on the Sample Api before using <Sample> components"
     );
   },
 });
 ```
 
-**`durableSample`** is a shared helper (`src/sample/durable-sample.ts`)
-that wraps the Sample Api call in `createDurableOperation`. It routes
-through the `EvalScope` so that middleware installed by `persist eval`
-blocks (e.g., `LlamafileProvider`'s `Sample.around()`) is visible:
-
-```typescript
-// src/sample/durable-sample.ts
-function* durableSample(
-  context: SampleContext,
-  name: string,
-): Workflow<string> {
-  return (yield createDurableOperation<Json>(
-    { type: "sample", name },
-    function* (): Operation<Json> {
-      // Route through EvalScope so middleware installed by
-      // persist-eval blocks is visible. evalScope.eval() runs
-      // the operation in the same spawned task where
-      // Sample.around() installed middleware.
-      const evalScope = yield* EvalScopeCtx.expect();
-      const boxedResult = yield* evalScope.eval(
-        () => Sample.operations.sample(context),
-      );
-      return unbox(boxedResult) as unknown as Json;
-    },
-  )) as unknown as string;
-}
-```
+Sample Api calls route through the `EvalScope` so that middleware
+installed by `persist eval` blocks (e.g., `LlamafileProvider`'s
+`Sample.around()`) is visible — `evalScope.eval()` runs the operation in
+the same spawned task where the middleware was installed.
 
 #### Sample middleware examples
 
@@ -896,7 +846,7 @@ scope.around(Sample, {
 // Param-driven: sample=passthrough skips LLM
 scope.around(Sample, {
   *sample([context], next): Operation<string> {
-    if (context.params === "passthrough") return context.stdout;
+    if (context.params === "passthrough") return context.content;
     return yield* next(context);
   },
 });
@@ -904,142 +854,12 @@ scope.around(Sample, {
 // Testing stub
 scope.around(Sample, {
   *sample([context], next): Operation<string> {
-    return `[stub] sampled ${context.stdout.length} bytes`;
+    return `[stub] sampled ${context.content.length} bytes`;
   },
 });
 ```
 
-### 3.5 `callLlamafile()` — inference HTTP utility
-
-**File:** `src/sample/llamafile.ts`
-
-`callLlamafile` is a plain utility function — not user-facing middleware. It is
-called from provider component eval blocks (e.g., `LlamafileProvider.md`)
-with `baseUrl` and `model` closed over at middleware install time. It makes a
-single `/v1/chat/completions` request via `@effectionx/fetch` and returns the
-response content as a string.
-
-It is available in eval blocks as a standard import via
-`@executablemd/core`, alongside `Sample`, `findFreePort`,
-`callOllama`, `callAnthropic`, and `useContent`.
-
-#### Signature
-
-```typescript
-import type { Operation } from "effection";
-import type { SampleContext } from "../types.ts";
-
-export interface LlamafileOptions {
-  /** Temperature for generation. Default: 0 */
-  temperature?: number;
-  /** Maximum tokens to generate. Default: 2048 */
-  maxTokens?: number;
-  /** Build the message array from the SampleContext. Default: buildDefaultMessages */
-  buildMessages?: (context: SampleContext) => ChatMessage[];
-}
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-export function* callLlamafile(
-  baseUrl: string,
-  model: string,
-  context: SampleContext,
-  opts?: LlamafileOptions,
-): Operation<string>;
-```
-
-#### Implementation
-
-```typescript
-export function* callLlamafile(
-  baseUrl: string,
-  model: string,
-  context: SampleContext,
-  opts: LlamafileOptions = {},
-): Operation<string> {
-  const {
-    temperature = 0,
-    maxTokens = 2048,
-    buildMessages = buildDefaultMessages,
-  } = opts;
-
-  const messages = buildMessages(context);
-
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      temperature,
-      max_tokens: maxTokens,
-      messages,
-    }),
-  })
-    .expect()
-    .json<{ choices: Array<{ message: { content: string } }> }>();
-
-  const content = result.choices?.[0]?.message?.content;
-  if (typeof content !== "string") {
-    throw new Error(
-      `Llamafile server returned unexpected response shape: ${JSON.stringify(result)}`,
-    );
-  }
-
-  return content;
-}
-```
-
-**Why `@effectionx/fetch`:** `fetch` from `@effectionx/fetch` returns an
-Effection-native `Response` — `response.json()` is `Operation<T>`, not
-`Promise<T>`. The entire request/response chain composes with `yield*` and
-cancellation flows through structured concurrency automatically.
-
-Each CLI invocation makes the inference request once. Its result may be
-included in the enclosing operation's diagnostic journal entry.
-
-#### Default message builder
-
-`buildDefaultMessages` supports two modes:
-
-**Direct prompt mode** — when `stdout === command` and `exitCode === 0` with no
-stderr, the caller is passing a plain text prompt (e.g., `<Sample prompt="..."/>`):
-
-```typescript
-function buildDefaultMessages(context: SampleContext): ChatMessage[] {
-  // Direct prompt mode
-  if (context.stdout === context.command && context.exitCode === 0 && !context.stderr) {
-    return [
-      { role: "system", content: "You are a helpful assistant..." },
-      { role: "user", content: context.stdout },
-    ];
-  }
-
-  // Exec analysis mode — real command output to analyze
-  const systemLines = [
-    "You are a precise technical assistant embedded in a durable document workflow.",
-    "Analyze the provided command output and respond according to the instructions.",
-    "Be concise. Output only what is requested.",
-  ];
-  if (context.componentName) systemLines.push(`Context: assisting ${context.componentName}`);
-  if (context.params) systemLines.push(`Instruction: ${context.params}`);
-
-  const userLines: string[] = [];
-  if (context.command) userLines.push(`Command: \`${context.language} -c '${context.command}'\``);
-  if (context.exitCode !== 0) userLines.push(`Exit code: ${context.exitCode}`);
-  if (context.stderr) userLines.push(`Stderr:\n\`\`\`\n${context.stderr}\n\`\`\``);
-  if (context.stdout) userLines.push(`Output:\n\`\`\`\n${context.stdout}\n\`\`\``);
-
-  return [
-    { role: "system", content: systemLines.join("\n") },
-    { role: "user", content: userLines.join("\n\n") },
-  ];
-}
-```
-
-### 3.6 Modifier parsing
+### 3.5 Modifier parsing
 
 The info string is split on whitespace. The first token is the
 language. The remaining tokens are the modifier chain:
@@ -1081,7 +901,7 @@ function parseInfoString(infoString: string): ParsedInfoString {
 }
 ```
 
-### 3.7 What is the command?
+### 3.6 What is the command?
 
 The content of the code block is the command. The language determines
 how it is invoked:
@@ -1095,7 +915,7 @@ how it is invoked:
 
 Multi-line code blocks are passed as a single string to the `-c` flag.
 
-### 3.8 Examples of modifier chain execution
+### 3.7 Examples of modifier chain execution
 
 **`exec` alone** — `exec` runs the command via `durableExec`
 (one journal entry). stdout becomes the output.
@@ -1104,16 +924,10 @@ Multi-line code blocks are passed as a single string to the `-c` flag.
 result as usual. `silent` calls `next()` (so exec runs), then
 returns empty output. No extra journal entry from `silent`.
 
-**`sample exec`** — `exec` runs the command and journals the
-result (first journal entry). `sample` calls `next()` (so exec
-runs), then passes stdout to `durableSample` which journals the
-LLM response (second journal entry). The LLM's response becomes
-the output.
-
-**`silent sample exec`** — `exec` journals the command result.
-`sample` journals the LLM response. `silent` discards the output.
-Both journal entries are written; the document gets nothing. The
-LLM call still happens because `silent` wraps `sample` — it calls
+**`silent timeout[30s] exec`** — `exec` journals the command result.
+`timeout` cancels the block if it overruns. `silent` discards the
+output. The journal entry is still written; the document gets nothing.
+The inner chain still runs because `silent` wraps `timeout` — it calls
 `next()` which runs the entire inner chain before discarding.
 
 **`daemon exec`** — `daemon` is the outermost terminal modifier. It
@@ -1310,32 +1124,22 @@ Every generated eval module is prepended with standard imports:
 import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";
 import { when } from "@effectionx/converge";
 import { fetch } from "@effectionx/fetch";
-import { useContent, findFreePort, Sample, callLlamafile, callOllama, callAnthropic } from "@executablemd/core";
+import { useContent, Sample } from "@executablemd/core";
+import { findFreePort } from "@executablemd/runtime";
 ```
 
-These imports resolve through Deno's import map (`deno.json`). The
-`@executablemd/core` package re-exports executable.md-specific APIs
-from its root barrel (`core/mod.ts`).
+These imports resolve through Deno's import map (`deno.json`).
+`@executablemd/core` re-exports executable.md-specific APIs from its root
+barrel (`core/mod.ts`); `findFreePort` comes from `@executablemd/runtime`
+(and is also re-exported by `core/mod.ts`).
 
-#### `globals.ts`
-
-executable.md-specific APIs are re-exported from `globals.ts` for use in
-generated eval modules and function components:
-
-```typescript
-// globals.ts
-export { useContent } from "./src/content-context.ts";
-export { findFreePort } from "./src/find-free-port.ts";
-export { Sample } from "./src/sample-api.ts";
-export { callLlamafile } from "./src/sample/llamafile.ts";
-export { callOllama } from "./src/sample/ollama.ts";
-export { callAnthropic } from "./src/sample/anthropic.ts";
-```
+The exact list lives in the `STANDARD_IMPORTS` constant, which both
+compilers share (`src/deno-compiler.ts`, `src/temp-file-compiler.ts`).
 
 #### `findFreePort`
 
 `findFreePort` is available in eval blocks as a standard import
-(`@executablemd/core`). It is an Effection
+(`@executablemd/runtime`). It is an Effection
 `Operation<number>`. It binds a `node:net` TCP server to
 port 0 (OS-assigned), reads the port number, and closes the server.
 It uses Effection's structured concurrency primitives (`once` from
@@ -1516,9 +1320,10 @@ run but are absent from the diagnostic trace.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()` (data: URI), `EvalCtxKey`, `EvalContext`, `STANDARD_IMPORTS` |
+| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()` (data: URI), `EvalCtxKey`, `EvalContext` |
+| `src/deno-compiler.ts` | `useDenoCompiler()` — data: URI compiler middleware for Deno; owns `STANDARD_IMPORTS` |
+| `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `ContentCtx`, `ContentHandle`, `useContent()` — content slot access for function components |
-| `globals.ts` | Re-exports executable.md globals (`useContent`, `findFreePort`, `Sample`, `callLlamafile`, `callOllama`, `callAnthropic`) for generated eval modules and function components |
 | `test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
 | `src/eval-env.ts` | `EvalEnv`, `EvalEnvCtx`, `EvalScopeCtx`, `PersistFlagCtx` |
 | `src/eval-handler.ts` | `evalFactory` |
@@ -1526,11 +1331,8 @@ run but are absent from the diagnostic trace.
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
-| `src/modifiers/sample.ts` | `sampleFactory` — wrapping modifier for LLM sampling |
-| `src/sample/durable-sample.ts` | `durableSample()` — shared Workflow helper for journaled Sample Api calls |
-| `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` — inference HTTP utility |
-| `src/sample/ollama.ts` | `callOllama()` — Ollama inference HTTP utility |
-| `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
+| `src/sample-api.ts` | `Sample` Api definition (§3.4) — LLM middleware surface |
+| `runtime/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` (separate `runtime` workspace package) |
 | `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
@@ -2359,10 +2161,9 @@ function* expandSegments(
 }
 ```
 
-The modifier chain composition, handler registration, and
-`durableSample` are defined in §3.3–3.4. The expansion code above
-composes the chain from the info string and runs it via
-`composeModifierChain`.
+The modifier chain composition and handler registration are defined
+in §3.3. The expansion code above composes the chain from the info
+string and runs it via `composeModifierChain`.
 
 ### 6.2 Component expansion with cycle detection
 
@@ -3114,7 +2915,22 @@ scope.around(Sample, function* ([context], next) {
   if (context.model !== undefined && context.model !== model) {
     return yield* next(context);
   }
-  return yield* callLlamafile(baseUrl, model, context);
+
+  const messages = [];
+  if (context.system) {
+    messages.push({ role: "system", content: context.system });
+  }
+  messages.push({ role: "user", content: context.content });
+
+  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 2048 }),
+  })
+    .expect()
+    .json();
+
+  return result.choices[0].message.content;
 });
 ```
 
@@ -3160,9 +2976,10 @@ No journal entry.
 journals the result.
 
 **Block 4 — middleware install:**
-`callLlamafile` and `Sample` are standard imports in the generated
-eval module (via `@executablemd/core`, §4.2). The
-middleware closes over `baseUrl` and `model` at install time. Routing:
+`Sample` and `fetch` are standard imports in the generated
+eval module (via `@executablemd/core` and `@effectionx/fetch`, §4.2). The
+middleware closes over `baseUrl` and `model` at install time and issues the
+`/v1/chat/completions` request inline. Routing:
 if `context.model` matches the provider's model (or is unspecified),
 handle it; otherwise pass through via `next()`.
 
@@ -4257,24 +4074,6 @@ visible warning blocks, collect into a separate error report).
 | S12 | Repeated provider run | Eval, daemon, readiness, and HTTP calls execute again |
 | S13 | Interrupted provider run | Partial diagnostic trace is not accepted as resume input |
 | S14 | Multiple provider instances | Two provider siblings → two processes, different ports |
-
-### Tier U — `callLlamafile()` utility
-
-| # | Test | Verify |
-|---|------|--------|
-| U1 | Request sent to correct URL | `POST ${baseUrl}/v1/chat/completions` |
-| U2 | model in request body | Request JSON `model` field matches argument |
-| U3 | temperature and maxTokens in request body | Request JSON matches opts |
-| U4 | Default temperature is 0 | No opts → request body has `temperature: 0` |
-| U5 | Custom buildMessages used | Custom function's output appears in request messages |
-| U6 | Non-ok response throws via expect() | 500 from server → `response.expect()` throws with status in message |
-| U7 | Unexpected response shape throws | Missing `choices[0].message.content` → descriptive error |
-| U8 | Response content returned as string | Return value matches `choices[0].message.content` |
-| U9 | buildDefaultMessages includes command | Context.command appears in user message |
-| U10 | buildDefaultMessages includes stderr | Context.stderr appears in user message when non-empty |
-| U11 | buildDefaultMessages includes params | Context.params appears as "Instruction:" in system prompt |
-| U12 | buildDefaultMessages includes componentName | Context.componentName appears in system prompt |
-| U13 | Direct prompt mode | `stdout === command`, exitCode 0, no stderr → simplified prompt without exec analysis |
 
 ### Tier EO — eval output() function
 
