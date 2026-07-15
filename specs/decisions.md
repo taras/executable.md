@@ -136,8 +136,8 @@ See DEC-006 for the full rationale behind this signature change.
 
 Component resolution needs filesystem access (`runtime.stat()`).
 The spec says resolution runs inside `durableImportComponent`'s
-`createDurableOperation` body — the entire resolve+read+hash is a
-single journaled effect.
+`createDurableOperation` body, so resolve and read form a single journaled
+operation.
 
 ### Decision
 
@@ -151,7 +151,7 @@ The `durableImportComponent` function is a `Workflow` — it yields the
 ```
 Workflow context:          durableImportComponent
   yields DurableEffect:      createDurableOperation(desc, execute)
-    Operation context:         execute() — resolver, readTextFile, SHA-256
+    Operation context:         execute() — resolver, readTextFile
       yields Effect:             runtime.stat(), runtime.readTextFile(), etc.
 ```
 
@@ -164,16 +164,15 @@ Workflow context:          durableImportComponent
 
 ### Context
 
-`@effectionx/durable-streams` and `@effectionx/durable-effects` are
-installed from `pkg.pr.new` preview URLs (PR #179 and #180). These
-are pre-release and may change.
+`@effectionx/durable-streams` is maintained in this repository as an
+experimental implementation detail. Its API may change.
 
 ### Decision
 
-Import from these packages only in `src/run-document.ts` (the integration
-layer). All other modules (scanner, frontmatter, expand, interpolate,
-validate, render) have zero dependency on the durable packages. This
-means API changes in the preview packages only affect one file.
+Keep stream protocol integration in the execution boundary
+(`src/run-document.ts`, `src/eval-handler.ts`, and terminal effect handlers).
+All other modules (scanner, frontmatter, expand, interpolate, validate,
+render) have zero dependency on the stream package.
 
 The expansion engine accepts abstract `ComponentImporter` and
 `ModifierChainRunner` functions — it doesn't know about durable effects.
@@ -345,7 +344,7 @@ component pattern). Two approaches were considered:
 
 `output()` is a plain synchronous function. It mutates a block-local
 `outputRef` object. The output text is journaled alongside exports as
-`__output` in the `durableEval` result.
+`__output` in the eval operation result.
 
 **Why plain function:** Output is a synchronous side effect (setting a
 string value), not an async operation. Making it a generator would
@@ -353,9 +352,8 @@ require the block to be in generator mode just to set output, which is
 unnecessarily restrictive. A plain function keeps the API simple.
 
 **Why `__output` in exports:** Avoids a separate journal entry type for
-output text. The output naturally replays when `durableEval` restores
-the stored result. `__output` is extracted before merging into
-`env.values` to prevent namespace pollution.
+output text. `__output` is extracted before merging into `env.values` to
+prevent namespace pollution.
 
 ---
 
@@ -392,39 +390,9 @@ are correctly set regardless of the calling task.
 
 ---
 
-## DEC-010: `durableSample` extracted as shared helper
-
-**Status:** Decided  
-**Date:** 2026-03-11
-
-### Context
-
-The sample modifier and the Sample component both need to make
-journaled calls to the Sample Api. The original implementation
-inlined the `createDurableOperation` + `evalScope.eval()` logic in
-the sample modifier.
-
-### Decision
-
-Extracted `durableSample()` to `src/sample/durable-sample.ts` as a
-shared `Workflow<string>` helper. Both the sample modifier and future
-callers use this single implementation.
-
-`durableSample` returns `Workflow<string>` (not `Operation<string>`)
-because it yields `DurableEffect` via `createDurableOperation`.
-
-**Why the Sample component does NOT use `durableSample`:** The Sample
-component's eval block runs inside `durableEval`'s evaluator, which
-expects `Operation<Json>` yields. `durableSample` yields
-`DurableEffect`s which are incompatible. Instead, the Sample component
-calls `Sample.operations.sample()` directly — the entire eval block
-(including its output) is journaled by `durableEval`'s mechanism.
-
----
-
 ## DEC-011: Sample component props use empty-string defaults
 
-**Status:** Decided  
+**Status:** Decided
 **Date:** 2026-03-11
 
 ### Context
@@ -452,3 +420,5 @@ still doesn't add the key to validated props. Empty string is a
 legitimate default that ensures the key exists. The `|| undefined`
 conversion preserves the distinction between "not provided" and "empty"
 for provider routing (providers check `context.model !== undefined`).
+
+---

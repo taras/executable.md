@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Implementing agent
-**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (protocol-specification, effection-integration, DECISIONS), `@effectionx/durable-effects` (effect-types, guards), Divergence API (`lib/divergence.ts`), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
+**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (journal protocol and journaling), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
 
 ---
 
@@ -10,22 +10,22 @@
 
 An executable MDX document is a markdown file containing embedded JSX
 component invocations and annotated code blocks. The system treats each
-document as a durable workflow: text is emitted immediately, component
+document as an executable workflow: text is emitted immediately, component
 references are resolved from the file system and expanded recursively,
 and code blocks marked as executable are either run as subprocess
-commands via `durableExec`, evaluated in-process as Effection
-generator operations via `durableEval`, or spawned as long-running
+commands, evaluated in-process as Effection generator operations, or spawned as long-running
 background processes via the `daemon` modifier. The journal records
-every I/O operation so that execution survives crashes and replays
-from the journal on restart.
+operation journal entries as a diagnostic JSONL trace.
 
-The system is built entirely on the existing durable execution
-infrastructure — `createDurableOperation`, `durableExec`, `durableEval`,
-`durableGlob`, replay guards, and the Divergence API. The main
-additions are `durableImportComponent` (a durable effect that wraps
-the Resolve Api and runtime file read into a single journaled
-operation, with a custom `useImportComponentGuard` for staleness
-detection), the in-process evaluation system (source transform,
+`--journal` names a path that does not exist; the CLI creates it for the
+current run and fails rather than appending to or interpreting an existing
+trace.
+
+The execution boundary uses `createDurableOperation` from the internal
+`durable-streams` package to write structured journal entries. This is a
+journaling implementation detail, not a durability guarantee. The main
+features are component import (a journaled operation that wraps the Resolve
+Api and runtime file read), the in-process evaluation system (source transform,
 module compilation, binding environment, and eval scope for resource
 lifetime management — see §4), daemon process management (the
 `daemon` terminal modifier, eval binding interpolation, and the
@@ -95,9 +95,9 @@ The journal records:
 
 ```
 [0] yield root  { type: "import_component", name: "__root__" }
-    result: { status: "ok", value: { path: "README.md", content: "---\ntitle: ...", contentHash: "sha256:..." } }
+    result: { status: "ok", value: { path: "README.md", content: "---\ntitle: ..." } }
 [1] yield root  { type: "import_component", name: "Greeting" }
-    result: { status: "ok", value: { path: "components/Greeting.md", content: "---\nemoji: ...", contentHash: "sha256:..." } }
+    result: { status: "ok", value: { path: "components/Greeting.md", content: "---\nemoji: ..." } }
 [2] yield root  { type: "exec", name: "exec:ls ./src", command: ["bash", "-c", "ls ./src"] }
     result: { status: "ok", value: { exitCode: 0, stdout: "main.ts\nutils.ts\n", stderr: "" } }
 [3] close root  result: { status: "ok", value: "# My Project\n\n👋 Hello, world!\n\n..." }
@@ -105,11 +105,9 @@ The journal records:
 
 ### 1.2 Workspace-relative paths
 
-All paths stored in the journal are **relative to the workspace root**
+All paths stored in a diagnostic trace are **relative to the workspace root**
 (the current working directory when `runDocument` is called). This
-makes journals portable across machines and environments — a journal
-produced on one developer's machine replays correctly on another as
-long as the workspace structure is the same.
+makes traces easier to compare and avoids leaking absolute local paths.
 
 Runtime operations (`readTextFile`, `stat`, `exec`, `glob`) all resolve
 paths relative to cwd. Runtime helpers never see
@@ -306,9 +304,7 @@ function healSegment(text: string): string {
 ```
 
 Healing is a **runtime operation** — pure, synchronous, deterministic
-from its input. No journal entry. Runs on every execution (live and
-replay) because it operates on the text content, which is either
-fresh (live) or stored (replay, fed from journal).
+from its input. It produces no journal entry and runs on every execution.
 
 ---
 
@@ -488,8 +484,8 @@ function createExecFactory(): ModifierFactory {
 }
 ```
 
-**`eval`** — evaluates the code block in-process as an Effection
-generator operation via `durableEval`. Also a terminal handler. Unlike
+**`eval`** — evaluates the code block in-process as a journaled Effection
+generator operation. Also a terminal handler. Unlike
 `exec` (subprocess), `eval` executes code in the same Effection
 process, enabling direct access to live in-memory objects, native
 `yield*` of Effection operations, and shared state across blocks
@@ -519,9 +515,10 @@ export const evalFactory: ModifierFactory = (_params) =>
       Object.keys(env.values),
     );
 
-    const result = yield* durableEval(
-      `eval:${ctx.blockId}`,
-      function* (source, bindings) {
+    const bindings = serializeExports(env.values, transformed.imports);
+    const result = yield createDurableOperation(
+      { type: "eval", name: `eval:${ctx.blockId}`, language: ctx.language },
+      function* () {
         Object.assign(env.values, bindings);
         const fn = yield* compileBlock(source, transformed.userImports ?? []);
 
@@ -537,21 +534,16 @@ export const evalFactory: ModifierFactory = (_params) =>
 
         const exports = serializeExports(env.values, transformed.exports);
 
-        // Journal output text alongside exports so replay restores it
+        // Record output text alongside exports.
         if (outputRef.text) {
           (exports as Record<string, unknown>).__output = outputRef.text;
         }
 
         return exports as unknown as Json;
       },
-      {
-        source: transformed.code,
-        language: ctx.language,
-        bindings: serializeExports(env.values, transformed.imports),
-      },
     );
 
-    // On replay, restore serializable exports from the journal
+    // Merge serializable exports into the current environment.
     if (result.value && typeof result.value === "object") {
       const restored = result.value as Record<string, unknown>;
       // Extract __output before merging into env
@@ -594,7 +586,7 @@ and signals to readers that this block runs a command.
 | Journal entry | Yes — stdout/stderr/exitCode | No |
 | Crash detection | Via non-zero exit code in result | Via `daemon()` from `@effectionx/process` throwing |
 | Lifetime | Until command exits | Until component scope closes |
-| Replay behavior | Returns stored result, no subprocess | Spawns fresh subprocess every run |
+| Repeated-run behavior | Spawns a fresh subprocess every run | Spawns a fresh subprocess every run |
 
 ```typescript
 import { daemon } from "@effectionx/process";
@@ -643,14 +635,9 @@ throws with a descriptive error. This error propagates to the
 to the component expansion, failing it before any child blocks are
 attempted. The error surfaces as an `ErrorSegment`.
 
-**Replay behavior.** `daemon` is not durable. It runs on every
-document execution, including full replay runs. On a full replay,
-all `sample` journal entries are present and returned directly — the
-daemon's endpoint is never called. The process starts, runs for the
-duration of expansion, and is terminated when the component scope
-closes — without serving a single request. This is harmless overhead;
-the alternative (conditional daemon startup based on journal state)
-would couple the modifier to the durable protocol.
+**Repeated-run behavior.** `daemon` runs on every document execution. The
+process starts, runs for the duration of expansion, and is terminated when
+the component scope closes.
 
 #### Built-in wrapping handlers
 
@@ -1010,10 +997,8 @@ Effection-native `Response` — `response.json()` is `Operation<T>`, not
 `Promise<T>`. The entire request/response chain composes with `yield*` and
 cancellation flows through structured concurrency automatically.
 
-**Why not `durableFetch`:** `durableFetch` journals its result. The HTTP
-request to the inference server must not be journaled — `durableSample` already
-journals the complete LLM response. Double-journaling would cause divergence on
-replay.
+Each CLI invocation makes the inference request once. Its result may be
+included in the enclosing operation's diagnostic journal entry.
 
 #### Default message builder
 
@@ -1136,13 +1121,6 @@ ignores `next` entirely — `exec` is never invoked. `daemon` forks the
 command as a background process into the eval scope. No journal entry.
 The process lives until the component scope closes.
 
-Future modifiers (not yet specified):
-
-| Modifier | Type | Behavior |
-|----------|------|----------|
-| `stderr` | Wrapping | Includes stderr in output |
-| `ignore-error` | Wrapping | Converts non-zero exit codes to success |
-
 ---
 
 ## 4. In-process evaluation
@@ -1151,7 +1129,7 @@ Eval blocks run JavaScript **in-process** as Effection generator operations.
 Unlike `exec` blocks (which run shell commands in a subprocess), `eval`
 blocks execute in the same Effection process. This section describes the
 architecture: source transform, module compilation, binding environment,
-eval scope, and durable replay.
+eval scope, and diagnostic journaling.
 
 ### 4.1 Source transform
 
@@ -1292,7 +1270,7 @@ function serializeExports(
     }
     // Non-serializable values silently omitted.
     // They remain in env.values as live references during this run
-    // but are absent from the journal and not restored on replay.
+    // but are absent from the diagnostic journal.
   }
   return result;
 }
@@ -1397,10 +1375,9 @@ export function* findFreePort(): Operation<number> {
 }
 ```
 
-The returned port number is a JSON-serializable primitive. When used
-in an eval block, it is exported to `env.values` and journaled as
-part of the `durableEval` result. On replay, the stored value is
-restored to `env.values` without calling `findFreePort()` again.
+The returned port number is a JSON-serializable primitive. When used in an
+eval block, it is exported to `env.values` and included in that block's
+diagnostic result. Each new run calls `findFreePort()` again.
 
 There is a small race window between closing the server and the
 caller binding the port — acceptable in practice, since daemon
@@ -1458,9 +1435,7 @@ The env preamble (`const { x, y } = env;`) is already in the
 `transformedBodyCode` — generated by `transformBlock()`.
 `compileBlock` does NOT add a second preamble.
 
-On replay, `durableEval` returns the stored result directly — the
-`compileBlock` call inside the callback is never reached. The
-dynamic import only happens during live execution.
+Each run compiles and imports the current transformed source.
 
 ### 4.3 Binding environment
 
@@ -1515,39 +1490,26 @@ processor. Instead:
 4. Resources spawned during that execution are retained until the
    eval scope is destroyed (when component expansion completes)
 
-### 4.5 Durable replay
+### 4.5 Eval journal entries
 
 #### What is journaled
 
-`evalFactory` wraps execution in `durableEval`. Journal entry shape:
+`evalFactory` wraps execution in `createDurableOperation`. Diagnostic journal
+shape:
 
 ```json
 { "type": "eval", "name": "eval:root:0", "language": "js" }
 
 { "status": "ok", "value": {
     "value": { "port": 4321, "config": { "debug": true } },
-    "sourceHash": "sha256:abc123...",
-    "bindingsHash": "sha256:def456..."
   }
 }
 ```
 
 `value.value` contains only the JSON-serializable subset of exports.
 Non-serializable bindings (functions, class instances, live objects) are
-omitted — they remain in `env.values` as live references during the
-current run but are absent from the journal and not restored on replay.
-
-#### Staleness detection
-
-The code freshness guard detects when source or bindings have changed
-since the last run. If a hash mismatch is found, `StaleInputError` is
-raised before replay of that block begins.
-
-#### `persist` during replay
-
-On replay, `durableEval` returns the stored result directly — the
-block's generator body is never entered. `persist` is a transparent
-no-op: no `evalScope.eval()` call is made, no resources are retained.
+omitted. They remain in `env.values` as live references during the current
+run but are absent from the diagnostic trace.
 
 ### 4.6 File locations
 
@@ -1576,7 +1538,6 @@ no-op: no `evalScope.eval()` call is made, no resources are retained.
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
 | `cli/src/cli.ts` | CLI entrypoint (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
 | `cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
-| `cli/src/load-journal.ts` | `loadJournal()` — reads/sanitizes JSONL journal for replay |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
@@ -1623,9 +1584,9 @@ itself won't pollute the journal.
 
 #### Journaling
 
-The output text is journaled alongside exports as `__output` in the
-`durableEval` result. On replay, `__output` is extracted before
-merging exports into `env.values`, and `outputRef.text` is restored:
+The output text is journaled alongside exports as `__output` in the eval entry.
+It is extracted before exports are merged into `env.values` in the current
+run:
 
 ```json
 { "type": "eval", "name": "eval:root:0", "language": "js" }
@@ -1634,8 +1595,6 @@ merging exports into `env.values`, and `outputRef.text` is restored:
       "port": 4321,
       "__output": "This text appears in the document"
     },
-    "sourceHash": "sha256:abc123...",
-    "bindingsHash": "sha256:def456..."
   }
 }
 ```
@@ -1886,7 +1845,6 @@ export interface FunctionComponentDefinition {
   path: string;
   inputs: Record<string, InputDefinition>;
   fn: FunctionComponent;
-  contentHash: string;
 }
 ```
 
@@ -1936,10 +1894,9 @@ the `.md` file wins. This ensures backward compatibility — existing
 markdown components are not shadowed by TypeScript files.
 
 **Journaling.** Function components are imported via
-`durableImportComponent`, which reads the file content and hashes it.
-On replay, the stored content hash is checked for staleness. The
-function component is re-imported via `import()` on every run
-(including replay) because the function itself is not serializable.
+`durableImportComponent`, which journals the resolved path and current file
+content. The function component is imported from the current file on every
+run because the function itself is not serializable.
 
 ### 5.2 Resolution (Resolve Api)
 
@@ -2009,69 +1966,25 @@ function* useDirectoryResolver(
 }
 ```
 
-#### Durable glob resolver middleware
-
-For large component trees, middleware can pre-scan directories with
-`durableGlob` so that the scan itself is journaled. Individual
-`resolve()` calls become pure map lookups:
-
-```typescript
-function* useDurableGlobResolver(
-  componentDirs: string[],
-): Operation<void> {
-  const allComponents = new Map<string, string>();
-  for (const dir of componentDirs) {
-    const globResult = yield* durableGlob(`resolve:${dir}`, {
-      baseDir: dir,
-      include: ["**/*.md"],
-    });
-    for (const match of globResult.matches) {
-      const name = match.path
-        .replace(/\.md$/, "")
-        .replace(/\/index$/, "")
-        .replace(/\//g, ".");
-      allComponents.set(name, join(dir, match.path));
-    }
-  }
-
-  const scope = yield* useScope();
-  scope.around(Resolve, {
-    *resolve([name], next): Operation<ResolveResult> {
-      const path = allComponents.get(name);
-      if (path) return { path };
-      return yield* next(name);
-    },
-  });
-}
-```
-
-With `useGlobContentGuard` installed, replay detects when files are
-added or removed from component directories.
-
 ### 5.3 Import: `durableImportComponent`
 
-Import is a single durable effect that resolves a component name,
-reads the file, and computes its content hash. The Resolve Api runs
-inside the operation body during live execution. On replay, the
-entire stored result is returned — neither the Api nor the filesystem
-is touched.
+Import is a single journaled operation that resolves a component name and
+reads the file during a CLI invocation.
 
-Parsing the stored content into frontmatter and segments is a
-**runtime operation** that runs after the durable effect returns,
-both live and on replay. It's deterministic from the content, so it
-doesn't need to be in the journal.
+Parsing the current content into frontmatter and segments is a **runtime
+operation** that runs after the journaled operation returns. It is
+deterministic from the content, so it needs no separate journal entry.
 
 ```typescript
 interface ImportResult {
   path: string;           // Workspace-relative, from Resolve Api
   content: string;        // Raw file content
-  contentHash: string;    // SHA-256 of content
 }
 
 function* durableImportComponent(
   name: string,
 ): Workflow<ComponentDefinition> {
-  // Single durable effect: resolve + read + hash
+  // Single durable effect: resolve + read
   const result = (yield createDurableOperation<ImportResult>(
     { type: "import_component", name },
     function* () {
@@ -2081,9 +1994,8 @@ function* durableImportComponent(
       // Read file via runtime
       const readTextFile = API.Fs.operations.readTextFile;
       const content = yield* readTextFile(path);
-      const contentHash = yield* computeSHA256(content);
 
-      return { path, content, contentHash } as ImportResult;
+      return { path, content } as ImportResult;
     },
   )) as ImportResult;
 
@@ -2097,7 +2009,6 @@ function* durableImportComponent(
       path: result.path,
       inputs: mod.inputs ?? {},
       fn: mod.default,
-      contentHash: result.contentHash,
     };
   }
 
@@ -2112,7 +2023,6 @@ function* durableImportComponent(
     meta,
     inputs,
     bodySegments,
-    contentHash: result.contentHash,
   };
 }
 ```
@@ -2123,71 +2033,11 @@ function* durableImportComponent(
 { "type": "import_component", "name": "Greeting" }
 { "status": "ok", "value": {
     "path": "components/Greeting.md",
-    "content": "---\nemoji: 👋\n...",
-    "contentHash": "sha256:abc..." } }
+    "content": "---\nemoji: 👋\n..." } }
 ```
 
-One journal entry per component. The entry captures both *which file
-was found* (path) and *what was in it* (content + hash). On replay,
-the stored content is parsed at runtime to produce the same
-`ComponentDefinition`.
-
-Staleness is detected by a custom `useImportComponentGuard` (not
-the generic `useFileContentGuard`, which expects a `path` field in
-the description — `import_component` descriptions only have `name`
-because the path isn't known until the Resolve Api runs inside the
-operation).
-
-The guard reads the path and contentHash from the stored *result*:
-
-```typescript
-function* useImportComponentGuard(): Operation<void> {
-  const scope = yield* useScope();
-  const readTextFile = API.Fs.operations.readTextFile;
-  const cache = new Map<string, string>();
-
-  scope.around(ReplayGuard, {
-    *check([event], next) {
-      if (event.description.type === "import_component") {
-        const storedPath = (event.result.status === "ok"
-          ? (event.result.value as ImportResult)?.path
-          : undefined) as string | undefined;
-        if (storedPath && !cache.has(storedPath)) {
-          const content = yield* readTextFile(storedPath);
-          const currentHash = yield* computeSHA256(content);
-          cache.set(storedPath, currentHash);
-        }
-      }
-      return yield* next(event);
-    },
-    decide([event], next) {
-      if (event.description.type === "import_component") {
-        const result = event.result.status === "ok"
-          ? event.result.value as ImportResult
-          : undefined;
-        if (result) {
-          const currentHash = cache.get(result.path);
-          if (currentHash && currentHash !== result.contentHash) {
-            return {
-              outcome: "error",
-              error: new StaleInputError(
-                `Component changed: ${event.description.name} ` +
-                `at ${result.path}`
-              ),
-            };
-          }
-        }
-      }
-      return next(event);
-    },
-  });
-}
-```
-
-This guard follows the same two-phase pattern as `useFileContentGuard`
-but reads from `result.value.path` and `result.value.contentHash`
-instead of `description.path`. It composes with other guards via the
-standard middleware chain.
+One journal entry per component. The entry captures both *which file was found*
+(path) and *what was in it* (content) for current-run diagnostics.
 
 ```typescript
 interface InputDefinition {
@@ -2204,7 +2054,6 @@ interface ComponentDefinition {
   meta: Record<string, unknown>;            // Resolved meta values
   inputs: Record<string, InputDefinition>;  // Declared input interface
   bodySegments: Segment[];                  // Parsed body (after frontmatter)
-  contentHash: string;                      // From import result
 }
 ```
 
@@ -2287,18 +2136,11 @@ function inferType(value: unknown): InputDefinition["type"] {
 }
 ```
 
-On replay, `durableImportComponent` feeds the stored content from
-the journal. Parsing re-runs at runtime on the stored content,
-producing the same segments deterministically. If
-`useImportComponentGuard` is installed, it re-reads the file and
-compares hashes before replay starts — if the file changed,
-`StaleInputError` halts replay.
-
 ### 5.4 The root document is a component
 
 The entry point treats the root document through the same import
-pipeline as any component. This gives it hash tracking, replay guard
-staleness detection, and uniform error handling for free.
+pipeline as any component. This gives it uniform resolution, parsing, and
+error handling.
 
 ```typescript
 function* documentWorkflow(docPath: string): Workflow<string> {
@@ -2361,8 +2203,8 @@ expansion calls (§5.4, §9.10).
 
 Previously, `result.length` was used as the `blockId` index. With
 per-root-segment emission, each `expandSegments` call would reset the
-counter, breaking journal replay matching. The mutable counter fixes
-this:
+counter, producing duplicate diagnostic operation names. The mutable counter
+fixes this:
 
 ```typescript
 interface BlockCounter {
@@ -2550,7 +2392,7 @@ function* expandComponent(
     }];
   }
 
-  // Import — single durable effect (resolve + read + hash)
+  // Import — single durable effect (resolve + read)
   const definition = yield* durableImportComponent(name);
 
   // Extract reserved props before validation.
@@ -2638,9 +2480,8 @@ function* expandComponent(
 ```
 
 Cycle detection and depth limiting are runtime operations — no journal
-entries. They are deterministic from the component dependency graph,
-which is reconstructed identically during replay because the same
-components are imported in the same order.
+entries. They are deterministic from the component dependency graph read in
+the current run.
 
 ### 6.3 Content slots: `<Content />` and `<Content slot="name" />`
 
@@ -3085,8 +2926,8 @@ Expression props (`count={42}`, `data={{ key: "value" }}`) are parsed
 by the JSX boundary scanner's expression state tracking (brace depth
 counting). The scanner extracts the raw expression string; evaluation
 of the expression to a JSON value is handled during segment
-construction. Only JSON-serializable values are supported — function
-props are not (they can't survive replay).
+construction. Only JSON-serializable values are supported; function props are
+outside the component contract.
 
 #### Components with no inputs
 
@@ -3181,11 +3022,9 @@ function interpolateEvalBindings(
 }
 ```
 
-This is a runtime operation — deterministic from `env.values` and
-the content. It produces no journal entry. On replay,
-`env.values` is populated from the stored `durableEval` result (§4.5)
-before any subsequent blocks execute, so interpolation produces the
-same substitutions as the original run.
+This is a runtime operation, deterministic from the current `env.values` and
+content. It produces no journal entry. Preceding eval blocks populate the
+environment before subsequent blocks are interpolated.
 
 **Escaping:** `\{name}` is preserved as literal `{name}`. The
 `interpolateEvalBindings` function protects escaped braces via a
@@ -3195,13 +3034,11 @@ them afterward. This is consistent with how `interpolate()` handles
 
 #### Serialization constraint
 
-Only JSON-serializable values in `env.values` are stored in the
-journal (§4.1). Non-serializable values (functions, class instances)
-remain in `env.values` as live references during the current run but
-are absent on replay. For eval binding interpolation purposes this is
-acceptable: values used in `{name}` substitutions are almost always
-primitives (port numbers, URLs, strings) which are JSON-serializable
-and round-trip correctly through the journal.
+Only JSON-serializable values in `env.values` are stored in the diagnostic
+journal entry (§4.1). Non-serializable values (functions, class instances) remain in
+`env.values` as live references during the current run. Values used in
+`{name}` substitutions are normally primitives such as port numbers, URLs,
+and strings.
 
 ### 6.7 Provider component pattern
 
@@ -3309,8 +3146,7 @@ capture step in the component body. It is consistent with how
 
 **Block 1 — resource allocation:**
 `findFreePort()` is available as a VM global. The eval block exports
-`port` and `baseUrl` to `env.values`. `durableEval` journals the
-result.
+`port` and `baseUrl` to `env.values`. The eval operation journals the result.
 
 **Block 2 — daemon spawn:**
 `{port}` is substituted from `env.values` into the command content
@@ -3320,7 +3156,7 @@ command is forked into the eval scope. Control returns immediately.
 No journal entry.
 
 **Block 3 — readiness:**
-`when` polls with retries until the server responds. `durableEval`
+`when` polls with retries until the server responds. The eval operation
 journals the result.
 
 **Block 4 — middleware install:**
@@ -3491,12 +3327,8 @@ output(sampleResult);
 1. `renderChildren()` expands and renders the component's children.
    For self-closing invocations, this returns an empty string.
 2. `content` falls back to the `prompt` prop if children are empty.
-3. `Sample.operations.sample()` is called directly from the eval
-   block — the eval block runs inside `durableEval`'s evaluator, and
-   `durableSample` is NOT used here because it yields `DurableEffect`s
-   which are incompatible with the eval block's `Operation` context.
-   Instead, the entire eval block (including its output) is journaled
-   by `durableEval`'s mechanism.
+3. `Sample.operations.sample()` is called directly from the eval block. The
+   enclosing eval operation journals the block result, including output.
 4. `output(sampleResult)` sets the block's rendered output to the
    LLM response.
 
@@ -3511,109 +3343,15 @@ All three props are optional with empty-string defaults:
 - **`params`** — Additional instruction params for the Sample Api
   middleware.
 
-#### Replay behavior of the provider pattern
+#### Repeated-run behavior of the provider pattern
 
-On full replay (all `eval` and `sample` journal entries present):
-
-- Block 1 (`findFreePort`): `durableEval` returns the stored result.
-  `port` and `baseUrl` are restored to `env.values`.
-  `findFreePort()` is not called.
-- Block 2 (`daemon exec`): `daemon` runs regardless — the process
-  starts and binds to the stored port. No journal entry.
-- Block 3 (`when`): `durableEval` returns the stored result
-  immediately. No polling.
-- `<children />`: all durable effects replay from the journal.
-- Component closes: daemon terminated.
-
-Total overhead on full replay: one daemon process started and
-terminated after children finish replaying.
+Every run allocates a current free port, starts the daemon, performs readiness
+polling and child operations, then terminates the daemon when the component
+closes. A previous diagnostic trace does not suppress any of these actions.
 
 ---
 
-## 7. Staleness and replay
-
-### 7.1 File staleness via `useImportComponentGuard`
-
-The custom `useImportComponentGuard` (defined in §5.3) handles
-staleness detection for `import_component` effects. It reads
-`result.value.path` and `result.value.contentHash` from stored
-journal entries, re-reads those files, and compares hashes.
-
-When installed before `durableRun`, it:
-
-1. **Check phase** (before replay): For each `import_component` event
-   in the journal, re-reads the file at the stored path and computes
-   its current SHA-256 hash. Caches the result.
-
-2. **Decide phase** (during replay): Compares the cached current hash
-   against the stored `contentHash`. If they differ, returns
-   `{ outcome: "error", error: StaleInputError(...) }`.
-
-If any component file changed since the last run, replay halts with
-`StaleInputError` before the workflow even starts executing.
-
-### 7.2 Staleness policy via middleware
-
-The default behavior (halt on any stale file) is correct for
-production. For development workflows, users may want different
-policies. These compose via existing middleware:
-
-**Re-execute from stale point.** Install Divergence middleware that
-responds to `StaleInputError` by switching to live execution:
-
-```typescript
-function* devMode(): Operation<void> {
-  yield* useImportComponentGuard();
-
-  const scope = yield* useScope();
-  scope.around(Divergence, {
-    decide([info], next) {
-      if (info.kind === "description-mismatch") {
-        return { type: "run-live" };
-      }
-      return next(info);
-    },
-  });
-
-  yield* durableRun(() => documentWorkflow(docPath), { stream });
-}
-```
-
-**Skip staleness checks entirely.** Don't install the guard. Replay
-uses stored content regardless of current file state. Useful for
-"show me what this produced last time."
-
-**Selective staleness.** Install a custom guard that only checks
-certain component names or paths.
-
-### 7.3 What happens when a file changes
-
-**Scenario: component file changed, `useImportComponentGuard` installed.**
-
-1. `durableRun` reads events from the journal.
-2. Guard's check phase re-reads files at stored paths, computes hashes.
-3. Guard's decide phase finds hash mismatch for the changed component.
-4. `StaleInputError` raised — replay halts.
-5. Caller catches the error and starts a new execution (new stream).
-
-**Scenario: component file changed, no guard installed.**
-
-1. Replay proceeds using stored file content from the journal.
-2. Expansion produces the same output as the previous run.
-3. The changed file is invisible — the stored content is authoritative.
-
-**Scenario: new component added to document, file doesn't exist in journal.**
-
-1. Replay proceeds normally through existing journal entries.
-2. When the new `<NewComponent />` is encountered, there is no journal
-   entry for its `durableImportComponent`. This is the replay-to-live
-   transition — the effect executes live (resolves, reads, hashes),
-   records a new journal entry.
-3. Execution continues with the new component expanded.
-
----
-
-## 8. Entry point
+## 7. Entry point
 
 ### 8.1 `runDocument`
 
@@ -3627,9 +3365,6 @@ interface RunDocumentOptions {
 
   /** Component search directories (default: ["./components", "./"]) */
   componentDirs?: string[];
-
-  /** Install file content guard (default: true) */
-  freshness?: boolean;
 
   /** Custom modifier factories to register alongside built-ins. */
   modifiers?: Record<string, ModifierFactory>;
@@ -3653,7 +3388,6 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
     stream,
     runtime,
     componentDirs = ["./components", "./"],
-    freshness = true,
     modifiers: customModifiers = {},
   } = options;
 
@@ -3663,15 +3397,11 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
   // Create the output channel — internal to runDocument.
   const channel = createChannel<string, string>();
 
-  // Spawn the execution scope. All durable state lives inside this
-  // spawned task: runtime API middleware, eval scope, replay guards,
+  // Spawn the execution scope. Runtime state lives inside this
+  // spawned task: runtime API middleware and eval scope,
   // EMA→channel bridge. The channel and workflow share this scope;
   // scope teardown cancels the producer and closes the channel.
   yield* spawn(function* () {
-    // Install replay guard
-    if (freshness) {
-      yield* useImportComponentGuard();
-    }
 
     // Install resolver middleware — maps __root__ to docPath,
     // then falls through to directory resolver for components
@@ -3690,9 +3420,7 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
     const evalCtx = createEvalContext();
     yield* EvalCtxKey.set(evalCtx);
 
-    // Create eval scope — MUST be created before durableRun (§4.4).
-    // The channel processor task and the sender inside durableEval
-    // must share an ancestor scope outside the durable execution boundary.
+    // Create eval scope before the journaled document workflow (§4.4).
     const evalScope = yield* resource(useEvalScope());
     yield* EvalScopeCtx.set(evalScope);
 
@@ -3992,7 +3720,7 @@ Given a document:
 
 The user sees progress incrementally at root-segment granularity.
 
-### 9.9 Durable/ephemeral boundary
+### 9.9 Recorded/ephemeral boundary
 
 `output()` calls are wrapped in `ephemeral()` inside `documentWorkflow`:
 
@@ -4000,17 +3728,16 @@ The user sees progress incrementally at root-segment granularity.
 yield* ephemeral(output(text));
 ```
 
-This bridges from the `Workflow` (durable) context to plain `Operation`
-(non-durable) context. Output emission is a derived side effect — the
-text comes from already-journaled expansion results. Journaling `output()`
-calls would cause double-journaling and replay divergence.
+This bridges from the journaled `Workflow` context to plain `Operation`
+context. Output emission is a derived side effect; journaling `output()` calls
+would add redundant entries.
 
 All middleware and side effects triggered by `output()` (normalization,
 formatting, channel send) execute on the ephemeral side. No durable state
 capture occurs in the output pipeline.
 
 The entire workflow runs in a `spawn()` inside `runDocument`. The channel
-and all execution state (runtime API middleware, eval scope, replay guards,
+and all execution state (runtime API middleware and eval scope,
 EMA→channel bridge) share this spawned scope. The consumer
 (`forEach`/`collect` on `execution.output`) runs in the **caller's**
 scope. This cross-boundary communication is safe because scope teardown
@@ -4025,8 +3752,8 @@ the caller as part of the `DocumentExecution` handle.
 #### `blockId` counter
 
 `expandSegments` uses `result.length` as the `blockId` index. Calling
-it once per root segment resets the counter, breaking journal replay
-matching. See §6.1 for the fix: a mutable counter threaded through the
+it once per root segment resets the counter, producing duplicate diagnostic
+operation names. See §6.1 for the fix: a mutable counter threaded through the
 expansion context.
 
 #### Sub-segment streaming
@@ -4059,7 +3786,6 @@ core/src/
 cli/src/
   cli.ts                  CLI entrypoint with forEach stream consumption
   file-stream.ts          JSONL-backed DurableStream
-  load-journal.ts         Journal file loading/sanitization
 ```
 
 ### 9.12 Dependencies
@@ -4076,15 +3802,15 @@ for the Api, `createChannel` from Effection, `forEach` from
 
 ### 10.1 Effect vocabulary for MDX execution
 
-All effects use existing durable effect types from
-`@effectionx/durable-effects` except `import_component`, which is
-new to the MDX execution layer.
+The execution boundary journals the following operation descriptions through
+`@executablemd/durable-streams`. These are diagnostic journal-entry types, not a
+public replay contract.
 
 | Operation | Effect type | Effect name | Notes |
 |-----------|------------|-------------|-------|
-| Import component | `import_component` | `{ComponentName}` | path + content + contentHash in result |
+| Import component | `import_component` | `{ComponentName}` | path + content in result |
 | Execute code block | `exec` | `exec:{command_preview}` | Command array in description, stdout/stderr/exitCode in result |
-| Evaluate code block | `eval` | `eval:{blockId}` | source + language + bindings in description; serializable exports + hashes in result (§4.5) |
+| Evaluate code block | `eval` | `eval:{blockId}` | language in description; serializable exports in result (§4.5) |
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 
@@ -4094,44 +3820,27 @@ With the default directory resolver:
 
 ```
 [0] yield  root  { type: "import_component", name: "__root__" }
-    result: { status: "ok", value: { path: "./README.md", content: "---\ntitle: ...", contentHash: "sha256:aaa..." } }
+    result: { status: "ok", value: { path: "./README.md", content: "---\ntitle: ..." } }
 
 [1] yield  root  { type: "import_component", name: "Header" }
-    result: { status: "ok", value: { path: "./components/Header.md", content: "---\n...", contentHash: "sha256:bbb..." } }
+    result: { status: "ok", value: { path: "./components/Header.md", content: "---\n..." } }
 
 [2] yield  root  { type: "import_component", name: "Footer" }
-    result: { status: "ok", value: { path: "./components/Footer.md", content: "...", contentHash: "sha256:ccc..." } }
+    result: { status: "ok", value: { path: "./components/Footer.md", content: "..." } }
 
 [3] yield  root  { type: "exec", name: "exec:date +%Y", command: ["bash", "-c", "date +%Y"], timeout: 30000 }
     result: { status: "ok", value: { exitCode: 0, stdout: "2026\n", stderr: "" } }
 
 [4] yield  root  { type: "eval", name: "eval:root:0", language: "js" }
-    result: { status: "ok", value: { value: { port: 4321 }, sourceHash: "sha256:ddd...", bindingsHash: "sha256:eee..." } }
+    result: { status: "ok", value: { value: { port: 4321 } } }
 
 [5] close  root  result: { status: "ok", value: "...rendered output..." }
 ```
 
-With the durable glob resolver middleware (`useDurableGlobResolver`),
-the journal also includes glob entries before the first import:
-
-```
-[0] yield  root  { type: "glob", name: "resolve:./components", baseDir: "./components", include: ["**/*.md"] }
-    result: { status: "ok", value: { matches: [...], scanHash: "sha256:..." } }
-
-[1] yield  root  { type: "import_component", name: "__root__" }
-    ...
-```
-
-The glob entry is protected by `useGlobContentGuard` — if files are
-added to or removed from the components directory between runs,
-replay halts with `StaleInputError`.
-
 ### 10.3 Sequential coroutine IDs
 
 In the basic sequential model, all effects run under the `root`
-coroutine ID. When parallel expansion is introduced (via `durableAll`
-for independent sibling components), child coroutine IDs follow the
-standard scheme: `root.0`, `root.1`, etc.
+coroutine ID.
 
 ---
 
@@ -4189,47 +3898,7 @@ visible warning blocks, collect into a separate error report).
 
 ---
 
-## 12. Parallel expansion (future)
-
-When a document contains multiple independent component invocations at
-the same level, they can be expanded concurrently via `durableAll`:
-
-```typescript
-// Future: parallel expansion of independent siblings
-function* expandSegmentsParallel(
-  segments: Segment[],
-  ...
-): Workflow<Segment[]> {
-  // Group consecutive components that don't depend on each other
-  const groups = groupIndependentComponents(segments);
-
-  const results: Segment[] = [];
-  for (const group of groups) {
-    if (group.type === "parallel") {
-      const expanded = yield* durableAll(
-        group.components.map((comp) =>
-          function* () {
-            return yield* expandComponent(comp.name, comp.props, ...);
-          }
-        ),
-      );
-      results.push(...expanded.flat());
-    } else {
-      results.push(...yield* expandSegments([group.segment], ...));
-    }
-  }
-  return results;
-}
-```
-
-This is additive — the sequential model is correct and complete. The
-parallel model is an optimization that produces the same output (the
-journal records the same effects, just with child coroutine IDs
-instead of all under `root`).
-
----
-
-## 13. Test plan
+## 12. Test plan
 
 ### Tier A — Boundary scanner
 
@@ -4263,24 +3932,19 @@ instead of all under `root`).
 
 | # | Test | Verify |
 |---|------|--------|
-| B1 | `durableImportComponent` golden run | Single `import_component` entry with path + content + contentHash |
-| B2 | `durableImportComponent` replay | Stored result returned, no Api call, no file read |
-| B3 | Replay + runtime parsing | Stored content parsed to same meta/inputs/segments |
+| B1 | `durableImportComponent` golden run | Single `import_component` entry with path + content |
+| B2 | `durableImportComponent` replay | Stored result is returned without a file read |
+| B3 | Runtime parsing | Current content parsed to meta/inputs/segments |
 | B4 | Import with simple frontmatter | `meta` correctly parsed, keys except `inputs` |
 | B5 | Import with typed meta | `meta` key with type definitions, defaults resolved |
 | B6 | Import with inputs (shorthand) | `greeting: Hello` → InputDefinition with type string, default "Hello" |
 | B7 | Import with inputs (full) | `name: { type: string, required: true }` → InputDefinition |
 | B8 | Import with inputs (null shorthand) | `name: null` → required, type any, no default |
 | B9 | Import missing component | Resolve Api throws, error propagated |
-| B10 | Stale import (guard installed) | File changed → StaleInputError from `useImportComponentGuard` |
-| B11 | Stale import (no guard) | Replay uses stored content silently |
 | B12 | Root document as component | `__root__` import, same journal shape |
 | B13 | Dotted name resolution | `Ns.Sub` → `components/Ns/Sub.md` |
 | B14 | No inputs key | Component accepts no props, `inputs` is empty record |
 | B15 | Default resolver middleware | Resolves via `runtime.stat` probe in search path order |
-| B16 | Durable glob resolver middleware | `durableGlob` journals directory scan, resolve is a map lookup |
-| B17 | Durable glob resolver replay | Glob replayed from journal, no filesystem scan |
-| B18 | Durable glob resolver + `useGlobContentGuard` | File added to components dir → StaleInputError |
 | B19 | Resolver middleware composition | Custom alias middleware + directory resolver |
 
 ### Tier C — Expansion and prop validation
@@ -4324,14 +3988,14 @@ instead of all under `root`).
 | # | Test | Verify |
 |---|------|--------|
 | D1 | `bash exec` golden run | `execHandler` runs, stdout in output, journal has exec entry |
-| D2 | Exec replay | Command not re-executed, stored stdout used |
+| D2 | Exec repeated run | Command executes again and current stdout is used |
 | D3 | Non-zero exit code | ErrorSegment in output |
 | D4 | Multi-line command | Full script passed to `-c` |
 | D5 | `python exec` | `python -c` invocation |
 | D6 | `bash silent exec` | Chain: silent wraps exec. Exec journals. Silent returns empty output |
-| D7 | `silent exec` replay | Still produces empty output from stored result |
+| D7 | `silent exec` repeated run | Command executes again and output remains empty |
 | D8 | `bash sample exec` golden run | Chain: sample wraps exec. Two journal entries (exec + sample) |
-| D9 | `bash sample exec` replay | Neither command nor LLM called, stored LLM response in output |
+| D9 | `bash sample exec` repeated run | Command and LLM are called again |
 | D10 | `bash silent sample exec` | All three handlers compose. Both journal entries written, output empty |
 | D11 | `sample` without Sample Api middleware | Clear error from core Api about missing middleware |
 | D12 | `sample=brief` passes params to handler | SampleContext.params is "brief" |
@@ -4349,10 +4013,10 @@ instead of all under `root`).
 | # | Test | Verify |
 |---|------|--------|
 | E1 | Full document golden run | Root + components + exec, correct output |
-| E2 | Full replay (no changes) | Zero file reads, zero exec calls, same output |
-| E3 | Crash mid-expansion, resume | Partial replay, then live for remaining |
-| E4 | Component file changed, guard on | StaleInputError before replay |
-| E5 | New component added | Replay existing, live for new component |
+| E2 | Full repeated run (no changes) | File reads and exec calls run again, same output |
+| E3 | Existing journal path | CLI refuses the run and leaves the trace unchanged |
+| E4 | Component file changed | Next run reads and executes the changed component |
+| E5 | New component added | Next run resolves and executes the new component |
 | E6 | Validated props flow through expansion | Declared props visible in component via `{props.key}`, defaults applied |
 | E7 | Undeclared prop in full document | PropValidationError with component name and prop name |
 | E8 | `silent exec` in full document | Command runs, result journaled, output omitted |
@@ -4479,12 +4143,12 @@ instead of all under `root`).
 | I6 | `persist timeout=10s eval` | Three modifiers compose: persist → timeout → eval |
 | I7 | `silent eval` | Silent wraps eval — both run, output empty |
 
-### Tier J — Eval and durableEval integration
+### Tier J — Eval journal-entry integration
 
 | # | Test | Verify |
 |---|------|--------|
 | J1 | `js eval` golden run | Block executes in-process, journal has eval entry |
-| J2 | `js eval` replay | Block not re-executed, stored exports restored to env |
+| J2 | `js eval` repeated run | Block executes again against current inputs |
 | J3 | Cross-block bindings | Block 1 exports `port`, block 2 reads `port` from env |
 | J4 | Non-serializable binding omitted from journal | Function in env → present in live env, absent from journal |
 | J5 | Eval produces no rendered output | Document output excludes eval block content |
@@ -4499,7 +4163,7 @@ instead of all under `root`).
 | K2 | Env shared across blocks in same component | Block 1 and block 2 in same component share `env.values` |
 | K3 | `serializeExports` filters non-JSON | Functions, symbols, circular refs excluded |
 | K4 | `serializeExports` preserves JSON values | Numbers, strings, objects, arrays round-trip correctly |
-| K5 | Replay restores serializable bindings | After replay, `env.values` contains stored exports |
+| K5 | Eval merges serializable bindings | After the block, `env.values` contains current exports |
 | K6 | Component `as` writes to invocation env | Binding is visible to downstream siblings at call site |
 | K7 | `<Capture>` is not a component boundary | Eval/exec inside `<Capture>` use parent env/scope and journal normally |
 
@@ -4512,7 +4176,7 @@ instead of all under `root`).
 | L3 | Persist resource lifetime matches component | Resource torn down when component expansion completes |
 | L4 | PersistFlagCtx scoped to chain | Flag is `true` only during the persist-wrapped chain |
 | L5 | Multiple persist blocks in one component | Each retains its own resources independently |
-| L6 | Persist during replay is no-op | On replay, no `evalScope.eval()` call, no resources retained |
+| L6 | Persist on repeated run | Resource is created and retained again for the current component lifetime |
 | L7 | Persist flag does not leak to sibling blocks | Non-persist block after persist block → flag is false |
 
 ### Tier M — Timeout modifier
@@ -4525,16 +4189,6 @@ instead of all under `root`).
 | M4 | `parseDuration` handles `s` | `"30s"` → 30000 |
 | M5 | `parseDuration` handles `m` | `"2m"` → 120000 |
 | M6 | Default timeout is 30s | `timeoutFactory(undefined)` → 30000ms |
-
-### Tier N — Staleness (eval blocks)
-
-| # | Test | Verify |
-|---|------|--------|
-| N1 | Source hash mismatch triggers StaleInputError | Block source changed since last run → replay halts |
-| N2 | Bindings hash mismatch triggers StaleInputError | Input bindings changed → replay halts |
-| N3 | Unchanged source and bindings replay normally | Hashes match → stored result returned |
-| N4 | sourceHash computed from transformed code | Hash is of the post-transform source, not the raw block |
-| N5 | bindingsHash computed from serialized imports | Hash covers the JSON of imported env bindings |
 
 ### Tier O — Eval scope hierarchy
 
@@ -4553,8 +4207,8 @@ instead of all under `root`).
 | P4 | Multiple bindings in one content | `{host}:{port}` → both substituted |
 | P5 | Non-string binding converted via `String()` | `env.values.port = 49821` (number) → `"49821"` |
 | P6 | Binding interpolation runs before modifier chain | Resulting `ctx.content` in modifier contains substituted value |
-| P7 | On replay, env restored before interpolation | `durableEval` result restores `port`; subsequent block interpolates correctly |
-| P8 | Non-serializable binding not restored on replay | Function in `env.values` not present after replay; bare `{fn}` left verbatim |
+| P7 | Same-run env populated before interpolation | Eval result sets `port`; subsequent block interpolates correctly |
+| P8 | Non-serializable binding remains current-run only | Function is usable in the current component expansion and absent from the trace |
 
 ### Tier Q — `daemon` modifier
 
@@ -4571,8 +4225,8 @@ instead of all under `root`).
 | Q9 | `{port}` interpolation in daemon content | Binding from preceding `eval` block substituted into command |
 | Q10 | `daemon` without eval scope | Missing `EvalScopeCtx` → clear error |
 | Q11 | Modifier chain: `bash daemon exec` | `daemon` is outermost terminal; `exec` present but never called |
-| Q12 | Replay: daemon starts and stops | On full replay, process spawned and terminated; no live `sample` calls made |
-| Q13 | Replay: stored port used | `env.values.port` restored from journal; daemon binds same port |
+| Q12 | Repeated run: daemon starts and stops | Process is spawned and terminated again |
+| Q13 | Repeated run: current port used | Eval allocates a current port; daemon binds it |
 
 ### Tier R — VM globals
 
@@ -4580,7 +4234,7 @@ instead of all under `root`).
 |---|------|--------|
 | R1 | `findFreePort` accessible in eval block | `yield* findFreePort()` succeeds, returns a number |
 | R2 | `findFreePort` returns usable port | Returned port is bindable (no EADDRINUSE) |
-| R3 | `findFreePort` not called on replay | `durableEval` returns stored port; function not invoked |
+| R3 | `findFreePort` called on each run | No port is restored from an earlier trace |
 | R4 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
 | R5 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
 | R6 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
@@ -4600,8 +4254,8 @@ instead of all under `root`).
 | S9 | Nested providers, explicit model matching outer | Inner passes through, outer handles |
 | S10 | Nested providers, explicit model matching inner | Inner handles regardless of nesting depth |
 | S11 | Unmatched model | Chain exhausted → descriptive error naming the model |
-| S12 | Full replay of provider component | All eval and sample entries replayed; daemon starts and stops; no live HTTP calls |
-| S13 | Partial replay (children not yet journaled) | eval+daemon+when replayed; children run live with daemon available |
+| S12 | Repeated provider run | Eval, daemon, readiness, and HTTP calls execute again |
+| S13 | Interrupted provider run | Partial diagnostic trace is not accepted as resume input |
 | S14 | Multiple provider instances | Two provider siblings → two processes, different ports |
 
 ### Tier U — `callLlamafile()` utility
@@ -4627,7 +4281,7 @@ instead of all under `root`).
 | # | Test | Verify |
 |---|------|--------|
 | EO1 | `output()` produces eval block output | Block calling `output("text")` → rendered output contains "text" |
-| EO2 | `output()` replayed from journal | `__output` stored in journal; replay restores output without re-execution |
+| EO2 | `output()` journaled in entry | `__output` is present in the current eval result |
 | EO3 | eval block without `output()` produces no output | Standard eval block → empty output unchanged |
 | EO4 | `output()` with multiline content | Multiline string preserved through journal round-trip |
 | EO5 | `output()` converts non-string to string | `output(42)` → `"42"` via `String()` coercion |
@@ -4648,7 +4302,7 @@ instead of all under `root`).
 | SC2 | With children | `<Sample>children</Sample>` → children rendered then sampled |
 | SC3 | Model routing | `<Sample model="X">` → targets specific provider |
 | SC4 | No provider | `<Sample>` outside provider → descriptive error |
-| SC5 | Replay returns stored response | Journal entry replayed; no re-execution |
+| SC5 | Repeated run calls provider | Current provider response is used and journaled |
 | SC6 | Self-closing renderChildren returns empty | `<Sample prompt="X" />` → `renderChildren()` returns empty, prompt used |
 
 ### Tier OA — EMA Output Api
@@ -4708,52 +4362,34 @@ instead of all under `root`).
 | # | Test | Verify |
 |---|------|--------|
 | BC1 | Counter increments across segments | Block 0 in segment 1, block 1 in segment 2 — IDs are 0, 1 |
-| BC2 | Counter stable on replay | Same blockIds produced during replay as during live run |
+| BC2 | Counter stable across runs | Same document structure produces the same block IDs |
 | BC3 | Counter threaded through expansion | Nested component expansion uses same counter |
 | BC4 | Counter not reset per root segment | Per-segment expansion does not reset counter |
 
 ---
 
-## 14. Walked example: crash recovery
+## 14. Walked example: diagnostic journal
 
-### Initial state
+Given a document that references `<A />`, `<B />`, and an `exec` block:
 
-```
-README.md references <A />, <B />, and a ```bash exec``` block.
-A.md references <C />.
-```
-
-### First run — crashes after importing B
-
-```
-[0] yield root  import_component __root__  → { path, content, contentHash }
-[1] yield root  import_component A         → { path, content, contentHash }
-[2] yield root  import_component C         → { path, content, contentHash } (C referenced by A)
-[3] yield root  import_component B         → { path, content, contentHash }
-    ← CRASH HERE
+```console
+$ xmd README.md --journal ./run.jsonl
 ```
 
-### Second run — resumes
-
-1. `durableRun` reads journal: 4 Yield events, no Close for root.
-2. `useImportComponentGuard` re-reads all 4 files, compares hashes — all match.
-3. Replay feeds stored results for events [0]–[3]. Parsing re-runs at
-   runtime on stored content.
-4. Execution transitions to live after event [3].
-5. The `exec` block runs live:
+The CLI atomically creates `run.jsonl`, executes against the current
+filesystem and process environment, and appends journal entries as operations finish:
 
 ```
-[4] yield root  exec "exec:date +%Y"      → { exitCode: 0, stdout: "2026\n" }
-[5] close root  result: { status: "ok", value: "...full rendered output..." }
+[0] yield root  import_component __root__  → { path, content }
+[1] yield root  import_component A         → { path, content }
+[2] yield root  import_component B         → { path, content }
+[3] yield root  exec "exec:date +%Y"       → { exitCode: 0, stdout: "2026\n" }
+[4] close root  result: { status: "ok", value: "...full rendered output..." }
 ```
 
-6. Output returned to caller.
-
-### Third run — full replay
-
-1. Journal has events [0]–[5] + Close.
-2. `durableRun` sees Close for root → short-circuits, returns stored output.
-3. Zero imports, zero command executions.
+If execution is interrupted, the file may contain a partial trace. An
+invocation with the same path fails before the document executes. The user
+must preserve the trace for diagnosis or remove it before starting a new run.
 
 ---
 
@@ -4761,10 +4397,10 @@ A.md references <C />.
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| 1 | Root document treated as a component | Uniform hash tracking and staleness detection |
-| 2 | All paths are workspace-relative | Journal portability — no absolute paths, everything relative to cwd |
+| 1 | Root document treated as a component | Uniform resolution, parsing, and error handling |
+| 2 | All paths are workspace-relative | Diagnostic portability and no absolute-path leakage |
 | 3 | Resolution is an Effection Api | Pluggable middleware (search paths, aliases, glob) — runs inside `durableImportComponent` during live execution |
-| 4 | `durableImportComponent` is a single durable effect | Resolve + read + hash in one `createDurableOperation` — one journal entry per component, Api and filesystem untouched on replay |
+| 4 | `durableImportComponent` is a single journaled operation | Resolve + read in one `createDurableOperation`; one diagnostic journal entry per component |
 | 5 | Parsing is runtime | Deterministic from file content, no journal needed |
 | 6 | Info string modifiers are a middleware chain | `bash silent exec` — left-to-right wrapping, composable, extensible, compatible with all renderers |
 | 7 | Each modifier is a factory that returns `Middleware<[], CodeBlockWorkflow>` | Factory captures params in closure; context on Effection scope via `CodeBlockCtx.with()` + `useCodeBlock()`; aligns with Effection v4.1's `Middleware<TArgs, TReturn>` |
@@ -4774,8 +4410,6 @@ A.md references <C />.
 | 11 | Cycle detection via hide sets, runtime | Deterministic from component graph, no journal |
 | 12 | `<Content />` is the content slot | Valid JSX, familiar (Astro/React), zero parser changes |
 | 13 | `{meta.key}` / `{props.key}` for interpolation | MDX-compatible expression syntax, parsed by regex |
-| 14 | Custom `useImportComponentGuard` for staleness | Reads path and contentHash from `result.value` (not `description.path`) since path isn't known until resolve runs |
-| 15 | Default staleness policy: halt | Safe default; middleware overrides for dev workflows |
 | 16 | Props must be declared in `inputs` frontmatter | Undeclared props are rejected — components are contracts |
 | 17 | Input definitions support JSON Schema subset | `type`, `default`, `required`, `enum`, `description` — enough for validation without full JSON Schema complexity |
 | 18 | Shorthand input syntax: value-as-default | `greeting: Hello` is equivalent to `greeting: { type: string, default: Hello }` — ergonomic for simple cases |
@@ -4784,36 +4418,36 @@ A.md references <C />.
 | 21 | Prop validation is runtime, not durable | Deterministic from component definition + caller props — no journal entry needed |
 | 22 | Components are semantic boundaries for markdown constructs | Bold, italic, links, code spans cannot span across a component or exec block — each text segment is healed independently |
 | 23 | Remend runs after scanning, before interpolation | Heals incomplete markdown in text segments; `htmlTags: false` required — boundary scanner owns JSX completeness, remend owns markdown completeness |
-| 24 | Healing is runtime, not durable | Pure function of text content — runs on both live and replay, no journal entry |
+| 24 | Healing is runtime, not journaled | Pure function of current text content; no journal entry |
 | 25 | `CodeBlockContext` delivered via Effection Context, not handler parameter | `CodeBlockCtx.with()` scopes the context to the chain execution; handlers read via `useCodeBlock()`; keeps middleware signature clean `Middleware<[], ...>` |
 | 26 | Reusable `Middleware<TArgs, TReturn>` primitive in `@effectionx/middleware` | Same type as Effection v4.1's Api middleware; `combine()` composes arrays; decoupled from modifier-specific types; originally `src/middleware.ts`, extracted to shared package |
-| 27 | `blockId` format: `eval:${componentName ?? "root"}:${index}` | Unique within a document run; component-scoped index ensures deterministic IDs for journal matching on replay |
+| 27 | `blockId` format: `eval:${componentName ?? "root"}:${index}` | Unique within a document run and stable enough to compare diagnostic traces |
 | 28 | Acorn + magic-string for source transform | Acorn provides reliable ES2024 parsing; magic-string preserves source positions for accurate source maps without rebuilding AST |
 | 29 | Execution mode auto-detected from AST | No modifier needed — `yield` in body → generator, `await` → async, neither → sync; mixed yield+await is a transform error |
 | 30 | `data:` URI module compilation for eval blocks | Eval blocks are compiled into `data:application/typescript,...` URI modules and dynamically imported via `yield* call(() => import(dataUri))`. APIs are standard `import` statements in the generated module, resolved through Deno's import map. `new Function()` is used for expression props (simpler than `data:` URI for single expressions, no module imports needed) |
 | 31 | `persist` uses a context flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` sets `PersistFlagCtx`, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
-| 32 | `evalScope` created before `durableRun` | The channel processor task and the sender inside `durableEval` must share an ancestor scope outside the durable execution boundary; creating inside `durableRun` would isolate the processor |
-| 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the journal; on replay they are not restored — this is by design, since non-serializable state can't survive process restart |
+| 32 | `evalScope` created before the journaled workflow | The channel processor and eval sender share an ancestor scope |
+| 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the diagnostic trace |
 | 34 | Eval blocks produce no rendered output by default | Eval blocks primarily exist for bindings and side effects. The `output()` function (§4.7) optionally produces rendered output; without it, result is `{ output: "", exitCode: 0, stderr: "" }` |
 | 35 | `@effectionx/middleware` replaces local `src/middleware.ts` | The middleware primitive was extracted to a shared package for reuse across the monorepo; import paths updated throughout |
 | 36 | `daemon` is a terminal modifier that ignores `next` | Process lifetime ≠ command result; `exec` in the chain satisfies the §3.2 detection rule without invoking `durableExec` |
 | 37 | `daemon` uses `evalScope`, not the durable run scope | Lifetime matches component expansion — daemon lives for `<children />` and dies with the component, not the whole document run |
-| 38 | `daemon` produces no journal entry | The process is an ephemeral resource; restarting it on every run including replay is correct since replayed `sample` calls never reach the server |
+| 38 | `daemon` produces no journal entry | The process is an ephemeral resource and starts on every run |
 | 39 | Eval binding interpolation uses bare `{name}` syntax | Distinct from `{meta.key}` and `{props.key}` namespaces; local eval bindings are local variables, not namespaced data; regex excludes names containing `.` to avoid conflicts |
 | 40 | Eval binding interpolation runs in the expansion engine, not inside modifier factories | Modifiers transform execution results — they are not responsible for preparing source text; one interpolation site in `expandSegments` is consistent with how text segment interpolation already works, and keeps modifier factories free of knowledge about the binding environment |
 | 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
-| 42 | `findFreePort` result journaled via `durableEval`, not as its own durable effect | The port number is a scalar export from the eval block; it round-trips through the journal as part of `durableEval`'s `value.value`; no separate effect type or journal entry needed |
+| 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
 | 44 | Provider lifecycle expressed as a component, not a `RunDocumentOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
 | 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; `EvalEnvCtx` is already the shared state carrier for within-component coordination; scope-correct because `EvalEnvCtx` is set per component expansion |
 | 47 | Each component gets a fresh `EvalEnv` | `EvalEnvCtx.with()` wraps component expansion so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
 | 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
-| 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry for output text; naturally replays when `durableEval` restores the result; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
+| 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
 | 50 | `renderChildren`/`render` are closures in `env.values`, not an Api | A Render Api would require middleware installation per component; closures are simpler and capture the expansion context at the injection point; they are non-serializable and silently omitted from the journal |
 | 51 | `renderChildren`/`render` use `parentEvalScope` wrapped in `EvalEnvCtx.with()` + `EvalScopeCtx.with()` | Children are caller-provided content and expand in the caller's scope context; the component's `childEvalScope` sequential channel is for its own `persist eval` blocks, not for expanding caller content; children may create resources (nested components, daemons) but their lifecycle is bound by their place in the expansion tree; wrapping ensures the correct scope is visible regardless of which task the closure runs in |
 | 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
-| 53 | Sample component calls `Sample.operations.sample()` directly, not `durableSample()` | `durableSample` yields `DurableEffect`s (Workflow-level), but eval blocks run inside `durableEval`'s evaluator which expects `Operation<Json>` yields; the entire eval block including output is already journaled by `durableEval` |
+| 53 | Sample component calls `Sample.operations.sample()` directly | The enclosing eval operation journals the complete block result |
 | 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |
 | 55 | `daemon()` uses `shell: true` | Matches `bash exec` block semantics — the same command string passed to `bash -c` is passed to the shell; handles shell expansions and PATH lookups correctly |
 | 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where `EvalEnvCtx` has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
@@ -4821,15 +4455,15 @@ A.md references <C />.
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
 | 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import EMA globals from `executable-markdown-agents/globals`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
 | 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
-| 61 | `callLlamafile()` uses `@effectionx/fetch` not `durableFetch` | `durableFetch` journals its result; the HTTP call to the inference server must not be journaled — `durableSample` already journals the complete LLM response; double-journaling would cause divergence on replay |
-| 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; configurability would require a `healthPath` prop; deferred — the hardcoded path covers all current targets |
+| 61 | `callLlamafile()` uses `@effectionx/fetch` | The HTTP call is an Effection operation executed once per document run |
+| 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; the hardcoded path covers the supported targets |
 | 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the EMA `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
 | 64 | `EMA` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
 | 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
 | 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |
 | 68 | Per-root-segment emission, not full-document batch | Enables streaming UX; root segments are sequential and independent; component-internal expansion remains recursive and buffered; `documentWorkflow` returns `""` — output already emitted via Api |
-| 69 | `blockId` counter threaded through expansion context | Per-segment expansion resets `result.length`; mutable counter preserves deterministic IDs for journal replay; counter guarded by expansion scope cancellation |
+| 69 | `blockId` counter threaded through expansion context | Per-segment expansion resets `result.length`; mutable counter preserves unique diagnostic IDs; counter guarded by expansion scope cancellation |
 | 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
@@ -4837,14 +4471,14 @@ A.md references <C />.
 | 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
 | 75 | `useContent()` on Effection scope, not in function args | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same pattern as `EvalEnvCtx`, `EvalScopeCtx`; supports named slots via `useContent("header")` |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
-| 77 | Function component re-imported on replay | `import()` runs on every execution including replay because the function itself is not serializable; the file content hash in the journal detects staleness; the import is fast (local file) |
-| 78 | Vendored tarballs for pkg.pr.new packages | `@effectionx/durable-streams` and `@effectionx/durable-effects` are pre-release builds not published to npm/JSR; vendored as `.tgz` tarballs in `.vendor/`, extracted at install time via `deno task setup`; temporary until packages are published |
+| 77 | Function component imported on every run | The current module must execute because functions are not serialized into a trace |
+| 78 | Internal durable-streams package | Provides journaling for the core runtime |
 | 79 | `as` is a reserved expansion prop | `as` is consumed by the expansion engine (not component inputs), stripped before validation, and used to bind rendered output into `env.values` |
 | 80 | `<Capture>` is the inline binding directive | Captures arbitrary inline rendered content while preserving JSX ergonomics and a single binding-target syntax (`as`) |
 | 81 | Component `as` writes to invocation-site env | Captured bindings must be visible to subsequent siblings/eval blocks where the invocation appears |
 | 82 | `<Capture>` does not create a new env/scope | Capture is structural (like `<Content />`), not a component boundary; middleware/scope behavior remains deterministic |
 | 83 | Capture trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
-| 84 | Capture assignment is not independently journaled | Captured value is deterministic from journaled effects and expansion order; replay reconstructs the same binding without extra journal entries |
+| 84 | Capture assignment is not independently journaled | Captured value is derived during current expansion; no extra journal entry is needed |
 | 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
 | 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |

@@ -47,7 +47,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("Hello from TypeScript!");
@@ -77,7 +76,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("Hello, world!");
@@ -106,7 +104,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("BEFORE");
@@ -135,7 +132,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("FROM-MARKDOWN");
@@ -162,7 +158,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("component error");
@@ -192,7 +187,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("count=42");
@@ -222,7 +216,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("Required prop");
@@ -247,7 +240,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output).toContain("FROM-MD");
@@ -274,7 +266,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       const output2 = yield* collect(
@@ -282,7 +273,6 @@ describe("Tier FC — Function components", () => {
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
-          freshness: false,
         }),
       );
       expect(output1).toContain("STATIC-OUTPUT");

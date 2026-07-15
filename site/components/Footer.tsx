@@ -12,7 +12,7 @@ export function Footer() {
         <div>
           <Wordmark size="1rem" />
           <p class="muted" style="font-size:0.85rem;margin-top:0.4rem;">
-            Markdown that runs — durable, executable workflows.
+            Markdown that runs — executable workflows.
           </p>
         </div>
         <div style="display:flex;gap:1.4rem;font-size:0.9rem;flex-wrap:wrap;">

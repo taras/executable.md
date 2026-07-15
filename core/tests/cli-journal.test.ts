@@ -2,7 +2,7 @@
  * CLI journal integration tests.
  *
  * Exercises the full CLI pipeline as a subprocess — arg parsing,
- * stream consumption, middleware, journal persistence, and replay.
+ * stream consumption, middleware, and diagnostic journal output.
  *
  * Each test shells out to `deno run --allow-all cli/src/cli.ts`
  * and uses timebox to prevent hangs from blocking the test suite.
@@ -10,7 +10,8 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { timebox } from "@effectionx/timebox";
-import { spawn, each } from "effection";
+import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { spawn, each, type Operation } from "effection";
 import { exec } from "@effectionx/process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -38,7 +39,7 @@ interface CliResult {
  * Run the CLI as a subprocess and collect stdout/stderr regardless
  * of exit code. This avoids ExecError swallowing diagnostic output.
  */
-function* runCli(args: string[]) {
+function* runCliResult(args: string[]) {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
     const proc = yield* exec(CLI_CMD, {
       arguments: [...CLI_ARGS, ...args],
@@ -75,13 +76,31 @@ function* runCli(args: string[]) {
   if (result.timeout) {
     throw new Error(`CLI timed out after ${TIMEOUT}ms`);
   }
-  const { value } = result;
-  if (value.code !== 0) {
+  return result.value;
+}
+
+function* runCli(args: string[]) {
+  const result = yield* runCliResult(args);
+  if (result.code !== 0) {
     throw new Error(
-      `CLI exited with code ${value.code}\nstderr: ${value.stderr}\nstdout: ${value.stdout}`,
+      `CLI exited with code ${result.code}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`,
     );
   }
-  return value;
+  return result;
+}
+
+interface JournalEventView {
+  type: string;
+  coroutineId?: string;
+  description?: { type?: string };
+  result?: { status?: string };
+}
+
+function* readJournal(filePath: string): Operation<JournalEventView[]> {
+  return (yield* readTextFile(filePath))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as JournalEventView);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,101 +124,93 @@ describe("CLI journal integration", () => {
     expect(result.stdout).toContain("Hello world");
   });
 
-  // CJ3: Replay from journal (raw)
-  it("CJ3: replay from journal produces same output --raw", function* () {
+  it("CJ3: --journal writes parseable entries for the current run", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
 
     try {
-      const firstRun = yield* runCli([
+      const result = yield* runCli([
         "core/tests/fixtures/streaming/simple.md",
         `--journal=${journalPath}`,
         "--raw",
       ]);
-      expect(firstRun.code).toBe(0);
-      expect(fs.existsSync(journalPath)).toBe(true);
+      expect(result.code).toBe(0);
+      expect(yield* exists(journalPath)).toBe(true);
 
-      const secondRun = yield* runCli([
-        "core/tests/fixtures/streaming/simple.md",
-        `--journal=${journalPath}`,
-        "--raw",
-      ]);
-      expect(secondRun.code).toBe(0);
-      expect(secondRun.stdout).toBe(firstRun.stdout);
+      const events = yield* readJournal(journalPath);
+      expect(events.length).toBeGreaterThan(1);
+      expect(events[0]?.type).toBe("yield");
+      expect(events.at(-1)?.type).toBe("close");
+      expect(events.at(-1)?.coroutineId).toBe("root");
+      expect(events.at(-1)?.result?.status).toBe("ok");
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      yield* rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  // CJ4: Replay from journal (normalized)
-  it("CJ4: replay from journal produces same output (normalized)", function* () {
+  it("CJ4: existing journal path is refused without executing the document", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
+    const documentPath = path.join(tmpDir, "side-effect.md");
+    const markerPath = path.join(tmpDir, "executed.txt");
+    const existingContent = '{"type":"partial"';
 
     try {
-      const firstRun = yield* runCli([
-        "core/tests/fixtures/streaming/simple.md",
-        `--journal=${journalPath}`,
-      ]);
-      expect(firstRun.code).toBe(0);
+      yield* writeTextFile(journalPath, existingContent);
+      yield* writeTextFile(
+        documentPath,
+        ["```bash exec", `printf ran > "${markerPath}"`, "```"].join("\n"),
+      );
 
-      const secondRun = yield* runCli([
-        "core/tests/fixtures/streaming/simple.md",
-        `--journal=${journalPath}`,
-      ]);
-      expect(secondRun.code).toBe(0);
-      expect(secondRun.stdout).toBe(firstRun.stdout);
+      const result = yield* runCliResult([documentPath, `--journal=${journalPath}`, "--raw"]);
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("Journal trace already exists");
+      expect(result.stdout).toBe("");
+      expect(yield* readTextFile(journalPath)).toBe(existingContent);
+      expect(yield* exists(markerPath)).toBe(false);
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      yield* rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  // CJ5: Replay with exec blocks (raw)
-  it("CJ5: replay with exec blocks --raw", function* () {
+  it("CJ5: separate trace paths produce fresh executions", function* () {
     const tmpDir = makeTmpDir();
-    const journalPath = path.join(tmpDir, "test.jsonl");
+    const documentPath = path.join(tmpDir, "document.md");
+    const firstJournal = path.join(tmpDir, "first.jsonl");
+    const secondJournal = path.join(tmpDir, "second.jsonl");
 
     try {
-      const firstRun = yield* runCli([
-        "core/tests/fixtures/streaming/with-exec.md",
-        `--journal=${journalPath}`,
-        "--raw",
-      ]);
-      expect(firstRun.code).toBe(0);
-      expect(firstRun.stdout).toContain("hello from exec");
+      yield* writeTextFile(documentPath, "Version one\n");
+      const firstRun = yield* runCli([documentPath, `--journal=${firstJournal}`, "--raw"]);
 
-      const secondRun = yield* runCli([
-        "core/tests/fixtures/streaming/with-exec.md",
-        `--journal=${journalPath}`,
-        "--raw",
-      ]);
-      expect(secondRun.code).toBe(0);
-      expect(secondRun.stdout).toBe(firstRun.stdout);
+      yield* writeTextFile(documentPath, "Version two\n");
+      const secondRun = yield* runCli([documentPath, `--journal=${secondJournal}`, "--raw"]);
+
+      expect(firstRun.stdout).toContain("Version one");
+      expect(secondRun.stdout).toContain("Version two");
+      expect((yield* readJournal(firstJournal)).at(-1)?.result?.status).toBe("ok");
+      expect((yield* readJournal(secondJournal)).at(-1)?.result?.status).toBe("ok");
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      yield* rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  // CJ6: Replay with exec blocks (normalized)
-  it("CJ6: replay with exec blocks (normalized)", function* () {
+  it("CJ6: journal writes exec entries", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
 
     try {
-      const firstRun = yield* runCli([
+      const result = yield* runCli([
         "core/tests/fixtures/streaming/with-exec.md",
         `--journal=${journalPath}`,
       ]);
-      expect(firstRun.code).toBe(0);
-
-      const secondRun = yield* runCli([
-        "core/tests/fixtures/streaming/with-exec.md",
-        `--journal=${journalPath}`,
-      ]);
-      expect(secondRun.code).toBe(0);
-      expect(secondRun.stdout).toBe(firstRun.stdout);
+      expect(result.code).toBe(0);
+      expect(
+        (yield* readJournal(journalPath)).some((event) => event.description?.type === "exec"),
+      ).toBe(true);
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      yield* rm(tmpDir, { recursive: true, force: true });
     }
   });
 });

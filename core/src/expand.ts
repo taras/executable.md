@@ -63,11 +63,6 @@ export function createBlockCounter(): BlockCounter {
 // Types for the expansion context
 // ---------------------------------------------------------------------------
 
-/**
- * Function that imports a component by name.
- * During live execution: resolves + reads + hashes via durable effect.
- * During replay: returns stored result.
- */
 export type ComponentImporter = (
   name: string,
 ) => Operation<ComponentDefinition | FunctionComponentDefinition>;
@@ -360,7 +355,6 @@ function* expandComponent(
     ];
   }
 
-  // Import — single durable effect (resolve + read + hash)
   let imported: ComponentDefinition | FunctionComponentDefinition;
   try {
     imported = yield* ctx.importComponent(name);
@@ -796,7 +790,6 @@ function validateBindingName(
  * they are evaluated as JavaScript using `new Function()` with
  * `env.values` destructured into scope.
  *
- * Results must be JSON-serializable — props must survive replay.
  * Errors are thrown (not ErrorSegments), consistent with PropValidationError.
  *
  * Uses `new Function()` instead of `node:vm` — Deno's permission model
@@ -848,7 +841,6 @@ function* resolveExpressionProps(
       const fn = new Function(...envKeys, `return (${expression})`);
       const result = fn(...envValues);
 
-      // Validate serialization — props must survive replay
       if (typeof result === "function" || typeof result === "undefined") {
         throw new Error(
           `Expression prop "${propName}" on <${componentName} /> evaluated ` +

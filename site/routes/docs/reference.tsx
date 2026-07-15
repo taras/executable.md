@@ -16,12 +16,12 @@ export default define.page(function Reference() {
       <ul>
         <li>
           <code>--journal</code>, <code>-j</code>{" "}
-          — JSONL journal file (creates if missing, replays if it exists,
-          retries on failure).
+          — write a diagnostic JSONL trace of the run to a new file. The path
+          must not exist and is never replayed.
         </li>
         <li>
           <code>--verbose</code>, <code>-V</code>{" "}
-          — log durable journal events to stderr.
+          — print journal entries to stderr.
         </li>
         <li>
           <code>--component-dir</code>{" "}

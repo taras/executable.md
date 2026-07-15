@@ -6,9 +6,8 @@
  * withResolvers so the caller can yield* ready before sending
  * messages or closing the channel.
  *
- * Without this, replay (where durableRun returns synchronously)
- * would close the channel before the consumer subscribes, hanging
- * forever.
+ * Without this, a synchronously completing workflow could close the channel
+ * before the consumer subscribes, hanging forever.
  */
 
 import type { Operation, Stream, Task } from "effection";

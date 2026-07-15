@@ -169,7 +169,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -207,7 +206,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -243,7 +241,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -252,7 +249,6 @@ describe("Tier R — findFreePort in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -300,7 +296,6 @@ describe("Tier R — when in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -340,7 +335,6 @@ describe("Tier R — when in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -374,7 +368,6 @@ describe("Tier R — when in eval blocks", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 

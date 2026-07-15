@@ -126,13 +126,11 @@ export interface ComponentDefinition {
   meta: Record<string, unknown>;
   inputs: Record<string, InputDefinition>;
   bodySegments: Segment[];
-  contentHash: string;
 }
 
-export interface ImportResult {
+export interface ImportResult extends Record<string, Json> {
   path: string;
   content: string;
-  contentHash: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +165,6 @@ export interface FunctionComponentDefinition {
   path: string;
   inputs: Record<string, InputDefinition>;
   fn: FunctionComponent;
-  contentHash: string;
 }
 
 export interface ResolveResult {

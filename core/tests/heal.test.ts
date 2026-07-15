@@ -34,7 +34,6 @@ function makeComponent(
     meta: opts.meta ?? {},
     inputs: opts.inputs ?? {},
     bodySegments: scanSegments(body),
-    contentHash: `sha256:fake-${name}`,
   };
 }
 

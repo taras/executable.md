@@ -29,7 +29,6 @@ describe("Tier T6 — persist modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -49,7 +48,6 @@ describe("Tier T6 — persist modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -70,7 +68,6 @@ describe("Tier T6 — persist modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -90,7 +87,6 @@ describe("Tier T6 — persist modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -98,7 +94,6 @@ describe("Tier T6 — persist modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -153,7 +148,6 @@ describe("Tier T6 — persist modifier", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

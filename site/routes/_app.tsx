@@ -11,7 +11,7 @@ const FAVICON = "data:image/svg+xml," +
   );
 
 const DEFAULT_DESC =
-  "executable.md treats plain markdown documents as durable, executable workflows: expand components, run code blocks, and replay from a journal after a crash — in a file that still renders as normal markdown anywhere.";
+  "executable.md treats plain markdown documents as executable workflows: expand components, run code blocks, and evaluate in-process operations — in a file that still renders as normal markdown anywhere.";
 
 // Per-route metadata so each page has a distinct title and its own canonical URL.
 const META: Record<string, { title: string; desc: string }> = {
@@ -30,11 +30,6 @@ const META: Record<string, { title: string; desc: string }> = {
     title: "Exec & Eval · executable.md docs",
     desc:
       "Run fenced code blocks as subprocesses or in-process Effection operations, with modifier chains.",
-  },
-  "/docs/durability": {
-    title: "Durable replay · executable.md docs",
-    desc:
-      "Journal every I/O operation so runs replay from where they left off after a crash.",
   },
   "/docs/providers": {
     title: "LLM providers · executable.md docs",

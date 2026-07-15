@@ -1,5 +1,5 @@
 /**
- * Tier T4 — eval factory and durableEval integration tests (spec §11).
+ * Tier T4 — eval factory and journal integration tests (spec §11).
  *
  * Tests the full eval pipeline: golden run, replay, partial replay,
  * divergence, error propagation, and serialization behavior.
@@ -13,7 +13,7 @@ import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 
-describe("Tier T4 — eval factory and durableEval integration", () => {
+describe("Tier T4 — eval factory and journal integration", () => {
   // T31: Golden run — journal entry written with serializable exports
   it("T31: golden run — journal records eval entry", function* () {
     const stream = new InMemoryStream();
@@ -27,7 +27,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -50,7 +49,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -59,7 +57,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -79,7 +76,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -88,7 +84,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -108,7 +103,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -129,7 +123,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -150,7 +143,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -182,7 +174,6 @@ describe("Tier T4 — eval factory and durableEval integration", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

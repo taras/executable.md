@@ -102,9 +102,6 @@ importers:
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
-      '@executablemd/durable-effects':
-        specifier: workspace:*
-        version: link:../durable-effects
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
@@ -114,9 +111,6 @@ importers:
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
-      '@executablemd/durable-effects':
-        specifier: workspace:*
-        version: link:../durable-effects
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
@@ -131,15 +125,6 @@ importers:
       '@effectionx/context-api':
         specifier: workspace:*
         version: link:../vendor/context-api
-      '@executablemd/durable-streams':
-        specifier: workspace:*
-        version: link:../durable-streams
-      '@executablemd/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-
-  durable-effects:
-    dependencies:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams

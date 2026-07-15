@@ -1,5 +1,5 @@
 {
-  "workspace": ["core", "cli", "durable-streams", "durable-effects", "runtime", "packages/code-review-agent", "site"],
+  "workspace": ["core", "cli", "durable-streams", "runtime", "packages/code-review-agent", "site"],
   "nodeModulesDir": "auto",
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",
@@ -10,7 +10,6 @@
     "effection": "npm:effection@4.1.0-alpha.7",
     "effection/experimental": "npm:effection@4.1.0-alpha.7/experimental",
     "@executablemd/durable-streams": "./durable-streams/mod.ts",
-    "@executablemd/durable-effects": "./durable-effects/mod.ts",
     "@executablemd/runtime": "./runtime/mod.ts",
     "@executablemd/runtime/test": "./runtime/test/mod.ts",
     "@executablemd/code-review-agent": "./packages/code-review-agent/mod.ts",
@@ -36,9 +35,9 @@
   "tasks": {
     "xmd": "deno run --allow-all cli/src/cli.ts",
     "build": "deno compile --node-modules-dir=none --exclude-unused-npm --exclude .opencode --exclude .internal --allow-all --output dist/xmd cli/src/cli.ts",
-    "test": "deno test --allow-all core/tests/ durable-streams/tests/ durable-effects/tests/ packages/code-review-agent/tests/",
+    "test": "deno test --allow-all core/tests/ durable-streams/tests/ packages/code-review-agent/tests/",
     "check": "deno check core/mod.ts",
-    "lint": "npx oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ && npx oxfmt --check core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ vendor/ test-support/",
+    "lint": "npx oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ runtime/ && npx oxfmt --check core/src/ cli/src/ durable-streams/ runtime/ vendor/ test-support/",
     "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.jsonl",
     "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.jsonl",

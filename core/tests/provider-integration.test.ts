@@ -143,7 +143,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -173,7 +172,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -217,7 +215,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -248,7 +245,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -301,7 +297,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -363,7 +358,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -409,7 +403,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -483,7 +476,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -549,7 +541,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -615,7 +606,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -677,7 +667,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -709,7 +698,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs,
-            freshness: false,
           }),
         );
 
@@ -722,7 +710,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs,
-            freshness: false,
           }),
         );
 
@@ -756,7 +743,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream: stream1,
             componentDirs,
-            freshness: false,
           }),
         );
 
@@ -784,7 +770,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream: stream2,
             componentDirs,
-            freshness: false,
           }),
         );
 
@@ -824,7 +809,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -905,7 +889,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 
@@ -975,7 +958,6 @@ describe(
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
-            freshness: false,
           }),
         );
 

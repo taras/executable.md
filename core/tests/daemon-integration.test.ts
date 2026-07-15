@@ -66,7 +66,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -95,7 +94,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -123,7 +121,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -159,7 +156,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -203,7 +199,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -240,7 +235,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -281,7 +275,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -294,7 +287,6 @@ describe("Tier Q — Daemon integration", () => {
         yield* runDocument({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
-          freshness: false,
         }),
       );
 
@@ -338,7 +330,6 @@ describe("Tier Q — Daemon integration", () => {
           yield* runDocument({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
-            freshness: false,
           }),
         ),
         sleep(500),

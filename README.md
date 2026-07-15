@@ -1,6 +1,6 @@
 # executable.md
 
-**executable.md** treats markdown documents as durable, executable workflows. A document can expand markdown components, execute annotated code blocks, evaluate in-process [Effection](https://frontside.com/effection) operations, and replay prior work from a journal after a crash or restart — while staying a valid, readable markdown file in any viewer.
+**executable.md** treats markdown documents as executable workflows. A document can expand markdown components, execute annotated code blocks, and evaluate in-process [Effection](https://frontside.com/effection) operations while staying a valid, readable markdown file in any viewer.
 
 The command-line tool is called **`xmd`** (eXecutable MarkDown).
 
@@ -10,7 +10,7 @@ This project is an implementation of the draft spec in [`specs/executable-mdx-sp
 
 - Expands JSX-style component invocations like `<Greeting name="world" />` from markdown files.
 - Executes fenced code blocks marked with `exec` or `eval`.
-- Journals component imports and command results so reruns can replay instead of redoing work.
+- Optionally journals component imports and command results to a diagnostic JSONL trace.
 - Shares bindings across `eval` blocks inside a component.
 - Supports long-lived background processes with `daemon` and provider-style components for LLM-backed workflows.
 
@@ -80,7 +80,7 @@ Prebuilt binaries for each platform are published on the [releases page](https:/
 xmd run core/examples/hello-world.md
 ```
 
-Keep a persistent journal for replay:
+Write a diagnostic trace for one run:
 
 ```bash
 xmd run core/examples/hello-world.md --journal .xmd/events.jsonl
@@ -88,8 +88,8 @@ xmd run core/examples/hello-world.md --journal .xmd/events.jsonl
 
 Useful flags:
 
-- `--journal`, `-j` - persist JSONL journal events and replay from them on rerun.
-- `--verbose`, `-V` - print durable journal events to stderr while running.
+- `--journal`, `-j` - write current-run journal entries to a new JSONL file for debugging. The path must not exist and is never replayed.
+- `--verbose`, `-V` - print durable journal entries to stderr while running.
 - `--component-dir` - add component search directories. Defaults to `components` and `.`.
 
 ## Document model
@@ -163,16 +163,11 @@ These components combine `eval`, `daemon`, readiness checks, and `Sample` middle
 xmd run core/examples/hello-world.md --component-dir core/components
 ```
 
-## Durable replay
+## Diagnostic journals
 
-executable.md stores workflow events in a durable stream. On rerun with the same journal:
+`--journal` writes internal workflow journal entries for troubleshooting. A trace can include component source, command output, evaluated values, and errors, so treat it as potentially sensitive data.
 
-- component imports replay from stored content,
-- completed `exec` and `eval` operations replay from stored results,
-- replay guards can detect stale component inputs,
-- execution resumes from the last successful durable step.
-
-Journals store workspace-relative paths so they remain portable across machines with the same repo structure.
+Each invocation requires a new path. If the path already exists, `xmd` exits without executing the document or modifying the file. An interrupted process may leave a partial trace; the CLI preserves it for inspection and does not use it as recovery input.
 
 ## Project layout
 
@@ -198,7 +193,7 @@ deno task test                                   # run the test suite
 
 ## Status
 
-This is an early, first public release and a draft spec, optimized for experimentation around durable markdown workflows, Effection-based evaluation, and provider-driven AI documents. Feedback, issues, and contributions are very welcome — please [open an issue](https://github.com/taras/executable.md/issues).
+This is an early, first public release and a draft spec, optimized for experimentation around executable markdown workflows, Effection-based evaluation, and provider-driven AI documents. Feedback, issues, and contributions are very welcome — please [open an issue](https://github.com/taras/executable.md/issues).
 
 ## License
 

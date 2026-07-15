@@ -25,7 +25,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -44,7 +43,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -63,7 +61,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -83,7 +80,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -102,7 +98,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -122,7 +117,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -141,7 +135,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -162,7 +155,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 
@@ -173,7 +165,6 @@ describe("Eval block return value", () => {
       yield* runDocument({
         docPath: "test.md",
         stream,
-        freshness: false,
       }),
     );
 

@@ -24,9 +24,9 @@ const FEATURES: { title: string; body: string }[] = [
       "Compose behavior left-to-right: silent, persist, timeout=30s, daemon. The fence info string is a middleware chain.",
   },
   {
-    title: "Durable replay",
+    title: "Diagnostic journals",
     body:
-      "Every I/O operation is journaled. Rerun and completed steps replay from the journal instead of redoing work. Execution survives crashes and restarts.",
+      "Pass --journal to write a JSONL trace of the run — component sources, command output, evaluated values, and errors — to a new file for troubleshooting.",
   },
   {
     title: "Shared bindings",
@@ -107,8 +107,8 @@ export default define.page(function Home({ url }) {
           style="font-size:clamp(1.05rem,2.2vw,1.25rem);max-width:46ch;margin:0 auto 2rem;line-height:1.5;"
         >
           <Wordmark size="1em" />{" "}
-          treats plain markdown documents as durable, executable workflows —
-          components, runnable code blocks, and crash-proof replay, all in a
+          treats plain markdown documents as executable workflows — components,
+          runnable code blocks, and in-process Effection operations, all in a
           file that still renders as normal markdown anywhere.
         </p>
         <div style="max-width:30rem;margin:0 auto 1rem;">
@@ -191,21 +191,20 @@ export default define.page(function Home({ url }) {
         </div>
       </section>
 
-      {/* Durability */}
+      {/* Diagnostic journals */}
       <section
         class="container prose-w"
         style="padding-block:3.5rem;margin-inline:auto;text-align:center;"
       >
         <h2 style="font-size:1.7rem;font-weight:700;margin-bottom:0.75rem;">
-          Crash-proof by default.
+          Diagnostic journals.
         </h2>
         <p class="muted" style="font-size:1.05rem;margin-bottom:1.5rem;">
-          executable.md stores every workflow event in a durable stream. On
-          rerun with the same journal, component imports replay from stored
-          content, completed <code>exec</code> and <code>eval</code>{" "}
-          steps replay from stored results, and execution resumes from the last
-          successful step. Journals store workspace-relative paths, so they stay
-          portable across machines.
+          Pass <code>--journal</code>{" "}
+          to write a JSONL trace of a single run — component sources, command
+          output, evaluated values, and errors. The path must not already exist,
+          and the trace is never replayed: it's for troubleshooting, not
+          recovery. Treat it as potentially sensitive data.
         </p>
         <div style="max-width:34rem;margin:0 auto;">
           <CopyCommand lines={["xmd run doc.md --journal .xmd/events.jsonl"]} />
@@ -285,9 +284,9 @@ export default define.page(function Home({ url }) {
           </h2>
           <p class="muted" style="font-size:1.05rem;margin-bottom:1.5rem;">
             executable.md is a first public release and a draft spec. It's built
-            for experimentation with durable markdown workflows, Effection-based
-            evaluation, and provider-driven AI documents. Feedback, issues, and
-            contributions are very welcome.
+            for experimentation with executable markdown workflows,
+            Effection-based evaluation, and provider-driven AI documents.
+            Feedback, issues, and contributions are very welcome.
           </p>
           <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;">
             <a class="btn btn-primary" href={`${GITHUB}/issues`} rel="noopener">
