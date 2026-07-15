@@ -11,12 +11,12 @@
  */
 
 import type { Operation } from "effection";
-import { EMA } from "../api.ts";
+import { DocumentOutput } from "../api.ts";
 
 export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
 
-  yield* EMA.around({
+  yield* DocumentOutput.around({
     *output([text], next) {
       let normalized = text;
 

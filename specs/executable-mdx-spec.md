@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Implementing agent
-**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (journal protocol and journaling), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), EMA Output Api specification (ui-improvement-spec)
+**Inputs:** Prior streaming MDX research, `@effectionx/durable-streams` (journal protocol and journaling), `@effectionx/process` (`daemon`), `@effectionx/converge` (`when`), Document Output Api specification (ui-improvement-spec)
 
 ---
 
@@ -30,7 +30,7 @@ module compilation, binding environment, and eval scope for resource
 lifetime management — see §4), daemon process management (the
 `daemon` terminal modifier, eval binding interpolation, and the
 provider component pattern — see §3.3 and §6.6–6.7), and the
-EMA Output Api (an Effection Api with composable middleware for
+Document Output Api (an Effection Api with composable middleware for
 streaming, whitespace-normalized, ANSI-formatted output — see §9).
 
 Expansion also supports binding capture: component invocations may
@@ -652,38 +652,6 @@ const silentFactory: ModifierFactory = (_params) =>
   }();
 ```
 
-**`sample`** — calls `next()`, then sends the inner result's output
-to an LLM via `durableSample` (§3.4), which wraps the Sample Api in
-a durable effect. The modifier parses optional bracket params
-(`sample[model=phi3-mini]`) to extract model and text params:
-
-```typescript
-const sampleFactory: ModifierFactory = (params) =>
-  (_args, next) => function* () {
-    const ctx = yield* useCodeBlock();
-    const inner = yield* next();
-    const { model, textParams } = parseSampleParams(params);
-
-    const sampleContext: SampleContext = {
-      stdout: inner.output,
-      stderr: inner.stderr,
-      exitCode: inner.exitCode,
-      command: ctx.content,
-      language: ctx.language,
-      params: textParams,
-      componentName: ctx.componentName,
-      model,
-    };
-
-    const commandPreview = ctx.content.slice(0, 30).replace(/\n/g, " ");
-    const sampled = yield* durableSample(
-      sampleContext,
-      `sample:${commandPreview}`,
-    );
-    return { ...inner, output: sampled };
-  }();
-```
-
 **`persist`** — extends resource lifetime from block scope to the
 component's eval scope. Without `persist`, resources spawned inside an
 eval block are torn down when the block completes. With `persist`, the
@@ -771,18 +739,18 @@ function composeModifierChain(
 }
 ```
 
-For ```` ```bash silent sample exec ````:
+For ```` ```bash silent timeout[30s] exec ````:
 
 ```
 exec    = execFactory(undefined)       // terminal middleware
-sample  = sampleFactory("brief")       // wraps exec
-silent  = silentFactory(undefined)     // wraps sample
-composed = combine([silent, sample, exec])
+timeout = timeoutFactory("30s")        // wraps exec
+silent  = silentFactory(undefined)     // wraps timeout
+composed = combine([silent, timeout, exec])
 ```
 
-Calling `composed([], terminal)` runs silent → sample → exec. The
-exec handler journals the command result. The sample handler journals
-the LLM response. The silent handler discards the output.
+Calling `composed([], terminal)` runs silent → timeout → exec. The
+exec handler journals the command result. The timeout handler cancels
+the block if it overruns. The silent handler discards the output.
 
 #### Overriding per-scope
 
@@ -809,26 +777,30 @@ via middleware.
 
 ### 3.4 The Sample Api
 
-The `sample` modifier handler delegates LLM access to the
+The `<Sample>` component delegates LLM access to the
 **Sample Api** — an Effection Api with middleware that determines
 which model is called, what prompt is constructed, and how the
 response is post-processed.
 
+`SampleContext` is content-centric (DEC-87): providers receive the
+rendered content and build their own message arrays.
+
 ```typescript
+// src/types.ts
 interface SampleContext {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  command: string;
-  language: string;
-  params?: string;
-  componentName?: string;
+  /** The content to send to the LLM (rendered children or prompt text). */
+  content: string;
   /**
    * Model identifier requested by the sample call. Undefined if the author
    * did not specify a model — in which case the innermost active provider wins.
-   * Set from the sample modifier's bracket params: ```bash sample[model=phi3-mini] exec
    */
   model?: string;
+  /** Additional params for the sample call. */
+  params?: string;
+  /** System prompt set by enclosing `<Instructions>` components. */
+  system?: string;
+  /** Name of the component that initiated the sample call. */
+  componentName?: string;
 }
 
 interface SampleApi {
@@ -838,40 +810,18 @@ interface SampleApi {
 const Sample = createApi<SampleApi>("Sample", {
   *sample(context: SampleContext): Operation<string> {
     throw new Error(
-      "sample modifier requires Sample Api middleware — " +
-      "install via scope.around(Sample, ...) before calling runDocument"
+      "Sample Api requires provider middleware — " +
+      "install a provider (e.g., OllamaProvider) or " +
+      "install middleware on the Sample Api before using <Sample> components"
     );
   },
 });
 ```
 
-**`durableSample`** is a shared helper (`src/sample/durable-sample.ts`)
-that wraps the Sample Api call in `createDurableOperation`. It routes
-through the `EvalScope` so that middleware installed by `persist eval`
-blocks (e.g., `LlamafileProvider`'s `Sample.around()`) is visible:
-
-```typescript
-// src/sample/durable-sample.ts
-function* durableSample(
-  context: SampleContext,
-  name: string,
-): Workflow<string> {
-  return (yield createDurableOperation<Json>(
-    { type: "sample", name },
-    function* (): Operation<Json> {
-      // Route through EvalScope so middleware installed by
-      // persist-eval blocks is visible. evalScope.eval() runs
-      // the operation in the same spawned task where
-      // Sample.around() installed middleware.
-      const evalScope = yield* EvalScopeCtx.expect();
-      const boxedResult = yield* evalScope.eval(
-        () => Sample.operations.sample(context),
-      );
-      return unbox(boxedResult) as unknown as Json;
-    },
-  )) as unknown as string;
-}
-```
+Sample Api calls route through the `EvalScope` so that middleware
+installed by `persist eval` blocks (e.g., `LlamafileProvider`'s
+`Sample.around()`) is visible — `evalScope.eval()` runs the operation in
+the same spawned task where the middleware was installed.
 
 #### Sample middleware examples
 
@@ -896,7 +846,7 @@ scope.around(Sample, {
 // Param-driven: sample=passthrough skips LLM
 scope.around(Sample, {
   *sample([context], next): Operation<string> {
-    if (context.params === "passthrough") return context.stdout;
+    if (context.params === "passthrough") return context.content;
     return yield* next(context);
   },
 });
@@ -904,142 +854,12 @@ scope.around(Sample, {
 // Testing stub
 scope.around(Sample, {
   *sample([context], next): Operation<string> {
-    return `[stub] sampled ${context.stdout.length} bytes`;
+    return `[stub] sampled ${context.content.length} bytes`;
   },
 });
 ```
 
-### 3.5 `callLlamafile()` — inference HTTP utility
-
-**File:** `src/sample/llamafile.ts`
-
-`callLlamafile` is a plain utility function — not user-facing middleware. It is
-called from provider component eval blocks (e.g., `LlamafileProvider.md`)
-with `baseUrl` and `model` closed over at middleware install time. It makes a
-single `/v1/chat/completions` request via `@effectionx/fetch` and returns the
-response content as a string.
-
-It is available in eval blocks as a standard import via
-`executable-markdown-agents/globals`, alongside `Sample`, `findFreePort`,
-`callOllama`, `callAnthropic`, and `useContent`.
-
-#### Signature
-
-```typescript
-import type { Operation } from "effection";
-import type { SampleContext } from "../types.ts";
-
-export interface LlamafileOptions {
-  /** Temperature for generation. Default: 0 */
-  temperature?: number;
-  /** Maximum tokens to generate. Default: 2048 */
-  maxTokens?: number;
-  /** Build the message array from the SampleContext. Default: buildDefaultMessages */
-  buildMessages?: (context: SampleContext) => ChatMessage[];
-}
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-export function* callLlamafile(
-  baseUrl: string,
-  model: string,
-  context: SampleContext,
-  opts?: LlamafileOptions,
-): Operation<string>;
-```
-
-#### Implementation
-
-```typescript
-export function* callLlamafile(
-  baseUrl: string,
-  model: string,
-  context: SampleContext,
-  opts: LlamafileOptions = {},
-): Operation<string> {
-  const {
-    temperature = 0,
-    maxTokens = 2048,
-    buildMessages = buildDefaultMessages,
-  } = opts;
-
-  const messages = buildMessages(context);
-
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      temperature,
-      max_tokens: maxTokens,
-      messages,
-    }),
-  })
-    .expect()
-    .json<{ choices: Array<{ message: { content: string } }> }>();
-
-  const content = result.choices?.[0]?.message?.content;
-  if (typeof content !== "string") {
-    throw new Error(
-      `Llamafile server returned unexpected response shape: ${JSON.stringify(result)}`,
-    );
-  }
-
-  return content;
-}
-```
-
-**Why `@effectionx/fetch`:** `fetch` from `@effectionx/fetch` returns an
-Effection-native `Response` — `response.json()` is `Operation<T>`, not
-`Promise<T>`. The entire request/response chain composes with `yield*` and
-cancellation flows through structured concurrency automatically.
-
-Each CLI invocation makes the inference request once. Its result may be
-included in the enclosing operation's diagnostic journal entry.
-
-#### Default message builder
-
-`buildDefaultMessages` supports two modes:
-
-**Direct prompt mode** — when `stdout === command` and `exitCode === 0` with no
-stderr, the caller is passing a plain text prompt (e.g., `<Sample prompt="..."/>`):
-
-```typescript
-function buildDefaultMessages(context: SampleContext): ChatMessage[] {
-  // Direct prompt mode
-  if (context.stdout === context.command && context.exitCode === 0 && !context.stderr) {
-    return [
-      { role: "system", content: "You are a helpful assistant..." },
-      { role: "user", content: context.stdout },
-    ];
-  }
-
-  // Exec analysis mode — real command output to analyze
-  const systemLines = [
-    "You are a precise technical assistant embedded in a durable document workflow.",
-    "Analyze the provided command output and respond according to the instructions.",
-    "Be concise. Output only what is requested.",
-  ];
-  if (context.componentName) systemLines.push(`Context: assisting ${context.componentName}`);
-  if (context.params) systemLines.push(`Instruction: ${context.params}`);
-
-  const userLines: string[] = [];
-  if (context.command) userLines.push(`Command: \`${context.language} -c '${context.command}'\``);
-  if (context.exitCode !== 0) userLines.push(`Exit code: ${context.exitCode}`);
-  if (context.stderr) userLines.push(`Stderr:\n\`\`\`\n${context.stderr}\n\`\`\``);
-  if (context.stdout) userLines.push(`Output:\n\`\`\`\n${context.stdout}\n\`\`\``);
-
-  return [
-    { role: "system", content: systemLines.join("\n") },
-    { role: "user", content: userLines.join("\n\n") },
-  ];
-}
-```
-
-### 3.6 Modifier parsing
+### 3.5 Modifier parsing
 
 The info string is split on whitespace. The first token is the
 language. The remaining tokens are the modifier chain:
@@ -1081,7 +901,7 @@ function parseInfoString(infoString: string): ParsedInfoString {
 }
 ```
 
-### 3.7 What is the command?
+### 3.6 What is the command?
 
 The content of the code block is the command. The language determines
 how it is invoked:
@@ -1095,7 +915,7 @@ how it is invoked:
 
 Multi-line code blocks are passed as a single string to the `-c` flag.
 
-### 3.8 Examples of modifier chain execution
+### 3.7 Examples of modifier chain execution
 
 **`exec` alone** — `exec` runs the command via `durableExec`
 (one journal entry). stdout becomes the output.
@@ -1104,16 +924,10 @@ Multi-line code blocks are passed as a single string to the `-c` flag.
 result as usual. `silent` calls `next()` (so exec runs), then
 returns empty output. No extra journal entry from `silent`.
 
-**`sample exec`** — `exec` runs the command and journals the
-result (first journal entry). `sample` calls `next()` (so exec
-runs), then passes stdout to `durableSample` which journals the
-LLM response (second journal entry). The LLM's response becomes
-the output.
-
-**`silent sample exec`** — `exec` journals the command result.
-`sample` journals the LLM response. `silent` discards the output.
-Both journal entries are written; the document gets nothing. The
-LLM call still happens because `silent` wraps `sample` — it calls
+**`silent timeout[30s] exec`** — `exec` journals the command result.
+`timeout` cancels the block if it overruns. `silent` discards the
+output. The journal entry is still written; the document gets nothing.
+The inner chain still runs because `silent` wraps `timeout` — it calls
 `next()` which runs the entire inner chain before discarding.
 
 **`daemon exec`** — `daemon` is the outermost terminal modifier. It
@@ -1310,32 +1124,22 @@ Every generated eval module is prepended with standard imports:
 import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";
 import { when } from "@effectionx/converge";
 import { fetch } from "@effectionx/fetch";
-import { useContent, findFreePort, Sample, callLlamafile, callOllama, callAnthropic } from "executable-markdown-agents/globals";
+import { useContent, Sample } from "@executablemd/core";
+import { findFreePort } from "@executablemd/runtime";
 ```
 
-These imports resolve through Deno's import map (`deno.json`). The
-`executable-markdown-agents/globals` path is an export from the
-package that re-exports EMA-specific APIs.
+These imports resolve through Deno's import map (`deno.json`).
+`@executablemd/core` re-exports executable.md-specific APIs from its root
+barrel (`core/mod.ts`); `findFreePort` comes from `@executablemd/runtime`
+(and is also re-exported by `core/mod.ts`).
 
-#### `globals.ts`
-
-EMA-specific APIs are re-exported from `globals.ts` for use in
-generated eval modules and function components:
-
-```typescript
-// globals.ts
-export { useContent } from "./src/content-context.ts";
-export { findFreePort } from "./src/find-free-port.ts";
-export { Sample } from "./src/sample-api.ts";
-export { callLlamafile } from "./src/sample/llamafile.ts";
-export { callOllama } from "./src/sample/ollama.ts";
-export { callAnthropic } from "./src/sample/anthropic.ts";
-```
+The exact list lives in the `STANDARD_IMPORTS` constant, which both
+compilers share (`src/deno-compiler.ts`, `src/temp-file-compiler.ts`).
 
 #### `findFreePort`
 
 `findFreePort` is available in eval blocks as a standard import
-(`executable-markdown-agents/globals`). It is an Effection
+(`@executablemd/runtime`). It is an Effection
 `Operation<number>`. It binds a `node:net` TCP server to
 port 0 (OS-assigned), reads the port number, and closes the server.
 It uses Effection's structured concurrency primitives (`once` from
@@ -1516,9 +1320,10 @@ run but are absent from the diagnostic trace.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()` (data: URI), `EvalCtxKey`, `EvalContext`, `STANDARD_IMPORTS` |
+| `src/eval-context.ts` | `createEvalContext()`, `compileBlock()` (data: URI), `EvalCtxKey`, `EvalContext` |
+| `src/deno-compiler.ts` | `useDenoCompiler()` — data: URI compiler middleware for Deno; owns `STANDARD_IMPORTS` |
+| `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `ContentCtx`, `ContentHandle`, `useContent()` — content slot access for function components |
-| `globals.ts` | Re-exports EMA globals (`useContent`, `findFreePort`, `Sample`, `callLlamafile`, `callOllama`, `callAnthropic`) for generated eval modules and function components |
 | `test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
 | `src/eval-env.ts` | `EvalEnv`, `EvalEnvCtx`, `EvalScopeCtx`, `PersistFlagCtx` |
 | `src/eval-handler.ts` | `evalFactory` |
@@ -1526,12 +1331,9 @@ run but are absent from the diagnostic trace.
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
-| `src/modifiers/sample.ts` | `sampleFactory` — wrapping modifier for LLM sampling |
-| `src/sample/durable-sample.ts` | `durableSample()` — shared Workflow helper for journaled Sample Api calls |
-| `src/sample/llamafile.ts` | `callLlamafile()`, `LlamafileOptions`, `buildDefaultMessages()` — inference HTTP utility |
-| `src/sample/ollama.ts` | `callOllama()` — Ollama inference HTTP utility |
-| `src/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` |
-| `src/api.ts` | EMA Output Api definition, exports `output` (§9.2) |
+| `src/sample-api.ts` | `Sample` Api definition (§3.4) — LLM middleware surface |
+| `runtime/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` (separate `runtime` workspace package) |
+| `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
@@ -1820,7 +1622,7 @@ validated props directly and return rendered output as a string.
 
 ```typescript
 // components/Greeting.ts
-import type { Json } from "executable-markdown-agents";
+import type { Json } from "@executablemd/core";
 
 export const inputs = {
   name: { type: "string" as const, required: true },
@@ -1860,7 +1662,7 @@ that need rendered children call `yield* useContent()`:
 
 ```typescript
 // components/Card.ts
-import { useContent } from "executable-markdown-agents/globals";
+import { useContent } from "@executablemd/core";
 
 export default function*(props: Record<string, Json>) {
   const content = yield* useContent();
@@ -2153,7 +1955,7 @@ function* documentWorkflow(docPath: string): Workflow<string> {
   const counter = createBlockCounter();
 
   // Per-root-segment emission loop — each root segment is expanded
-  // independently and its output emitted through the EMA Output Api (§9).
+  // independently and its output emitted through the Document Output Api (§9).
   // Root segments are sequential and independent in document order.
   // Component-internal expansion remains recursive and buffered.
   for (const segment of root.bodySegments) {
@@ -2359,10 +2161,9 @@ function* expandSegments(
 }
 ```
 
-The modifier chain composition, handler registration, and
-`durableSample` are defined in §3.3–3.4. The expansion code above
-composes the chain from the info string and runs it via
-`composeModifierChain`.
+The modifier chain composition and handler registration are defined
+in §3.3. The expansion code above composes the chain from the info
+string and runs it via `composeModifierChain`.
 
 ### 6.2 Component expansion with cycle detection
 
@@ -3064,9 +2865,9 @@ changes.
 
 **File:** `components/LlamafileProvider.md`
 
-This file is part of the EMA standard library and is distributed
-alongside the EMA package. It is a regular markdown component — no
-code changes to the EMA runtime are required to add it.
+This file is part of the executable.md standard library and is distributed
+alongside the executable.md package. It is a regular markdown component — no
+code changes to the executable.md runtime are required to add it.
 
 ````markdown
 ---
@@ -3114,7 +2915,22 @@ scope.around(Sample, function* ([context], next) {
   if (context.model !== undefined && context.model !== model) {
     return yield* next(context);
   }
-  return yield* callLlamafile(baseUrl, model, context);
+
+  const messages = [];
+  if (context.system) {
+    messages.push({ role: "system", content: context.system });
+  }
+  messages.push({ role: "user", content: context.content });
+
+  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 2048 }),
+  })
+    .expect()
+    .json();
+
+  return result.choices[0].message.content;
 });
 ```
 
@@ -3160,9 +2976,10 @@ No journal entry.
 journals the result.
 
 **Block 4 — middleware install:**
-`callLlamafile` and `Sample` are standard imports in the generated
-eval module (via `executable-markdown-agents/globals`, §4.2). The
-middleware closes over `baseUrl` and `model` at install time. Routing:
+`Sample` and `fetch` are standard imports in the generated
+eval module (via `@executablemd/core` and `@effectionx/fetch`, §4.2). The
+middleware closes over `baseUrl` and `model` at install time and issues the
+`/v1/chat/completions` request inline. Routing:
 if `context.model` matches the provider's model (or is unspecified),
 handle it; otherwise pass through via `next()`.
 
@@ -3399,7 +3216,7 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
 
   // Spawn the execution scope. Runtime state lives inside this
   // spawned task: runtime API middleware and eval scope,
-  // EMA→channel bridge. The channel and workflow share this scope;
+  // DocumentOutput→channel bridge. The channel and workflow share this scope;
   // scope teardown cancels the producer and closes the channel.
   yield* spawn(function* () {
 
@@ -3432,8 +3249,8 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
       registry.set(name, factory);
     }
 
-    // Channel delivery is the innermost EMA handler (installed first).
-    scope.around(EMA, {
+    // Channel delivery is the innermost DocumentOutput handler (installed first).
+    scope.around(DocumentOutput, {
       *output([text]) {
         yield* channel.send(text);
       },
@@ -3479,7 +3296,7 @@ await run(function* () {
 
 ---
 
-## 9. EMA Output Api
+## 9. Document Output Api
 
 ### 9.1 Problem
 
@@ -3499,9 +3316,9 @@ The output pipeline has three UX issues:
 3. **No terminal formatting.** Output is raw markdown text. No ANSI colors,
    no heading emphasis, no syntax highlighting.
 
-### 9.2 The EMA Api
+### 9.2 The Document Output Api
 
-A single Effection Api named `EMA` with one operation: `output`. The Api
+A single Effection Api named `DocumentOutput` with one operation: `output`. The Api
 is the system's public surface — extensible to progress, diagnostics, etc.
 as needs grow.
 
@@ -3511,20 +3328,20 @@ as needs grow.
 import type { Operation } from "effection";
 import { createApi } from "./api.ts";
 
-export interface EMAApi {
+export interface DocumentOutputApi {
   output(text: string): Operation<void>;
 }
 
-export const EMA = createApi<EMAApi>("EMA", {
+export const DocumentOutput = createApi<DocumentOutputApi>("DocumentOutput", {
   *output(_text: string): Operation<void> {},
 });
 
-export const { output } = EMA.operations;
+export const { output } = DocumentOutput.operations;
 ```
 
 Core handler is a no-op. Behavior comes from two sources:
 
-- **Middleware** installed via `scope.around(EMA, ...)` — intercepts and
+- **Middleware** installed via `scope.around(DocumentOutput, ...)` — intercepts and
   transforms text.
 - **Channel delivery** — the terminal handler sends transformed text into
   a `createChannel`.
@@ -3567,13 +3384,13 @@ full document.
 ```typescript
 import type { Operation } from "effection";
 import { useScope } from "effection";
-import { EMA } from "../api.ts";
+import { DocumentOutput } from "../api.ts";
 
 export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
   const scope = yield* useScope();
 
-  scope.around(EMA, {
+  scope.around(DocumentOutput, {
     *output([text], next) {
       let normalized = text;
 
@@ -3615,13 +3432,13 @@ import type { Operation } from "effection";
 import { useScope } from "effection";
 import { Marked } from "marked";
 import TerminalRenderer from "marked-terminal";
-import { EMA } from "../api.ts";
+import { DocumentOutput } from "../api.ts";
 
 export function* useTerminalOutput(): Operation<void> {
   const marked = new Marked({ renderer: new TerminalRenderer() });
   const scope = yield* useScope();
 
-  scope.around(EMA, {
+  scope.around(DocumentOutput, {
     *output([text], next) {
       const formatted = marked.parse(text, { async: false }) as string;
       yield* next(formatted);
@@ -3738,7 +3555,7 @@ capture occurs in the output pipeline.
 
 The entire workflow runs in a `spawn()` inside `runDocument`. The channel
 and all execution state (runtime API middleware and eval scope,
-EMA→channel bridge) share this spawned scope. The consumer
+DocumentOutput→channel bridge) share this spawned scope. The consumer
 (`forEach`/`collect` on `execution.output`) runs in the **caller's**
 scope. This cross-boundary communication is safe because scope teardown
 of the spawned task cancels the producer and closes the channel, which
@@ -3848,7 +3665,7 @@ coroutine ID.
 
 ### 11.1 Segment → output
 
-With the EMA Output Api (§9), segments are no longer batch-rendered
+With the Document Output Api (§9), segments are no longer batch-rendered
 into a single string. Instead, `renderSegment` (singular) is called
 per-segment in the emission loop (§5.4), and each rendered string
 flows through the Output Api via `yield* ephemeral(output(text))`.
@@ -4125,7 +3942,7 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | H1 | Eval context creation | `createEvalContext()` returns `EvalContext` with `initialized: true` |
 | H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block via standard imports |
-| H3 | EMA globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `executable-markdown-agents/globals` |
+| H3 | executable.md globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `@executablemd/core` |
 | H5 | `compileBlock` returns generator function | `yield* compileBlock(code, [])` returns a callable generator function |
 | H6 | Distinct modules per block | Each `compileBlock` call produces a separate module — no shared state between blocks |
 | H7 | `data:` URI encoding | Module source with special characters is correctly URI-encoded |
@@ -4258,24 +4075,6 @@ visible warning blocks, collect into a separate error report).
 | S13 | Interrupted provider run | Partial diagnostic trace is not accepted as resume input |
 | S14 | Multiple provider instances | Two provider siblings → two processes, different ports |
 
-### Tier U — `callLlamafile()` utility
-
-| # | Test | Verify |
-|---|------|--------|
-| U1 | Request sent to correct URL | `POST ${baseUrl}/v1/chat/completions` |
-| U2 | model in request body | Request JSON `model` field matches argument |
-| U3 | temperature and maxTokens in request body | Request JSON matches opts |
-| U4 | Default temperature is 0 | No opts → request body has `temperature: 0` |
-| U5 | Custom buildMessages used | Custom function's output appears in request messages |
-| U6 | Non-ok response throws via expect() | 500 from server → `response.expect()` throws with status in message |
-| U7 | Unexpected response shape throws | Missing `choices[0].message.content` → descriptive error |
-| U8 | Response content returned as string | Return value matches `choices[0].message.content` |
-| U9 | buildDefaultMessages includes command | Context.command appears in user message |
-| U10 | buildDefaultMessages includes stderr | Context.stderr appears in user message when non-empty |
-| U11 | buildDefaultMessages includes params | Context.params appears as "Instruction:" in system prompt |
-| U12 | buildDefaultMessages includes componentName | Context.componentName appears in system prompt |
-| U13 | Direct prompt mode | `stdout === command`, exitCode 0, no stderr → simplified prompt without exec analysis |
-
 ### Tier EO — eval output() function
 
 | # | Test | Verify |
@@ -4305,13 +4104,13 @@ visible warning blocks, collect into a separate error report).
 | SC5 | Repeated run calls provider | Current provider response is used and journaled |
 | SC6 | Self-closing renderChildren returns empty | `<Sample prompt="X" />` → `renderChildren()` returns empty, prompt used |
 
-### Tier OA — EMA Output Api
+### Tier OA — Document Output Api
 
 | # | Test | Verify |
 |---|------|--------|
-| OA1 | Api creation | `EMA` Api created with `output` operation |
+| OA1 | Api creation | `DocumentOutput` Api created with `output` operation |
 | OA2 | Core handler is no-op | `output("text")` with no middleware installed → no error, no visible effect |
-| OA3 | Middleware intercepts output | `scope.around(EMA, ...)` receives text in middleware handler |
+| OA3 | Middleware intercepts output | `scope.around(DocumentOutput, ...)` receives text in middleware handler |
 | OA4 | Middleware transforms text | Middleware modifies text, `next()` receives modified text |
 | OA5 | Channel delivery | Channel delivery handler sends text via `yield* channel.send()` |
 | OA6 | Consumer collects all chunks | `forEach` consumer collects all emitted chunks in order |
@@ -4453,12 +4252,12 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where `EvalEnvCtx` has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
 | 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
-| 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import EMA globals from `executable-markdown-agents/globals`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
+| 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import executable.md globals from `@executablemd/core`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
 | 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
 | 61 | `callLlamafile()` uses `@effectionx/fetch` | The HTTP call is an Effection operation executed once per document run |
 | 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; the hardcoded path covers the supported targets |
-| 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the EMA `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
-| 64 | `EMA` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
+| 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the executable.md `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
+| 64 | `DocumentOutput` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
 | 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
 | 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |

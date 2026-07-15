@@ -4,7 +4,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { createChannel, type Operation } from "effection";
-import { EMA } from "../src/api.ts";
+import { DocumentOutput } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { subscribe } from "../src/subscribe.ts";
 
@@ -19,7 +19,7 @@ function* collectNormalized(texts: string[]): Operation<string[]> {
   yield* useNormalizedOutput();
 
   // Last: channel delivery (runs last — closest to core)
-  yield* EMA.around({
+  yield* DocumentOutput.around({
     *output([text]) {
       yield* channel.send(text);
     },
@@ -29,7 +29,7 @@ function* collectNormalized(texts: string[]): Operation<string[]> {
   yield* ready;
 
   for (const text of texts) {
-    yield* EMA.operations.output(text);
+    yield* DocumentOutput.operations.output(text);
   }
   yield* channel.close();
 

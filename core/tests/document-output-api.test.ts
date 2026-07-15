@@ -1,7 +1,7 @@
 /**
- * Tier OA — EMA Output Api tests (spec §9).
+ * Tier OA — Document Output Api tests (spec §9).
  *
- * Tests the EMA Api, middleware interception, and channel delivery.
+ * Tests the Document Output Api, middleware interception, and channel delivery.
  *
  * scope.around semantics: first-installed runs first (outermost).
  * Its next() delegates to the second-installed, and so on to the core.
@@ -9,34 +9,34 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { createChannel } from "effection";
-import { EMA } from "../src/api.ts";
+import { DocumentOutput } from "../src/api.ts";
 import { subscribe } from "../src/subscribe.ts";
 
-describe("Tier OA — EMA Output Api", () => {
+describe("Tier OA — Document Output Api", () => {
   // OA1: Api creation
-  it("OA1: EMA Api created with output operation", function* () {
-    expect(EMA).toBeDefined();
-    expect(EMA.operations).toBeDefined();
-    expect(typeof EMA.operations.output).toBe("function");
+  it("OA1: Document Output Api created with output operation", function* () {
+    expect(DocumentOutput).toBeDefined();
+    expect(DocumentOutput.operations).toBeDefined();
+    expect(typeof DocumentOutput.operations.output).toBe("function");
   });
 
   // OA2: Core handler is no-op
   it("OA2: output with no middleware produces no error", function* () {
-    yield* EMA.operations.output("hello");
+    yield* DocumentOutput.operations.output("hello");
   });
 
   // OA3: Middleware intercepts output
   it("OA3: middleware intercepts output text", function* () {
     const captured: string[] = [];
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text], next) {
         captured.push(text);
         yield* next(text);
       },
     });
 
-    yield* EMA.operations.output("hello");
-    yield* EMA.operations.output("world");
+    yield* DocumentOutput.operations.output("hello");
+    yield* DocumentOutput.operations.output("world");
 
     expect(captured).toEqual(["hello", "world"]);
   });
@@ -46,20 +46,20 @@ describe("Tier OA — EMA Output Api", () => {
   it("OA4: middleware transforms text for next handler", function* () {
     const captured: string[] = [];
     // First installed → runs first (outermost), transforms text
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text], next) {
         yield* next(text.toUpperCase());
       },
     });
 
     // Second installed → runs second (closer to core), captures text
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text]) {
         captured.push(text);
       },
     });
 
-    yield* EMA.operations.output("hello");
+    yield* DocumentOutput.operations.output("hello");
 
     expect(captured).toEqual(["HELLO"]);
   });
@@ -68,7 +68,7 @@ describe("Tier OA — EMA Output Api", () => {
   it("OA5: channel delivery sends text via yield* channel.send()", function* () {
     const channel = createChannel<string, void>();
     // Channel delivery installed last — runs closest to core
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text]) {
         yield* channel.send(text);
       },
@@ -77,8 +77,8 @@ describe("Tier OA — EMA Output Api", () => {
     const { ready, task: consumer } = yield* subscribe<string>(channel);
     yield* ready;
 
-    yield* EMA.operations.output("hello");
-    yield* EMA.operations.output("world");
+    yield* DocumentOutput.operations.output("hello");
+    yield* DocumentOutput.operations.output("world");
     yield* channel.close();
 
     const result = yield* consumer;
@@ -88,7 +88,7 @@ describe("Tier OA — EMA Output Api", () => {
   // OA6: Consumer collects all chunks
   it("OA6: consumer collects all emitted chunks in order", function* () {
     const channel = createChannel<string, void>();
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text]) {
         yield* channel.send(text);
       },
@@ -97,9 +97,9 @@ describe("Tier OA — EMA Output Api", () => {
     const { ready, task: consumer } = yield* subscribe<string>(channel);
     yield* ready;
 
-    yield* EMA.operations.output("# Title\n\n");
-    yield* EMA.operations.output("Body text\n");
-    yield* EMA.operations.output("## Footer\n");
+    yield* DocumentOutput.operations.output("# Title\n\n");
+    yield* DocumentOutput.operations.output("Body text\n");
+    yield* DocumentOutput.operations.output("## Footer\n");
     yield* channel.close();
 
     const result = yield* consumer;
@@ -127,21 +127,21 @@ describe("Tier OA — EMA Output Api", () => {
   it("OA8: normalize + transform + channel all compose", function* () {
     const channel = createChannel<string, void>();
     // First installed → runs first (outermost): uppercase
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text], next) {
         yield* next(text.toUpperCase());
       },
     });
 
     // Second installed → runs second: add prefix
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text], next) {
         yield* next("[ok] " + text);
       },
     });
 
     // Third installed → runs last (closest to core): channel delivery
-    yield* EMA.around({
+    yield* DocumentOutput.around({
       *output([text]) {
         yield* channel.send(text);
       },
@@ -150,7 +150,7 @@ describe("Tier OA — EMA Output Api", () => {
     const { ready, task: consumer } = yield* subscribe<string>(channel);
     yield* ready;
 
-    yield* EMA.operations.output("hello");
+    yield* DocumentOutput.operations.output("hello");
     yield* channel.close();
 
     const result = yield* consumer;

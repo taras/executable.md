@@ -52,7 +52,7 @@ export type { EvalContext } from "./src/eval-context.ts";
 export { EvalCtxKey, createEvalContext, compileBlock } from "./src/eval-context.ts";
 
 // ---------------------------------------------------------------------------
-// EMA Globals (for generated eval modules)
+// executable.md Globals (for generated eval modules)
 // ---------------------------------------------------------------------------
 
 export { useContent } from "./src/content-context.ts";
@@ -86,8 +86,8 @@ export {
 // Output Api & middleware
 // ---------------------------------------------------------------------------
 
-export { EMA } from "./src/api.ts";
-export type { EMAApi } from "./src/api.ts";
+export { DocumentOutput } from "./src/api.ts";
+export type { DocumentOutputApi } from "./src/api.ts";
 export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
 

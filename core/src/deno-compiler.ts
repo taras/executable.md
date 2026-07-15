@@ -2,7 +2,7 @@
  * Deno-specific eval block compiler middleware.
  *
  * Compiles eval block source into generator functions via data: URIs.
- * Standard imports (Effection, EMA APIs) are captured in the middleware
+ * Standard imports (Effection, executable.md APIs) are captured in the middleware
  * closure — they are not part of the Compiler API interface.
  *
  * Install via `yield* useDenoCompiler()` inside a document execution

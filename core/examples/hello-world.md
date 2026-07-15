@@ -2,7 +2,7 @@
 title: Hello World
 ---
 
-# {meta.title} from EMA
+# {meta.title} from executable.md
 
 This program uses Opus 4.5 and open-source llama3.2 model to tell jokes.
 

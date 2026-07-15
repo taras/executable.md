@@ -26,7 +26,7 @@ TSCONFIG
 <Capture as="repoStats">
 
 ```bash exec
-find core/src cli/src durable-streams durable-effects packages -name '*.ts' -not -name '*.test.ts' -not -name '*.spec.ts' -not -path '*/node_modules/*' 2>/dev/null | tee /tmp/ema-repo-files.txt | wc -l | tr -d ' '
+find core/src cli/src durable-streams durable-effects packages -name '*.ts' -not -name '*.test.ts' -not -name '*.spec.ts' -not -path '*/node_modules/*' 2>/dev/null | tee /tmp/xmd-repo-files.txt | wc -l | tr -d ' '
 ```
 
 </Capture>
@@ -34,7 +34,7 @@ find core/src cli/src durable-streams durable-effects packages -name '*.ts' -not
 <Capture as="repoLineCount">
 
 ```bash exec
-cat /tmp/ema-repo-files.txt | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}'
+cat /tmp/xmd-repo-files.txt | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}'
 ```
 
 </Capture>
@@ -42,7 +42,7 @@ cat /tmp/ema-repo-files.txt | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1
 <Capture as="fileList">
 
 ```bash exec
-cat /tmp/ema-repo-files.txt
+cat /tmp/xmd-repo-files.txt
 ```
 
 </Capture>

@@ -52,9 +52,9 @@ which model runs, what system prompt is set, or where the output goes.
 
 ---
 
-## 2. EMA Changes (Implemented)
+## 2. executable.md Changes (Implemented)
 
-All EMA core changes and the full agent implementation are complete:
+All executable.md core changes and the full agent implementation are complete:
 
 - **Eval block `return` as rendered output** (PR #35)
 - **Eval binding interpolation in text segments** (PR #34)
@@ -261,7 +261,7 @@ scope.around(Sample, function* ([context], next) {
 ````markdown
 ---
 inputs:
-  marker: "<!-- ema-review -->"
+  marker: "<!-- xmd-review -->"
 ---
 
 ```ts eval
@@ -1041,9 +1041,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .reviews/journal.jsonl
-          key: ema-review-${{ github.event.pull_request.head.sha }}
+          key: xmd-review-${{ github.event.pull_request.head.sha }}
           restore-keys: |
-            ema-review-${{ github.event.pull_request.base.sha }}
+            xmd-review-${{ github.event.pull_request.base.sha }}
 
       - name: Run review
         env:
@@ -1055,7 +1055,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task ema run .reviews/ReviewPR.md
+        run: deno task xmd run .reviews/ReviewPR.md
 ```
 
 ### Journal caching
@@ -1069,7 +1069,7 @@ shared component imports.
 
 ## 9. Deterministic Analysis (separate CI jobs, unchanged)
 
-EMA replaces the advisory/AI review layer and process enforcement.
+executable.md replaces the advisory/AI review layer and process enforcement.
 Deterministic static analysis continues as separate CI jobs:
 
 | Job | Tool | What it catches |
@@ -1077,7 +1077,7 @@ Deterministic static analysis continues as separate CI jobs:
 | `lint` | Oxlint `--type-aware` | Unused vars, inferrable types, empty functions, type bloat, console/debugger |
 | `dead-code` | Knip | Unused exports, files, types, dependencies (cross-file) |
 
-These block merges. The EMA review is advisory.
+These block merges. The executable.md review is advisory.
 
 ---
 
@@ -1160,7 +1160,7 @@ contain no JavaScript.
 All phases have been implemented across PRs #34, #35, and the
 code-review-agent PR:
 
-- Phase 1: EMA core (text interpolation, eval return) — PR #34, #35
+- Phase 1: executable.md core (text interpolation, eval return) — PR #34, #35
 - Phase 2: Infrastructure components — code-review-agent PR
 - Phase 3: `@executablemd/code-review-agent` package — code-review-agent PR
 - Phase 4: Rule components — code-review-agent PR
@@ -1193,7 +1193,7 @@ specifier scan (`jsr:`, `npm:`), and a type-aware test run. Outputs
 a recommendation: `type-aware`, `type-aware-filtered`, or
 `syntax-only`. Includes prose narration for local visibility.
 Its JSON output is wrapped in a `` ```json `` code fence and
-extracted via `<Capture select="code[lang=json]">` (see EMA spec
+extracted via `<Capture select="code[lang=json]">` (see executable.md spec
 §6.5), isolating the structured data from surrounding narration.
 
 ### 13.3 PR-scoped analysis
@@ -1242,8 +1242,8 @@ The repo analysis pipeline creates idempotent GitHub issues for
 the top 5 file clusters ranked by `buildCleanupAnalysis()`.
 
 **Identity:** Each issue body contains a marker comment
-`<!-- ema-cleanup:{file} -->`. The component searches open issues
-with the `ema-cleanup` label for matching markers before creating.
+`<!-- xmd-cleanup:{file} -->`. The component searches open issues
+with the `cleanup` label for matching markers before creating.
 
 **Lifecycle:**
 

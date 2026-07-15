@@ -1,30 +1,30 @@
 /**
- * EMA Output Api — Effection Api for streaming document output (spec §9).
+ * Document Output Api — Effection Api for streaming document output (spec §9).
  *
  * A single Api with one operation: `output`. The core handler is a no-op.
- * Behavior comes from middleware installed via `yield* EMA.around(...)`
+ * Behavior comes from middleware installed via `yield* DocumentOutput.around(...)`
  * and channel delivery.
  *
- * Call sites use `EMA.operations.output(text)` inside `yield* ephemeral(...)`.
+ * Call sites use `DocumentOutput.operations.output(text)` inside `yield* ephemeral(...)`.
  */
 
 import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 // ---------------------------------------------------------------------------
-// EMA Api definition
+// Document Output Api definition
 // ---------------------------------------------------------------------------
 
-export interface EMAApi {
+export interface DocumentOutputApi {
   output(text: string): Operation<void>;
 }
 
 /**
- * The EMA Api instance.
+ * The Document Output Api instance.
  *
  * Usage in middleware:
  * ```js
- * yield* EMA.around({
+ * yield* DocumentOutput.around({
  *   *output([text], next) {
  *     const transformed = transform(text);
  *     yield* next(transformed);
@@ -34,9 +34,9 @@ export interface EMAApi {
  *
  * Usage in the emission loop:
  * ```js
- * yield* ephemeral(EMA.operations.output(text));
+ * yield* ephemeral(DocumentOutput.operations.output(text));
  * ```
  */
-export const EMA = createApi<EMAApi>("EMA", {
+export const DocumentOutput = createApi<DocumentOutputApi>("DocumentOutput", {
   *output(_text: string): Operation<void> {},
 });

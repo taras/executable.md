@@ -34,7 +34,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { expandSegments, createBlockCounter } from "./expand.ts";
 import type { ExpansionContext } from "./expand.ts";
 import { renderSegment } from "./render.ts";
-import { EMA } from "./api.ts";
+import { DocumentOutput } from "./api.ts";
 import {
   composeModifierChain,
   buildCommand,
@@ -293,11 +293,11 @@ function* documentWorkflow(
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
-          // Emit through the EMA Output Api (spec §9).
+          // Emit through the Document Output Api (spec §9).
           // ephemeral() bridges from Workflow (durable) to Operation
           // (non-durable) — output emission is a derived side effect,
           // not journaled.
-          yield* ephemeral(EMA.operations.output(text));
+          yield* ephemeral(DocumentOutput.operations.output(text));
           chunks.push(text);
         }
       }
@@ -386,7 +386,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   //
   // The workflow runs in a spawned child scope that contains all
   // execution state: eval context/scope and the
-  // EMA→channel bridge. Nothing leaks onto the caller's scope.
+  // DocumentOutput→channel bridge. Nothing leaks onto the caller's scope.
   //
   // withResolvers captures the completion result so `yield* execution`
   // can wait for it without needing to await the spawned Task directly
@@ -408,9 +408,9 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
       yield* useTempFileCompiler();
     }
 
-    // EMA → channel bridge (innermost middleware — output flows through
-    // caller-installed normalize/terminal middleware first, then here).
-    yield* EMA.around({
+    // DocumentOutput → channel bridge (innermost middleware — output flows
+    // through caller-installed normalize/terminal middleware first, then here).
+    yield* DocumentOutput.around({
       *output([text]) {
         emitted = true;
         yield* channel.send(text);
@@ -437,7 +437,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
       // Preserve output for any synchronous completion path that did not emit
       // through the streaming API.
       if (!emitted && output) {
-        yield* EMA.operations.output(output);
+        yield* DocumentOutput.operations.output(output);
       }
 
       yield* channel.close(output);

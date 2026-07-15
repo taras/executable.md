@@ -1,7 +1,7 @@
 /**
- * Reusable EMA document runner for OpenCode tools.
+ * Reusable executable.md document runner for OpenCode tools.
  *
- * Provides `emaRun` — an Effection Operation that runs an EMA document
+ * Provides `xmdRun` — an Effection Operation that runs an executable.md document
  * and returns the output string. Handles:
  * - Compiler middleware (auto-detected by runDocument)
  * - AbortSignal bridging into Effection structured concurrency
@@ -11,10 +11,10 @@
  *
  * ```ts
  * import { run } from "effection";
- * import { emaRun } from "../.internal/ema-run.ts";
+ * import { xmdRun } from "../.internal/xmd-run.ts";
  *
  * const output = await run(() =>
- *   emaRun({
+ *   xmdRun({
  *     docPath: ".internal/MyDoc.md",
  *     signal: context.abort,
  *   })
@@ -27,8 +27,8 @@ import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, runDocument } from "@executablemd/core";
 
-export interface EmaRunOptions {
-  /** Path to the EMA document to run. */
+export interface XmdRunOptions {
+  /** Path to the executable.md document to run. */
   docPath: string;
 
   /** Component search directories (default: [".internal/components"]). */
@@ -63,15 +63,15 @@ function* useSignal(signal: AbortSignal): Operation<void> {
 }
 
 /**
- * Run an EMA document and return the output.
+ * Run an executable.md document and return the output.
  *
  * This is an Effection Operation — call it inside `run()`:
  *
  * ```ts
- * const output = await run(() => emaRun({ docPath: "doc.md" }));
+ * const output = await run(() => xmdRun({ docPath: "doc.md" }));
  * ```
  */
-export function* emaRun(options: EmaRunOptions): Operation<string> {
+export function* xmdRun(options: XmdRunOptions): Operation<string> {
   const { docPath, componentDirs = [".internal/components"], env, signal } =
     options;
 
