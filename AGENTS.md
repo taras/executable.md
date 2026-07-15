@@ -29,3 +29,11 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
    that explain what code does
 5. Describe implemented behavior in the present tense; Don't use roadmap
    language in specifications or source code.
+
+## PR Process
+
+1. Use .github/pull_request_template.md
+2. After PR is open, monitor PR for 
+   1. CI failures
+   2. Comments with feedback
+   3. Integrate changes feedback appears
