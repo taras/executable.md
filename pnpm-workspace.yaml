@@ -5,5 +5,3 @@ packages:
   - runtime
   - packages/code-review-agent
   - test-support
-  - .internal
-  - .opencode

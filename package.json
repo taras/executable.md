@@ -69,8 +69,6 @@
     "durable-streams",
     "runtime",
     "packages/code-review-agent",
-    "test-support",
-    ".internal",
-    ".opencode"
+    "test-support"
   ]
 }
