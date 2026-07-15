@@ -49,6 +49,7 @@ import { daemonFactory } from "./modifiers/daemon.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
+import { Stdio } from "@effectionx/process";
 
 // Re-export gray-matter — we use it for YAML frontmatter extraction
 import matter from "gray-matter";
@@ -414,6 +415,11 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
         emitted = true;
         yield* channel.send(text);
       },
+    });
+
+    yield* Stdio.around({
+      *stdout() {},
+      *stderr() {},
     });
 
     // Create per-document eval scope (spec §3.1).

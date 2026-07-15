@@ -14,7 +14,7 @@
 
 import { FetchError, stream as fetchStream } from "@durable-streams/client";
 import { DurableStreamTestServer } from "@durable-streams/server";
-import { call, createChannel, each, main, resource, spawn } from "effection";
+import { call, createChannel, each, ensure, main, resource, spawn, until } from "effection";
 import type { Operation, Stream } from "effection";
 import process from "node:process";
 import type { DurableEvent } from "../mod.ts";
@@ -53,11 +53,8 @@ function useDurableStreamTestServer(): Operation<DurableStreamTestServer> {
   return resource(function* (provide) {
     const server = new DurableStreamTestServer();
     yield* call(() => server.start());
-    try {
-      yield* provide(server);
-    } finally {
-      yield* call(() => server.stop());
-    }
+    yield* ensure(() => until(server.stop()));
+    yield* provide(server);
   });
 }
 

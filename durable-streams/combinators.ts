@@ -18,7 +18,14 @@
  * See protocol spec §7 (structured concurrency), §10 (race semantics).
  */
 
-import { all as effectionAll, race as effectionRace, spawn, suspend, useScope } from "effection";
+import {
+  all as effectionAll,
+  ensure,
+  race as effectionRace,
+  spawn,
+  suspend,
+  useScope,
+} from "effection";
 import type { Operation, Task } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
 import { ephemeral } from "./ephemeral.ts";
@@ -69,7 +76,7 @@ function* runDurableChild<T extends WorkflowValue>(
       // parent combinator (race/all) will cancel this child as part of
       // normal structured concurrency teardown, just like the original
       // run. The Close(cancelled) event already exists in the journal,
-      // so we skip re-emitting it (the finally block checks for this).
+      // so we skip re-emitting it (the ensure teardown checks for this).
       //
       // INVARIANT: This branch is only reachable when a parent combinator
       // (durableRace or durableAll with a failed sibling) will cancel this
@@ -91,39 +98,11 @@ function* runDurableChild<T extends WorkflowValue>(
     childCounter: 0,
   });
 
-  // Track whether we completed normally or via error, so that
-  // the finally block can detect cancellation (the remaining case).
   let closeEvent: Close | undefined;
 
-  try {
-    // Run the child workflow. DurableEffects inside the child read
-    // DurableCtx from the scope, so they'll use childId.
-    const result: T = yield* childWorkflow();
-
-    // Record Close(ok) — will be appended in finally
-    closeEvent = {
-      type: "close",
-      coroutineId: childId,
-      result: { status: "ok", value: result as Json },
-    };
-
-    return result;
-  } catch (error) {
-    // Record Close(err) — will be appended in finally
-    closeEvent = {
-      type: "close",
-      coroutineId: childId,
-      result: {
-        status: "err",
-        error: serializeError(error instanceof Error ? error : new Error(String(error))),
-      },
-    };
-
-    throw error;
-  } finally {
-    // If closeEvent is still undefined, the generator was cancelled
-    // (Effection called iterator.return(), skipping both the normal
-    // return path and the catch block).
+  yield* ensure(function* () {
+    // closeEvent still undefined means the child was cancelled before the
+    // normal-return or catch path ran.
     if (!closeEvent) {
       closeEvent = {
         type: "close",
@@ -135,9 +114,33 @@ function* runDurableChild<T extends WorkflowValue>(
     // Don't re-emit a Close event if one already exists in the journal
     // (e.g., a cancelled child being replayed via suspend()).
     if (!replayIndex.hasClose(childId)) {
-      // Append the Close event.
       yield* stream.append(closeEvent!);
     }
+  });
+
+  try {
+    // Run the child workflow. DurableEffects inside the child read
+    // DurableCtx from the scope, so they'll use childId.
+    const result: T = yield* childWorkflow();
+
+    closeEvent = {
+      type: "close",
+      coroutineId: childId,
+      result: { status: "ok", value: result as Json },
+    };
+
+    return result;
+  } catch (error) {
+    closeEvent = {
+      type: "close",
+      coroutineId: childId,
+      result: {
+        status: "err",
+        error: serializeError(error instanceof Error ? error : new Error(String(error))),
+      },
+    };
+
+    throw error;
   }
 }
 

@@ -7,6 +7,6 @@
     "./test": "./test/mod.ts"
   },
   "dependencies": {
-    "@effectionx/context-api": "workspace:*"
+    "@effectionx/context-api": "0.6.0"
   }
 }
