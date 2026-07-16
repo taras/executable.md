@@ -47,8 +47,6 @@ jobs:
           deno compile \
             --node-modules-dir=none \
             --exclude-unused-npm \
-            --exclude .opencode \
-            --exclude .internal \
             --allow-all \
             --target ${{ matrix.target }} \
             --output dist/${{ matrix.artifact }} \

@@ -100,27 +100,6 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
-  .internal:
-    dependencies:
-      '@executablemd/core':
-        specifier: workspace:*
-        version: link:../core
-      '@executablemd/durable-streams':
-        specifier: workspace:*
-        version: link:../durable-streams
-
-  .opencode:
-    dependencies:
-      '@executablemd/core':
-        specifier: workspace:*
-        version: link:../core
-      '@executablemd/durable-streams':
-        specifier: workspace:*
-        version: link:../durable-streams
-      '@opencode-ai/plugin':
-        specifier: 1.2.27
-        version: 1.2.27
-
   cli: {}
 
   core:
@@ -413,12 +392,6 @@ packages:
 
   '@microsoft/fetch-event-source@2.0.1':
     resolution: {integrity: sha512-W6CLUJ2eBMw3Rec70qrsEW0jOm/3twwJv21mrmj2yORiaVmVYGS4sSS5yUwvQc1ZlDLYGPnClVWmUUMagKNsfA==}
-
-  '@opencode-ai/plugin@1.2.27':
-    resolution: {integrity: sha512-h+8Bw9v9nghMg7T+SUCTzxlIhOrsTqXW7U0HVLGQST5DjbN7uyCUM51roZWZ8LRjGxzbzFhvPnY1bj8i+ioZyw==}
-
-  '@opencode-ai/sdk@1.2.27':
-    resolution: {integrity: sha512-Wk0o/I+Fo+wE3zgvlJDs8Fb67KlKqX0PrV8dK5adSDkANq6r4Z25zXJg2iOir+a8ntg3rAcpel1OY4FV/TwRUA==}
 
   '@oxfmt/binding-android-arm-eabi@0.41.0':
     resolution: {integrity: sha512-REfrqeMKGkfMP+m/ScX4f5jJBSmVNYcpoDF8vP8f8eYPDuPGZmzp56NIUsYmx3h7f6NzC6cE3gqh8GDWrJHCKw==}
@@ -1220,9 +1193,6 @@ packages:
     resolution: {integrity: sha512-D1mvvtDG0L5ft/jGWkLpG1+m0eQxOfaBvTNELraWj22wSVUMWxZUvYgJYcKh6jGGIkJFhH4IZPQhR4TKpc8mBw==}
     engines: {node: '>=10'}
 
-  zod@4.1.8:
-    resolution: {integrity: sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ==}
-
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -1416,13 +1386,6 @@ snapshots:
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
   '@microsoft/fetch-event-source@2.0.1': {}
-
-  '@opencode-ai/plugin@1.2.27':
-    dependencies:
-      '@opencode-ai/sdk': 1.2.27
-      zod: 4.1.8
-
-  '@opencode-ai/sdk@1.2.27': {}
 
   '@oxfmt/binding-android-arm-eabi@0.41.0':
     optional: true
@@ -2266,8 +2229,6 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 20.2.9
-
-  zod@4.1.8: {}
 
   zod@4.3.6: {}
 
