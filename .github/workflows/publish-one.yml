@@ -60,9 +60,18 @@ jobs:
           echo "build failed after 4 attempts" >&2
           exit 1
 
+      # Skip an already-published version so re-running a tag's workflow (or
+      # tagging a version that was hand-bootstrapped) is idempotent instead of
+      # failing on npm's no-republish rule.
       - name: Publish to npm
-        run: npm publish --access public
         working-directory: ${{ inputs.package }}/npm
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          if npm view "$NAME@${{ inputs.version }}" version >/dev/null 2>&1; then
+            echo "$NAME@${{ inputs.version }} is already on npm — skipping"
+          else
+            npm publish --access public
+          fi
 
       - name: Publish to JSR (best-effort)
         run: deno publish --allow-dirty || echo "JSR publish skipped/failed (secondary registry)"

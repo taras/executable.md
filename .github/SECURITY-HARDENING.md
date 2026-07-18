@@ -29,12 +29,12 @@ publishing only).
 
 ## Do now — repository/npm settings (owner)
 
-- [ ] Create the `npm-publish` GitHub environment with required reviewers and a
+- [x] Create the `npm-publish` GitHub environment with required reviewers and a
       deployment branch/tag rule allowing only `v*` tags. Without this, anyone
       with write access can `workflow_dispatch` the publish from an unreviewed
       branch; npm's trusted publisher validates only repo + caller workflow
       filename, so it would mint a token for it.
-- [ ] Add the environment name (`npm-publish`) to each package's npm
+- [x] Add the environment name (`npm-publish`) to each package's npm
       trusted-publisher configuration so npm rejects tokens minted outside it.
 - [ ] Rulesets: require PRs into `main`; restrict `v*` tag creation.
 - [ ] Actions settings: require approval for all outside collaborators (the
