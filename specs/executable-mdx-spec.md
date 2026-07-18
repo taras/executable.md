@@ -488,72 +488,20 @@ within a component via a binding environment (see §4).
 Eval blocks produce **no rendered output by default**. They can
 optionally produce output via the `output()` function (see §4.7).
 
-```typescript
-export const evalFactory: ModifierFactory = (_params) =>
-  (_args, _next) => (function* () {
-    const ctx = yield* useCodeBlock();
-    // Contextual reads (§5.5), bridged with ephemeral() because this
-    // handler is Workflow-typed.
-    const evalEnv = yield* ephemeral(env());
-    const persist = yield* ephemeral(persistent());
+Observable behavior of an `eval` block:
 
-    // Inject output() function into env so eval blocks can produce
-    // rendered output. The mutable ref is block-local; serializeExports
-    // silently omits non-JSON values (functions), so output won't
-    // pollute the journal. The output text itself is journaled alongside
-    // exports as __output.
-    const outputRef = { text: "" };
-    evalEnv.values.output = (text: string) => { outputRef.text = String(text); };
-
-    const transformed = transformBlock(
-      ctx.content,
-      ctx.blockId,
-      Object.keys(evalEnv.values),
-    );
-
-    const bindings = serializeExports(evalEnv.values, transformed.imports);
-    const result = yield createDurableOperation(
-      { type: "eval", name: `eval:${ctx.blockId}`, language: ctx.language },
-      function* () {
-        Object.assign(evalEnv.values, bindings);
-        const fn = yield* compileBlock(source, transformed.userImports ?? []);
-
-        if (persist) {
-          // The component eval scope is read contextually (§5.5).
-          const scope = yield* evalScope();
-          const blockResult = yield* scope.eval(
-            () => fn(evalEnv.values) as unknown as Operation<void>,
-          );
-          unbox(blockResult);
-        } else {
-          yield* fn(evalEnv.values) as unknown as Operation<void>;
-        }
-
-        const exports = serializeExports(evalEnv.values, transformed.exports);
-
-        // Record output text alongside exports.
-        if (outputRef.text) {
-          (exports as Record<string, unknown>).__output = outputRef.text;
-        }
-
-        return exports as unknown as Json;
-      },
-    );
-
-    // Merge serializable exports into the current environment.
-    if (result.value && typeof result.value === "object") {
-      const restored = result.value as Record<string, unknown>;
-      // Extract __output before merging into env
-      if (typeof restored.__output === "string") {
-        outputRef.text = restored.__output;
-      }
-      const { __output: _, ...exports } = restored;
-      Object.assign(evalEnv.values, exports);
-    }
-
-    return { output: outputRef.text, exitCode: 0, stderr: "" };
-  })();
-```
+- The block and its binding environment are read contextually (§5.5);
+  running an eval block without an environment in scope is a clear error.
+- Execution is journaled as one `eval` entry named after the block id.
+  The JSON-serializable exports (plus the `__output` text, §4.7) are
+  stored in the entry; on replay they are restored into the environment
+  without re-executing the block.
+- New bindings the block exports merge into the shared environment, so
+  later blocks in the same component can read them.
+- Under `persist`, only the compiled block runs inside the component
+  eval scope (§4.4), so resources it spawns outlive the block.
+- The block's rendered output is the `output()` text, or the coerced
+  return value when `output()` was not called (§4.7).
 
 **`daemon`** — spawns a long-running subprocess and immediately
 returns control to the document. The process is alive for the
@@ -585,38 +533,14 @@ and signals to readers that this block runs a command.
 | Lifetime | Until command exits | Until component scope closes |
 | Repeated-run behavior | Spawns a fresh subprocess every run | Spawns a fresh subprocess every run |
 
-```typescript
-import { daemon } from "@effectionx/process";
+Observable behavior of a `daemon` block:
 
-export const daemonFactory: ModifierFactory = (_params) =>
-  (_args, _next) => (function* () {
-    const ctx = yield* useCodeBlock();
-
-    // Bridge from Workflow (durable) to Operation (ephemeral) —
-    // daemon produces no journal entry, so all its effects are ephemeral.
-    const launchDaemon = {
-      *[Symbol.iterator]() {
-        const scope = yield* evalScope();
-
-        // ctx.content is already interpolated by the expansion engine
-        // before the modifier chain runs — no interpolation needed here.
-        const commandParts = buildCommand(ctx.language, ctx.content);
-        const commandStr = commandParts.join(" ");
-
-        // Fork into eval scope — lifetime tied to component expansion.
-        // daemon() never resolves. If the process exits prematurely,
-        // daemon() throws DaemonExitError, propagating to the eval scope.
-        yield* scope.eval(function* () {
-          yield* daemon(commandStr);
-        });
-      },
-    };
-    yield* ephemeral(launchDaemon);
-
-    // Control returns here immediately after the fork.
-    return { output: "", exitCode: 0, stderr: "" };
-  })();
-```
+- The block's command (its content, already interpolated by the
+  expansion engine) is forked into the component eval scope (§4.4);
+  running a daemon block without an eval scope in scope is a clear
+  error.
+- The block produces no journal entry and no rendered output — control
+  returns to the document immediately after the fork.
 
 **Process lifetime.** The forked task calls `daemon(command)` from
 `@effectionx/process`. `daemon` spawns the process and suspends
@@ -3074,15 +2998,11 @@ function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution>
     });
     yield* useDirectoryResolver(componentDirs);
 
-    // Create eval scope before the journaled document workflow (§4.4),
-    // then install the document's Component providers (§5.5) so the
-    // workflow inherits import, modifier execution, and the root eval
-    // scope contextually.
+    // Create eval scope before the journaled document workflow (§4.4).
+    // The document's Component providers — import, modifier execution,
+    // and this eval scope — are installed here so the workflow inherits
+    // them contextually (§5.5).
     const rootEvalScope = yield* resource(useEvalScope());
-    yield* Component.around(
-      { importComponent, applyModifiers, evalScope: () => rootEvalScope },
-      { at: "min" },
-    );
 
     // Install built-in modifier handlers (exec, silent, sample, eval, persist, timeout)
     yield* useBuiltinModifiers();

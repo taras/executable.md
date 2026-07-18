@@ -33,11 +33,13 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
 7. Do not use braceless `if` statements.
 8. Keep the release spec current — changes to the release configuration
    require changes to specs/release-process-spec.md to match.
+9. Prefer stateless generators - use a function when calling a function that
+   returns an operation; Do not do this function*(arg) { return yield* generator(arg) }
 
 ## PR Process
 
 1. Use .github/pull_request_template.md
-2. After PR is open, monitor PR for 
+2. After PR is open, monitor PR for
    1. CI failures
    2. Comments with feedback
    3. Integrate changes feedback appears

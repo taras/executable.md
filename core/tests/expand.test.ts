@@ -8,8 +8,16 @@ import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
+import { ephemeral } from "@executablemd/durable-streams";
+import { useContent } from "../src/content-context.ts";
 import type { EvalEnv } from "../src/eval-env.ts";
-import type { Segment, ComponentDefinition, Json, CodeBlockResult } from "../src/types.ts";
+import type {
+  Segment,
+  ComponentDefinition,
+  FunctionComponentDefinition,
+  Json,
+  CodeBlockResult,
+} from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,11 +42,11 @@ function makeComponent(
 }
 
 /** Install test component + modifier providers on the current scope. */
-function* useTestComponents(
-  components: Record<string, ComponentDefinition>,
+function useTestComponents(
+  components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
   codeResult?: CodeBlockResult,
 ): Operation<void> {
-  yield* Component.around(
+  return Component.around(
     {
       // deno-lint-ignore require-yield
       *importComponent([name], _next) {
@@ -64,8 +72,8 @@ function* useTestComponents(
 }
 
 /** Install a binding environment on the current scope. */
-function* useTestEnv(testEnv: EvalEnv): Operation<void> {
-  yield* Component.around(
+function useTestEnv(testEnv: EvalEnv): Operation<void> {
+  return Component.around(
     {
       // deno-lint-ignore require-yield
       *env(_args, _next) {
@@ -78,7 +86,7 @@ function* useTestEnv(testEnv: EvalEnv): Operation<void> {
 
 function expand(
   segments: Segment[],
-  components: Record<string, ComponentDefinition>,
+  components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
   opts: {
     meta?: Record<string, unknown>;
     props?: Record<string, Json>;
@@ -95,7 +103,7 @@ function expand(
 
 function expandWithEnv(
   segments: Segment[],
-  components: Record<string, ComponentDefinition>,
+  components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
   codeResult?: CodeBlockResult,
 ): Operation<{ output: string; env: Record<string, unknown> }> {
   return scoped(function* () {
@@ -415,7 +423,7 @@ function* useRecordingModifiers(codeResult?: CodeBlockResult): Operation<string[
 
 function recordingExpand(
   segments: Segment[],
-  components: Record<string, ComponentDefinition>,
+  components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
   codeResult?: CodeBlockResult,
 ): Operation<{ output: string; execCalls: string[] }> {
   return scoped(function* () {
@@ -788,5 +796,29 @@ describe("interpolate", () => {
 
   it("escaped braces → literal", function* () {
     expect(interpolate("\\{meta.title}", { title: "Hello" }, {})).toBe("{meta.title}");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Function-component content through the contextual content() operation
+// ---------------------------------------------------------------------------
+
+describe("function component content", () => {
+  it("renders default content and a named slot via useContent", function* () {
+    const card: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Card",
+      path: "components/Card.ts",
+      inputs: {},
+      *fn(_props) {
+        const header = yield* ephemeral(useContent("header"));
+        const body = yield* ephemeral(useContent());
+        return `[${header.trim()}|${body.trim()}]`;
+      },
+    };
+    const note = makeComponent("Note", "HEADER");
+    const segments = scanSegments('<Card>\n<Note slot="header" />\nBODY\n</Card>');
+    const output = yield* expand(segments, { Card: card, Note: note });
+    expect(output).toBe("[HEADER|BODY]");
   });
 });

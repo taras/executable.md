@@ -42,10 +42,10 @@ export interface ComponentInvocation {
   selfClosing: boolean;
   /**
    * When set, expression props resolve against this env instead of the
-   * current EvalEnvCtx. Used for projected children (substituted via
-   * `<Content />`) — they carry the caller's eval env so that expression
-   * props like `{pr}` resolve in the lexical scope where the JSX was
-   * written, not the wrapping component's scope.
+   * contextual `env()` binding environment. Used for projected children
+   * (substituted via `<Content />`) — they carry the caller's eval env so
+   * that expression props like `{pr}` resolve in the lexical scope where
+   * the JSX was written, not the wrapping component's scope.
    *
    * This field is NOT part of the parsed IR — it's set at expansion time
    * by substituteContent when projecting children into <Content /> slots.

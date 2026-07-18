@@ -49,11 +49,11 @@ function makeComponent(
 }
 
 /** Install test component + modifier providers on the current scope. */
-function* useTestComponents(
+function useTestComponents(
   components: Record<string, ComponentDefinition>,
   codeResult?: CodeBlockResult,
 ): Operation<void> {
-  yield* Component.around(
+  return Component.around(
     {
       // deno-lint-ignore require-yield
       *importComponent([name], _next) {

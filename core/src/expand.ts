@@ -70,8 +70,8 @@ export function createBlockCounter(): BlockCounter {
 // override ancestors without leaking into siblings
 // ---------------------------------------------------------------------------
 
-function* provideEnv(value: EvalEnv): Operation<void> {
-  yield* Component.around(
+function provideEnv(value: EvalEnv): Operation<void> {
+  return Component.around(
     {
       // deno-lint-ignore require-yield
       *env(_args, _next) {
@@ -82,8 +82,8 @@ function* provideEnv(value: EvalEnv): Operation<void> {
   );
 }
 
-function* provideEvalScope(value: EvalScope): Operation<void> {
-  yield* Component.around(
+function provideEvalScope(value: EvalScope): Operation<void> {
+  return Component.around(
     {
       // deno-lint-ignore require-yield
       *evalScope(_args, _next) {

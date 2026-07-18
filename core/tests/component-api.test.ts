@@ -18,6 +18,7 @@ import {
   content,
 } from "../src/component-api.ts";
 import { ephemeral } from "@executablemd/durable-streams";
+import { useEvalScope } from "@effectionx/scope-eval";
 import { persistFactory } from "../src/modifiers/persist.ts";
 import type { ComponentDefinition, ErrorSegment } from "../src/types.ts";
 
@@ -180,6 +181,39 @@ describe("Component Api", () => {
     expect(second).toBe(outerEnv);
   });
 
+  it("nested evalScope providers override ancestors without leaking into siblings", function* () {
+    const outerScope = yield* useEvalScope();
+    const innerScope = yield* useEvalScope();
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *evalScope(_args, _next) {
+          return outerScope;
+        },
+      },
+      { at: "min" },
+    );
+
+    const first = yield* scoped(function* () {
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *evalScope(_args, _next) {
+            return innerScope;
+          },
+        },
+        { at: "min" },
+      );
+      return yield* evalScope();
+    });
+    expect(first).toBe(innerScope);
+
+    const second = yield* scoped(function* () {
+      return yield* evalScope();
+    });
+    expect(second).toBe(outerScope);
+  });
+
   // ----- Persistent evaluation flag -----
 
   it("persistent() is true inside the persist modifier chain and false outside", function* () {
@@ -191,7 +225,7 @@ describe("Component Api", () => {
       observed = yield* ephemeral(persistent());
       return { output: "", exitCode: 0, stderr: "" };
     };
-    yield* middleware([], terminal) as unknown as Operation<unknown>;
+    yield* middleware([], terminal);
     expect(observed).toBe(true);
     expect(yield* persistent()).toBe(false);
   });

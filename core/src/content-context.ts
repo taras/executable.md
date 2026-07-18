@@ -21,6 +21,6 @@ import { content } from "./component-api.ts";
  * const header = yield* useContent("header");
  * ```
  */
-export function* useContent(slotName?: string): Operation<string> {
-  return yield* content(slotName);
+export function useContent(slotName?: string): Operation<string> {
+  return content(slotName);
 }

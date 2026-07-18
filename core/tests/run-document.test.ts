@@ -1009,10 +1009,10 @@ describe("runDocument", () => {
 // ---------------------------------------------------------------------------
 
 describe("Component Api dispatch — journal shape", () => {
-  it("import and exec journal entries keep their identities", function* () {
+  it("import, exec, and eval journal entries keep their identities", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "README.md": "<Note />\n\n```bash exec\necho hi\n```\n",
+      "README.md": "<Note />\n\n```bash exec\necho hi\n```\n\n```js eval\nconst x = 1;\n```\n",
       "components/Note.md": "note!\n",
     });
     yield* useStubExec();
@@ -1031,6 +1031,12 @@ describe("Component Api dispatch — journal shape", () => {
       e.type === "yield" && e.description.type === "exec" ? [e] : [],
     );
     expect(execs.length).toBe(1);
+
+    const evals = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "eval" ? [e.description.name] : [],
+    );
+    expect(evals.length).toBe(1);
+    expect(String(evals[0])).toMatch(/^eval:eval:root:\d+$/);
   });
 });
 
