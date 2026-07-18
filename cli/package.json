@@ -1,6 +1,18 @@
 {
   "name": "@executablemd/cli",
   "version": "0.2.0",
+  "description": "The xmd command-line interface for executable.md.",
+  "bin": {
+    "xmd": "./src/cli.ts"
+  },
   "type": "module",
-  "exports": "./src/cli.ts"
+  "exports": "./src/cli.ts",
+  "dependencies": {
+    "@effectionx/stream-helpers": "0.8.3",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "configliere": "^0.2.3",
+    "effection": "4.1.0-alpha.7",
+    "zod": "^4.3.6"
+  }
 }

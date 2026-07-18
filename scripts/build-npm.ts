@@ -2,15 +2,17 @@
  * Build an npm package for one @executablemd workspace member via dnt.
  *
  * Usage:
- *   deno run -A scripts/build-npm.ts <package> [version]
+ *   deno run -A scripts/build-npm.ts <package-dir> [version]
  *
- * <package> is one of the keys in PACKAGES below. [version] defaults to
- * 0.0.0-dev. Output lands in <dir>/npm.
+ * <package-dir> is a workspace member directory (e.g. "core" or
+ * "packages/code-review-agent"). [version] defaults to 0.0.0-dev. Output lands
+ * in <package-dir>/npm.
  *
- * Internal @executablemd siblings are declared as external npm dependencies
- * (never inlined), so each published package resolves them from npm. External
- * dependency versions are read from the root package.json so there is a single
- * source of truth.
+ * Everything published is derived from the member's own deno.json (name,
+ * exports) and package.json (dependencies, description, bin) — those manifests
+ * are the single source of truth. Internal @executablemd siblings are declared
+ * as external npm dependencies (resolved to the sibling's own version), never
+ * inlined, so each published package resolves them from npm.
  */
 
 import { exit, main, until } from "effection";
@@ -28,154 +30,120 @@ import { join } from "node:path";
 // Recursive directory copy and temp-dir creation are not part of @effectionx/fs.
 import { cp, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { z } from "npm:zod@^4";
 
-/** Version range published packages use to depend on their siblings. */
-const INTERNAL_RANGE = "^0.2.0";
+const ExportsSchema = z.union([z.string(), z.record(z.string(), z.string())]);
 
-interface EntryPoint {
-  name: string;
-  path: string;
-  kind?: "bin";
+const DenoJsonSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  exports: ExportsSchema,
+});
+
+const PackageJsonSchema = z.object({
+  description: z.string().optional(),
+  dependencies: z.record(z.string(), z.string()).optional(),
+  bin: z.record(z.string(), z.string()).optional(),
+});
+
+const RootDenoSchema = z.object({
+  workspace: z.array(z.string()),
+  imports: z.record(z.string(), z.string()),
+});
+
+const INTERNAL_SCOPE = "@executablemd/";
+
+function normalizeExports(exports: z.infer<typeof ExportsSchema>): Record<string, string> {
+  if (typeof exports === "string") {
+    return { ".": exports };
+  }
+  return exports;
 }
-
-interface PackageConfig {
-  dir: string;
-  name: string;
-  description: string;
-  entryPoints: (string | EntryPoint)[];
-  /** External npm dependency names; versions come from root package.json. */
-  deps: string[];
-  /** Sibling @executablemd packages this one depends on. */
-  internal: string[];
-}
-
-const PACKAGES: Record<string, PackageConfig> = {
-  "code-review-agent": {
-    dir: "packages/code-review-agent",
-    name: "@executablemd/code-review-agent",
-    description:
-      "Parsers that turn git diff and Oxlint output into typed structures for executable.md reviews.",
-    entryPoints: ["./mod.ts"],
-    deps: [],
-    internal: [],
-  },
-  "durable-streams": {
-    dir: "durable-streams",
-    name: "@executablemd/durable-streams",
-    description: "Durable, replayable event streams for executable.md.",
-    entryPoints: ["./mod.ts"],
-    deps: ["@durable-streams/client", "effection"],
-    internal: [],
-  },
-  runtime: {
-    dir: "runtime",
-    name: "@executablemd/runtime",
-    description: "Runtime host APIs for executable.md documents.",
-    entryPoints: [
-      { name: ".", path: "./mod.ts" },
-      { name: "./test", path: "./test/mod.ts" },
-    ],
-    deps: [
-      "effection",
-      "@effectionx/context-api",
-      "@effectionx/fetch",
-      "@effectionx/fs",
-      "@effectionx/node",
-      "@effectionx/process",
-    ],
-    internal: [],
-  },
-  core: {
-    dir: "core",
-    name: "@executablemd/core",
-    description: "Core engine that evaluates executable.md documents.",
-    entryPoints: ["./mod.ts"],
-    deps: [
-      "effection",
-      "@effectionx/context-api",
-      "@effectionx/converge",
-      "@effectionx/fetch",
-      "@effectionx/fs",
-      "@effectionx/middleware",
-      "@effectionx/node",
-      "@effectionx/process",
-      "@effectionx/scope-eval",
-      "@effectionx/stream-helpers",
-      "@effectionx/timebox",
-      "acorn",
-      "gray-matter",
-      "magic-string",
-      "marked",
-      "marked-terminal",
-      "mdast-util-to-string",
-      "remark",
-      "remend",
-      "unist-util-select",
-    ],
-    internal: ["@executablemd/durable-streams", "@executablemd/runtime"],
-  },
-  cli: {
-    dir: "cli",
-    name: "@executablemd/cli",
-    description: "The xmd command-line interface for executable.md.",
-    entryPoints: [{ kind: "bin", name: "xmd", path: "./src/cli.ts" }],
-    deps: ["effection", "@effectionx/stream-helpers", "configliere", "zod"],
-    internal: ["@executablemd/core", "@executablemd/durable-streams"],
-  },
-};
 
 await main(function* (args) {
-  const repoRoot = new URL("../", import.meta.url);
-
-  const rootPkg = JSON.parse(yield* readTextFile(new URL("package.json", repoRoot))) as {
-    dependencies: Record<string, string>;
-  };
-  const rootDeno = JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot))) as {
-    imports: Record<string, string>;
-  };
-
-  // Version range from the single sources of truth: root package.json
-  // dependencies, falling back to the root deno.json import map (npm:
-  // specifiers, e.g. "npm:configliere@^0.2.3").
-  const depVersion = (name: string): string => {
-    const fromPkg = rootPkg.dependencies[name];
-    if (fromPkg) return fromPkg;
-    const spec = rootDeno.imports[name];
-    if (spec?.startsWith("npm:")) {
-      const at = spec.lastIndexOf("@");
-      if (at > "npm:".length) return spec.slice(at + 1);
-    }
-    throw new Error(`no version for "${name}" in root package.json or deno.json`);
-  };
-
-  const pkgKey = args[0];
+  const pkgArg = args[0];
   const version = args[1] ?? "0.0.0-dev";
   const skipInstall = Deno.env.get("DNT_SKIP_INSTALL") === "1";
 
-  const config = PACKAGES[pkgKey];
-  if (!config) {
-    console.error(`unknown package "${pkgKey}". known: ${Object.keys(PACKAGES).join(", ")}`);
+  if (!pkgArg) {
+    console.error("usage: build-npm.ts <package-dir> [version]");
     yield* exit(1);
     return;
   }
 
-  const pkgDir = new URL(`${config.dir}/`, repoRoot);
-  const outDir = new URL("npm/", pkgDir);
+  const repoRoot = new URL("../", import.meta.url);
+  const pkgDir = new URL(`${pkgArg}/`, repoRoot);
 
+  const rootDeno = RootDenoSchema.parse(
+    JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot))),
+  );
+
+  // Map every @executablemd workspace member name -> its declared version, so
+  // internal deps can be pinned to the sibling's own version without hardcoding.
+  const siblingVersion: Record<string, string> = {};
+  for (const member of rootDeno.workspace) {
+    const memberDenoUrl = new URL(`${member}/deno.json`, repoRoot);
+    if (!(yield* exists(memberDenoUrl))) {
+      continue;
+    }
+    const parsed = DenoJsonSchema.safeParse(JSON.parse(yield* readTextFile(memberDenoUrl)));
+    if (parsed.success && parsed.data.name.startsWith(INTERNAL_SCOPE)) {
+      siblingVersion[parsed.data.name] = parsed.data.version;
+    }
+  }
+
+  const denoJson = DenoJsonSchema.parse(
+    JSON.parse(yield* readTextFile(new URL("deno.json", pkgDir))),
+  );
+  const packageJson = PackageJsonSchema.parse(
+    JSON.parse(yield* readTextFile(new URL("package.json", pkgDir))),
+  );
+
+  // Dependencies come from package.json verbatim, except internal siblings
+  // (workspace:* protocol) which resolve to the sibling's own version range.
+  const dependencies: Record<string, string> = {};
+  for (const [name, range] of Object.entries(packageJson.dependencies ?? {})) {
+    if (name.startsWith(INTERNAL_SCOPE)) {
+      const resolved = siblingVersion[name];
+      if (!resolved) {
+        throw new Error(`no workspace version found for internal dependency "${name}"`);
+      }
+      dependencies[name] = `^${resolved}`;
+    } else {
+      dependencies[name] = range;
+    }
+  }
+
+  // Entry points come from deno.json exports; a package.json `bin` marks its
+  // main export as an executable rather than a library entry.
+  const exportsMap = normalizeExports(denoJson.exports);
+  const binNames = Object.keys(packageJson.bin ?? {});
+  const entryPoints: Array<{ name: string; path: string; kind?: "bin" }> = [];
+  for (const binName of binNames) {
+    const mainPath = exportsMap["."];
+    if (!mainPath) {
+      throw new Error(`package "${denoJson.name}" declares bin "${binName}" but has no "." export`);
+    }
+    entryPoints.push({ kind: "bin", name: binName, path: mainPath });
+  }
+  for (const [subpath, path] of Object.entries(exportsMap)) {
+    if (subpath === "." && binNames.length > 0) {
+      continue;
+    }
+    entryPoints.push({ name: subpath, path });
+  }
+
+  const outDir = new URL("npm/", pkgDir);
   yield* emptyDir(fromFileUrl(outDir));
 
-  const dependencies: Record<string, string> = {};
-  for (const name of config.deps) dependencies[name] = depVersion(name);
-  for (const name of config.internal) dependencies[name] = INTERNAL_RANGE;
-
   // dnt externalizes any import that resolves to an `npm:` specifier (that's how
-  // effection/@effectionx end up as dependencies), and inlines anything that
+  // effection/@effectionx end up as dependencies) and inlines anything that
   // resolves to a local file. Sibling @executablemd packages resolve locally via
-  // Deno *workspace* membership, which no import-map override or dnt mapping can
-  // suppress. So build in an isolated copy OUTSIDE the workspace tree, with a
-  // generated import map that redirects the siblings to `npm:` specifiers — dnt
-  // then declares them as dependencies instead of inlining them.
-  const buildRoot = yield* until(mkdtemp(join(tmpdir(), `dnt-${pkgKey}-`)));
+  // Deno *workspace* membership, which no import-map override can suppress. So
+  // build in a copy OUTSIDE the workspace tree, with a generated import map that
+  // redirects the siblings to `npm:` specifiers — dnt then declares them as
+  // dependencies instead of inlining them.
+  const buildRoot = yield* until(mkdtemp(join(tmpdir(), "dnt-")));
   const srcCopy = join(buildRoot, "pkg");
   yield* until(cp(fromFileUrl(pkgDir), srcCopy, { recursive: true }));
   for (const excluded of ["npm", "tests", "node_modules", "demo"]) {
@@ -184,14 +152,18 @@ await main(function* (args) {
 
   const isolatedImports: Record<string, string> = {};
   for (const [key, value] of Object.entries(rootDeno.imports)) {
-    isolatedImports[key] =
-      value.startsWith("npm:") || value.startsWith("jsr:") || value.startsWith("http")
-        ? value
-        : new URL(value, repoRoot).href;
+    if (value.startsWith("npm:") || value.startsWith("jsr:") || value.startsWith("http")) {
+      isolatedImports[key] = value;
+    } else {
+      isolatedImports[key] = new URL(value, repoRoot).href;
+    }
   }
-  for (const name of config.internal) {
-    isolatedImports[name] = `npm:${name}@${INTERNAL_RANGE}`;
-    isolatedImports[`${name}/`] = `npm:${name}@${INTERNAL_RANGE}/`;
+  for (const [name, siblingVer] of Object.entries(siblingVersion)) {
+    if (name === denoJson.name) {
+      continue;
+    }
+    isolatedImports[name] = `npm:${name}@^${siblingVer}`;
+    isolatedImports[`${name}/`] = `npm:${name}@^${siblingVer}/`;
   }
   yield* writeTextFile(
     join(srcCopy, "deno.json"),
@@ -201,14 +173,7 @@ await main(function* (args) {
   try {
     yield* until(
       build({
-        entryPoints: config.entryPoints.map((entry) =>
-          typeof entry === "string"
-            ? join(srcCopy, entry)
-            : {
-                ...entry,
-                path: join(srcCopy, entry.path),
-              },
-        ),
+        entryPoints: entryPoints.map((entry) => ({ ...entry, path: join(srcCopy, entry.path) })),
         outDir: fromFileUrl(outDir),
         importMap: join(srcCopy, "deno.json"),
         shims: { deno: false },
@@ -229,9 +194,9 @@ await main(function* (args) {
           lib: ["ESNext", "DOM"],
         },
         package: {
-          name: config.name,
+          name: denoJson.name,
           version,
-          description: config.description,
+          description: packageJson.description ?? "",
           license: "MIT",
           homepage: "https://executable.md",
           repository: {
@@ -241,7 +206,6 @@ await main(function* (args) {
           bugs: { url: "https://github.com/taras/executable.md/issues" },
           dependencies,
         },
-        // dnt's postBuild runs npm install first; copy LICENSE afterwards instead.
       }),
     );
   } finally {
@@ -253,5 +217,5 @@ await main(function* (args) {
     yield* copyFile(license, new URL("LICENSE", outDir));
   }
 
-  console.log(`built ${config.name}@${version} -> ${config.dir}/npm`);
+  console.log(`built ${denoJson.name}@${version} -> ${pkgArg}/npm`);
 });

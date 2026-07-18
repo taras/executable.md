@@ -1,6 +1,7 @@
 node_modules/
 .vscode/
 .reviews/journal*.jsonl
+.reviews/.oxlint/
 .reviews/tsconfig.oxlint.json
 .reviews/analyze-report.md
 .reviews/analyze-run.json

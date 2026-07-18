@@ -15,13 +15,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Deno + `deno install` provision only the lint toolchain the review
-      # document invokes via `npx oxlint` (oxlint + oxlint-tsgolint). The review
-      # itself runs on the released xmd binary, below — not from source.
-      - uses: denoland/setup-deno@v2.0.3
-
-      - run: deno install
-
       - name: Install xmd release binary
         run: |
           curl -fsSL https://executable.md/install.sh | sh

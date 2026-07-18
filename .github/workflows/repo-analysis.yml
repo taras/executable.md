@@ -29,14 +29,6 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      # Deno + `deno install` provision only the lint toolchain the analysis
-      # document invokes via `npx oxlint`. The analysis itself runs on the
-      # released xmd binary, below — not from source.
-      - uses: denoland/setup-deno@v2.0.3
-
-      - name: Install dependencies
-        run: deno install
-
       - name: Install xmd release binary
         run: |
           curl -fsSL https://executable.md/install.sh | sh

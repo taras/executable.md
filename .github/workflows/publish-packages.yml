@@ -1,17 +1,19 @@
 name: Publish packages
 
-# Publishes every @executablemd library package to npm (primary) and JSR
-# (secondary). Runs on the same `v*` tag that drives release.yml, so a single
-# tag ships the binary and the packages together.
-#
-# Packages are built and published in dependency order (leaves first) so that
-# when a downstream package builds, dnt resolves its siblings from the registry
-# instead of inlining them.
+# Publishes every @executablemd library to npm (primary) and JSR (secondary) on
+# the same `v*` tag that drives release.yml, so one tag ships the binary and the
+# packages together. Build/publish orchestration lives in
+# scripts/publish-packages.ts (packages + order derived from the manifests).
 #
 # Prerequisites (one-time):
-#   - NPM_TOKEN repo secret with publish rights to the @executablemd npm scope.
-#   - The @executablemd JSR scope + packages created and linked to this repo
-#     (JSR publish is best-effort; failures do not block the npm publish).
+#   - npm: configure a trusted publisher (OIDC) for each @executablemd package
+#     pointing at this repo + this workflow, so no npm token is needed.
+#   - JSR: create/link the @executablemd packages to this repo (JSR publish is
+#     best-effort; failures do not fail the run).
+#
+# Note for consumers: core/runtime/cli depend on effection's 4.x prerelease,
+# which npm's peer resolver rejects against @effectionx/* (`^3 || ^4`). Until
+# effection 4 is stable, installing those packages needs `--legacy-peer-deps`.
 
 on:
   push:
@@ -24,15 +26,14 @@ on:
 
 permissions:
   contents: read
-  id-token: write # JSR OIDC
+  id-token: write # npm OIDC trusted publishing + JSR OIDC
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      # @effectionx/* declare `peer effection@"^3 || ^4"`, which npm does not
-      # match against the pinned 4.x prerelease. Mirror the repo's pnpm
-      # strict-peer-dependencies=false for npm during dnt's install step.
+      # @effectionx/* peer-depend on effection `^3 || ^4`, which npm won't match
+      # against the pinned 4.x prerelease during dnt's install step.
       NPM_CONFIG_LEGACY_PEER_DEPS: "true"
     steps:
       - uses: actions/checkout@v6
@@ -43,9 +44,10 @@ jobs:
         with:
           deno-version: v2.9.1
 
+      # Node 24 ships npm >= 11.5, required for OIDC trusted publishing to npm.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Resolve version from tag
@@ -54,51 +56,5 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.value }}"
-
-          pkg_dir() {
-            case "$1" in
-              code-review-agent) echo "packages/code-review-agent/npm" ;;
-              *) echo "$1/npm" ;;
-            esac
-          }
-
-          # Build (with retries for registry propagation of freshly published
-          # siblings) then publish, one package at a time in dependency order.
-          for pkg in durable-streams runtime code-review-agent core cli; do
-            echo "::group::npm $pkg@$VERSION"
-            n=0
-            until deno run -A scripts/build-npm.ts "$pkg" "$VERSION"; do
-              n=$((n + 1))
-              if [ "$n" -ge 4 ]; then
-                echo "build failed for $pkg after $n attempts" >&2
-                exit 1
-              fi
-              echo "build $pkg failed (attempt $n) — retrying in 15s (sibling propagation?)"
-              sleep 15
-            done
-            ( cd "$(pkg_dir "$pkg")" && npm publish --access public )
-            echo "::endgroup::"
-          done
-
-      - name: Publish to JSR (best-effort)
-        run: |
-          set -uo pipefail
-          for pkg in durable-streams runtime code-review-agent core cli; do
-            case "$pkg" in
-              code-review-agent) dir="packages/code-review-agent" ;;
-              *) dir="$pkg" ;;
-            esac
-            echo "::group::jsr $pkg"
-            # --allow-dirty: the npm build step above leaves gitignored npm/
-            # output in the tree. JSR is secondary; a failure (e.g. slow types
-            # on core/cli, or an unlinked scope) must not fail the workflow.
-            ( cd "$dir" && deno publish --allow-dirty ) \
-              || echo "JSR publish skipped/failed for $pkg (secondary registry) — continuing"
-            echo "::endgroup::"
-          done
+      - name: Build and publish (npm + JSR)
+        run: deno run -A scripts/publish-packages.ts "${{ steps.version.outputs.value }}"
