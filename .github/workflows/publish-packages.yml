@@ -1,13 +1,12 @@
 name: Publish packages
 
-# Publishes every @executablemd library to npm (primary) and JSR (secondary) on
-# the same `v*` tag that drives release.yml, so one tag ships the binary and the
-# packages together. Build/publish orchestration lives in
-# scripts/publish-packages.ts (packages + order derived from the manifests).
+# One tag ships everything: release.yml builds the binary; this workflow fans
+# out one publish-one.yml run per @executablemd package, ordered with `needs:`
+# so dependencies publish before dependents (leaves run in parallel).
 #
 # Prerequisites (one-time):
-#   - npm: configure a trusted publisher (OIDC) for each @executablemd package
-#     pointing at this repo + this workflow, so no npm token is needed.
+#   - npm: configure an OIDC trusted publisher for each @executablemd package
+#     pointing at this repo + publish-one.yml, so no npm token is needed.
 #   - JSR: create/link the @executablemd packages to this repo (JSR publish is
 #     best-effort; failures do not fail the run).
 #
@@ -26,35 +25,57 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm OIDC trusted publishing + JSR OIDC
+  id-token: write # granted to the reusable publish-one.yml jobs for OIDC
 
 jobs:
-  publish:
+  version:
     runs-on: ubuntu-latest
-    env:
-      # @effectionx/* peer-depend on effection `^3 || ^4`, which npm won't match
-      # against the pinned 4.x prerelease during dnt's install step.
-      NPM_CONFIG_LEGACY_PEER_DEPS: "true"
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      value: ${{ steps.resolve.outputs.value }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.9.1
-
-      # Node 24 ships npm >= 11.5, required for OIDC trusted publishing to npm.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Resolve version from tag
-        id: version
+      - id: resolve
         run: |
+          echo "ref=${{ github.event.inputs.tag || github.ref }}" >> "$GITHUB_OUTPUT"
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and publish (npm + JSR)
-        run: deno run -A scripts/publish-packages.ts "${{ steps.version.outputs.value }}"
+  durable-streams:
+    needs: version
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: durable-streams
+      version: ${{ needs.version.outputs.value }}
+      ref: ${{ needs.version.outputs.ref }}
+
+  runtime:
+    needs: version
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: runtime
+      version: ${{ needs.version.outputs.value }}
+      ref: ${{ needs.version.outputs.ref }}
+
+  code-review-agent:
+    needs: version
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: packages/code-review-agent
+      version: ${{ needs.version.outputs.value }}
+      ref: ${{ needs.version.outputs.ref }}
+
+  core:
+    needs: [version, durable-streams, runtime]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: core
+      version: ${{ needs.version.outputs.value }}
+      ref: ${{ needs.version.outputs.ref }}
+
+  cli:
+    needs: [version, core, durable-streams]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: cli
+      version: ${{ needs.version.outputs.value }}
+      ref: ${{ needs.version.outputs.ref }}

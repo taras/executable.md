@@ -35,6 +35,7 @@
     "jsr:@std/semver@^1.0.6": "1.0.8",
     "jsr:@std/testing@1": "1.0.17",
     "jsr:@std/uuid@^1.0.9": "1.1.1",
+    "jsr:@std/yaml@1": "1.0.12",
     "jsr:@ts-morph/bootstrap@0.27": "0.27.0",
     "jsr:@ts-morph/common@0.27": "0.27.0",
     "npm:@babel/core@^7.28.0": "7.29.7",
@@ -238,6 +239,9 @@
       "dependencies": [
         "jsr:@std/bytes"
       ]
+    },
+    "@std/yaml@1.0.12": {
+      "integrity": "7deabca4545bcedd07c5f69ea53acea71b8b4c67562f224e17b90d75944cb20c"
     },
     "@ts-morph/bootstrap@0.27.0": {
       "integrity": "b8d7bc8f7942ce853dde4161b28f9aa96769cef3d8eebafb379a81800b9e2448",

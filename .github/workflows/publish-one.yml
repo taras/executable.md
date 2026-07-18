@@ -1,0 +1,68 @@
+name: Publish one package
+
+# Reusable: build one @executablemd workspace member with dnt and publish it to
+# npm (OIDC) and JSR (best-effort). publish-packages.yml calls this once per
+# package and orders the calls with `needs:`.
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: "Workspace member directory (e.g. core, packages/code-review-agent)"
+        required: true
+        type: string
+      version:
+        description: "Version to publish"
+        required: true
+        type: string
+      ref:
+        description: "Git ref to check out"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write # npm OIDC trusted publishing + JSR OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # @effectionx/* peer-depend on effection `^3 || ^4`, which npm won't match
+      # against the pinned 4.x prerelease during dnt's install step.
+      NPM_CONFIG_LEGACY_PEER_DEPS: "true"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.1
+
+      # Node 24 ships npm >= 11.5, required for OIDC trusted publishing to npm.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Build with dnt
+        # Retry to absorb npm propagation of a just-published sibling dependency.
+        run: |
+          set -eu
+          for attempt in 1 2 3 4; do
+            if deno run -A scripts/build-npm.ts "${{ inputs.package }}" "${{ inputs.version }}"; then
+              exit 0
+            fi
+            [ "$attempt" -lt 4 ] && sleep 15 || true
+          done
+          echo "build failed after 4 attempts" >&2
+          exit 1
+
+      - name: Publish to npm
+        run: npm publish --access public
+        working-directory: ${{ inputs.package }}/npm
+
+      - name: Publish to JSR (best-effort)
+        run: deno publish --allow-dirty || echo "JSR publish skipped/failed (secondary registry)"
+        working-directory: ${{ inputs.package }}
