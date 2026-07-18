@@ -19,7 +19,9 @@ import { ContentCtx } from "./content-context.ts";
 import type { ContentHandle } from "./content-context.ts";
 import type {
   Segment,
+  TextSegment,
   ErrorSegment,
+  ComponentInvocation,
   ComponentDefinition,
   FunctionComponentDefinition,
   Json,
@@ -31,6 +33,7 @@ import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
+import { ErrorPolicyCtx, DocumentationError, currentErrorPolicy, raise } from "./error-policy.ts";
 import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { validateProps } from "./validate.ts";
@@ -124,6 +127,15 @@ export function* expandSegments(
       }
 
       case "component": {
+        if (segment.name === "Output") {
+          // Definition-owned <Output> is consumed by buildBody before it
+          // reaches here. Reaching this branch means a misplaced or
+          // dynamically scanned <Output> (e.g. render(markdown) content) —
+          // diagnose it defensively per the ambient policy.
+          result.push(...(yield* raise(misplacedOutputError())));
+          break;
+        }
+
         if (segment.name === "Capture") {
           const captureResult = yield* expandCapture(
             segment,
@@ -134,7 +146,7 @@ export function* expandSegments(
             counter,
           );
           if (captureResult) {
-            result.push(captureResult);
+            result.push(...(yield* raise(captureResult)));
           }
           break;
         }
@@ -149,7 +161,15 @@ export function* expandSegments(
           counter,
           segment.projectedEnv,
         );
-        result.push(...expanded);
+        // Consumer boundary: re-raise transported error segments under the
+        // ambient policy before appending them (spec §6.9).
+        for (const expandedSegment of expanded) {
+          if (expandedSegment.type === "error") {
+            result.push(...(yield* raise(expandedSegment)));
+          } else {
+            result.push(expandedSegment);
+          }
+        }
         break;
       }
 
@@ -183,11 +203,13 @@ export function* expandSegments(
           const codeResult = yield* ctx.runModifierChain(segment.modifiers, context);
 
           if (codeResult.exitCode !== 0 && codeResult.output === "") {
-            result.push({
-              type: "error",
-              message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
-              source: segment.content,
-            });
+            result.push(
+              ...(yield* raise({
+                type: "error",
+                message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
+                source: segment.content,
+              })),
+            );
           } else if (codeResult.output !== "") {
             result.push({
               type: "execOutput",
@@ -201,17 +223,31 @@ export function* expandSegments(
           }
           // If output is empty and exit code is 0, nothing added (e.g., silent)
         } catch (error) {
-          result.push({
-            type: "error",
-            message: error instanceof Error ? error.message : String(error),
-            source: segment.content,
-          });
+          // A DocumentationError from nested expansion (e.g. renderChildren
+          // inside an eval block) is our own fail-fast — never swallow it.
+          if (error instanceof DocumentationError) {
+            throw error;
+          }
+          result.push(
+            ...(yield* raise({
+              type: "error",
+              message: error instanceof Error ? error.message : String(error),
+              source: segment.content,
+            })),
+          );
         }
         break;
       }
 
-      default:
-        result.push(segment);
+      default: {
+        if (segment.type === "error") {
+          // Pre-existing error segments (e.g. slot/substitution errors) follow
+          // the ambient policy.
+          result.push(...(yield* raise(segment)));
+        } else {
+          result.push(segment);
+        }
+      }
     }
   }
 
@@ -336,39 +372,33 @@ function* expandComponent(
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
-    return [
-      {
-        type: "error",
-        message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
+      source: name,
+    });
   }
 
   if (hideSet.size >= MAX_EXPANSION_DEPTH) {
-    return [
-      {
-        type: "error",
-        message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
+      source: name,
+    });
   }
 
   let imported: ComponentDefinition | FunctionComponentDefinition;
   try {
     imported = yield* ctx.importComponent(name);
   } catch (error) {
-    return [
-      {
-        type: "error",
-        message:
-          error instanceof Error
-            ? `Failed to import component ${name}: ${error.message}`
-            : `Failed to import component ${name}: ${String(error)}`,
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message:
+        error instanceof Error
+          ? `Failed to import component ${name}: ${error.message}`
+          : `Failed to import component ${name}: ${String(error)}`,
+      source: name,
+    });
   }
 
   // Function component: call the generator function directly
@@ -388,6 +418,15 @@ function* expandComponent(
 
   const definition = imported;
 
+  // Structural preflight (spec §6.9): validate <Output> placement against the
+  // component's own source AST before any part of its body executes. A
+  // structurally invalid component runs no eval, exec, Capture, nested
+  // components, or other side effects.
+  const placementError = validateOutputPlacement(definition.bodySegments);
+  if (placementError) {
+    return yield* raise(placementError);
+  }
+
   // Resolve eval expression props against env.values using the shared
   // VM context. This must happen before validation so that resolved
   // values can be type-checked. See spec §5.1 (expression prop evaluation).
@@ -395,23 +434,19 @@ function* expandComponent(
   try {
     resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
   } catch (error) {
-    return [
-      {
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: error instanceof Error ? error.message : String(error),
+      source: name,
+    });
   }
 
   if ("as" in expressions) {
-    return [
-      {
-        type: "error",
-        message: `Prop "as" on <${name} /> must be a string literal.`,
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: `Prop "as" on <${name} /> must be a string literal.`,
+      source: name,
+    });
   }
 
   // Validate props against declared inputs.
@@ -429,13 +464,11 @@ function* expandComponent(
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
-    return [
-      {
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: error instanceof Error ? error.message : String(error),
+      source: name,
+    });
   }
 
   // Capture the caller's eval environment before creating the component's
@@ -451,19 +484,6 @@ function* expandComponent(
   const callerEvalEnv = projectedEnv
     ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
     : contextEnv;
-
-  // Substitute raw children into <Content /> positions. Children are NOT
-  // pre-expanded — they expand in document order when the component body
-  // is expanded. This ensures eval blocks before <Content /> (e.g.,
-  // provider middleware installation) run before children's code blocks.
-  // Children segments are tagged with callerEvalEnv so expression props
-  const substituted = substituteContent(
-    definition.bodySegments,
-    children,
-    definition.meta,
-    validatedProps,
-    callerEvalEnv ?? undefined,
-  );
 
   // Recurse with augmented hide set.
   // Each component gets its own fresh binding environment so that
@@ -588,40 +608,49 @@ function* expandComponent(
     });
   };
 
+  // Expand the body through expandBody, which renders only the declared
+  // <Output> regions (executing documentation for side effects) when the
+  // definition declares output, and renders the whole body otherwise.
   const expanded = yield* EvalEnvCtx.with(componentEnv, function* () {
     if (childEvalScope) {
       return yield* EvalScopeCtx.with(childEvalScope, function* () {
-        return yield* expandSegments(
-          substituted,
+        return yield* expandBody(
+          definition.bodySegments,
+          children,
           definition.meta,
           validatedProps,
           newHideSet,
           ctx,
           counter,
+          callerEvalEnv ?? undefined,
         );
       });
     }
-    return yield* expandSegments(
-      substituted,
+    return yield* expandBody(
+      definition.bodySegments,
+      children,
       definition.meta,
       validatedProps,
       newHideSet,
       ctx,
       counter,
+      callerEvalEnv ?? undefined,
     );
   });
 
   if (asBinding) {
     const parentEnv = yield* EvalEnvCtx.get();
     if (!parentEnv) {
-      return [
-        {
-          type: "error",
-          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-          source: name,
-        },
-      ];
+      return yield* raise({
+        type: "error",
+        message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+        source: name,
+      });
     }
+    // Consumer boundary (spec §6.9): re-raise transported errors under the
+    // ambient policy so documentation never captures and hides an error
+    // comment.
+    yield* consume(expanded);
     parentEnv.values[asBinding] = renderSegments(expanded);
     return [];
   }
@@ -652,13 +681,11 @@ function* expandFunctionComponent(
   projectedEnv?: EvalEnv,
 ): Operation<Segment[]> {
   if ("as" in expressions) {
-    return [
-      {
-        type: "error",
-        message: `Prop "as" on <${name} /> must be a string literal.`,
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: `Prop "as" on <${name} /> must be a string literal.`,
+      source: name,
+    });
   }
 
   // Resolve expression props
@@ -666,25 +693,21 @@ function* expandFunctionComponent(
   try {
     resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
   } catch (error) {
-    return [
-      {
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: error instanceof Error ? error.message : String(error),
+      source: name,
+    });
   }
 
   // Strip slot prop before validation
   const asBindingResult = validateBindingName(resolvedProps.as);
   if (!asBindingResult.ok) {
-    return [
-      {
-        type: "error",
-        message: `Prop "as" on <${name} /> ${asBindingResult.error}`,
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: `Prop "as" on <${name} /> ${asBindingResult.error}`,
+      source: name,
+    });
   }
   const asBinding = asBindingResult.value;
   const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
@@ -694,13 +717,11 @@ function* expandFunctionComponent(
   try {
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
-    return [
-      {
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      },
-    ];
+    return yield* raise({
+      type: "error",
+      message: error instanceof Error ? error.message : String(error),
+      source: name,
+    });
   }
 
   // Set ContentCtx on the scope so the function component can
@@ -730,29 +751,30 @@ function* expandFunctionComponent(
     if (asBinding) {
       const parentEnv = yield* EvalEnvCtx.get();
       if (!parentEnv) {
-        return [
-          {
-            type: "error",
-            message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-            source: name,
-          },
-        ];
+        return yield* raise({
+          type: "error",
+          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+          source: name,
+        });
       }
       parentEnv.values[asBinding] = output;
       return [];
     }
     return [{ type: "text", content: output }];
   } catch (error) {
-    return [
-      {
-        type: "error",
-        message:
-          error instanceof Error
-            ? `Function component ${name} error: ${error.message}`
-            : `Function component ${name} error: ${String(error)}`,
-        source: name,
-      },
-    ];
+    // A DocumentationError from a content-rendering path (renderDefault /
+    // useContent) is fail-fast — propagate it unchanged.
+    if (error instanceof DocumentationError) {
+      throw error;
+    }
+    return yield* raise({
+      type: "error",
+      message:
+        error instanceof Error
+          ? `Function component ${name} error: ${error.message}`
+          : `Function component ${name} error: ${String(error)}`,
+      source: name,
+    });
   }
 }
 
@@ -982,6 +1004,72 @@ export function stripSlotProp(segment: Segment): Segment {
 // Content slot substitution (spec §6.3)
 // ---------------------------------------------------------------------------
 
+/** Projects the caller's eval env onto substituted children. */
+type ProjectFn = (segments: Segment[]) => Segment[];
+
+/** Mutable flag so slot validation errors are emitted only once. */
+interface SubstitutionState {
+  errorsEmitted: boolean;
+}
+
+/**
+ * Build the projection function that tags substituted children with the
+ * caller's eval env so their expression props resolve in the caller's scope.
+ */
+function makeProjectFn(callerEnv: EvalEnv | undefined): ProjectFn {
+  const project: ProjectFn = (segments) => {
+    if (!callerEnv) {
+      return segments;
+    }
+    return segments.map((seg) => {
+      if (seg.type === "component") {
+        return {
+          ...seg,
+          projectedEnv: callerEnv,
+          children: project(seg.children),
+        };
+      }
+      return seg;
+    });
+  };
+  return project;
+}
+
+/**
+ * Replace `<Content />` / `<Content slot="X" />` in a segment list with the
+ * caller's children (partitioned by slot) and interpolate {meta}/{props} in
+ * text. Slot validation errors are emitted once, at the first projection
+ * point, tracked via the shared `state`.
+ */
+function substituteSegmentList(
+  segments: Segment[],
+  slots: SlotMap,
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  project: ProjectFn,
+  state: SubstitutionState,
+): Segment[] {
+  return segments.flatMap((segment) => {
+    if (segment.type === "component" && segment.name === "Content") {
+      const targetSlot = segment.props.slot;
+      const pendingErrors = !state.errorsEmitted ? slots.errors : [];
+      if (pendingErrors.length > 0) {
+        state.errorsEmitted = true;
+      }
+
+      if (targetSlot !== undefined) {
+        const slotKey = String(targetSlot);
+        return [...pendingErrors, ...project((slots.named.get(slotKey) ?? []).map(stripSlotProp))];
+      }
+      return [...pendingErrors, ...project(slots.default)];
+    }
+    if (segment.type === "text") {
+      return [{ ...segment, content: interpolate(segment.content, meta, props) }];
+    }
+    return [segment];
+  });
+}
+
 /**
  * Replace `<Content />` and `<Content slot="X" />` invocations with the
  * caller's children, partitioned by slot assignment.
@@ -998,49 +1086,210 @@ function substituteContent(
   callerEnv?: EvalEnv,
 ): Segment[] {
   const slots = partitionBySlot(children);
-  // Track whether errors have been emitted (only emit once)
-  let errorsEmitted = false;
+  const state: SubstitutionState = { errorsEmitted: false };
+  const project = makeProjectFn(callerEnv);
+  return substituteSegmentList(bodySegments, slots, meta, props, project, state);
+}
 
-  // Tag projected children with the caller's eval env so expression
-  const tagProjected = (segments: Segment[]): Segment[] => {
-    if (!callerEnv) return segments;
-    return segments.map((seg) => {
-      if (seg.type === "component") {
-        return {
-          ...seg,
-          projectedEnv: callerEnv,
-          children: tagProjected(seg.children),
-        };
+// ---------------------------------------------------------------------------
+// Component-declared output: <Output> (spec §6.9)
+// ---------------------------------------------------------------------------
+
+/** A body chunk produced by buildBody: a rendered output region or documentation. */
+interface BodyChunk {
+  output: boolean;
+  segments: Segment[];
+}
+
+/** True when a top-level segment is an `<Output>` declaration. */
+function isTopLevelOutput(segment: Segment): boolean {
+  return segment.type === "component" && segment.name === "Output";
+}
+
+/** True when the definition body declares at least one top-level `<Output>`. */
+export function bodyHasOutput(bodySegments: Segment[]): boolean {
+  return bodySegments.some(isTopLevelOutput);
+}
+
+/** The diagnostic for a misplaced `<Output>` tag. */
+function misplacedOutputError(): ErrorSegment {
+  return {
+    type: "error",
+    message:
+      "<Output> must be a direct top-level child of the component or document " +
+      "that declares it. For conditional rendering, use <Show> inside <Output>.",
+    source: "Output",
+  };
+}
+
+/** A short, stable preview of an `<Output>` region for aggregate diagnostics. */
+function previewOutput(segment: ComponentInvocation): string {
+  const text = segment.children
+    .filter((child): child is TextSegment => child.type === "text")
+    .map((child) => child.content)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length === 0) {
+    return "<Output> (empty)";
+  }
+  const clipped = text.slice(0, 40);
+  return `<Output> containing "${clipped}${text.length > 40 ? "…" : ""}"`;
+}
+
+/**
+ * Structural preflight (spec §6.9). Validates `<Output>` placement against the
+ * body's own source AST. Only a direct top-level `<Output>` is a valid
+ * declaration; any `<Output>` at depth > 0 — including inside unreachable or
+ * discarded children — is a placement violation. All violations are combined
+ * into a single aggregate ErrorSegment. Returns undefined when placement is
+ * valid.
+ */
+export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment | undefined {
+  const violations: string[] = [];
+
+  const walk = (segments: Segment[], depth: number): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component") {
+        continue;
       }
-      return seg;
-    });
+      if (segment.name === "Output" && depth > 0) {
+        violations.push(previewOutput(segment));
+      }
+      walk(segment.children, depth + 1);
+    }
   };
 
-  return bodySegments.flatMap((segment) => {
-    if (segment.type === "component" && segment.name === "Content") {
-      const targetSlot = segment.props.slot as string | undefined;
-      // Emit slot validation errors at the first Content projection point
-      const pendingErrors = !errorsEmitted ? slots.errors : [];
-      if (pendingErrors.length > 0) errorsEmitted = true;
+  walk(bodySegments, 0);
 
-      if (targetSlot !== undefined) {
-        // Named slot projection — strip slot prop from each child
-        return [
-          ...pendingErrors,
-          ...tagProjected((slots.named.get(targetSlot) ?? []).map(stripSlotProp)),
-        ];
+  if (violations.length === 0) {
+    return undefined;
+  }
+
+  const list = violations.map((entry) => `  - ${entry}`).join("\n");
+  return {
+    type: "error",
+    message:
+      "<Output> must be a direct top-level child of the component or document " +
+      "that declares it. For conditional rendering, use <Show> inside " +
+      `<Output>. Misplaced <Output> found:\n${list}`,
+    source: "Output",
+  };
+}
+
+/** Validate that a top-level `<Output>` carries no props. */
+function validateOutputProps(segment: ComponentInvocation): ErrorSegment | undefined {
+  const hasProps = Object.keys(segment.props).length > 0;
+  const hasExpressions = Object.keys(segment.expressions).length > 0;
+  if (hasProps || hasExpressions) {
+    return { type: "error", message: "<Output> accepts no props.", source: "Output" };
+  }
+  return undefined;
+}
+
+/**
+ * Partition a definition body into ordered chunks (spec §6.9). Output policy
+ * is determined by definition provenance — top-level `<Output>` segments in
+ * the source, before `<Content />` substitution — so caller-projected
+ * `<Output>` can neither activate nor alter it. `<Content />` inside a
+ * top-level `<Output>` is substituted one level in; slot errors are emitted
+ * once across the whole body via the shared substitution state.
+ */
+function buildBody(
+  bodySegments: Segment[],
+  children: Segment[],
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  callerEnv: EvalEnv | undefined,
+): BodyChunk[] {
+  const slots = partitionBySlot(children);
+  const state: SubstitutionState = { errorsEmitted: false };
+  const project = makeProjectFn(callerEnv);
+  const chunks: BodyChunk[] = [];
+
+  for (const segment of bodySegments) {
+    if (segment.type === "component" && segment.name === "Output") {
+      const propsError = validateOutputProps(segment);
+      if (propsError) {
+        chunks.push({ output: true, segments: [propsError] });
+        continue;
       }
-      // Default slot projection
-      return [...pendingErrors, ...tagProjected(slots.default)];
+      const outputSegments = substituteSegmentList(
+        segment.children,
+        slots,
+        meta,
+        props,
+        project,
+        state,
+      );
+      chunks.push({ output: true, segments: outputSegments });
+      continue;
     }
-    if (segment.type === "text") {
-      return [
-        {
-          ...segment,
-          content: interpolate(segment.content, meta, props),
-        },
-      ];
+
+    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state);
+    chunks.push({ output: false, segments: docSegments });
+  }
+
+  return chunks;
+}
+
+/**
+ * Expand a definition body (spec §6.9). Without a top-level `<Output>`, the
+ * whole body renders (backward compatible). With `<Output>`, only the declared
+ * regions render; documentation executes for its side effects under a "throw"
+ * policy (fail-fast) and its rendered result is discarded; output regions run
+ * under "collect" (errors render as comments). Regions and documentation run
+ * in document order, so output can depend on bindings computed by preceding
+ * documentation.
+ */
+export function* expandBody(
+  bodySegments: Segment[],
+  children: Segment[],
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  hideSet: Set<string>,
+  ctx: ExpansionContext,
+  counter: BlockCounter,
+  callerEnv: EvalEnv | undefined,
+): Operation<Segment[]> {
+  if (!bodyHasOutput(bodySegments)) {
+    const substituted = substituteContent(bodySegments, children, meta, props, callerEnv);
+    return yield* expandSegments(substituted, meta, props, hideSet, ctx, counter);
+  }
+
+  const chunks = buildBody(bodySegments, children, meta, props, callerEnv);
+  const output: Segment[] = [];
+
+  for (const chunk of chunks) {
+    if (chunk.output) {
+      const expanded = yield* ErrorPolicyCtx.with("collect", function* () {
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, ctx, counter);
+      });
+      output.push(...expanded);
+    } else {
+      // Documentation: execute for side effects, discard rendered output.
+      yield* ErrorPolicyCtx.with("throw", function* () {
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, ctx, counter);
+      });
     }
-    return [segment];
-  });
+  }
+
+  return output;
+}
+
+/**
+ * Consumer boundary (spec §6.9). When consuming a component's returned
+ * segments in a documentation context, re-raise the first transported error
+ * so it is never captured and hidden. Under "collect" it is a no-op.
+ */
+function* consume(segments: Segment[]): Operation<void> {
+  const policy = yield* currentErrorPolicy();
+  if (policy !== "throw") {
+    return;
+  }
+  for (const segment of segments) {
+    if (segment.type === "error") {
+      throw new DocumentationError(segment);
+    }
+  }
 }

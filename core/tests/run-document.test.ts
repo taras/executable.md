@@ -13,6 +13,7 @@ import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
+import { forEach } from "@effectionx/stream-helpers";
 import type { Operation } from "effection";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
@@ -1000,5 +1001,128 @@ describe("runDocument", () => {
     expect(result).toContain("BEFORE");
     expect(result).toContain("inside");
     expect(result).toContain("AFTER");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Component-declared output at the document level (spec §5.4, §6.9)
+// ---------------------------------------------------------------------------
+
+describe("component-declared output — document workflow", () => {
+  it("applies <Output> to an imported component invoked from a streaming root", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "Intro paragraph.\n\n<Warn />\n",
+      "components/Warn.md": "Docs line.\n\n<Output>\nWARNING_SHOWN\n</Output>\n",
+    });
+    yield* useStubExec();
+    const output = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+    expect(output).toContain("Intro paragraph.");
+    expect(output).toContain("WARNING_SHOWN");
+    expect(output).not.toContain("Docs line");
+  });
+
+  it("applies <Output> to a root document the same way", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
+    const output = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+    expect(output).toContain("ROOT_SHOWN");
+    expect(output).not.toContain("Root docs");
+  });
+
+  it("buffers a root with <Output> into a single emission after success", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
+
+    const execution = yield* runDocument({ docPath: "README.md", stream });
+    const chunks: string[] = [];
+    const full = yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+
+    expect(full).toContain("ROOT_SHOWN");
+    expect(chunks).toHaveLength(1);
+  });
+
+  it("emits no partial output when documentation fails in a buffered root", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "<Output>\nSELECTED\n</Output>\n\n```bash exec\nfailing-command\n```\n",
+    });
+    yield* useFailingExec(1, "command not found");
+
+    const execution = yield* runDocument({ docPath: "README.md", stream });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+
+    let threw = false;
+    try {
+      yield* execution;
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    expect(chunks.join("")).not.toContain("SELECTED");
+  });
+
+  it("keeps per-segment streaming for roots without <Output>", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "```bash exec\necho one\n```\n\n```bash exec\necho two\n```\n",
+    });
+    yield* useStubExec();
+
+    const execution = yield* runDocument({ docPath: "README.md", stream });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("emits no output event for an empty buffered root <Output>", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": "Root docs.\n\n<Output />\n" });
+
+    const execution = yield* runDocument({ docPath: "README.md", stream });
+    const chunks: string[] = [];
+    const full = yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+
+    expect(chunks).toHaveLength(0);
+    expect(full).toBe("");
+  });
+
+  it("replays a buffered root <Output> to the same result", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
+
+    const first = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+    const second = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+
+    expect(second).toBe(first);
+    expect(second).toContain("ROOT_SHOWN");
+  });
+
+  it("diagnoses a misplaced root <Output> and runs no body side effects", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output>x</Output>\n</Wrapper>\n",
+    });
+    yield* useFailingExec(1, "should not run");
+
+    const result = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+
+    expect(result).toContain("must be a direct top-level");
+
+    const events = stream.snapshot();
+    const execEvents = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execEvents).toHaveLength(0);
   });
 });

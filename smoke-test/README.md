@@ -448,6 +448,18 @@ the stale content hash and halts replay, forcing a fresh execution.
 
 </Section>
 
+<Section title="Component-declared Output">
+
+A component can declare which region of its body renders using `<Output>`.
+Everything outside the region is documentation that executes (its eval blocks
+run, its captures populate bindings) but never renders into the consumer.
+`OutputDemo` computes a binding in documentation, then renders a `<Show>`
+inside `<Output>` that depends on it.
+
+<OutputDemo />
+
+</Section>
+
 <Section title="Smoke Test Summary">
 
 This document exercises every feature of the system:

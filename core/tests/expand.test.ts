@@ -359,6 +359,277 @@ describe("expansion", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Component-declared output — <Output> (spec §6.9)
+// ---------------------------------------------------------------------------
+
+/** ExpansionContext that records executed code-block contents. */
+function recordingCtx(
+  components: Record<string, ComponentDefinition>,
+  codeResult?: CodeBlockResult,
+): { ctx: ExpansionContext; execCalls: string[] } {
+  const execCalls: string[] = [];
+  const ctx: ExpansionContext = {
+    importComponent: function* (name: string) {
+      const comp = components[name];
+      if (!comp) throw new Error(`Component not found: ${name}`);
+      return comp;
+    },
+    runModifierChain: function* (_modifiers: Modifier[], context: CodeBlockContext) {
+      execCalls.push(context.content);
+      return codeResult ?? { output: "ran\n", exitCode: 0, stderr: "" };
+    },
+  };
+  return { ctx, execCalls };
+}
+
+describe("component-declared output", () => {
+  it("renders only the <Output> region, suppressing documentation", function* () {
+    const comp = makeComponent(
+      "Warn",
+      "Docs heading.\n\n<Output>\nSHOWN\n</Output>\n\nMore docs.\n",
+    );
+    const ctx = makeCtx({ Warn: comp });
+    const output = yield* expand(scanSegments("<Warn />"), ctx);
+    expect(output).toContain("SHOWN");
+    expect(output).not.toContain("Docs heading");
+    expect(output).not.toContain("More docs");
+  });
+
+  it("without <Output> renders the complete body", function* () {
+    const comp = makeComponent("Doc", "Alpha then Beta.");
+    const ctx = makeCtx({ Doc: comp });
+    const output = yield* expand(scanSegments("<Doc />"), ctx);
+    expect(output).toContain("Alpha then Beta.");
+  });
+
+  it("concatenates multiple <Output> regions in document order", function* () {
+    const comp = makeComponent(
+      "Multi",
+      "<Output>ONE</Output>\n\nmiddle docs\n\n<Output>TWO</Output>\n",
+    );
+    const ctx = makeCtx({ Multi: comp });
+    const output = yield* expand(scanSegments("<Multi />"), ctx);
+    expect(output).not.toContain("middle docs");
+    expect(output.indexOf("ONE")).toBeGreaterThanOrEqual(0);
+    expect(output.indexOf("ONE")).toBeLessThan(output.indexOf("TWO"));
+  });
+
+  it("preserves markdown source inside <Output>, including a GitHub admonition", function* () {
+    const comp = makeComponent(
+      "Adm",
+      "docs\n\n<Output>\n> [!WARNING]\n> Careful now.\n</Output>\n",
+    );
+    const ctx = makeCtx({ Adm: comp });
+    const output = yield* expand(scanSegments("<Adm />"), ctx);
+    expect(output).toContain("> [!WARNING]");
+    expect(output).toContain("> Careful now.");
+    expect(output).not.toContain("docs");
+  });
+
+  it("treats <Output /> and <Output></Output> as equivalent empty output", function* () {
+    const selfClosing = makeComponent("A", "before\n\n<Output />\n\nafter");
+    const paired = makeComponent("B", "before\n\n<Output></Output>\n\nafter");
+    const ctx = makeCtx({ A: selfClosing, B: paired });
+    const a = yield* expand(scanSegments("<A />"), ctx);
+    const b = yield* expand(scanSegments("<B />"), ctx);
+    expect(a.trim()).toBe("");
+    expect(b.trim()).toBe("");
+  });
+
+  it("rejects props on <Output>", function* () {
+    const comp = makeComponent("Bad", '<Output foo="bar">x</Output>');
+    const ctx = makeCtx({ Bad: comp });
+    const output = yield* expand(scanSegments("<Bad />"), ctx);
+    expect(output).toContain("ERROR");
+    expect(output).toContain("accepts no props");
+  });
+
+  it("rejects expression props on <Output>", function* () {
+    const comp = makeComponent("Bad", "<Output when={x}>y</Output>");
+    const ctx = makeCtx({ Bad: comp });
+    const output = yield* expand(scanSegments("<Bad />"), ctx);
+    expect(output).toContain("ERROR");
+    expect(output).toContain("accepts no props");
+  });
+
+  it("projects caller content through <Content /> inside <Output>", function* () {
+    const comp = makeComponent("Wrap", "docs\n\n<Output>\n<Content />\n</Output>\n");
+    const ctx = makeCtx({ Wrap: comp });
+    const output = yield* expand(scanSegments("<Wrap>PROJECTED</Wrap>"), ctx);
+    expect(output).toContain("PROJECTED");
+    expect(output).not.toContain("docs");
+  });
+
+  it("lets an <Output> region read a binding recorded by preceding documentation", function* () {
+    const comp = makeComponent(
+      "Dep",
+      '<Capture as="msg">HELLO</Capture>\n\n<Output>msg={msg}</Output>',
+    );
+    const ctx = makeCtx({ Dep: comp });
+    const output = yield* expand(scanSegments("<Dep />"), ctx);
+    expect(output).toContain("msg=HELLO");
+  });
+
+  it("executes exec blocks outside <Output> but suppresses their output", function* () {
+    const comp = makeComponent("Ex", "```bash exec\nDOCRUN\n```\n\n<Output>ok</Output>\n");
+    const { ctx, execCalls } = recordingCtx({ Ex: comp });
+    const output = yield* expand(scanSegments("<Ex />"), ctx);
+    expect(execCalls.some((c) => c.includes("DOCRUN"))).toBe(true);
+    expect(output).toContain("ok");
+    expect(output).not.toContain("ran");
+  });
+
+  it("executes documentation after an <Output> region", function* () {
+    const comp = makeComponent("Post", "<Output>ok</Output>\n\n```bash exec\nAFTER\n```\n");
+    const { ctx, execCalls } = recordingCtx({ Post: comp });
+    const output = yield* expand(scanSegments("<Post />"), ctx);
+    expect(execCalls.some((c) => c.includes("AFTER"))).toBe(true);
+    expect(output).toContain("ok");
+  });
+
+  it("keeps errors inside an <Output> region as comments", function* () {
+    const comp = makeComponent("Err", "<Output>\n<Bogus />\n</Output>");
+    const ctx = makeCtx({ Err: comp });
+    const output = yield* expand(scanSegments("<Err />"), ctx);
+    expect(output).toContain("<!-- ERROR");
+    expect(output).toContain("Failed to import component Bogus");
+  });
+
+  it("keeps errors as comments when no <Output> is declared", function* () {
+    const comp = makeComponent("NoOut", "<Bogus />");
+    const ctx = makeCtx({ NoOut: comp });
+    const output = yield* expand(scanSegments("<NoOut />"), ctx);
+    expect(output).toContain("<!-- ERROR");
+  });
+
+  // --- Fail-fast in documentation ---
+
+  it("throws on a failing exec block in documentation", function* () {
+    const comp = makeComponent("Fail", "```bash exec\nboom\n```\n\n<Output>ok</Output>\n");
+    const ctx = makeCtx({ Fail: comp }, { output: "", exitCode: 1, stderr: "nope" });
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<Fail />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("continues when a modifier handles the failure in documentation", function* () {
+    const comp = makeComponent("Handled", "```bash exec\nrecover\n```\n\n<Output>ok</Output>\n");
+    const ctx = makeCtx({ Handled: comp }, { output: "recovered\n", exitCode: 0, stderr: "" });
+    const output = yield* expand(scanSegments("<Handled />"), ctx);
+    expect(output).toContain("ok");
+  });
+
+  it("throws on a failure inside <Capture> documentation", function* () {
+    const comp = makeComponent(
+      "CapFail",
+      '<Capture as="x">\n<Bogus />\n</Capture>\n\n<Output>ok</Output>',
+    );
+    const ctx = makeCtx({ CapFail: comp });
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<CapFail />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  // --- Consumer boundary: transported errors ---
+
+  it("throws when a child's Output error is consumed from parent documentation", function* () {
+    const child = makeComponent("Child", "<Output>\n<Bogus />\n</Output>");
+    const parent = makeComponent("P", "<Child />\n\n<Output>tail</Output>");
+    const ctx = makeCtx({ Child: child, P: parent });
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("renders a child's Output error as a comment when consumed inside parent Output", function* () {
+    const child = makeComponent("Child", "<Output>\n<Bogus />\n</Output>");
+    const parent = makeComponent("P", "<Output>\n<Child />\n</Output>");
+    const ctx = makeCtx({ Child: child, P: parent });
+    const output = yield* expand(scanSegments("<P />"), ctx);
+    expect(output).toContain("<!-- ERROR");
+    expect(output).toContain("Failed to import component Bogus");
+  });
+
+  it("throws before storing an as= binding that captured a child's Output error", function* () {
+    const child = makeComponent("Child", "<Output>\n<Bogus />\n</Output>");
+    const parent = makeComponent("P", '<Child as="captured" />\n\n<Output>tail</Output>');
+    const ctx = makeCtx({ Child: child, P: parent });
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  // --- Structural preflight ---
+
+  it("aggregates a nested <Output> into one diagnostic and runs no side effects", function* () {
+    const comp = makeComponent(
+      "Struct",
+      "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output>x</Output>\n</Wrapper>\n",
+    );
+    const { ctx, execCalls } = recordingCtx({ Struct: comp });
+    const output = yield* expand(scanSegments("<Struct />"), ctx);
+    expect(output).toContain("must be a direct top-level");
+    expect(execCalls).toHaveLength(0);
+  });
+
+  it("aggregates every misplaced <Output> into a single diagnostic", function* () {
+    const comp = makeComponent(
+      "Many",
+      "<A>\n<Output>one</Output>\n</A>\n\n<B>\n<Output>two</Output>\n</B>\n",
+    );
+    const ctx = makeCtx({ Many: comp });
+    const output = yield* expand(scanSegments("<Many />"), ctx);
+    const errorComments = output.match(/<!-- ERROR/g) ?? [];
+    expect(errorComments).toHaveLength(1);
+    expect(output).toContain("one");
+    expect(output).toContain("two");
+  });
+
+  it("diagnoses a nested <Output> inside <Show when={false}>", function* () {
+    const comp = makeComponent("Hidden", "<Show when={false}>\n<Output>hidden</Output>\n</Show>");
+    const ctx = makeCtx({ Hidden: comp });
+    const output = yield* expand(scanSegments("<Hidden />"), ctx);
+    expect(output).toContain("must be a direct top-level");
+  });
+
+  it("diagnoses a nested <Output> passed to a component that discards content", function* () {
+    const comp = makeComponent("Discard", "<NoContent>\n<Output>x</Output>\n</NoContent>");
+    const ctx = makeCtx({ Discard: comp });
+    const output = yield* expand(scanSegments("<Discard />"), ctx);
+    expect(output).toContain("must be a direct top-level");
+  });
+
+  it("throws a structural diagnostic when an invalid child is used from documentation", function* () {
+    const child = makeComponent("BadChild", "<Wrapper>\n<Output>x</Output>\n</Wrapper>");
+    const parent = makeComponent("P", "<BadChild />\n\n<Output>tail</Output>");
+    const ctx = makeCtx({ BadChild: child, P: parent });
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Prop validation (spec §5.5)
 // ---------------------------------------------------------------------------
 

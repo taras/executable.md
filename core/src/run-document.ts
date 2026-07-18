@@ -31,7 +31,13 @@ import type {
 } from "./types.ts";
 import { scanSegments } from "./scanner.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { expandSegments, createBlockCounter } from "./expand.ts";
+import {
+  expandSegments,
+  expandBody,
+  bodyHasOutput,
+  validateOutputPlacement,
+  createBlockCounter,
+} from "./expand.ts";
 import type { ExpansionContext } from "./expand.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
@@ -285,6 +291,40 @@ function* documentWorkflow(
   // The EvalEnvCtx.with() wraps the entire loop so all segments share
   // the same binding environment.
   const scopedExpansion: Operation<string> = EvalEnvCtx.with(env, function* () {
+    // Structural preflight (spec §6.9): a root with misplaced <Output>
+    // executes no body side effects; the aggregate diagnostic renders as a
+    // comment (root policy is "collect").
+    const placementError = validateOutputPlacement(root.bodySegments);
+    if (placementError) {
+      const text = renderSegment(placementError);
+      yield* ephemeral(DocumentOutput.operations.output(text));
+      return text;
+    }
+
+    // A root declaring top-level <Output> buffers completely (spec §5.4):
+    // execute the whole body, then emit the selected regions only after
+    // successful completion. A documentation failure throws before any emit,
+    // so no partial output is produced.
+    if (bodyHasOutput(root.bodySegments)) {
+      const expanded = yield* expandBody(
+        root.bodySegments,
+        [],
+        root.meta,
+        {},
+        new Set(),
+        ctx,
+        counter,
+        undefined,
+      );
+      const text = expanded.map(renderSegment).join("");
+      // An empty buffered root emits no output event.
+      if (text) {
+        yield* ephemeral(DocumentOutput.operations.output(text));
+      }
+      return text;
+    }
+
+    // Per-root-segment emission loop for roots without <Output> (spec §5.4).
     const chunks: string[] = [];
 
     for (const segment of root.bodySegments) {

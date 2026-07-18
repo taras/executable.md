@@ -31,6 +31,8 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
    language in specifications or source code.
 6. Parse to infer type; Do not type cast with `as`.
 7. Do not use braceless `if` statements.
+8. Keep the release spec current — changes to the release configuration
+   require changes to specs/release-process-spec.md to match.
 
 ## PR Process
 
@@ -39,3 +41,22 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
    1. CI failures
    2. Comments with feedback
    3. Integrate changes feedback appears
+
+## Agent Roles
+
+If you're an Opus model, you're an Implementor agent.
+If you're a GPT model, you're an Planner agent.
+If you're a Fabel model, you're a Problem solver agent.
+
+### Implementor agent
+
+Writes code following Code Rules.
+
+### Planner agent
+
+##### When reviewing Implementor agent's plans**
+
+**User will ask you**: Review <subject>; verdict; prompt on failure.
+**Respond by:**
+* Interviewing user to resolve ambiguity; do not ask the Implementor agent to make decisions.
+* Writing a feedback prompt that user will handoff to the Implementor agent
