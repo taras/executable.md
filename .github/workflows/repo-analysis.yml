@@ -29,17 +29,29 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - uses: denoland/setup-deno@v2.0.3
-
-      - name: Install dependencies
-        run: deno install
+      - name: Install xmd release binary
+        run: |
+          curl -fsSL https://executable.md/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run repo analysis
         env:
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
+        run: |
+          xmd run .reviews/AnalyzeRepoCI.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir core/components \
+            -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
+
+      # xmd embeds a failed EnsureOxlint as a comment and still exits 0, so
+      # assert the lint binaries were provisioned — fail the job if not.
+      - name: Verify oxlint provisioning
+        run: |
+          test -x .reviews/.oxlint/oxlint && test -x .reviews/.oxlint/tsgolint \
+            || { echo "::error::oxlint/tsgolint could not be provisioned by EnsureOxlint"; exit 1; }
 
       - name: Write run metadata
         if: always()

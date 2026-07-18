@@ -67,7 +67,7 @@ const runConfig = object({
 
 const xmd = program({
   name: "xmd",
-  version: "0.1.0",
+  version: "0.2.0",
   config: commands({ run: runConfig }, { default: "run" }),
 });
 

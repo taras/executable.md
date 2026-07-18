@@ -99,7 +99,7 @@ git diff --name-only {BASE_SHA}...{HEAD_SHA} -- '*.ts' '*.tsx' | grep -v '\.test
 
 ```bash exec
 if [ -n "{changedTsFiles}" ]; then
-  echo "{changedTsFiles}" | tr '\n' ' ' | xargs npx oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true
+  echo "{changedTsFiles}" | tr '\n' ' ' | OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true
 else
   echo "[]"
 fi
@@ -112,7 +112,7 @@ fi
 
 ```bash exec
 if [ -n "{changedTsFiles}" ]; then
-  echo "{changedTsFiles}" | tr '\n' ' ' | xargs npx oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true
+  echo "{changedTsFiles}" | tr '\n' ' ' | xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true
 else
   echo "[]"
 fi

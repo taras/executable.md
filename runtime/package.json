@@ -1,12 +1,18 @@
 {
   "name": "@executablemd/runtime",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Runtime host APIs for executable.md documents.",
   "type": "module",
   "exports": {
     ".": "./mod.ts",
     "./test": "./test/mod.ts"
   },
   "dependencies": {
-    "@effectionx/context-api": "0.6.0"
+    "@effectionx/context-api": "0.6.0",
+    "@effectionx/fetch": "0.2.0",
+    "@effectionx/fs": "0.3.0",
+    "@effectionx/node": "0.2.4",
+    "@effectionx/process": "0.8.1",
+    "effection": "4.1.0-alpha.7"
   }
 }

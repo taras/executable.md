@@ -100,21 +100,104 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
-  cli: {}
+  cli:
+    dependencies:
+      '@effectionx/stream-helpers':
+        specifier: 0.8.3
+        version: 0.8.3(effection@4.1.0-alpha.7)
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      configliere:
+        specifier: ^0.2.3
+        version: 0.2.4
+      effection:
+        specifier: 4.1.0-alpha.7
+        version: 4.1.0-alpha.7
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   core:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0
         version: 0.6.0(effection@4.1.0-alpha.7)
+      '@effectionx/converge':
+        specifier: 0.1.4
+        version: 0.1.4(effection@4.1.0-alpha.7)
+      '@effectionx/fetch':
+        specifier: 0.2.0
+        version: 0.2.0(effection@4.1.0-alpha.7)
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0-alpha.7)
+      '@effectionx/middleware':
+        specifier: 0.1.1
+        version: 0.1.1
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0-alpha.7)
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0-alpha.7)
+      '@effectionx/scope-eval':
+        specifier: 0.1.3
+        version: 0.1.3(effection@4.1.0-alpha.7)
+      '@effectionx/stream-helpers':
+        specifier: 0.8.3
+        version: 0.8.3(effection@4.1.0-alpha.7)
+      '@effectionx/timebox':
+        specifier: 0.4.3
+        version: 0.4.3(effection@4.1.0-alpha.7)
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      acorn:
+        specifier: ^8.16.0
+        version: 8.16.0
+      effection:
+        specifier: 4.1.0-alpha.7
+        version: 4.1.0-alpha.7
+      gray-matter:
+        specifier: ^4.0.3
+        version: 4.0.3
+      magic-string:
+        specifier: ^0.30.21
+        version: 0.30.21
+      marked:
+        specifier: ^17.0.4
+        version: 17.0.4
+      marked-terminal:
+        specifier: ^7.3.0
+        version: 7.3.0(marked@17.0.4)
+      mdast-util-to-string:
+        specifier: ^4
+        version: 4.0.0
+      remark:
+        specifier: '15'
+        version: 15.0.1
+      remend:
+        specifier: ^1.2.2
+        version: 1.3.0
+      unist-util-select:
+        specifier: ^5
+        version: 5.1.0
 
-  durable-streams: {}
+  durable-streams:
+    dependencies:
+      '@durable-streams/client':
+        specifier: ^0.2.2
+        version: 0.2.2
+      effection:
+        specifier: 4.1.0-alpha.7
+        version: 4.1.0-alpha.7
 
   packages/code-review-agent: {}
 
@@ -123,6 +206,21 @@ importers:
       '@effectionx/context-api':
         specifier: 0.6.0
         version: 0.6.0(effection@4.1.0-alpha.7)
+      '@effectionx/fetch':
+        specifier: 0.2.0
+        version: 0.2.0(effection@4.1.0-alpha.7)
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0-alpha.7)
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0-alpha.7)
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0-alpha.7)
+      effection:
+        specifier: 4.1.0-alpha.7
+        version: 4.1.0-alpha.7
 
   test-support:
     dependencies:
@@ -628,6 +726,9 @@ packages:
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
     engines: {node: '>=10'}
 
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
   '@types/debug@4.1.12':
     resolution: {integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==}
 
@@ -735,6 +836,10 @@ packages:
 
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
+
+  configliere@0.2.4:
+    resolution: {integrity: sha512-xGvxseKlsySjwXzB9HXNHe0/eqA9nCUUEo1227tTnhiBjlUrlMTN7CgpO4ufK9+TW/823dhjfOLY83fYqOh/hA==}
+    engines: {node: '>= 16'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -1131,6 +1236,9 @@ packages:
   trough@2.2.0:
     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
 
+  ts-case-convert@2.3.1:
+    resolution: {integrity: sha512-Y/HgigFuL6gqw7brjoRWdFDDUc1R5N7+yoxw2AAZ/9tL5bj0HfSFf008oHFNq2nEcCBF9a1nSeddRMTA9sOO7w==}
+
   tsx@4.21.0:
     resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
     engines: {node: '>=18.0.0'}
@@ -1505,6 +1613,8 @@ snapshots:
 
   '@sindresorhus/is@4.6.0': {}
 
+  '@standard-schema/spec@1.1.0': {}
+
   '@types/debug@4.1.12':
     dependencies:
       '@types/ms': 2.1.0
@@ -1604,6 +1714,11 @@ snapshots:
       color-name: 1.1.4
 
   color-name@1.1.4: {}
+
+  configliere@0.2.4:
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      ts-case-convert: 2.3.1
 
   cross-spawn@7.0.6:
     dependencies:
@@ -2145,6 +2260,8 @@ snapshots:
   tinypool@2.1.0: {}
 
   trough@2.2.0: {}
+
+  ts-case-convert@2.3.1: {}
 
   tsx@4.21.0:
     dependencies:

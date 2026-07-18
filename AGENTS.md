@@ -29,6 +29,8 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
    that explain what code does
 5. Describe implemented behavior in the present tense; Don't use roadmap
    language in specifications or source code.
+6. Parse to infer type; Do not type cast with `as`.
+7. Do not use braceless `if` statements.
 
 ## PR Process
 

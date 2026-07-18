@@ -1,6 +1,7 @@
 {
   "name": "@executablemd/code-review-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Parsers that turn git diff and Oxlint output into typed structures for executable.md reviews.",
   "type": "module",
   "exports": "./mod.ts"
 }

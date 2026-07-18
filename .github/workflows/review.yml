@@ -15,9 +15,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: denoland/setup-deno@v2.0.3
-
-      - run: deno install
+      - name: Install xmd release binary
+        run: |
+          curl -fsSL https://executable.md/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run review
         env:
@@ -28,7 +29,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task review --verbose
+        run: |
+          xmd run .reviews/ReviewPR.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir core/components \
+            -j .reviews/journal.jsonl \
+            --verbose
+
+      # xmd embeds a failed EnsureOxlint as a comment and still exits 0, so
+      # assert the lint binaries were provisioned — fail the job if not.
+      - name: Verify oxlint provisioning
+        run: |
+          test -x .reviews/.oxlint/oxlint && test -x .reviews/.oxlint/tsgolint \
+            || { echo "::error::oxlint/tsgolint could not be provisioned by EnsureOxlint"; exit 1; }
 
       - name: Upload journal
         if: always()

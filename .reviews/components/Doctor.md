@@ -10,10 +10,12 @@ inputs:
 
 Checking environment for Oxlint static analysis...
 
+<EnsureOxlint />
+
 <Capture as="oxlintVersion">
 
 ```bash exec
-npx oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
+.reviews/.oxlint/oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
 ```
 
 </Capture>
@@ -21,7 +23,7 @@ npx oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
 <Capture as="tsgolintVersion">
 
 ```bash exec
-test -d node_modules/oxlint-tsgolint && echo "INSTALLED" || echo "NOT_INSTALLED"
+test -x .reviews/.oxlint/tsgolint && echo "INSTALLED" || echo "NOT_INSTALLED"
 ```
 
 </Capture>
@@ -29,7 +31,7 @@ test -d node_modules/oxlint-tsgolint && echo "INSTALLED" || echo "NOT_INSTALLED"
 <Capture as="nodeModulesCheck">
 
 ```bash exec
-test -d node_modules && echo "EXISTS" || echo "MISSING"
+test -x .reviews/.oxlint/oxlint && echo "EXISTS" || echo "MISSING"
 ```
 
 </Capture>
@@ -85,7 +87,7 @@ Running type-aware probe to test Oxlint compatibility...
   fallback='{"diagnostics":[],"stderr":""}'>
 
 ```bash exec
-RESULT=$(npx oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
+RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
 STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
 rm -f .reviews/probe-stderr.tmp
 echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
