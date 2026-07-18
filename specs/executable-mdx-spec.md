@@ -581,10 +581,10 @@ resources for the lifetime of the component expansion. See §4.5 for
 the context flag pattern.
 
 `persist` itself does not call `evalScope.eval()` — it makes the
-contextual `persistent()` operation (§5.5) answer true for the duration
+contextual `persistent` value (§5.5) answer true for the duration
 of the inner chain, and `evalFactory` reads that to decide whether to
 route through the eval scope. The install is scope-local, so
-`persistent()` reverts to false as soon as the persist-wrapped chain
+`persistent` reverts to false as soon as the persist-wrapped chain
 completes.
 
 | Info string | Behavior |
@@ -1113,7 +1113,7 @@ Each run compiles and imports the current transformed source.
 ### 4.3 Binding environment
 
 ```typescript
-// src/eval-env.ts
+// src/types.ts
 export interface EvalEnv {
   values: Record<string, unknown>;
 }
@@ -1122,7 +1122,7 @@ export interface EvalEnv {
 Created fresh at the start of component expansion. Each eval block reads
 bindings from `values` (via env preamble) and writes new bindings back
 (via env-write transforms). The current environment is read contextually
-via the `env()` operation (§5.5); the expansion engine provides it
+via the `env` value (§5.5); the expansion engine provides it
 scope-locally around each component body, so eval blocks within a
 component share bindings without leaking into parent or sibling
 components.
@@ -1132,7 +1132,7 @@ components.
 Each document gets a dedicated **eval scope** — an Effection scope whose
 lifetime matches the document's expansion. Resources spawned by `persist`
 blocks are retained in this scope until expansion completes. The current
-eval scope is read contextually via the `evalScope()` operation (§5.5).
+eval scope is read contextually via the `evalScope` value (§5.5).
 
 The eval scope is created in `runDocument()` (§8.1) **before**
 `durableRun` via `resource(useEvalScope())`. This is critical:
@@ -1148,9 +1148,9 @@ That would hang because the durable effects in the workflow can't
 interact with the journal from within the eval scope's channel
 processor. Instead:
 
-1. `persist` makes the contextual `persistent()` operation answer true
+1. `persist` makes the contextual `persistent` value answer true
    for the duration of the inner chain
-2. `evalFactory` reads `persistent()` after compiling the block
+2. `evalFactory` reads `persistent` after compiling the block
 3. When true, only the **compiled VM block** (`fn(env.values)`) runs
    inside `evalScope.eval()` — not the entire modifier chain
 4. Resources spawned during that execution are retained until the
@@ -1188,7 +1188,6 @@ run but are absent from the diagnostic trace.
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `useContent()` — content slot access for function components |
 | `test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
-| `src/eval-env.ts` | `EvalEnv` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
 | `src/modifiers/persist.ts` | `persistFactory` |
@@ -1822,12 +1821,14 @@ interface, and each operation is also exported directly:
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
 | `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9) | returns the supplied segment |
-| `env()` | The current binding environment (§4.3) | `undefined` |
-| `evalScope()` | The current eval scope (§4.4) | `undefined` |
+| `env` | The current binding environment (§4.3) | `undefined` |
+| `evalScope` | The current eval scope (§4.4) | `undefined` |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
-| `persistent()` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
+| `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
 
+`env`, `evalScope`, and `persistent` are value operations — read without
+invocation (`yield* env`); a provider is middleware returning the value.
 `useCodeBlock()` and `useContent()` remain as ergonomic aliases backed
 by `codeBlock()` and `content(slot?)`.
 
@@ -3732,7 +3733,7 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | I1 | `eval` is terminal | `evalFactory` ignores `next` — never calls it |
 | I2 | `eval` returns empty output | `result.output === ""`, `exitCode === 0` |
-| I3 | `persist eval` composes | `persist` makes `persistent()` answer true, `eval` reads it |
+| I3 | `persist eval` composes | `persist` makes `persistent` answer true, `eval` reads it |
 | I4 | `timeout=5s eval` composes | Timeout cancels after 5s if block hangs |
 | I5 | `timeout eval` default | Default timeout is 30s |
 | I6 | `persist timeout=10s eval` | Three modifiers compose: persist → timeout → eval |
@@ -3769,7 +3770,7 @@ visible warning blocks, collect into a separate error report).
 | L1 | `persist eval` retains spawned resource | Resource spawned in block survives block completion |
 | L2 | Non-persist eval tears down resource | Resource spawned in block torn down at block end |
 | L3 | Persist resource lifetime matches component | Resource torn down when component expansion completes |
-| L4 | Persistent flag scoped to chain | `persistent()` is `true` only during the persist-wrapped chain |
+| L4 | Persistent flag scoped to chain | `persistent` is `true` only during the persist-wrapped chain |
 | L5 | Multiple persist blocks in one component | Each retains its own resources independently |
 | L6 | Persist on repeated run | Resource is created and retained again for the current component lifetime |
 | L7 | Persist flag does not leak to sibling blocks | Non-persist block after persist block → flag is false |
@@ -4002,7 +4003,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 28 | Acorn + magic-string for source transform | Acorn provides reliable ES2024 parsing; magic-string preserves source positions for accurate source maps without rebuilding AST |
 | 29 | Execution mode auto-detected from AST | No modifier needed — `yield` in body → generator, `await` → async, neither → sync; mixed yield+await is a transform error |
 | 30 | `data:` URI module compilation for eval blocks | Eval blocks are compiled into `data:application/typescript,...` URI modules and dynamically imported via `yield* call(() => import(dataUri))`. APIs are standard `import` statements in the generated module, resolved through Deno's import map. `new Function()` is used for expression props (simpler than `data:` URI for single expressions, no module imports needed) |
-| 31 | `persist` uses a contextual flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` makes `persistent()` answer true, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
+| 31 | `persist` uses a contextual flag, not direct wrapping | Wrapping the full modifier chain in `evalScope.eval()` hangs because durable effects can't interact with the journal from inside the eval scope's channel processor; instead `persist` makes `persistent` answer true, and `evalFactory` routes only the compiled VM block through `evalScope.eval()` |
 | 32 | `evalScope` created before the journaled workflow | The channel processor and eval sender share an ancestor scope |
 | 33 | Non-serializable bindings silently omitted from journal | Functions, class instances, and live objects remain in `env.values` during the current run but are absent from the diagnostic trace |
 | 34 | Eval blocks produce no rendered output by default | Eval blocks primarily exist for bindings and side effects. The `output()` function (§4.7) optionally produces rendered output; without it, result is `{ output: "", exitCode: 0, stderr: "" }` |
@@ -4018,7 +4019,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 44 | Provider lifecycle expressed as a component, not a `RunDocumentOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
 | 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; the binding environment is already the shared state carrier for within-component coordination; scope-correct because a fresh environment is provided per component expansion |
-| 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env()` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
+| 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
 | 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
 | 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
 | 50 | `renderChildren`/`render` are closures in `env.values`, not an Api | A Render Api would require middleware installation per component; closures are simpler and capture the expansion context at the injection point; they are non-serializable and silently omitted from the journal |
@@ -4046,7 +4047,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
 | 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<string>` (`yield*` for result) and has `.output` stream for chunks; errors surface through `yield* execution` via `withResolvers` `reject()`; eliminates `Result<string>` / `unbox` in consumer code |
 | 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
-| 75 | `useContent()` is contextual, not a function argument | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same contextual pattern as `env()`/`evalScope()`; supports named slots via `useContent("header")` |
+| 75 | `useContent()` is contextual, not a function argument | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same contextual pattern as `env`/`evalScope`; supports named slots via `useContent("header")` |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
 | 77 | Function component imported on every run | The current module must execute because functions are not serialized into a trace |
 | 78 | Internal durable-streams package | Provides journaling for the core runtime |

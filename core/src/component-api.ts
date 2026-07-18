@@ -21,10 +21,10 @@ import type {
   CodeBlockResult,
   ComponentDefinition,
   ErrorSegment,
+  EvalEnv,
   FunctionComponentDefinition,
   Modifier,
 } from "./types.ts";
-import type { EvalEnv } from "./eval-env.ts";
 
 export interface ComponentApi {
   /** `"__root__"` imports the root document. */
@@ -36,11 +36,11 @@ export interface ComponentApi {
    * install middleware that throws instead (spec §6.9).
    */
   raise(error: ErrorSegment): Operation<ErrorSegment>;
-  env(): Operation<EvalEnv | undefined>;
-  evalScope(): Operation<EvalScope | undefined>;
+  env: EvalEnv | undefined;
+  evalScope: EvalScope | undefined;
   codeBlock(): Operation<CodeBlockContext>;
   /** Whether the current block runs with persistent resource lifetime. */
-  persistent(): Operation<boolean>;
+  persistent: boolean;
   /** Render the invoking component's children (optionally a named slot). */
   content(slot?: string): Operation<string>;
 }
@@ -64,24 +64,15 @@ export const Component = createApi<ComponentApi>("Component", {
   *raise(error: ErrorSegment): Operation<ErrorSegment> {
     return error;
   },
-  // deno-lint-ignore require-yield
-  *env(): Operation<EvalEnv | undefined> {
-    return undefined;
-  },
-  // deno-lint-ignore require-yield
-  *evalScope(): Operation<EvalScope | undefined> {
-    return undefined;
-  },
+  env: undefined,
+  evalScope: undefined,
   // deno-lint-ignore require-yield
   *codeBlock(): Operation<CodeBlockContext> {
     throw new Error(
       "Component.codeBlock() has no provider: no code block is executing in this scope.",
     );
   },
-  // deno-lint-ignore require-yield
-  *persistent(): Operation<boolean> {
-    return false;
-  },
+  persistent: false,
   // deno-lint-ignore require-yield
   *content(_slot?: string): Operation<string> {
     throw new Error(

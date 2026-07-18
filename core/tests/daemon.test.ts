@@ -92,7 +92,7 @@ describe("Tier Q — Daemon modifier", () => {
           },
           { at: "min" },
         );
-        yield* middleware([], terminal) as unknown as Operation<unknown>;
+        yield* middleware([], terminal);
       });
     } catch (e) {
       threw = true;

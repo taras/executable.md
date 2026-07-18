@@ -26,7 +26,7 @@ import { evalScope } from "../component-api.ts";
  *
  * Ignores `next` — this is the terminal handler (like `exec` and `eval`).
  * Reads code block metadata via useCodeBlock() and the eval scope via
- * Component.evalScope().
+ * the contextual `evalScope` value.
  *
  * The block's content (already interpolated with eval bindings by the
  * expansion engine) is used to build the subprocess command. The command
@@ -46,7 +46,7 @@ export const daemonFactory: ModifierFactory = (_params) => (_args, _next) =>
     // daemon produces no journal entry, so all its effects are ephemeral.
     const launchDaemon = {
       *[Symbol.iterator]() {
-        const scope = yield* evalScope();
+        const scope = yield* evalScope;
         if (!scope) {
           throw new Error("daemon requires a component eval scope; none is in scope.");
         }

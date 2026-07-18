@@ -460,7 +460,7 @@ delegate with `next(...)` or short-circuit.
 
 **Why defaults instead of mandatory providers:** operations with a
 sensible neutral value default to it (`raise` returns the segment,
-`env()`/`evalScope()` are undefined, `persistent()` is false), while
+`env`/`evalScope` are undefined, `persistent` is false), while
 operations that cannot proceed without a provider (`importComponent`,
 `applyModifiers`, `codeBlock`, `content`) throw named missing-provider
 errors that identify the missing installation.

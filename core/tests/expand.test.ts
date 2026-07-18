@@ -10,10 +10,10 @@ import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
 import { ephemeral } from "@executablemd/durable-streams";
 import { useContent } from "../src/content-context.ts";
-import type { EvalEnv } from "../src/eval-env.ts";
 import type {
   Segment,
   ComponentDefinition,
+  EvalEnv,
   FunctionComponentDefinition,
   Json,
   CodeBlockResult,
@@ -73,15 +73,7 @@ function useTestComponents(
 
 /** Install a binding environment on the current scope. */
 function useTestEnv(testEnv: EvalEnv): Operation<void> {
-  return Component.around(
-    {
-      // deno-lint-ignore require-yield
-      *env(_args, _next) {
-        return testEnv;
-      },
-    },
-    { at: "min" },
-  );
+  return Component.around({ env: () => testEnv }, { at: "min" });
 }
 
 function expand(

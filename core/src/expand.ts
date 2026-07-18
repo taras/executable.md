@@ -21,13 +21,13 @@ import type {
   ErrorSegment,
   ComponentInvocation,
   ComponentDefinition,
+  EvalEnv,
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
-import type { EvalEnv } from "./eval-env.ts";
 import {
   Component,
   applyModifiers,
@@ -36,7 +36,7 @@ import {
   importComponent,
   raise,
 } from "./component-api.ts";
-import { DocumentationError } from "./error-policy.ts";
+import { DocumentationError } from "./errors.ts";
 import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { validateProps } from "./validate.ts";
@@ -65,33 +65,14 @@ export function createBlockCounter(): BlockCounter {
   return { next: () => id++ };
 }
 
-// ---------------------------------------------------------------------------
-// Scope-local providers — installed inside scoped() so nested components
-// override ancestors without leaking into siblings
-// ---------------------------------------------------------------------------
-
+// Providers install at "min" inside scoped() so nested components override
+// ancestors (innermost min runs first) without leaking into siblings.
 function provideEnv(value: EvalEnv): Operation<void> {
-  return Component.around(
-    {
-      // deno-lint-ignore require-yield
-      *env(_args, _next) {
-        return value;
-      },
-    },
-    { at: "min" },
-  );
+  return Component.around({ env: () => value }, { at: "min" });
 }
 
 function provideEvalScope(value: EvalScope): Operation<void> {
-  return Component.around(
-    {
-      // deno-lint-ignore require-yield
-      *evalScope(_args, _next) {
-        return value;
-      },
-    },
-    { at: "min" },
-  );
+  return Component.around({ evalScope: () => value }, { at: "min" });
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +113,7 @@ export function* expandSegments(
         // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
         // Runs after meta/props interpolation so component contract takes
         // precedence. Only runs when a binding environment is in scope.
-        const textEvalEnv = yield* env();
+        const textEvalEnv = yield* env;
         const final = textEvalEnv
           ? interpolateEvalBindings(interpolated, textEvalEnv.values)
           : interpolated;
@@ -193,7 +174,7 @@ export function* expandSegments(
         // Skip interpolation for eval blocks — they access bindings directly
         // via the env preamble (const { name } = env;). Interpolating would
         // mangle JS template literals like `${name}` into `$<value>`.
-        const evalEnv = yield* env();
+        const evalEnv = yield* env;
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
         const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
         const interpolatedContent =
@@ -354,7 +335,7 @@ function* expandCapture(
     }
   }
 
-  const bindingEnv = yield* env();
+  const bindingEnv = yield* env;
   if (!bindingEnv) {
     return {
       type: "error",
@@ -404,9 +385,6 @@ function* expandComponent(
   try {
     imported = yield* importComponent(name);
   } catch (error) {
-    if (error instanceof DocumentationError) {
-      throw error;
-    }
     return [
       yield* raise({
         type: "error",
@@ -503,7 +481,7 @@ function* expandComponent(
   // the projectedEnv from the outer caller must be merged with the current
   // context env so that ancestor bindings propagate through all levels.
   // The current context env's bindings take precedence (innermost-wins).
-  const contextEnv = yield* env();
+  const contextEnv = yield* env;
   const callerEvalEnv = projectedEnv
     ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
     : contextEnv;
@@ -527,7 +505,7 @@ function* expandComponent(
   // By creating it via parentEvalScope.eval(), the child's spawned task
   // lives inside the parent's scope — Effection's scope prototype chain
   // ensures scope.reduce() walks child → parent when resolving middleware.
-  const parentEvalScope = yield* evalScope();
+  const parentEvalScope = yield* evalScope;
   let childEvalScope: EvalScope | undefined = undefined;
   if (parentEvalScope) {
     const result = yield* parentEvalScope.eval(() => useEvalScope());
@@ -590,13 +568,9 @@ function* expandComponent(
       return renderSegments(expanded);
     });
 
-  componentEnv.values.renderChildren = function* () {
-    return yield* renderInCallerScope(children);
-  };
+  componentEnv.values.renderChildren = () => renderInCallerScope(children);
 
-  componentEnv.values.render = function* (markdown: string) {
-    return yield* renderInCallerScope(scanSegments(markdown));
-  };
+  componentEnv.values.render = (markdown: string) => renderInCallerScope(scanSegments(markdown));
 
   const expanded = yield* scoped(function* () {
     yield* provideEnv(componentEnv);
@@ -615,7 +589,7 @@ function* expandComponent(
   });
 
   if (asBinding) {
-    const parentEnv = yield* env();
+    const parentEnv = yield* env;
     if (!parentEnv) {
       return [
         yield* raise({
@@ -738,7 +712,7 @@ function* expandFunctionComponent(
       return yield* definition.fn(validatedProps);
     });
     if (asBinding) {
-      const parentEnv = yield* env();
+      const parentEnv = yield* env;
       if (!parentEnv) {
         return [
           yield* raise({
@@ -825,7 +799,7 @@ function* resolveExpressionProps(
     return resolved;
   }
 
-  const contextEnv = yield* env();
+  const contextEnv = yield* env;
 
   // For projected children (substituted via <Content />), merge the
   // caller's env (explicitEnv) with the wrapping component's env
@@ -1082,10 +1056,6 @@ function substituteContent(
   const project = makeProjectFn(callerEnv);
   return substituteSegmentList(bodySegments, slots, meta, props, project, state);
 }
-
-// ---------------------------------------------------------------------------
-// Component-declared output: <Output> (spec §6.9)
-// ---------------------------------------------------------------------------
 
 interface BodyChunk {
   /** true = a rendered `<Output>` region; false = documentation (executed, not rendered). */

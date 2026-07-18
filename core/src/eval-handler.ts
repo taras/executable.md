@@ -15,13 +15,13 @@ import { transformBlock, serializeExports } from "./eval-transform.ts";
 export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const ctx = yield* useCodeBlock();
-    const evalEnv = yield* ephemeral(env());
+    const evalEnv = yield* ephemeral(env);
     if (!evalEnv) {
       throw new Error(
         `eval block "${ctx.blockId}" requires a binding environment; none is in scope.`,
       );
     }
-    const persist = yield* ephemeral(persistent());
+    const persist = yield* ephemeral(persistent);
 
     // Inject output() function into env so eval blocks can produce
     // rendered output. The function is a plain synchronous call:
@@ -56,7 +56,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         if (persist) {
           // Persist mode: run the compiled block inside the eval scope
           // so spawned resources are retained in the persistent EvalScope.
-          const scope = yield* evalScope();
+          const scope = yield* evalScope;
           if (!scope) {
             throw new Error(
               `persist eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,

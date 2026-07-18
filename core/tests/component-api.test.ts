@@ -70,9 +70,9 @@ describe("Component Api", () => {
   });
 
   it("env and evalScope default to undefined; persistent defaults to false", function* () {
-    expect(yield* env()).toBe(undefined);
-    expect(yield* evalScope()).toBe(undefined);
-    expect(yield* persistent()).toBe(false);
+    expect(yield* env).toBe(undefined);
+    expect(yield* evalScope).toBe(undefined);
+    expect(yield* persistent).toBe(false);
   });
 
   // ----- Scoped overrides -----
@@ -150,33 +150,17 @@ describe("Component Api", () => {
   it("nested env providers override ancestors without leaking into siblings", function* () {
     const outerEnv = { values: { tag: "outer" } };
     const innerEnv = { values: { tag: "inner" } };
-    yield* Component.around(
-      {
-        // deno-lint-ignore require-yield
-        *env(_args, _next) {
-          return outerEnv;
-        },
-      },
-      { at: "min" },
-    );
+    yield* Component.around({ env: () => outerEnv }, { at: "min" });
 
     const first = yield* scoped(function* () {
-      yield* Component.around(
-        {
-          // deno-lint-ignore require-yield
-          *env(_args, _next) {
-            return innerEnv;
-          },
-        },
-        { at: "min" },
-      );
-      return yield* env();
+      yield* Component.around({ env: () => innerEnv }, { at: "min" });
+      return yield* env;
     });
     expect(first).toBe(innerEnv);
 
     // A sibling scope sees the ancestor provider, not the first sibling's.
     const second = yield* scoped(function* () {
-      return yield* env();
+      return yield* env;
     });
     expect(second).toBe(outerEnv);
   });
@@ -184,50 +168,34 @@ describe("Component Api", () => {
   it("nested evalScope providers override ancestors without leaking into siblings", function* () {
     const outerScope = yield* useEvalScope();
     const innerScope = yield* useEvalScope();
-    yield* Component.around(
-      {
-        // deno-lint-ignore require-yield
-        *evalScope(_args, _next) {
-          return outerScope;
-        },
-      },
-      { at: "min" },
-    );
+    yield* Component.around({ evalScope: () => outerScope }, { at: "min" });
 
     const first = yield* scoped(function* () {
-      yield* Component.around(
-        {
-          // deno-lint-ignore require-yield
-          *evalScope(_args, _next) {
-            return innerScope;
-          },
-        },
-        { at: "min" },
-      );
-      return yield* evalScope();
+      yield* Component.around({ evalScope: () => innerScope }, { at: "min" });
+      return yield* evalScope;
     });
     expect(first).toBe(innerScope);
 
     const second = yield* scoped(function* () {
-      return yield* evalScope();
+      return yield* evalScope;
     });
     expect(second).toBe(outerScope);
   });
 
   // ----- Persistent evaluation flag -----
 
-  it("persistent() is true inside the persist modifier chain and false outside", function* () {
+  it("persistent is true inside the persist modifier chain and false outside", function* () {
     let observed: boolean | undefined = undefined;
     const middleware = persistFactory(undefined);
     // The terminal is Workflow-typed, so the contextual read bridges
     // through ephemeral().
     const terminal = function* () {
-      observed = yield* ephemeral(persistent());
+      observed = yield* ephemeral(persistent);
       return { output: "", exitCode: 0, stderr: "" };
     };
     yield* middleware([], terminal);
     expect(observed).toBe(true);
-    expect(yield* persistent()).toBe(false);
+    expect(yield* persistent).toBe(false);
   });
 
   // ----- Content provider dispatch -----

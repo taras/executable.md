@@ -62,7 +62,7 @@ export {
 // Eval system (generator eval blocks)
 // ---------------------------------------------------------------------------
 
-export type { EvalEnv } from "./src/eval-env.ts";
+export type { EvalEnv } from "./src/types.ts";
 
 export { compileBlock } from "./src/eval-context.ts";
 

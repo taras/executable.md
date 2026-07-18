@@ -87,15 +87,7 @@ function expandWithBindings(
   return scoped(function* () {
     yield* useTestComponents(components);
     const testEnv = { values: bindings };
-    yield* Component.around(
-      {
-        // deno-lint-ignore require-yield
-        *env(_args, _next) {
-          return testEnv;
-        },
-      },
-      { at: "min" },
-    );
+    yield* Component.around({ env: () => testEnv }, { at: "min" });
     const expanded = yield* expandSegments(segments, meta, props, new Set());
     return renderSegments(expanded);
   });
@@ -305,10 +297,7 @@ describe("Text interpolation — eval bindings in text segments", () => {
             captured.push(block.content);
             return { output: "ok\n", exitCode: 0, stderr: "" };
           },
-          // deno-lint-ignore require-yield
-          *env(_args, _next) {
-            return { values: { port: 8080 } };
-          },
+          env: () => ({ values: { port: 8080 } }),
         },
         { at: "min" },
       );

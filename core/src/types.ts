@@ -79,6 +79,15 @@ export interface ExecResult {
   stderr: string;
 }
 
+/**
+ * Shared binding environment for eval blocks within a single component
+ * (spec §4.3). Created fresh at the start of component expansion; read
+ * contextually via the Component `env` operation.
+ */
+export interface EvalEnv {
+  values: Record<string, unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // Modifier system (spec §3.2–3.5)
 // ---------------------------------------------------------------------------

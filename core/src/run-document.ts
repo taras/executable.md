@@ -50,7 +50,7 @@ import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
-import type { EvalEnv } from "./eval-env.ts";
+import type { EvalEnv } from "./types.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 
@@ -272,15 +272,7 @@ function* documentWorkflow(): Workflow<string> {
   // `persist` blocks are retained in the eval scope until expansion
   // completes, then torn down.
   const scopedExpansion: Operation<string> = scoped(function* () {
-    yield* Component.around(
-      {
-        // deno-lint-ignore require-yield
-        *env(_args, _next) {
-          return rootEnv;
-        },
-      },
-      { at: "min" },
-    );
+    yield* Component.around({ env: () => rootEnv }, { at: "min" });
     // Structural preflight (spec §6.9): a root with misplaced <Output>
     // executes no body side effects; the aggregate diagnostic renders as a
     // comment (root policy is "collect").
@@ -472,10 +464,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
           const chain = composeModifierChain(modifiers, context, registry);
           return yield* chain();
         },
-        // deno-lint-ignore require-yield
-        *evalScope(_args, _next) {
-          return rootEvalScope;
-        },
+        evalScope: () => rootEvalScope,
       },
       { at: "min" },
     );

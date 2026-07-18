@@ -11,9 +11,9 @@ import { compile as runtimeCompile } from "@executablemd/runtime";
  * Delegates to `@executablemd/runtime` so platform-specific
  * compilation can be provided via API.Compiler middleware.
  */
-export function* compileBlock(
+export function compileBlock(
   transformedBodyCode: string,
   userImports: string[],
 ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
-  return yield* runtimeCompile(transformedBodyCode, { imports: userImports });
+  return runtimeCompile(transformedBodyCode, { imports: userImports });
 }
