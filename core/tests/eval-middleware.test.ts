@@ -53,7 +53,7 @@ describe("Tier T3 — Middleware factory conformance", () => {
     expect(typeof middleware).toBe("function");
   });
 
-  // T28: EvalEnvCtx accessible pattern
+  // T28: binding environment accessible pattern
   it("T28: evalFactory creates a generator when called", function* () {
     const middleware = evalFactory(undefined);
     // Call the middleware with dummy args and next

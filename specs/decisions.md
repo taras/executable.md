@@ -174,9 +174,10 @@ Keep stream protocol integration in the execution boundary
 All other modules (scanner, frontmatter, expand, interpolate, validate,
 render) have zero dependency on the stream package.
 
-The expansion engine accepts abstract `ComponentImporter` and
-`ModifierChainRunner` functions — it doesn't know about durable effects.
-This was a good architectural decision that happened naturally.
+The expansion engine reaches import and modifier execution through the
+contextual Component Api (DEC-012) — it doesn't know about durable
+effects. The document's providers, installed by `run-document.ts`, are
+the only place expansion meets the stream protocol.
 
 ---
 
@@ -241,26 +242,19 @@ the factory is called with the parsed params from the info string
 conforms to `Middleware<[], ...>` — no arguments flow through `next`,
 params are captured in the factory closure.
 
-**3. Effection Context for code block metadata:**
+**3. Contextual delivery of code block metadata:**
 
-```typescript
-const CodeBlockCtx = createContext<CodeBlockContext>("codeBlock");
-function useCodeBlock(): Workflow<CodeBlockContext> {
-  return ephemeral(CodeBlockCtx.expect());
-}
-```
-
-`composeModifierChain` sets the context via `CodeBlockCtx.with()`,
-which scopes the value to the chain execution. Handlers that need the
+The block's `CodeBlockContext` is delivered through the Component Api
+(DEC-012): `composeModifierChain` installs a scope-local `codeBlock()`
+provider for the duration of the chain, and handlers that need the
 code block info (language, content, componentName) call `useCodeBlock()`
 instead of receiving it as a parameter. The `ephemeral()` bridge makes
 this work inside durable workflow generators (see DEC-001).
 
-### Why `CodeBlockCtx.with()` instead of `Context.set()`
+### Why a scope-local provider instead of `Context.set()`
 
-`Context.with(value, operation)` scopes the value to the operation's
-lifetime and restores the previous value when done. This is the correct
-primitive because:
+A provider installed inside the chain's own scope is removed when that
+scope exits. This is the correct primitive because:
 
 - Each code block gets its own context for the duration of its chain
 - No context leaks between code blocks
@@ -374,8 +368,8 @@ Components needed a way to capture their children's rendered output
 
 Closures injected into `env.values` at component expansion time. They
 capture the expansion context (meta, props, hide set, eval scope) and
-wrap their `expandSegments` calls in `EvalEnvCtx.with()` and
-`EvalScopeCtx.with()`.
+install the caller's binding environment and eval scope as scope-local
+Component providers (DEC-012) around their `expandSegments` calls.
 
 **Why closures, not an Api:** A Render Api would require middleware
 installation per component and add a new Api type to the system.
@@ -383,10 +377,11 @@ Closures are simpler — they're injected once during `expandComponent`
 and naturally capture all needed context. They're non-serializable,
 so `serializeExports` silently omits them from the journal.
 
-**Why context wrapping:** The closures may be called from inside
-`evalScope.eval()`, where the Effection context is different from
-the expansion context. Wrapping ensures `EvalEnvCtx` and `EvalScopeCtx`
-are correctly set regardless of the calling task.
+**Why provider installation inside the closure:** The closures may be
+called from inside `evalScope.eval()`, where the ambient scope differs
+from the expansion scope. Installing the providers at call time ensures
+the correct environment and eval scope are visible regardless of the
+calling task.
 
 ---
 
@@ -422,3 +417,53 @@ conversion preserves the distinction between "not provided" and "empty"
 for provider routing (providers check `context.model !== undefined`).
 
 ---
+
+## DEC-012: Component Api replaces dependency threading and raw operational contexts
+
+**Status:** Decided
+
+### Context
+
+Expansion originally received its dependencies through an
+`ExpansionContext` object (`importComponent`, `runModifierChain`)
+threaded as a parameter into every recursive expansion call, while the
+remaining operational state traveled through raw Effection context keys
+(`EvalEnvCtx`, `EvalScopeCtx`, `CodeBlockCtx`, `PersistFlagCtx`,
+`ContentCtx`, `ErrorPolicyCtx`). Two delivery mechanisms meant two
+override models: replacing an import strategy required constructing a
+new container at the call site, while overriding scope state required
+knowing which raw key to set — and neither surface was wrappable for
+instrumentation.
+
+### Decision
+
+One public Api — `Component` (`ComponentApi`) backed by
+`@effectionx/context-api` — carries every context-dependent operation:
+`importComponent`, `applyModifiers`, `raise`, `env`, `evalScope`,
+`codeBlock`, `persistent`, `content`. The `ctx` parameter is gone from
+the expansion signatures, and the raw operational keys are removed from
+the public surface. `useCodeBlock()` and `useContent()` remain as
+ergonomic aliases.
+
+**Why middleware at `min` for implementations:** middleware installed
+in a nested scope runs before inherited middleware, so a component's
+own `env`/`evalScope` providers shadow its ancestors' by
+short-circuiting — and installing inside `scoped()` removes them on
+exit, so siblings never observe each other's state. Runtime providers
+(document import, modifier execution, per-component state, error
+policy) all install at `min`.
+
+**Why `max` for instrumentation:** `max` middleware wraps outside every
+implementation, so tracing, mocking, and overrides can observe or
+transform calls without caring which `min` provider is active, and can
+delegate with `next(...)` or short-circuit.
+
+**Why defaults instead of mandatory providers:** operations with a
+sensible neutral value default to it (`raise` returns the segment,
+`env`/`evalScope` are undefined, `persistent` is false), while
+operations that cannot proceed without a provider (`importComponent`,
+`applyModifiers`, `codeBlock`, `content`) throw named missing-provider
+errors that identify the missing installation.
+
+Durable-streams' own contexts (e.g. `DurableCtx`) are unchanged: they
+store durable runtime state, not overridable core operations.

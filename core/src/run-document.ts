@@ -8,7 +8,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { useScope, spawn, createChannel, withResolvers, until } from "effection";
+import { scoped, spawn, createChannel, withResolvers, until } from "effection";
 import type { Operation, Stream } from "effection";
 import {
   durableRun,
@@ -26,13 +26,17 @@ import type {
   FunctionComponentDefinition,
   InputDefinition,
   ImportResult,
-  Modifier,
-  CodeBlockContext,
 } from "./types.ts";
 import { scanSegments } from "./scanner.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { expandSegments, createBlockCounter } from "./expand.ts";
-import type { ExpansionContext } from "./expand.ts";
+import {
+  expandSegments,
+  expandBody,
+  bodyHasOutput,
+  validateOutputPlacement,
+  createBlockCounter,
+} from "./expand.ts";
+import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
 import {
@@ -41,13 +45,12 @@ import {
   createModifierRegistry,
   useCodeBlock,
 } from "./modifiers.ts";
-import type { ModifierFactory, ModifierRegistry } from "./modifiers.ts";
+import type { ModifierFactory } from "./modifiers.ts";
 import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
-import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
-import type { EvalEnv } from "./eval-env.ts";
+import type { EvalEnv } from "./types.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 
@@ -246,49 +249,67 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
 // calls inside the expansion engine. See DEC-002.
 // ---------------------------------------------------------------------------
 
-function* documentWorkflow(
-  docPath: string,
-  searchPaths: string[],
-  modifierRegistry: ModifierRegistry,
-): Workflow<string> {
-  // Import root — same pipeline as any component
-  const root = yield* durableImportComponent("__root__", docPath, searchPaths);
+function* documentWorkflow(): Workflow<string> {
+  // Import root — same pipeline as any component. The provider middleware
+  // installed by runDocument maps "__root__" to the document path. The
+  // ephemeral() wrapper bridges typing only — the import inside remains a
+  // durable, journaled operation.
+  const root = yield* ephemeral(importComponent("__root__"));
 
   if (root.kind === "function") {
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
-  const env: EvalEnv = { values: {} };
-
-  // Build the expansion context
-  const ctx: ExpansionContext = {
-    importComponent: function* (name: string) {
-      return yield* durableImportComponent(name, undefined, searchPaths);
-    },
-    runModifierChain: function* (modifiers: Modifier[], context: CodeBlockContext) {
-      const chain = composeModifierChain(modifiers, context, modifierRegistry);
-      return yield* chain();
-    },
-  };
+  const rootEnv: EvalEnv = { values: {} };
 
   // Per-root-segment emission loop (spec §9).
   // Mutable counter preserves deterministic blockIds across
   // per-segment expansion calls (see spec §6.1).
   const counter = createBlockCounter();
 
-  // EvalScopeCtx is already set on the scope by runDocument.
-  // EvalEnvCtx is scoped to the document expansion lifetime via
-  // Context.with() (spec §3.1). Resources spawned by `persist` blocks
-  // are retained in the eval scope until expansion completes, then
-  // torn down.
-  //
-  // The EvalEnvCtx.with() wraps the entire loop so all segments share
-  // the same binding environment.
-  const scopedExpansion: Operation<string> = EvalEnvCtx.with(env, function* () {
+  // The root binding environment is installed as scope-local middleware
+  // around the entire loop so all segments share it. Resources spawned by
+  // `persist` blocks are retained in the eval scope until expansion
+  // completes, then torn down.
+  const scopedExpansion: Operation<string> = scoped(function* () {
+    yield* Component.around({ env: () => rootEnv }, { at: "min" });
+    // Structural preflight (spec §6.9): a root with misplaced <Output>
+    // executes no body side effects; the aggregate diagnostic renders as a
+    // comment (root policy is "collect").
+    const placementError = validateOutputPlacement(root.bodySegments);
+    if (placementError) {
+      const text = renderSegment(placementError);
+      yield* ephemeral(DocumentOutput.operations.output(text));
+      return text;
+    }
+
+    // A root declaring top-level <Output> buffers completely (spec §5.4):
+    // execute the whole body, then emit the selected regions only after
+    // successful completion. A documentation failure throws before any emit,
+    // so no partial output is produced.
+    if (bodyHasOutput(root.bodySegments)) {
+      const expanded = yield* expandBody(
+        root.bodySegments,
+        [],
+        root.meta,
+        {},
+        new Set(),
+        counter,
+        undefined,
+      );
+      const text = expanded.map(renderSegment).join("");
+      // An empty buffered root emits no output event.
+      if (text) {
+        yield* ephemeral(DocumentOutput.operations.output(text));
+      }
+      return text;
+    }
+
+    // Per-root-segment emission loop for roots without <Output> (spec §5.4).
     const chunks: string[] = [];
 
     for (const segment of root.bodySegments) {
-      const expanded = yield* expandSegments([segment], root.meta, {}, new Set(), ctx, counter);
+      const expanded = yield* expandSegments([segment], root.meta, {}, new Set(), counter);
 
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -397,7 +418,6 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   const { operation, resolve, reject } = withResolvers<string>();
 
   yield* spawn(function* () {
-    const scope = yield* useScope();
     let emitted = false;
 
     // Install platform-appropriate compiler middleware
@@ -426,11 +446,32 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     // Created in the same scope as durableRun so that DurableCtx
     // (set by durableRun) is visible to eval code that calls
     // renderChildren → importComponent → createDurableOperation.
-    scope.set(EvalScopeCtx, yield* useEvalScope());
+    const rootEvalScope = yield* useEvalScope();
+
+    // Install the document's runtime Component providers before durableRun
+    // so the workflow inherits them: component import, modifier execution,
+    // and the root eval scope.
+    yield* Component.around(
+      {
+        *importComponent([name], _next) {
+          return yield* durableImportComponent(
+            name,
+            name === "__root__" ? docPath : undefined,
+            componentDirs,
+          );
+        },
+        *applyModifiers([modifiers, context], _next) {
+          const chain = composeModifierChain(modifiers, context, registry);
+          return yield* chain();
+        },
+        evalScope: () => rootEvalScope,
+      },
+      { at: "min" },
+    );
 
     // Run the durable workflow.
     try {
-      const output = yield* durableRun(() => documentWorkflow(docPath, componentDirs, registry), {
+      const output = yield* durableRun(() => documentWorkflow(), {
         stream,
       });
 

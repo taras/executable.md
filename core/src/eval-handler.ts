@@ -4,7 +4,7 @@ import { unbox } from "@effectionx/scope-eval";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
-import { EvalEnvCtx, EvalScopeCtx, PersistFlagCtx } from "./eval-env.ts";
+import { env, evalScope, persistent } from "./component-api.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
 
@@ -15,8 +15,13 @@ import { transformBlock, serializeExports } from "./eval-transform.ts";
 export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const ctx = yield* useCodeBlock();
-    const env = yield* ephemeral(EvalEnvCtx.expect());
-    const persist = yield* ephemeral(PersistFlagCtx.get()) ?? false;
+    const evalEnv = yield* ephemeral(env);
+    if (!evalEnv) {
+      throw new Error(
+        `eval block "${ctx.blockId}" requires a binding environment; none is in scope.`,
+      );
+    }
+    const persist = yield* ephemeral(persistent);
 
     // Inject output() function into env so eval blocks can produce
     // rendered output. The function is a plain synchronous call:
@@ -26,13 +31,13 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     // the journal. The output text itself is journaled alongside
     // exports as __output.
     const outputRef = { text: "" };
-    env.values.output = (text: string) => {
+    evalEnv.values.output = (text: string) => {
       outputRef.text = String(text);
     };
 
-    const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(env.values));
+    const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(evalEnv.values));
 
-    const bindings = serializeExports(env.values, transformed.imports);
+    const bindings = serializeExports(evalEnv.values, transformed.imports);
     const result = (yield createDurableOperation<Json>(
       {
         type: "eval",
@@ -41,7 +46,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
       },
       function* (): Operation<Json> {
         // Merge incoming bindings snapshot into env before execution
-        Object.assign(env.values, bindings);
+        Object.assign(evalEnv.values, bindings);
 
         // Compile the eval block via data: URI module import.
         // compileBlock is async (returns Operation) — it generates a
@@ -49,11 +54,16 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
 
         if (persist) {
-          // Persist mode: run the compiled block inside evalScope.eval()
+          // Persist mode: run the compiled block inside the eval scope
           // so spawned resources are retained in the persistent EvalScope.
-          const evalScope = yield* EvalScopeCtx.expect();
-          const blockResult = yield* evalScope.eval(
-            () => fn(env.values) as unknown as Operation<unknown>,
+          const scope = yield* evalScope;
+          if (!scope) {
+            throw new Error(
+              `persist eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,
+            );
+          }
+          const blockResult = yield* scope.eval(
+            () => fn(evalEnv.values) as unknown as Operation<unknown>,
           );
           const returnValue = unbox(blockResult);
           if (!outputRef.text && returnValue != null) {
@@ -62,13 +72,13 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         } else {
           // Normal mode: run the compiled block in the current scope.
           // Resources are torn down when this operation completes.
-          const returnValue = yield* fn(env.values) as unknown as Operation<unknown>;
+          const returnValue = yield* fn(evalEnv.values) as unknown as Operation<unknown>;
           if (!outputRef.text && returnValue != null) {
             outputRef.text = String(returnValue);
           }
         }
 
-        const exports = serializeExports(env.values, transformed.exports);
+        const exports = serializeExports(evalEnv.values, transformed.exports);
 
         if (outputRef.text) {
           (exports as Record<string, unknown>).__output = outputRef.text;
@@ -86,7 +96,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
       }
       // Remove __output from exports before assigning to env
       const { __output: _, ...exports } = restored;
-      Object.assign(env.values, exports);
+      Object.assign(evalEnv.values, exports);
     }
 
     return { output: outputRef.text, exitCode: 0, stderr: "" };

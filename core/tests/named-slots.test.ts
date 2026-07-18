@@ -8,9 +8,11 @@
 
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
+import { scoped } from "effection";
+import type { Operation } from "effection";
 import { partitionBySlot, stripSlotProp } from "../src/expand.ts";
-import { expandSegments, createBlockCounter } from "../src/expand.ts";
-import type { ExpansionContext } from "../src/expand.ts";
+import { expandSegments } from "../src/expand.ts";
+import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
@@ -18,14 +20,7 @@ import { validateProps } from "../src/validate.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type {
-  Segment,
-  ComponentDefinition,
-  Json,
-  CodeBlockResult,
-  Modifier,
-  CodeBlockContext,
-} from "../src/types.ts";
+import type { Segment, ComponentDefinition, Json, CodeBlockResult } from "../src/types.ts";
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -53,26 +48,44 @@ function makeComponent(
   };
 }
 
-function makeCtx(
+/** Install test component + modifier providers on the current scope. */
+function useTestComponents(
   components: Record<string, ComponentDefinition>,
   codeResult?: CodeBlockResult,
-): ExpansionContext {
-  return {
-    importComponent: function* (name: string) {
-      const comp = components[name];
-      if (!comp) throw new Error(`Component not found: ${name}`);
-      return comp;
-    },
-    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
-      return (
-        codeResult ?? {
-          output: "mock output\n",
-          exitCode: 0,
-          stderr: "",
+): Operation<void> {
+  return Component.around(
+    {
+      // deno-lint-ignore require-yield
+      *importComponent([name], _next) {
+        const comp = components[name];
+        if (!comp) {
+          throw new Error(`Component not found: ${name}`);
         }
-      );
+        return comp;
+      },
+      // deno-lint-ignore require-yield
+      *applyModifiers(_args, _next) {
+        return (
+          codeResult ?? {
+            output: "mock output\n",
+            exitCode: 0,
+            stderr: "",
+          }
+        );
+      },
     },
-  };
+    { at: "min" },
+  );
+}
+
+function expandAll(
+  segments: Segment[],
+  components: Record<string, ComponentDefinition>,
+): Operation<Segment[]> {
+  return scoped(function* () {
+    yield* useTestComponents(components);
+    return yield* expandSegments(segments, {}, {}, new Set());
+  });
 }
 
 /** Create a component segment for use in partition tests. */
@@ -262,9 +275,9 @@ describe("Tier NS-A — Slot partitioning", () => {
 describe("Tier NS-B — Content substitution", () => {
   it("NS-B1: backward compat — no slots anywhere", function* () {
     const layout = makeComponent("Layout", "before\n<Content />\nafter");
-    const ctx = makeCtx({ Layout: layout });
+    const ctx = { Layout: layout };
     const segments = scanSegments("<Layout>\nchild text\n</Layout>");
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("before");
     expect(output).toContain("child text");
@@ -273,9 +286,9 @@ describe("Tier NS-B — Content substitution", () => {
 
   it("NS-B2: named slot projection", function* () {
     const layout = makeComponent("Layout", '<Content slot="header" />\n---\n<Content />');
-    const ctx = makeCtx({ Layout: layout, Header: makeComponent("Header", "HEADER") });
+    const ctx = { Layout: layout, Header: makeComponent("Header", "HEADER") };
     const segments = scanSegments('<Layout>\n<Header slot="header" />\ndefault text\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("HEADER");
     expect(output).toContain("default text");
@@ -284,9 +297,9 @@ describe("Tier NS-B — Content substitution", () => {
   it("NS-B3: default slot projection", function* () {
     const layout = makeComponent("Layout", '<Content slot="nav" />\n---\n<Content />');
     const nav = makeComponent("Nav", "NAV");
-    const ctx = makeCtx({ Layout: layout, Nav: nav });
+    const ctx = { Layout: layout, Nav: nav };
     const segments = scanSegments('<Layout>\n<Nav slot="nav" />\ndefault text\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     // Default slot should only have "default text", not Nav
     expect(output).toContain("NAV");
@@ -296,9 +309,9 @@ describe("Tier NS-B — Content substitution", () => {
   it("NS-B4: named + default together", function* () {
     const layout = makeComponent("Layout", 'NAV: <Content slot="nav" />\nBODY: <Content />');
     const nav = makeComponent("Nav", "I-AM-NAV");
-    const ctx = makeCtx({ Layout: layout, Nav: nav });
+    const ctx = { Layout: layout, Nav: nav };
     const segments = scanSegments('<Layout>\n<Nav slot="nav" />\nbody content\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("I-AM-NAV");
     expect(output).toContain("body content");
@@ -306,9 +319,9 @@ describe("Tier NS-B — Content substitution", () => {
 
   it("NS-B5: missing named slot — empty expansion", function* () {
     const layout = makeComponent("Layout", '<Content slot="footer" />\n<Content />');
-    const ctx = makeCtx({ Layout: layout });
+    const ctx = { Layout: layout };
     const segments = scanSegments("<Layout>\nbody only\n</Layout>");
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("body only");
     expect(output).not.toContain("footer");
@@ -318,9 +331,9 @@ describe("Tier NS-B — Content substitution", () => {
     // Layout body has no <Content slot="extra" />, so the extra-slotted child is discarded
     const layout = makeComponent("Layout", "<Content />");
     const extra = makeComponent("Extra", "EXTRA");
-    const ctx = makeCtx({ Layout: layout, Extra: extra });
+    const ctx = { Layout: layout, Extra: extra };
     const segments = scanSegments('<Layout>\n<Extra slot="extra" />\nbody text\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("body text");
     expect(output).not.toContain("EXTRA");
@@ -332,9 +345,9 @@ describe("Tier NS-B — Content substitution", () => {
       'FIRST: <Content slot="header" />\nSECOND: <Content slot="header" />',
     );
     const header = makeComponent("Header", "H");
-    const ctx = makeCtx({ Layout: layout, Header: header });
+    const ctx = { Layout: layout, Header: header };
     const segments = scanSegments('<Layout>\n<Header slot="header" />\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     // Both projections should have the header content
     const matches = output.match(/H/g);
@@ -347,9 +360,9 @@ describe("Tier NS-B — Content substitution", () => {
     const widget = makeComponent("Widget", "WIDGET:{props.title}", {
       inputs: { title: { type: "string", required: true } },
     });
-    const ctx = makeCtx({ Layout: layout, Widget: widget });
+    const ctx = { Layout: layout, Widget: widget };
     const segments = scanSegments('<Layout>\n<Widget slot="main" title="Hello" />\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     // Should expand Widget with title prop, without PropValidationError for "slot"
     expect(output).toContain("WIDGET:");
@@ -366,9 +379,9 @@ describe("Tier NS-B — Content substitution", () => {
       },
     );
     const body = makeComponent("Body", "BODY-CONTENT");
-    const ctx = makeCtx({ Layout: layout, Body: body });
+    const ctx = { Layout: layout, Body: body };
     const segments = scanSegments('<Layout>\n<Body slot="body" />\ndefault content\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("Title: MyLayout");
     expect(output).toContain("BODY-CONTENT");
@@ -379,11 +392,11 @@ describe("Tier NS-B — Content substitution", () => {
     const layout = makeComponent("Layout", '<Content slot="items" />');
     const itemA = makeComponent("ItemA", "A");
     const itemB = makeComponent("ItemB", "B");
-    const ctx = makeCtx({ Layout: layout, ItemA: itemA, ItemB: itemB });
+    const ctx = { Layout: layout, ItemA: itemA, ItemB: itemB };
     const segments = scanSegments(
       '<Layout>\n<ItemA slot="items" />\n<ItemB slot="items" />\n</Layout>',
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("A");
     expect(output).toContain("B");
@@ -404,11 +417,11 @@ describe("Tier NS-C — Expansion integration", () => {
     );
     const header = makeComponent("Header", "HEADER-TEXT");
     const body = makeComponent("Body", "BODY-TEXT");
-    const ctx = makeCtx({ Report: report, Header: header, Body: body });
+    const ctx = { Report: report, Header: header, Body: body };
     const segments = scanSegments(
       '<Report>\n<Header slot="header" />\n<Body slot="body" />\ndefault text\n</Report>',
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("HEADER-TEXT");
     expect(output).toContain("BODY-TEXT");
@@ -422,9 +435,9 @@ describe("Tier NS-C — Expansion integration", () => {
     const layout = makeComponent("Layout", '<Content slot="main" />');
     const inner = makeComponent("Inner", "INNER-EXPANDED");
     const wrapper = makeComponent("Wrapper", "WRAP:<Content />");
-    const ctx = makeCtx({ Layout: layout, Wrapper: wrapper, Inner: inner });
+    const ctx = { Layout: layout, Wrapper: wrapper, Inner: inner };
     const segments = scanSegments('<Layout>\n<Wrapper slot="main"><Inner /></Wrapper>\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("WRAP:");
     expect(output).toContain("INNER-EXPANDED");
@@ -443,13 +456,13 @@ describe("Tier NS-C — Expansion integration", () => {
     const leftComp = makeComponent("Left", "L");
     const rightComp = makeComponent("Right", "R");
     const headComp = makeComponent("Head", "H");
-    const ctx = makeCtx({
+    const ctx = {
       Outer: outer,
       Inner: inner,
       Left: leftComp,
       Right: rightComp,
       Head: headComp,
-    });
+    };
     const segments = scanSegments(
       [
         "<Outer>",
@@ -461,7 +474,7 @@ describe("Tier NS-C — Expansion integration", () => {
         "</Outer>",
       ].join("\n"),
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("OUTER-HEAD:");
     expect(output).toContain("H");
@@ -477,7 +490,7 @@ describe("Tier NS-C — Expansion integration", () => {
     const provider = makeComponent("Provider", "<Content />");
     const report = makeComponent("Report", 'HEAD:<Content slot="header" />\nBODY:<Content />');
     const header = makeComponent("Header", "H");
-    const ctx = makeCtx({ Provider: provider, Report: report, Header: header });
+    const ctx = { Provider: provider, Report: report, Header: header };
     const segments = scanSegments(
       [
         "<Provider>",
@@ -488,7 +501,7 @@ describe("Tier NS-C — Expansion integration", () => {
         "</Provider>",
       ].join("\n"),
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("HEAD:");
     expect(output).toContain("H");
@@ -501,9 +514,9 @@ describe("Tier NS-C — Expansion integration", () => {
     const comp = makeComponent("Comp", "title={props.title}", {
       inputs: { title: { type: "string", required: true } },
     });
-    const ctx = makeCtx({ Layout: layout, Comp: comp });
+    const ctx = { Layout: layout, Comp: comp };
     const segments = scanSegments('<Layout>\n<Comp slot="main" title="Hello" />\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("title=Hello");
     expect(output).not.toContain("Unknown prop");
@@ -514,9 +527,9 @@ describe("Tier NS-C — Expansion integration", () => {
     // All children carry slot props — default <Content /> expands to nothing
     const layout = makeComponent("Layout", 'HEAD:<Content slot="header" />\nDEFAULT:<Content />');
     const header = makeComponent("Header", "H");
-    const ctx = makeCtx({ Layout: layout, Header: header });
+    const ctx = { Layout: layout, Header: header };
     const segments = scanSegments('<Layout>\n<Header slot="header" />\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("HEAD:");
     expect(output).toContain("H");
@@ -527,7 +540,7 @@ describe("Tier NS-C — Expansion integration", () => {
   it("NS-C7: Fragment passthrough", function* () {
     const layout = makeComponent("Layout", 'SLOT:<Content slot="header" />\nDEFAULT:<Content />');
     const fragment = makeComponent("Fragment", "<Content />");
-    const ctx = makeCtx({ Layout: layout, Fragment: fragment });
+    const ctx = { Layout: layout, Fragment: fragment };
     const segments = scanSegments(
       [
         "<Layout>",
@@ -538,7 +551,7 @@ describe("Tier NS-C — Expansion integration", () => {
         "</Layout>",
       ].join("\n"),
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("raw text in header slot");
     expect(output).toContain("default text");
@@ -548,13 +561,13 @@ describe("Tier NS-C — Expansion integration", () => {
     const layout = makeComponent("Layout", '<Content slot="sidebar" />\n<Content />');
     const wrapper = makeComponent("Wrapper", "WRAP:<Content />");
     const nav = makeComponent("Nav", "NAV");
-    const ctx = makeCtx({ Layout: layout, Wrapper: wrapper, Nav: nav });
+    const ctx = { Layout: layout, Wrapper: wrapper, Nav: nav };
     const segments = scanSegments(
       ["<Layout>", '<Wrapper slot="sidebar"><Nav /></Wrapper>', "main content", "</Layout>"].join(
         "\n",
       ),
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("WRAP:");
     expect(output).toContain("NAV");
@@ -564,7 +577,7 @@ describe("Tier NS-C — Expansion integration", () => {
   it("NS-C9: exec block in default slot", function* () {
     const layout = makeComponent("Layout", '<Content slot="header" />\n<Content />');
     const header = makeComponent("Header", "H");
-    const ctx = makeCtx({ Layout: layout, Header: header });
+    const ctx = { Layout: layout, Header: header };
     const segments = scanSegments(
       [
         "<Layout>",
@@ -577,7 +590,7 @@ describe("Tier NS-C — Expansion integration", () => {
         "</Layout>",
       ].join("\n"),
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("H");
     expect(output).toContain("mock output");
@@ -586,9 +599,9 @@ describe("Tier NS-C — Expansion integration", () => {
   it("NS-C10: cycle detection unaffected", function* () {
     // A uses slots but A slot="x" where A's body references A → cycle
     const a = makeComponent("A", '<Content slot="x" />\n<A />');
-    const ctx = makeCtx({ A: a });
+    const ctx = { A: a };
     const segments = scanSegments('<A>\n<A slot="x" />\n</A>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("Cycle detected");
   });
@@ -616,10 +629,10 @@ describe("Tier NS-D — slot prop reservation", () => {
     const widget = makeComponent("Widget", "T:{props.title}", {
       inputs: { title: { type: "string", required: true } },
     });
-    const ctx = makeCtx({ Layout: layout, Widget: widget });
+    const ctx = { Layout: layout, Widget: widget };
     // <Widget slot="main" title="Hi" /> — slot is stripped before validation
     const segments = scanSegments('<Layout>\n<Widget slot="main" title="Hi" />\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("T:Hi");
     expect(output).not.toContain("ERROR");
@@ -629,9 +642,9 @@ describe("Tier NS-D — slot prop reservation", () => {
     // Content is special-cased — slot on Content should not cause validation error
     const comp = makeComponent("Comp", '<Content slot="header" />\n<Content />');
     const header = makeComponent("Header", "H");
-    const ctx = makeCtx({ Comp: comp, Header: header });
+    const ctx = { Comp: comp, Header: header };
     const segments = scanSegments('<Comp>\n<Header slot="header" />\nbody\n</Comp>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).not.toContain("ERROR");
     expect(output).toContain("H");
@@ -779,9 +792,9 @@ describe("Tier NS-F — Edge cases", () => {
   it("NS-F1: slot on self-closing component", function* () {
     const layout = makeComponent("Layout", '<Content slot="icon" />\n<Content />');
     const badge = makeComponent("Badge", "BADGE");
-    const ctx = makeCtx({ Layout: layout, Badge: badge });
+    const ctx = { Layout: layout, Badge: badge };
     const segments = scanSegments('<Layout>\n<Badge slot="icon" />\nbody\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("BADGE");
     expect(output).toContain("body");
@@ -791,9 +804,9 @@ describe("Tier NS-F — Edge cases", () => {
     const layout = makeComponent("Layout", '<Content slot="main" />');
     const card = makeComponent("Card", "CARD:<Content />");
     const text = makeComponent("Text", "TEXT");
-    const ctx = makeCtx({ Layout: layout, Card: card, Text: text });
+    const ctx = { Layout: layout, Card: card, Text: text };
     const segments = scanSegments('<Layout>\n<Card slot="main"><Text /></Card>\n</Layout>');
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("CARD:");
     expect(output).toContain("TEXT");
@@ -808,7 +821,7 @@ describe("Tier NS-F — Edge cases", () => {
     const c = makeComponent("C", "C");
     const d = makeComponent("D", "D");
     const h = makeComponent("H", "HEAD");
-    const ctx = makeCtx({ A: a, B: b, C: c, D: d, H: h });
+    const ctx = { A: a, B: b, C: c, D: d, H: h };
     const segments = scanSegments(
       [
         "<A>",
@@ -820,7 +833,7 @@ describe("Tier NS-F — Edge cases", () => {
         "</A>",
       ].join("\n"),
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("A-HEAD:");
     expect(output).toContain("HEAD");
@@ -845,11 +858,11 @@ describe("Tier NS-F — Edge cases", () => {
   it("NS-F5: body with only named Content slots — default children discarded", function* () {
     const layout = makeComponent("Layout", '<Content slot="a" />\n<Content slot="b" />');
     const a = makeComponent("A", "A-CONTENT");
-    const ctx = makeCtx({ Layout: layout, A: a });
+    const ctx = { Layout: layout, A: a };
     const segments = scanSegments(
       '<Layout>\n<A slot="a" />\ndefault text should be discarded\n</Layout>',
     );
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     expect(output).toContain("A-CONTENT");
     // Default text should be discarded since there's no <Content />
@@ -859,10 +872,10 @@ describe("Tier NS-F — Edge cases", () => {
   it("NS-F6: healing unaffected by slots", function* () {
     // Text goes to default slot — layout must have <Content /> for it
     const layout = makeComponent("Layout", '<Content slot="main" />\n<Content />');
-    const ctx = makeCtx({ Layout: layout });
+    const ctx = { Layout: layout };
     // Unclosed bold in text — text goes to default slot, healing runs on it
     const segments = scanSegments("<Layout>\n**unclosed bold\n</Layout>");
-    const expanded = yield* expandSegments(segments, {}, {}, new Set(), ctx);
+    const expanded = yield* expandAll(segments, ctx);
     const output = renderSegments(expanded);
     // Text should be healed — no dangling markers
     expect(output).toContain("unclosed bold");

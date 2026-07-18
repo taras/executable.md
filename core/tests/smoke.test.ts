@@ -174,6 +174,14 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     // Instruction wraps Sample — response includes system prompt text
     expect(output).toContain("[response-from-instruction-stub|system:You are a helpful pirate.]");
 
+    // ----- Component-declared Output section -----
+    expect(output).toContain("§ Component-declared Output");
+    // The <Show> inside <Output> renders (its `when` binding was computed by
+    // preceding documentation).
+    expect(output).toContain("OUTPUTDEMO_SELECTED");
+    // The component's documentation prose is suppressed.
+    expect(output).not.toContain("OUTPUTDEMO_DOC_LEAK");
+
     // ----- Durability section -----
     expect(output).toContain("Run at:");
 

@@ -6,9 +6,10 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
+import { scoped } from "effection";
 import { daemonFactory } from "../src/modifiers/daemon.ts";
 import { combine } from "@effectionx/middleware";
-import { CodeBlockCtx } from "../src/modifiers.ts";
+import { Component } from "../src/component-api.ts";
 import type { ModifierFactory, ModifierMiddleware } from "../src/modifiers.ts";
 import type { Operation } from "effection";
 
@@ -63,16 +64,14 @@ describe("Tier Q — Daemon modifier", () => {
     expect(factory.length).toBe(2);
   });
 
-  // Q10b: daemon without EvalScopeCtx throws a clear error
-  // When the daemon middleware runs in a scope where EvalScopeCtx
-  // is not set, EvalScopeCtx.expect() should throw.
-  it("Q10b: daemon without EvalScopeCtx throws clear error", function* () {
+  // Q10b: daemon without an eval scope in scope throws a clear error
+  it("Q10b: daemon without an eval scope throws clear error", function* () {
     const middleware = daemonFactory(undefined);
     const terminal = function* () {
       return { output: "", exitCode: 0, stderr: "" };
     };
 
-    // Provide CodeBlockCtx (required by useCodeBlock) but NOT EvalScopeCtx
+    // Provide the code block (required by useCodeBlock) but no eval scope
     const fakeContext = {
       language: "bash",
       content: "echo hello",
@@ -83,11 +82,17 @@ describe("Tier Q — Daemon modifier", () => {
     let errorMessage = "";
 
     try {
-      yield* CodeBlockCtx.with(fakeContext, function* () {
-        // The daemon middleware generator yields ephemeral operations.
-        // When it reaches EvalScopeCtx.expect() without the context set,
-        // it should throw.
-        yield* middleware([], terminal) as unknown as Operation<unknown>;
+      yield* scoped(function* () {
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *codeBlock(_args, _next) {
+              return fakeContext;
+            },
+          },
+          { at: "min" },
+        );
+        yield* middleware([], terminal);
       });
     } catch (e) {
       threw = true;
@@ -95,7 +100,6 @@ describe("Tier Q — Daemon modifier", () => {
     }
 
     expect(threw).toBe(true);
-    // The error should mention the missing context
-    expect(errorMessage.toLowerCase()).toMatch(/evalscope|context/);
+    expect(errorMessage).toContain("daemon requires a component eval scope");
   });
 });
