@@ -15,10 +15,6 @@ on:
         description: "Version to publish"
         required: true
         type: string
-      ref:
-        description: "Git ref to check out"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -32,9 +28,10 @@ jobs:
       # against the pinned 4.x prerelease during dnt's install step.
       NPM_CONFIG_LEGACY_PEER_DEPS: "true"
     steps:
+      # Reusable workflows run at the caller's commit, so the default checkout
+      # ref (github.sha) is the tag's commit on a tag push and the dispatched
+      # branch's HEAD on a manual run — no explicit ref needed.
       - uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: denoland/setup-deno@v2
         with:

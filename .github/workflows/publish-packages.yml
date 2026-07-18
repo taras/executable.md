@@ -34,12 +34,10 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
-      ref: ${{ steps.resolve.outputs.ref }}
       value: ${{ steps.resolve.outputs.value }}
     steps:
       - id: resolve
         run: |
-          echo "ref=${{ github.event.inputs.tag || github.ref }}" >> "$GITHUB_OUTPUT"
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -49,7 +47,6 @@ jobs:
     with:
       package: durable-streams
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   runtime:
     needs: [version]
@@ -57,7 +54,6 @@ jobs:
     with:
       package: runtime
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   core:
     needs: [version, durable-streams, runtime]
@@ -65,7 +61,6 @@ jobs:
     with:
       package: core
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   cli:
     needs: [version, core, durable-streams]
@@ -73,7 +68,6 @@ jobs:
     with:
       package: cli
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   code-review-agent:
     needs: [version]
@@ -81,4 +75,3 @@ jobs:
     with:
       package: packages/code-review-agent
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}

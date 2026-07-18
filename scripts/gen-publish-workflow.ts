@@ -63,12 +63,10 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
-      ref: \${{ steps.resolve.outputs.ref }}
       value: \${{ steps.resolve.outputs.value }}
     steps:
       - id: resolve
         run: |
-          echo "ref=\${{ github.event.inputs.tag || github.ref }}" >> "$GITHUB_OUTPUT"
           TAG="\${{ github.event.inputs.tag || github.ref_name }}"
           echo "value=\${TAG#v}" >> "$GITHUB_OUTPUT"
 `;
@@ -133,7 +131,6 @@ await main(function* () {
     lines.push("    with:");
     lines.push(`      package: ${member.dir}`);
     lines.push("      version: ${{ needs.version.outputs.value }}");
-    lines.push("      ref: ${{ needs.version.outputs.ref }}");
     lines.push("");
   }
 
