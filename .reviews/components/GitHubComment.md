@@ -4,23 +4,22 @@ inputs:
 ---
 
 ```ts eval
+// GITHUB_TOKEN is read inline at each call site, never assigned to a binding:
+// eval bindings are journaled, and the journal is uploaded as a CI artifact.
 const content = yield* renderChildren();
 const body = marker + "\n" + content.trim();
 
-const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
 const [owner, name] = repo.split("/");
 const api = `https://api.github.com/repos/${owner}/${name}`;
 
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-};
-
-const commentsResult = yield* fetch(
-  `${api}/issues/${prNumber}/comments`, { headers }
-)
+const commentsResult = yield* fetch(`${api}/issues/${prNumber}/comments`, {
+  headers: {
+    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+    "Accept": "application/vnd.github+json",
+  },
+})
   .expect()
   .json();
 
@@ -31,13 +30,21 @@ const existing = commentsResult.find(c =>
 if (existing) {
   yield* fetch(`${api}/issues/comments/${existing.id}`, {
     method: "PATCH",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: {
+      "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+      "Accept": "application/vnd.github+json",
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ body }),
   }).expect();
 } else {
   yield* fetch(`${api}/issues/${prNumber}/comments`, {
     method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: {
+      "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+      "Accept": "application/vnd.github+json",
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ body }),
   }).expect();
 }

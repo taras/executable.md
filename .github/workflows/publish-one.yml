@@ -23,6 +23,10 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Environment protection rules (required reviewers, v* tag-only deployment
+    # rule) gate every publish; the npm trusted publisher is also bound to this
+    # environment name, so npm rejects OIDC tokens minted outside it.
+    environment: npm-publish
     env:
       # @effectionx/* peer-depend on effection `^3 || ^4`, which npm won't match
       # against the pinned 4.x prerelease during dnt's install step.
@@ -31,14 +35,14 @@ jobs:
       # Reusable workflows run at the caller's commit, so the default checkout
       # ref (github.sha) is the tag's commit on a tag push and the dispatched
       # branch's HEAD on a manual run — no explicit ref needed.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.1
 
       # Node 24 ships npm >= 11.5, required for OIDC trusted publishing to npm.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
