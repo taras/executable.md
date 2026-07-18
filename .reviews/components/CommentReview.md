@@ -242,8 +242,11 @@ for (const pf of pendingFindings) {
   });
 }
 
-hasChecklist = checklistItems.length > 0;
-checklistMd = checklistItems.map(item => {
+// Redeclared, not reassigned: bindings from earlier eval blocks arrive in
+// later blocks as consts, so assignment throws. A fresh declaration shadows
+// the injected binding and its export overrides env for the <Show> below.
+const hasChecklist = checklistItems.length > 0;
+const checklistMd = checklistItems.map(item => {
   const checked = item.status !== "pending" ? "x" : " ";
   if (item.status === "applied") {
     return `- [${checked}] \`${item.file}:${item.lineNumber}\` (removed)`;
