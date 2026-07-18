@@ -8,20 +8,9 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { parseExpressionValue, scanSegments } from "../src/scanner.ts";
-import { expandSegments, createBlockCounter } from "../src/expand.ts";
-import type { ExpansionContext } from "../src/expand.ts";
-import { renderSegments } from "../src/render.ts";
 import { runDocument } from "../src/run-document.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type {
-  Segment,
-  ComponentDefinition,
-  Json,
-  CodeBlockResult,
-  Modifier,
-  CodeBlockContext,
-} from "../src/types.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -29,46 +18,6 @@ import * as os from "node:os";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function makeComponent(
-  name: string,
-  body: string,
-  opts: {
-    meta?: Record<string, unknown>;
-    inputs?: Record<string, any>;
-  } = {},
-): ComponentDefinition {
-  return {
-    kind: "markdown",
-    name,
-    path: `components/${name}.md`,
-    meta: opts.meta ?? {},
-    inputs: opts.inputs ?? {},
-    bodySegments: scanSegments(body),
-  };
-}
-
-function makeCtx(
-  components: Record<string, ComponentDefinition>,
-  codeResult?: CodeBlockResult,
-): ExpansionContext {
-  return {
-    importComponent: function* (name: string) {
-      const comp = components[name];
-      if (!comp) throw new Error(`Component not found: ${name}`);
-      return comp;
-    },
-    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
-      return (
-        codeResult ?? {
-          output: "mock output\n",
-          exitCode: 0,
-          stderr: "",
-        }
-      );
-    },
-  };
-}
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "expr-props-test-"));

@@ -13,10 +13,8 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { useScope } from "effection";
+import { scoped } from "effection";
 import type { Operation } from "effection";
-import { ContentCtx } from "./content-context.ts";
-import type { ContentHandle } from "./content-context.ts";
 import type {
   Segment,
   TextSegment,
@@ -26,14 +24,19 @@ import type {
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
-  CodeBlockResult,
-  Modifier,
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
-import { EvalEnvCtx, EvalScopeCtx } from "./eval-env.ts";
 import type { EvalEnv } from "./eval-env.ts";
-import { ErrorPolicyCtx, DocumentationError, currentErrorPolicy, raise } from "./error-policy.ts";
+import {
+  Component,
+  applyModifiers,
+  env,
+  evalScope,
+  importComponent,
+  raise,
+} from "./component-api.ts";
+import { DocumentationError } from "./error-policy.ts";
 import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { validateProps } from "./validate.ts";
@@ -63,24 +66,32 @@ export function createBlockCounter(): BlockCounter {
 }
 
 // ---------------------------------------------------------------------------
-// Types for the expansion context
+// Scope-local providers — installed inside scoped() so nested components
+// override ancestors without leaking into siblings
 // ---------------------------------------------------------------------------
 
-export type ComponentImporter = (
-  name: string,
-) => Operation<ComponentDefinition | FunctionComponentDefinition>;
+function* provideEnv(value: EvalEnv): Operation<void> {
+  yield* Component.around(
+    {
+      // deno-lint-ignore require-yield
+      *env(_args, _next) {
+        return value;
+      },
+    },
+    { at: "min" },
+  );
+}
 
-/**
- * Function that executes a modifier chain for a code block.
- */
-export type ModifierChainRunner = (
-  modifiers: Modifier[],
-  context: CodeBlockContext,
-) => Operation<CodeBlockResult>;
-
-export interface ExpansionContext {
-  importComponent: ComponentImporter;
-  runModifierChain: ModifierChainRunner;
+function* provideEvalScope(value: EvalScope): Operation<void> {
+  yield* Component.around(
+    {
+      // deno-lint-ignore require-yield
+      *evalScope(_args, _next) {
+        return value;
+      },
+    },
+    { at: "min" },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +104,10 @@ const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 /**
  * Expand an array of segments, resolving components and executing code blocks.
  *
+ * Component import, modifier execution, bindings, and error policy are all
+ * delivered contextually through the Component Api — install providers with
+ * `Component.around(..., { at: "min" })` before expanding.
+ *
  * @param counter - Optional block ID counter. If omitted, a local counter
  *   is created. For per-segment emission (§9), pass a shared counter so
  *   IDs are stable across calls.
@@ -102,7 +117,6 @@ export function* expandSegments(
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
-  ctx: ExpansionContext,
   counter: BlockCounter = createBlockCounter(),
 ): Operation<Segment[]> {
   const result: Segment[] = [];
@@ -117,8 +131,8 @@ export function* expandSegments(
         const interpolated = interpolate(healed, parentMeta, parentProps);
         // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
         // Runs after meta/props interpolation so component contract takes
-        // precedence. Only runs when an EvalEnv is present on the scope.
-        const textEvalEnv = yield* EvalEnvCtx.get();
+        // precedence. Only runs when a binding environment is in scope.
+        const textEvalEnv = yield* env();
         const final = textEvalEnv
           ? interpolateEvalBindings(interpolated, textEvalEnv.values)
           : interpolated;
@@ -132,7 +146,7 @@ export function* expandSegments(
           // reaches here. Reaching this branch means a misplaced or
           // dynamically scanned <Output> (e.g. render(markdown) content) —
           // diagnose it defensively per the ambient policy.
-          result.push(...(yield* raise(misplacedOutputError())));
+          result.push(yield* raise(misplacedOutputError()));
           break;
         }
 
@@ -142,11 +156,10 @@ export function* expandSegments(
             parentMeta,
             parentProps,
             hideSet,
-            ctx,
             counter,
           );
           if (captureResult) {
-            result.push(...(yield* raise(captureResult)));
+            result.push(yield* raise(captureResult));
           }
           break;
         }
@@ -157,7 +170,6 @@ export function* expandSegments(
           segment.expressions,
           segment.children,
           hideSet,
-          ctx,
           counter,
           segment.projectedEnv,
         );
@@ -165,7 +177,7 @@ export function* expandSegments(
         // ambient policy before appending them (spec §6.9).
         for (const expandedSegment of expanded) {
           if (expandedSegment.type === "error") {
-            result.push(...(yield* raise(expandedSegment)));
+            result.push(yield* raise(expandedSegment));
           } else {
             result.push(expandedSegment);
           }
@@ -175,13 +187,13 @@ export function* expandSegments(
 
       case "codeBlock": {
         // Interpolate eval bindings into content before the modifier chain.
-        // EvalEnvCtx may not be set (e.g., blocks outside component expansion),
-        // so we use .get() and fall back to the original content.
+        // A binding environment may not be in scope (e.g., blocks outside
+        // component expansion) — fall back to the original content.
         //
         // Skip interpolation for eval blocks — they access bindings directly
         // via the env preamble (const { name } = env;). Interpolating would
         // mangle JS template literals like `${name}` into `$<value>`.
-        const evalEnv = yield* EvalEnvCtx.get();
+        const evalEnv = yield* env();
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
         const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
         const interpolatedContent =
@@ -200,15 +212,15 @@ export function* expandSegments(
         };
 
         try {
-          const codeResult = yield* ctx.runModifierChain(segment.modifiers, context);
+          const codeResult = yield* applyModifiers(segment.modifiers, context);
 
           if (codeResult.exitCode !== 0 && codeResult.output === "") {
             result.push(
-              ...(yield* raise({
+              yield* raise({
                 type: "error",
                 message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
                 source: segment.content,
-              })),
+              }),
             );
           } else if (codeResult.output !== "") {
             result.push({
@@ -229,11 +241,11 @@ export function* expandSegments(
             throw error;
           }
           result.push(
-            ...(yield* raise({
+            yield* raise({
               type: "error",
               message: error instanceof Error ? error.message : String(error),
               source: segment.content,
-            })),
+            }),
           );
         }
         break;
@@ -243,7 +255,7 @@ export function* expandSegments(
         if (segment.type === "error") {
           // Pre-existing error segments (e.g. slot/substitution errors) follow
           // the ambient policy.
-          result.push(...(yield* raise(segment)));
+          result.push(yield* raise(segment));
         } else {
           result.push(segment);
         }
@@ -259,7 +271,6 @@ function* expandCapture(
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
-  ctx: ExpansionContext,
   counter: BlockCounter,
 ): Operation<ErrorSegment | undefined> {
   if (segment.selfClosing || segment.children.length === 0) {
@@ -327,7 +338,6 @@ function* expandCapture(
     parentMeta,
     parentProps,
     hideSet,
-    ctx,
     counter,
   );
   const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
@@ -344,15 +354,15 @@ function* expandCapture(
     }
   }
 
-  const env = yield* EvalEnvCtx.get();
-  if (!env) {
+  const bindingEnv = yield* env();
+  if (!bindingEnv) {
     return {
       type: "error",
       message: "<Capture> requires an evaluation environment.",
       source: "Capture",
     };
   }
-  env.values[bindingName] = captured;
+  bindingEnv.values[bindingName] = captured;
   return undefined;
 }
 
@@ -366,39 +376,47 @@ function* expandComponent(
   expressions: Record<string, string>,
   children: Segment[],
   hideSet: Set<string>,
-  ctx: ExpansionContext,
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
-    return yield* raise({
-      type: "error",
-      message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
+        source: name,
+      }),
+    ];
   }
 
   if (hideSet.size >= MAX_EXPANSION_DEPTH) {
-    return yield* raise({
-      type: "error",
-      message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
+        source: name,
+      }),
+    ];
   }
 
   let imported: ComponentDefinition | FunctionComponentDefinition;
   try {
-    imported = yield* ctx.importComponent(name);
+    imported = yield* importComponent(name);
   } catch (error) {
-    return yield* raise({
-      type: "error",
-      message:
-        error instanceof Error
-          ? `Failed to import component ${name}: ${error.message}`
-          : `Failed to import component ${name}: ${String(error)}`,
-      source: name,
-    });
+    if (error instanceof DocumentationError) {
+      throw error;
+    }
+    return [
+      yield* raise({
+        type: "error",
+        message:
+          error instanceof Error
+            ? `Failed to import component ${name}: ${error.message}`
+            : `Failed to import component ${name}: ${String(error)}`,
+        source: name,
+      }),
+    ];
   }
 
   // Function component: call the generator function directly
@@ -410,7 +428,6 @@ function* expandComponent(
       children,
       imported,
       hideSet,
-      ctx,
       counter,
       projectedEnv,
     );
@@ -424,7 +441,7 @@ function* expandComponent(
   // components, or other side effects.
   const placementError = validateOutputPlacement(definition.bodySegments);
   if (placementError) {
-    return yield* raise(placementError);
+    return [yield* raise(placementError)];
   }
 
   // Resolve eval expression props against env.values using the shared
@@ -434,19 +451,23 @@ function* expandComponent(
   try {
     resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
   } catch (error) {
-    return yield* raise({
-      type: "error",
-      message: error instanceof Error ? error.message : String(error),
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+        source: name,
+      }),
+    ];
   }
 
   if ("as" in expressions) {
-    return yield* raise({
-      type: "error",
-      message: `Prop "as" on <${name} /> must be a string literal.`,
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: `Prop "as" on <${name} /> must be a string literal.`,
+        source: name,
+      }),
+    ];
   }
 
   // Validate props against declared inputs.
@@ -464,11 +485,13 @@ function* expandComponent(
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
-    return yield* raise({
-      type: "error",
-      message: error instanceof Error ? error.message : String(error),
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+        source: name,
+      }),
+    ];
   }
 
   // Capture the caller's eval environment before creating the component's
@@ -480,7 +503,7 @@ function* expandComponent(
   // the projectedEnv from the outer caller must be merged with the current
   // context env so that ancestor bindings propagate through all levels.
   // The current context env's bindings take precedence (innermost-wins).
-  const contextEnv = yield* EvalEnvCtx.get();
+  const contextEnv = yield* env();
   const callerEvalEnv = projectedEnv
     ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
     : contextEnv;
@@ -504,7 +527,7 @@ function* expandComponent(
   // By creating it via parentEvalScope.eval(), the child's spawned task
   // lives inside the parent's scope — Effection's scope prototype chain
   // ensures scope.reduce() walks child → parent when resolving middleware.
-  const parentEvalScope = yield* EvalScopeCtx.get();
+  const parentEvalScope = yield* evalScope();
   let childEvalScope: EvalScope | undefined = undefined;
   if (parentEvalScope) {
     const result = yield* parentEvalScope.eval(() => useEvalScope());
@@ -531,10 +554,9 @@ function* expandComponent(
   // their own child scopes off parentEvalScope, and ancestor
   // middleware is visible through Effection's scope prototype chain.
   //
-  // Both wrap their expandSegments call in EvalEnvCtx.with() and
-  // EvalScopeCtx.with() so the full expansion context is available
-  // regardless of which task the closure runs in (e.g., inside
-  // evalScope.eval()).
+  // Both install env/evalScope middleware inside a fresh scope so the full
+  // expansion context is available regardless of which task the closure
+  // runs in (e.g., inside evalScope.eval()).
   //
   // These are non-serializable (functions) so serializeExports silently
   // omits them from the journal.
@@ -546,82 +568,40 @@ function* expandComponent(
   // without triggering false cycle detection. True cycles in a component's
   // body are still caught because body expansion uses newHideSet.
   const capturedChildrenHideSet = hideSet;
-  const capturedCtx = ctx;
   const capturedParentEvalScope = parentEvalScope;
   // Children are caller-provided content. Use the caller's eval env so
   // expression props (e.g., {pr}) resolve against the scope where the
   // JSX was written, not the wrapping component's env. Falls back to
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
 
-  componentEnv.values.renderChildren = function* () {
-    return yield* EvalEnvCtx.with(capturedCallerEnv, function* () {
+  const renderInCallerScope = (segments: Segment[]) =>
+    scoped(function* () {
+      yield* provideEnv(capturedCallerEnv);
       if (capturedParentEvalScope) {
-        return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
-          const expanded = yield* expandSegments(
-            children,
-            capturedMeta,
-            capturedProps,
-            capturedChildrenHideSet,
-            capturedCtx,
-            counter,
-          );
-          return renderSegments(expanded);
-        });
-      }
-      const expanded = yield* expandSegments(
-        children,
-        capturedMeta,
-        capturedProps,
-        capturedChildrenHideSet,
-        capturedCtx,
-        counter,
-      );
-      return renderSegments(expanded);
-    });
-  };
-
-  componentEnv.values.render = function* (markdown: string) {
-    const segments = scanSegments(markdown);
-    return yield* EvalEnvCtx.with(capturedCallerEnv, function* () {
-      if (capturedParentEvalScope) {
-        return yield* EvalScopeCtx.with(capturedParentEvalScope, function* () {
-          const expanded = yield* expandSegments(
-            segments,
-            capturedMeta,
-            capturedProps,
-            capturedChildrenHideSet,
-            capturedCtx,
-            counter,
-          );
-          return renderSegments(expanded);
-        });
+        yield* provideEvalScope(capturedParentEvalScope);
       }
       const expanded = yield* expandSegments(
         segments,
         capturedMeta,
         capturedProps,
         capturedChildrenHideSet,
-        capturedCtx,
         counter,
       );
       return renderSegments(expanded);
     });
+
+  componentEnv.values.renderChildren = function* () {
+    return yield* renderInCallerScope(children);
   };
 
-  const expanded = yield* EvalEnvCtx.with(componentEnv, function* () {
+  componentEnv.values.render = function* (markdown: string) {
+    return yield* renderInCallerScope(scanSegments(markdown));
+  };
+
+  const expanded = yield* scoped(function* () {
+    yield* provideEnv(componentEnv);
     if (childEvalScope) {
-      return yield* EvalScopeCtx.with(childEvalScope, function* () {
-        return yield* expandBody(
-          definition.bodySegments,
-          children,
-          definition.meta,
-          validatedProps,
-          newHideSet,
-          ctx,
-          counter,
-          callerEvalEnv ?? undefined,
-        );
-      });
+      yield* provideEvalScope(childEvalScope);
     }
     return yield* expandBody(
       definition.bodySegments,
@@ -629,25 +609,29 @@ function* expandComponent(
       definition.meta,
       validatedProps,
       newHideSet,
-      ctx,
       counter,
       callerEvalEnv ?? undefined,
     );
   });
 
   if (asBinding) {
-    const parentEnv = yield* EvalEnvCtx.get();
+    const parentEnv = yield* env();
     if (!parentEnv) {
-      return yield* raise({
-        type: "error",
-        message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-        source: name,
-      });
+      return [
+        yield* raise({
+          type: "error",
+          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+          source: name,
+        }),
+      ];
     }
-    // Consumer boundary (spec §6.9): re-raise transported errors under the
-    // ambient policy so documentation never captures and hides an error
-    // comment.
-    yield* consume(expanded);
+    // Consumer boundary (spec §6.9): raise transported errors unconditionally
+    // so documentation never captures and hides an error comment.
+    for (const capturedSegment of expanded) {
+      if (capturedSegment.type === "error") {
+        yield* raise(capturedSegment);
+      }
+    }
     parentEnv.values[asBinding] = renderSegments(expanded);
     return [];
   }
@@ -673,16 +657,17 @@ function* expandFunctionComponent(
   children: Segment[],
   definition: FunctionComponentDefinition,
   hideSet: Set<string>,
-  ctx: ExpansionContext,
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
 ): Operation<Segment[]> {
   if ("as" in expressions) {
-    return yield* raise({
-      type: "error",
-      message: `Prop "as" on <${name} /> must be a string literal.`,
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: `Prop "as" on <${name} /> must be a string literal.`,
+        source: name,
+      }),
+    ];
   }
 
   // Resolve expression props
@@ -690,21 +675,25 @@ function* expandFunctionComponent(
   try {
     resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
   } catch (error) {
-    return yield* raise({
-      type: "error",
-      message: error instanceof Error ? error.message : String(error),
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+        source: name,
+      }),
+    ];
   }
 
   // Strip slot prop before validation
   const asBindingResult = validateBindingName(resolvedProps.as);
   if (!asBindingResult.ok) {
-    return yield* raise({
-      type: "error",
-      message: `Prop "as" on <${name} /> ${asBindingResult.error}`,
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: `Prop "as" on <${name} /> ${asBindingResult.error}`,
+        source: name,
+      }),
+    ];
   }
   const asBinding = asBindingResult.value;
   const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
@@ -714,64 +703,71 @@ function* expandFunctionComponent(
   try {
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
-    return yield* raise({
-      type: "error",
-      message: error instanceof Error ? error.message : String(error),
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+        source: name,
+      }),
+    ];
   }
 
-  // Set ContentCtx on the scope so the function component can
-  // access children via `yield* useContent()`. Supports named
-  // slots: `yield* useContent("header")`.
   const slots = partitionBySlot(children);
-  const scope = yield* useScope();
 
-  const contentHandle: ContentHandle = {
-    segments: children,
-    *renderDefault() {
-      const expanded = yield* expandSegments(slots.default, {}, {}, hideSet, ctx, counter);
-      return renderSegments(expanded);
-    },
-    *renderSlot(slotName: string) {
-      const slotChildren = (slots.named.get(slotName) ?? []).map(stripSlotProp);
-      if (slotChildren.length === 0) return "";
-      const expanded = yield* expandSegments(slotChildren, {}, {}, hideSet, ctx, counter);
-      return renderSegments(expanded);
-    },
-  };
-  scope.set(ContentCtx, contentHandle);
-
-  // Call the function component
+  // Call the function component with content middleware in scope so it can
+  // render children via `yield* useContent()` / `useContent("slot")`.
   try {
-    const output = yield* definition.fn(validatedProps);
+    const output = yield* scoped(function* () {
+      yield* Component.around(
+        {
+          *content([slotName], _next) {
+            if (slotName !== undefined) {
+              const slotChildren = (slots.named.get(slotName) ?? []).map(stripSlotProp);
+              if (slotChildren.length === 0) {
+                return "";
+              }
+              const expanded = yield* expandSegments(slotChildren, {}, {}, hideSet, counter);
+              return renderSegments(expanded);
+            }
+            const expanded = yield* expandSegments(slots.default, {}, {}, hideSet, counter);
+            return renderSegments(expanded);
+          },
+        },
+        { at: "min" },
+      );
+      return yield* definition.fn(validatedProps);
+    });
     if (asBinding) {
-      const parentEnv = yield* EvalEnvCtx.get();
+      const parentEnv = yield* env();
       if (!parentEnv) {
-        return yield* raise({
-          type: "error",
-          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-          source: name,
-        });
+        return [
+          yield* raise({
+            type: "error",
+            message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+            source: name,
+          }),
+        ];
       }
       parentEnv.values[asBinding] = output;
       return [];
     }
     return [{ type: "text", content: output }];
   } catch (error) {
-    // A DocumentationError from a content-rendering path (renderDefault /
-    // useContent) is fail-fast — propagate it unchanged.
+    // A DocumentationError from a content-rendering path (useContent) is
+    // fail-fast — propagate it unchanged.
     if (error instanceof DocumentationError) {
       throw error;
     }
-    return yield* raise({
-      type: "error",
-      message:
-        error instanceof Error
-          ? `Function component ${name} error: ${error.message}`
-          : `Function component ${name} error: ${String(error)}`,
-      source: name,
-    });
+    return [
+      yield* raise({
+        type: "error",
+        message:
+          error instanceof Error
+            ? `Function component ${name} error: ${error.message}`
+            : `Function component ${name} error: ${String(error)}`,
+        source: name,
+      }),
+    ];
   }
 }
 
@@ -829,7 +825,7 @@ function* resolveExpressionProps(
     return resolved;
   }
 
-  const contextEnv = yield* EvalEnvCtx.get();
+  const contextEnv = yield* env();
 
   // For projected children (substituted via <Content />), merge the
   // caller's env (explicitEnv) with the wrapping component's env
@@ -1227,11 +1223,12 @@ function buildBody(
 /**
  * Expand a definition body (spec §6.9). Without a top-level `<Output>`, the
  * whole body renders (backward compatible). With `<Output>`, only the declared
- * regions render; documentation executes for its side effects under a "throw"
- * policy (fail-fast) and its rendered result is discarded; output regions run
- * under "collect" (errors render as comments). Regions and documentation run
- * in document order, so output can depend on bindings computed by preceding
- * documentation.
+ * regions render; documentation executes for its side effects under a throwing
+ * raise policy (fail-fast) and its rendered result is discarded; output
+ * regions install a collecting raise that shadows any inherited throwing
+ * middleware (innermost min runs first), so their errors render as comments.
+ * Regions and documentation run in document order, so output can depend on
+ * bindings computed by preceding documentation.
  */
 export function* expandBody(
   bodySegments: Segment[],
@@ -1239,13 +1236,12 @@ export function* expandBody(
   meta: Record<string, unknown>,
   props: Record<string, Json>,
   hideSet: Set<string>,
-  ctx: ExpansionContext,
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, meta, props, callerEnv);
-    return yield* expandSegments(substituted, meta, props, hideSet, ctx, counter);
+    return yield* expandSegments(substituted, meta, props, hideSet, counter);
   }
 
   const chunks = buildBody(bodySegments, children, meta, props, callerEnv);
@@ -1253,34 +1249,35 @@ export function* expandBody(
 
   for (const chunk of chunks) {
     if (chunk.output) {
-      const expanded = yield* ErrorPolicyCtx.with("collect", function* () {
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, ctx, counter);
+      const expanded = yield* scoped(function* () {
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *raise([error], _next) {
+              return error;
+            },
+          },
+          { at: "min" },
+        );
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
       output.push(...expanded);
     } else {
       // Documentation: execute for side effects, discard rendered output.
-      yield* ErrorPolicyCtx.with("throw", function* () {
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, ctx, counter);
+      yield* scoped(function* () {
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *raise([error], _next) {
+              throw new DocumentationError(error);
+            },
+          },
+          { at: "min" },
+        );
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
     }
   }
 
   return output;
-}
-
-/**
- * Consumer boundary (spec §6.9). When consuming a component's returned
- * segments in a documentation context, re-raise the first transported error
- * so it is never captured and hidden. Under "collect" it is a no-op.
- */
-function* consume(segments: Segment[]): Operation<void> {
-  const policy = yield* currentErrorPolicy();
-  if (policy !== "throw") {
-    return;
-  }
-  for (const segment of segments) {
-    if (segment.type === "error") {
-      throw new DocumentationError(segment);
-    }
-  }
 }

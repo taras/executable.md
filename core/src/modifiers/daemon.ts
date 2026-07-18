@@ -15,7 +15,7 @@ import { ephemeral } from "@executablemd/durable-streams";
 import { daemon } from "@effectionx/process";
 import type { ModifierFactory } from "../modifiers.ts";
 import { useCodeBlock } from "../modifiers.ts";
-import { EvalScopeCtx } from "../eval-env.ts";
+import { evalScope } from "../component-api.ts";
 
 // ---------------------------------------------------------------------------
 // daemonFactory — terminal modifier (spec §3.3)
@@ -26,7 +26,7 @@ import { EvalScopeCtx } from "../eval-env.ts";
  *
  * Ignores `next` — this is the terminal handler (like `exec` and `eval`).
  * Reads code block metadata via useCodeBlock() and the eval scope via
- * EvalScopeCtx.
+ * Component.evalScope().
  *
  * The block's content (already interpolated with eval bindings by the
  * expansion engine) is used to build the subprocess command. The command
@@ -46,14 +46,17 @@ export const daemonFactory: ModifierFactory = (_params) => (_args, _next) =>
     // daemon produces no journal entry, so all its effects are ephemeral.
     const launchDaemon = {
       *[Symbol.iterator]() {
-        const evalScope = yield* EvalScopeCtx.expect();
+        const scope = yield* evalScope();
+        if (!scope) {
+          throw new Error("daemon requires a component eval scope; none is in scope.");
+        }
 
         // The block content is a raw shell command (e.g. the body of a
         // ```bash daemon exec``` block). Pass it directly to daemon()
         // with shell:true so @effectionx/process invokes the system
         // shell instead of splitting with shellwords — which would
         // mangle commands containing nested quotes.
-        yield* evalScope.eval(function* () {
+        yield* scope.eval(function* () {
           yield* daemon(ctx.content, { shell: true });
         });
       },

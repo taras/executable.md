@@ -1005,6 +1005,36 @@ describe("runDocument", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Journal shape through Component Api dispatch
+// ---------------------------------------------------------------------------
+
+describe("Component Api dispatch — journal shape", () => {
+  it("import and exec journal entries keep their identities", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "<Note />\n\n```bash exec\necho hi\n```\n",
+      "components/Note.md": "note!\n",
+    });
+    yield* useStubExec();
+
+    const output = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+    expect(output).toContain("note!");
+
+    const events = stream.snapshot();
+    const imports = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "import_component" ? [e.description.name] : [],
+    );
+    expect(imports).toContain("__root__");
+    expect(imports).toContain("Note");
+
+    const execs = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execs.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Component-declared output at the document level (spec §5.4, §6.9)
 // ---------------------------------------------------------------------------
 

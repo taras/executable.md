@@ -1,19 +1,13 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
+import { scoped } from "effection";
 import { healSegment } from "../src/heal.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { expandSegments } from "../src/expand.ts";
-import type { ExpansionContext } from "../src/expand.ts";
+import { Component } from "../src/component-api.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
-import type {
-  Segment,
-  ComponentDefinition,
-  TextSegment,
-  Json,
-  Modifier,
-  CodeBlockContext,
-} from "../src/types.ts";
+import type { Segment, ComponentDefinition, TextSegment, Json } from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,19 +31,6 @@ function makeComponent(
   };
 }
 
-function makeCtx(components: Record<string, ComponentDefinition>): ExpansionContext {
-  return {
-    importComponent: function* (name: string) {
-      const comp = components[name];
-      if (!comp) throw new Error(`Component not found: ${name}`);
-      return comp;
-    },
-    runModifierChain: function* (_modifiers: Modifier[], _context: CodeBlockContext) {
-      return { output: "", exitCode: 0, stderr: "" };
-    },
-  };
-}
-
 /** Extract text segments from scan results. */
 function getTextSegments(input: string): string[] {
   return scanSegments(input)
@@ -57,18 +38,34 @@ function getTextSegments(input: string): string[] {
     .map((s) => s.content);
 }
 
-/** Expand segments and render to string — wraps generator in Operation. */
+/** Expand segments with test providers and render to string. */
 function expand(
   segments: Segment[],
-  ctx: ExpansionContext,
+  components: Record<string, ComponentDefinition>,
   meta: Record<string, unknown> = {},
   props: Record<string, Json> = {},
 ): Operation<string> {
-  function* op() {
-    const expanded = yield* expandSegments(segments, meta, props, new Set(), ctx);
+  return scoped(function* () {
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *importComponent([name], _next) {
+          const comp = components[name];
+          if (!comp) {
+            throw new Error(`Component not found: ${name}`);
+          }
+          return comp;
+        },
+        // deno-lint-ignore require-yield
+        *applyModifiers(_args, _next) {
+          return { output: "", exitCode: 0, stderr: "" };
+        },
+      },
+      { at: "min" },
+    );
+    const expanded = yield* expandSegments(segments, meta, props, new Set());
     return renderSegments(expanded);
-  }
-  return op() as unknown as Operation<string>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +251,7 @@ describe("healSegment", () => {
     const comp = makeComponent("Comp", "{meta.title} world", {
       meta: { title: "**bold**" },
     });
-    const ctx = makeCtx({ Comp: comp });
+    const ctx = { Comp: comp };
     const segments = scanSegments("<Comp />");
     const output = yield* expand(segments, ctx);
     expect(output).toContain("**bold**");
@@ -266,7 +263,7 @@ describe("healSegment", () => {
 
   it("F25: children with unclosed bold — healed before substitution", function* () {
     const comp = makeComponent("Wrap", "before <Content /> after");
-    const ctx = makeCtx({ Wrap: comp });
+    const ctx = { Wrap: comp };
     const segments = scanSegments("<Wrap>**hello</Wrap>");
     const output = yield* expand(segments, ctx);
     expect(output).toContain("**hello**");
@@ -276,7 +273,7 @@ describe("healSegment", () => {
 
   it("F26: component body segment healed independently", function* () {
     const comp = makeComponent("Wrap", "*intro\n<Content />");
-    const ctx = makeCtx({ Wrap: comp });
+    const ctx = { Wrap: comp };
     const segments = scanSegments("<Wrap>child</Wrap>");
     const output = yield* expand(segments, ctx);
     expect(output.includes("*intro*") || output.includes("*intro")).toBeTruthy();

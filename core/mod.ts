@@ -39,17 +39,32 @@ export type {
   ModifierMiddleware,
   CodeBlockWorkflow,
 } from "./src/modifiers.ts";
-export { useCodeBlock, CodeBlockCtx } from "./src/modifiers.ts";
+export { useCodeBlock } from "./src/modifiers.ts";
+
+// ---------------------------------------------------------------------------
+// Component Api — contextual operations for component expansion
+// ---------------------------------------------------------------------------
+
+export type { ComponentApi } from "./src/component-api.ts";
+export {
+  Component,
+  importComponent,
+  applyModifiers,
+  raise,
+  env,
+  evalScope,
+  codeBlock,
+  persistent,
+  content,
+} from "./src/component-api.ts";
 
 // ---------------------------------------------------------------------------
 // Eval system (generator eval blocks)
 // ---------------------------------------------------------------------------
 
 export type { EvalEnv } from "./src/eval-env.ts";
-export { EvalEnvCtx, EvalScopeCtx } from "./src/eval-env.ts";
 
-export type { EvalContext } from "./src/eval-context.ts";
-export { EvalCtxKey, createEvalContext, compileBlock } from "./src/eval-context.ts";
+export { compileBlock } from "./src/eval-context.ts";
 
 // ---------------------------------------------------------------------------
 // executable.md Globals (for generated eval modules)

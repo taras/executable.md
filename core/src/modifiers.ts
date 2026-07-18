@@ -10,47 +10,24 @@
  * - The middleware signature is Middleware<[], CodeBlockWorkflow>
  */
 
-import { createContext } from "effection";
+import { scoped } from "effection";
 import type { Operation } from "effection";
 import { ephemeral } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import type { Middleware } from "@effectionx/middleware";
 import { combine } from "@effectionx/middleware";
+import { Component, codeBlock } from "./component-api.ts";
 import type { CodeBlockContext, CodeBlockResult, Modifier } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// CodeBlock context — Effection scope-inherited value
-// ---------------------------------------------------------------------------
-
 /**
- * Effection Context holding the current code block's metadata.
+ * Read the current code block context.
  *
- * Set on the scope via `CodeBlockCtx.with()` before the modifier chain
- * runs. Handlers that need the code block info (language, content,
- * componentName) read it via `useCodeBlock()` instead of receiving it
- * as a parameter.
- */
-export const CodeBlockCtx = createContext<CodeBlockContext>("codeBlock");
-
-/**
- * Read the current code block context from the Effection scope.
- *
- * Returns a Workflow-compatible generator (bridged via `ephemeral`)
- * so it can be `yield*`'d inside modifier handlers that run within
- * durable workflows.
- *
- * @example
- * ```typescript
- * const myFactory: ModifierFactory = (_params) =>
- *   (_args, next) => function* () {
- *     const ctx = yield* useCodeBlock();
- *     console.log(ctx.language);
- *     return yield* next();
- *   }();
- * ```
+ * Ergonomic alias for the Component `codeBlock()` operation, bridged via
+ * `ephemeral` so it can be `yield*`'d inside modifier handlers that run
+ * within durable workflows.
  */
 export function useCodeBlock(): Workflow<CodeBlockContext> {
-  return ephemeral(CodeBlockCtx.expect());
+  return ephemeral(codeBlock());
 }
 
 // ---------------------------------------------------------------------------
@@ -125,9 +102,9 @@ export function createModifierRegistry(parent?: ModifierRegistry): ModifierRegis
  * leftmost modifier is the outermost wrapper. `combine` handles the
  * right-to-left reduction internally.
  *
- * The `context` parameter is made available to handlers via Effection's
- * `CodeBlockCtx.with()`, which sets the context on the scope for the
- * duration of the chain execution and restores it afterward.
+ * The `context` parameter is made available to handlers via scope-local
+ * `Component.operations.codeBlock()` middleware, installed for the
+ * duration of the chain execution and removed when its scope exits.
  */
 export function composeModifierChain(
   modifiers: Modifier[],
@@ -156,13 +133,22 @@ export function composeModifierChain(
   // Combine all middlewares into a single middleware
   const composed = combine(middlewares);
 
-  // Return a thunk that sets CodeBlockCtx for the duration of the
-  // chain via Context.with(), then runs the composed middleware.
+  // Return a thunk that provides the code block contextually for the
+  // duration of the chain, then runs the composed middleware.
   // The cast is safe because CodeBlockWorkflow yields DurableEffect
   // values which extend Effect — structurally compatible with Operation.
   return function* () {
     return yield* ephemeral(
-      CodeBlockCtx.with(context, function* () {
+      scoped(function* () {
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *codeBlock(_args, _next) {
+              return context;
+            },
+          },
+          { at: "min" },
+        );
         return yield* composed([], terminal) as unknown as Operation<CodeBlockResult>;
       }),
     );
