@@ -48,6 +48,7 @@ jobs:
             --node-modules-dir=none \
             --exclude-unused-npm \
             --allow-all \
+            --include packages/code-review-agent \
             --target ${{ matrix.target }} \
             --output dist/${{ matrix.artifact }} \
             cli/src/cli.ts

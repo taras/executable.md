@@ -29,17 +29,30 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
+      # Deno + `deno install` provision only the lint toolchain the analysis
+      # document invokes via `npx oxlint`. The analysis itself runs on the
+      # released xmd binary, below — not from source.
       - uses: denoland/setup-deno@v2.0.3
 
       - name: Install dependencies
         run: deno install
+
+      - name: Install xmd release binary
+        run: |
+          curl -fsSL https://executable.md/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run repo analysis
         env:
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
+        run: |
+          xmd run .reviews/AnalyzeRepoCI.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir core/components \
+            -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
 
       - name: Write run metadata
         if: always()

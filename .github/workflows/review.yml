@@ -15,9 +15,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Deno + `deno install` provision only the lint toolchain the review
+      # document invokes via `npx oxlint` (oxlint + oxlint-tsgolint). The review
+      # itself runs on the released xmd binary, below — not from source.
       - uses: denoland/setup-deno@v2.0.3
 
       - run: deno install
+
+      - name: Install xmd release binary
+        run: |
+          curl -fsSL https://executable.md/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run review
         env:
@@ -28,7 +36,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task review --verbose
+        run: |
+          xmd run .reviews/ReviewPR.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir core/components \
+            -j .reviews/journal.jsonl \
+            --verbose
 
       - name: Upload journal
         if: always()

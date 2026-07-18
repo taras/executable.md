@@ -1,6 +1,14 @@
 node_modules/
 .vscode/
 .reviews/journal*.jsonl
+.reviews/tsconfig.oxlint.json
+.reviews/analyze-report.md
+.reviews/analyze-run.json
 .xmd-eval/
 dist/
 .DS_Store
+
+# dnt npm build output
+npm/
+**/npm/
+.dnt-importmap.*.json
