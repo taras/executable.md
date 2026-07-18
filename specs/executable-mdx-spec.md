@@ -3232,7 +3232,7 @@ run, `<Capture>` populates bindings, nested components run — but its rendered
 result never reaches the consumer. Without `<Output>`, the whole body renders,
 so existing components are unaffected.
 
-```markdown
+````markdown
 # Release Config Files
 
 The following files participate in the release process. (Documentation — it
@@ -3256,7 +3256,7 @@ const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`)
 </Show>
 
 </Output>
-```
+````
 
 #### Placement is a source-level structural rule
 

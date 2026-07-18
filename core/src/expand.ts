@@ -608,9 +608,6 @@ function* expandComponent(
     });
   };
 
-  // Expand the body through expandBody, which renders only the declared
-  // <Output> regions (executing documentation for side effects) when the
-  // definition declares output, and renders the whole body otherwise.
   const expanded = yield* EvalEnvCtx.with(componentEnv, function* () {
     if (childEvalScope) {
       return yield* EvalScopeCtx.with(childEvalScope, function* () {
@@ -1004,7 +1001,6 @@ export function stripSlotProp(segment: Segment): Segment {
 // Content slot substitution (spec §6.3)
 // ---------------------------------------------------------------------------
 
-/** Projects the caller's eval env onto substituted children. */
 type ProjectFn = (segments: Segment[]) => Segment[];
 
 /** Mutable flag so slot validation errors are emitted only once. */
@@ -1095,23 +1091,20 @@ function substituteContent(
 // Component-declared output: <Output> (spec §6.9)
 // ---------------------------------------------------------------------------
 
-/** A body chunk produced by buildBody: a rendered output region or documentation. */
 interface BodyChunk {
+  /** true = a rendered `<Output>` region; false = documentation (executed, not rendered). */
   output: boolean;
   segments: Segment[];
 }
 
-/** True when a top-level segment is an `<Output>` declaration. */
 function isTopLevelOutput(segment: Segment): boolean {
   return segment.type === "component" && segment.name === "Output";
 }
 
-/** True when the definition body declares at least one top-level `<Output>`. */
 export function bodyHasOutput(bodySegments: Segment[]): boolean {
   return bodySegments.some(isTopLevelOutput);
 }
 
-/** The diagnostic for a misplaced `<Output>` tag. */
 function misplacedOutputError(): ErrorSegment {
   return {
     type: "error",
@@ -1122,7 +1115,6 @@ function misplacedOutputError(): ErrorSegment {
   };
 }
 
-/** A short, stable preview of an `<Output>` region for aggregate diagnostics. */
 function previewOutput(segment: ComponentInvocation): string {
   const text = segment.children
     .filter((child): child is TextSegment => child.type === "text")
@@ -1177,7 +1169,6 @@ export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment |
   };
 }
 
-/** Validate that a top-level `<Output>` carries no props. */
 function validateOutputProps(segment: ComponentInvocation): ErrorSegment | undefined {
   const hasProps = Object.keys(segment.props).length > 0;
   const hasExpressions = Object.keys(segment.expressions).length > 0;
