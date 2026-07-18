@@ -1,0 +1,8 @@
+# Config for draft-release.yml — see specs/release-process-spec.md §3.
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+template: |
+  ## What's changed
+
+  $CHANGES

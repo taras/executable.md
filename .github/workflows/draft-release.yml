@@ -1,0 +1,21 @@
+name: Draft release
+
+# Keeps a rolling draft release: every merge to main updates its changelog
+# with the PRs merged since the last published release. Publishing the draft
+# creates the tag that starts the release. See specs/release-process-spec.md.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@4d75298e00d9e34c483e5ff8c68d0ea1c1940c1e # v7.5.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

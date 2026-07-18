@@ -34,6 +34,9 @@ const pr = parseDiff(rawDiff, rawFiles, {
   body: PR_BODY,
   number: PR_NUMBER,
 });
+
+// TODO: we need an easier way to work with diffs here.
+const changedFilePaths = pr.files.map((file) => file.path);
 ```
 
 ```bash silent exec
@@ -129,6 +132,8 @@ import { parseDiagnostics } from "@executablemd/code-review-agent";
 
 const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
 ```
+
+<ReleaseSpecWarning files={changedFilePaths} />
 
 <ThinkFilter>
 <OllamaProvider model="qwen3:30b-a3b">
