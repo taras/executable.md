@@ -1961,30 +1961,6 @@ function* documentWorkflow(docPath: string): Workflow<string> {
   // per-segment expansion calls (see §6.1 for details).
   const counter = createBlockCounter();
 
-  // Structural preflight (§6.9): a misplaced <Output> aborts before any body
-  // side effects; the aggregate diagnostic renders as a comment.
-  const placementError = validateOutputPlacement(root.bodySegments);
-  if (placementError) {
-    const text = renderSegment(placementError);
-    yield* ephemeral(output(text));
-    return text;
-  }
-
-  // A root declaring top-level <Output> buffers completely: execute the whole
-  // body, then emit the selected regions only after success. A documentation
-  // failure throws before any emit, so no partial output is produced. An empty
-  // buffered root emits no output event.
-  if (bodyHasOutput(root.bodySegments)) {
-    const expanded = yield* expandBody(
-      root.bodySegments, [], root.meta, {}, new Set(), ctx, counter, undefined,
-    );
-    const text = expanded.map(renderSegment).join("");
-    if (text) {
-      yield* ephemeral(output(text));
-    }
-    return text;
-  }
-
   // Per-root-segment emission loop — each root segment is expanded
   // independently and its output emitted through the Document Output Api (§9).
   // Root segments are sequential and independent in document order.
@@ -2079,15 +2055,6 @@ function* expandSegments(
       }
 
       case "component": {
-        if (segment.name === "Output") {
-          // Definition-owned <Output> is consumed by buildBody before it
-          // reaches here (§6.9). Reaching this branch means a misplaced or
-          // dynamically scanned <Output> — diagnose it under the ambient
-          // error policy via raise().
-          result.push(...(yield* raise(misplacedOutputError())));
-          break;
-        }
-
         if (segment.name === "Capture") {
           const asBinding = segment.props.as;
           if (typeof asBinding !== "string" || asBinding.length === 0) {
@@ -2145,15 +2112,7 @@ function* expandSegments(
           segment.children,
           hideSet,
         );
-        // Consumer boundary (§6.9): re-raise transported error segments under
-        // the ambient policy so documentation never appends a hidden error.
-        for (const s of expanded) {
-          if (s.type === "error") {
-            result.push(...(yield* raise(s)));
-          } else {
-            result.push(s);
-          }
-        }
+        result.push(...expanded);
         break;
       }
 
@@ -2178,18 +2137,14 @@ function* expandSegments(
         const chain = composeModifierChain(
           segment.modifiers, context, registry,
         );
-        // The modifier chain (middleware) runs first and gets the first
-        // opportunity to handle or normalize a failure. The result is then
-        // classified under the existing rules; a resulting error follows the
-        // ambient error policy via raise() (§6.9) — no separate exitCode path.
         const codeResult = yield* chain();
 
         if (codeResult.exitCode !== 0 && codeResult.output === "") {
-          result.push(...(yield* raise({
+          result.push({
             type: "error",
             message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
             source: segment.content,
-          })));
+          });
         } else if (codeResult.output !== "") {
           result.push({
             type: "execOutput",
@@ -2248,15 +2203,6 @@ function* expandComponent(
   // Import — single durable effect (resolve + read)
   const definition = yield* durableImportComponent(name);
 
-  // Structural preflight (§6.9): validate <Output> placement against the
-  // component's own source AST before any body side effects run. A
-  // structurally invalid component executes no eval, exec, Capture, or nested
-  // components — the aggregate diagnostic follows the ambient policy.
-  const placementError = validateOutputPlacement(definition.bodySegments);
-  if (placementError) {
-    return yield* raise(placementError);
-  }
-
   // Extract reserved props before validation.
   // `slot` and `as` are consumed by the expansion engine.
   const asBinding = props.as;
@@ -2272,6 +2218,21 @@ function* expandComponent(
   const callerEvalEnv = projectedEnv
     ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
     : contextEnv;
+
+  // Substitute raw children into <Content /> positions.
+  // Children are NOT pre-expanded — they expand in document order
+  // when the substituted body is expanded. This ensures code blocks
+  // before <Content /> (e.g., provider middleware installation) run
+  // before children's code blocks.
+  // Children segments are tagged with callerEvalEnv so expression
+  // props resolve in the caller's lexical scope (DEC-91).
+  const substituted = substituteContent(
+    definition.bodySegments,
+    children,
+    definition.meta,
+    validatedProps,
+    callerEvalEnv ?? undefined,
+  );
 
   // Recurse with augmented hide set.
   // Each component gets its own fresh binding environment so that
@@ -2291,22 +2252,14 @@ function* expandComponent(
   componentEnv.values.renderChildren = function* () { /* ... */ };
   componentEnv.values.render = function* (markdown) { /* ... */ };
 
-  // Expand the body via expandBody (§6.9): it substitutes <Content />, then
-  // renders only the declared <Output> regions (executing documentation for
-  // its side effects) when the definition declares output, or renders the
-  // whole body otherwise.
   const expanded = yield* EvalEnvCtx.with(
     componentEnv,
     function* () {
-      return yield* expandBody(
-        definition.bodySegments,
-        children,
+      return yield* expandSegments(
+        substituted,
         definition.meta,
         validatedProps,
         newHideSet,
-        ctx,
-        counter,
-        callerEvalEnv ?? undefined,
       );
     },
   );
@@ -2325,9 +2278,6 @@ function* expandComponent(
       ]);
     }
 
-    // Consumer boundary (§6.9): re-raise transported errors under the ambient
-    // policy so documentation never captures and hides an error comment.
-    yield* consume(expanded);
     const parentEnv = yield* ephemeral(EvalEnvCtx.expect());
     parentEnv.values[asBinding] = renderSegments(expanded);
     return [];
@@ -3258,67 +3208,66 @@ const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`)
 </Output>
 ````
 
-#### Placement is a source-level structural rule
+#### Placement
 
-Only a **direct top-level** `<Output>` node is a valid declaration.
-`validateOutputPlacement` traverses the component's own parsed source AST —
-including unreachable or discarded children (inside `<Show when={false}>`,
-passed to a component that has no `<Content />`, nested inside another
-`<Output>`, or enclosed by anything that declines to render its children) — and
-reports every `<Output>` at depth > 0. All violations combine into **one
-aggregate `ErrorSegment`** advising that `<Output>` must be a direct top-level
-declaration and that conditional rendering uses `<Show>` inside `<Output>`.
+Only a **direct top-level** `<Output>` is a valid declaration. Placement is
+checked against the component's (or root's) source structure, including regions
+that never render — content inside `<Show when={false}>`, content passed to a
+component that has no `<Content />`, an `<Output>` nested inside another
+`<Output>`, or the children of any component that declines to render them. An
+`<Output>` anywhere other than the top level is misplaced; all misplaced
+occurrences in a single component are reported together as one diagnostic that
+advises `<Output>` must be a direct top-level declaration and that conditional
+rendering uses `<Show>` inside `<Output>`.
 
-Structural validation runs **before** any body execution. A structurally
-invalid component or root executes no eval, exec, `<Capture>`, nested
-components, or other side effects. Placement is owned by the declaring
-component: child expansion cannot introduce, remove, promote, repair, or
-redefine it, and a caller-projected `<Output>` (a depth > 0 node in the
-caller's own AST) is diagnosed in the caller and never becomes the callee's
+Placement is owned by the declaring component. Child expansion cannot
+introduce, remove, or redefine it, and an `<Output>` a caller passes as content
+is diagnosed against the caller's own structure — it never becomes the callee's
 declaration.
 
-#### Provenance and rendering
+#### Definition-owned structure and rendering
 
-Output policy is determined from the **definition body**, before `<Content />`
-substitution — never from the post-substitution array. `buildBody` walks the
-definition's top level in document order and produces ordered chunks: each
-top-level `<Output>` becomes a rendered region (its children with `<Content />`
-substituted one level in — `<Content />` belonging to unrelated nested
-components is untouched); everything else is documentation. `<Output>` accepts
-no props. `<Output />` and `<Output></Output>` are equivalent and contribute no
-content. Multiple regions concatenate in document order. A component invoked
-with `as="binding"` captures only its selected output regions; its
-documentation executes but is neither rendered nor captured.
+A component's output regions are fixed by its own source, independent of the
+content a caller projects through `<Content />`, so caller content can neither
+add an output region nor suppress the declared body. `<Content />` inside a
+top-level `<Output>` projects the caller's content into that region.
+`<Output>` accepts no props. `<Output />` and `<Output></Output>` are
+equivalent and contribute no rendered content. Multiple top-level `<Output>`
+regions render in document order and concatenate. A component invoked with
+`as="binding"` captures only its selected output; its documentation executes
+but is neither rendered nor captured.
 
-The root document obeys the same rules (§5.4). A root declaring top-level
-`<Output>` is **fully buffered**: it executes to completion and emits the
-selected regions only after success — a documentation failure produces no
-partial output, and an empty selection emits no output event. Roots without
-`<Output>` keep per-segment streaming. Buffering defers only the `output()`
-emission, not the durable execution, so replay is deterministic.
+#### Execution order and error behavior
 
-#### Contextual error policy
+Documentation and output regions execute in document order, so an output region
+can use bindings a preceding documentation block computed, and documentation
+after a region still runs. The required sequencing:
 
-An `ErrorPolicy` (`"collect"` or `"throw"`) threads through expansion via
-`ErrorPolicyCtx` (unset defaults to `"collect"`). Inside a rendered region, and
-everywhere when no `<Output>` is declared, an `ErrorSegment` renders as an
-`<!-- ERROR -->` comment (`raise` under `"collect"`). While executing
-documentation, the first `ErrorSegment` **throws immediately** (`raise` under
-`"throw"`, a `DocumentationError`) so it propagates to be handled above. Output
-regions reset the policy to `"collect"`; documentation sets it to `"throw"`.
-The modifier chain runs first (middleware may normalize a failure); the
-existing result classification then decides whether an `ErrorSegment` results —
-there is no separate raw `exitCode` policy.
+- Structural placement is validated before any body content executes; a
+  structurally invalid component or root runs no eval, exec, `<Capture>`, or
+  nested components and produces only the diagnostic.
+- Documentation and output regions execute in document order.
+- The first error produced while executing documentation stops that body's
+  execution immediately and propagates to the caller.
+- An error produced while rendering an output region — or anywhere in a body
+  that declares no `<Output>` — retains normal `ErrorSegment` rendering (an
+  `<!-- ERROR -->` comment).
+- A root containing `<Output>` emits its selected output only after the whole
+  body completes successfully; a documentation failure yields no partial
+  output, and an empty selection emits nothing.
 
-Because a nested component can produce an `ErrorSegment` inside its **own**
-valid `<Output>` under `"collect"` and return it to a suppressed-documentation
-caller, every site that **consumes** a component's returned segments re-applies
-the ambient policy: the `expandSegments` component case and markdown `as=`
-capture route transported error segments through `raise`/`consume`, and the
-`renderChildren()` / `render()` / `useContent()` / function-component paths run
-under the ambient policy so transported errors re-raise before being flattened
-to strings. Producing an error inside a component's own Output (a comment) is
-thus distinct from consuming it from a parent documentation context (a throw).
+An error a nested component renders inside its own output region is a normal
+comment when that component renders normally; but when that component is
+executed as a parent's documentation, the parent's documentation fail-fast
+applies and the error propagates rather than being hidden.
+
+#### Root and component consistency
+
+A root document obeys exactly the same rules as an imported component (§5.4).
+Because selecting output requires the whole body, a root that declares
+`<Output>` is buffered — executed to completion, then emitted once on success —
+while a root without `<Output>` keeps per-segment streaming. Buffering defers
+only when output is emitted, not what executes, so replay is deterministic.
 
 ---
 
