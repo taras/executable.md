@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "exports": "./src/cli.ts",
   "imports": {
     "@executablemd/core": "../core/mod.ts",
