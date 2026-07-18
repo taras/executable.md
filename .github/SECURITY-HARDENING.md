@@ -36,8 +36,8 @@ publishing only).
       filename, so it would mint a token for it.
 - [x] Add the environment name (`npm-publish`) to each package's npm
       trusted-publisher configuration so npm rejects tokens minted outside it.
-- [ ] Rulesets: require PRs into `main`; restrict `v*` tag creation.
-- [ ] Actions settings: require approval for all outside collaborators (the
+- [x] Rulesets: require PRs into `main`; restrict `v*` tag creation.
+- [x] Actions settings: require approval for all outside collaborators (the
       review executes documents from the PR by design); set default workflow
       permissions to read-only.
 
