@@ -1944,50 +1944,16 @@ The entry point treats the root document through the same import
 pipeline as any component. This gives it uniform resolution, parsing, and
 error handling.
 
-The root obeys the same `<Output>` rules as any component (§6.9): it is
-structurally validated before execution, and a root declaring a top-level
-`<Output>` renders only its declared regions. Because output selection requires
-the whole body, a root with `<Output>` is **fully buffered** — it executes to
-completion and emits only after success; a root without `<Output>` keeps the
-per-segment streaming path.
-
-```typescript
-function* documentWorkflow(docPath: string): Workflow<string> {
-  // Import root — same pipeline as any component.
-  // The host installs Resolve middleware that maps "__root__" → docPath
-  const root = yield* durableImportComponent("__root__");
-
-  // Mutable counter preserves deterministic blockIds across
-  // per-segment expansion calls (see §6.1 for details).
-  const counter = createBlockCounter();
-
-  // Per-root-segment emission loop — each root segment is expanded
-  // independently and its output emitted through the Document Output Api (§9).
-  // Root segments are sequential and independent in document order.
-  // Component-internal expansion remains recursive and buffered.
-  for (const segment of root.bodySegments) {
-    const expanded = yield* expandSegments(
-      [segment],
-      root.meta,
-      {},              // No props for root
-      new Set(),       // Empty hide set
-      ctx,
-      counter,
-    );
-
-    for (const resolved of expanded) {
-      const text = renderSegment(resolved);
-      if (text) {
-        yield* ephemeral(output(text));
-      }
-    }
-  }
-
-  // Return value is empty — output has already been emitted
-  // incrementally via the Output Api.
-  return "";
-}
-```
+The root obeys the same `<Output>` rules as any component (§6.9), and how its
+output is emitted depends on whether it declares one. Without `<Output>`, the
+root's top-level segments are expanded in document order and each segment's
+rendered text is emitted incrementally through the Document Output Api (§9) as
+it is produced. With `<Output>`, the whole body is expanded before anything is
+emitted; only the selected content is emitted, and only after the body has
+completed successfully — a failure while executing documentation produces no
+emission, and an empty selection emits nothing. A component invoked within the
+root expands recursively and its result is buffered into the surrounding
+output in both cases.
 
 ---
 
@@ -2032,260 +1998,53 @@ increments occur, preventing state leaks on abort.
 
 #### Algorithm
 
-```typescript
-function* expandSegments(
-  segments: Segment[],
-  parentMeta: Record<string, unknown>,
-  parentProps: Record<string, Json>,
-  hideSet: Set<string>,
-  ctx: ExpansionContext,
-  counter: BlockCounter,
-): Workflow<Segment[]> {
-  const result: Segment[] = [];
+Segment expansion rewrites a list of segments into rendered segments, in
+document order:
 
-  for (const segment of segments) {
-    switch (segment.type) {
-      case "text": {
-        // Heal incomplete markdown constructs at segment boundaries
-        const healed = healSegment(segment.content);
-        // Interpolate {meta.key} and {props.key} — runtime, no journal
-        const interpolated = interpolate(healed, parentMeta, parentProps);
-        result.push({ type: "text", content: interpolated });
-        break;
-      }
+- **Text** is healed at segment boundaries (§2.3), then interpolated for
+  `{meta.key}` / `{props.key}` (§6.4) and for eval bindings (§6.6).
+- **`<Capture>`** expands its children in the current scope and stores the
+  rendered result in the named binding — optionally narrowed by a `select`
+  prop (§6.5) — and itself renders nothing. `<Content />` is replaced by the
+  caller's projected children (§6.3).
+- **Any other component** is expanded (§6.2) and replaced by its result.
+- **Executable code blocks** run their modifier chain (§3.3); a block
+  contributes its emitted output, or an `ErrorSegment` when it fails with no
+  output.
 
-      case "component": {
-        if (segment.name === "Capture") {
-          const asBinding = segment.props.as;
-          if (typeof asBinding !== "string" || asBinding.length === 0) {
-            result.push({
-              type: "error",
-              message: '<Capture> requires an "as" prop (non-empty string).',
-              source: "Capture",
-            });
-            break;
-          }
-          if (!isValidIdentifier(asBinding)) {
-            result.push({
-              type: "error",
-              message: `<Capture as="${asBinding}">: as must be a valid JavaScript identifier.`,
-              source: "Capture",
-            });
-            break;
-          }
-          if (segment.selfClosing || segment.children.length === 0) {
-            result.push({
-              type: "error",
-              message: '<Capture> must have content. Use <Capture as="x">...</Capture>.',
-              source: "Capture",
-            });
-            break;
-          }
+Errors are represented as `ErrorSegment`s and render as HTML comments by
+default (§11.2). Deterministic `blockId` values come from the block counter
+above, so per-segment expansion produces stable diagnostic identifiers.
 
-          // Capture expands in the current env/scope (no fresh boundary).
-          const expandedChildren = yield* expandSegments(
-            segment.children,
-            parentMeta,
-            parentProps,
-            hideSet,
-            ctx,
-            counter,
-          );
-          let captured = renderSegments(expandedChildren).replace(/\s+$/, "");
+Where a component (or the root) declares `<Output>`, this same rewriting drives
+each of its regions, but only the content of declared output regions is
+retained; content outside them executes for its effects without rendering, and
+the first error produced while executing that non-rendered documentation stops
+the body immediately (§6.9).
 
-          // If select prop is present, parse rendered content as markdown
-          // and apply CSS selector to extract matching node's text content.
-          // Falls back to full rendered content if no node matches.
-          // See §6.5 for selector syntax and node extraction rules.
-          if (segment.props.select is a non-empty string) {
-            captured = applyCssSelector(captured, segment.props.select);
-          }
-
-          const env = yield* ephemeral(EvalEnvCtx.expect());
-          env.values[asBinding] = captured;
-          break;
-        }
-
-        const expanded = yield* expandComponent(
-          segment.name,
-          segment.props,
-          segment.children,
-          hideSet,
-        );
-        result.push(...expanded);
-        break;
-      }
-
-      case "codeBlock": {
-        // Interpolate eval bindings into content before the modifier chain.
-        // EvalEnvCtx may not be set (e.g., blocks outside component expansion),
-        // so we use .get() and fall back to the original content.
-        const evalEnv = yield* EvalEnvCtx.get();
-        const interpolatedContent = evalEnv
-          ? interpolateEvalBindings(segment.content, evalEnv.values)
-          : segment.content;
-
-        // Compose modifier chain from info string and run it.
-        // blockId uses counter.next() for deterministic IDs that
-        // survive per-segment expansion (see §6.1 Block ID counter).
-        const context: CodeBlockContext = {
-          language: segment.language,
-          content: interpolatedContent,
-          blockId: `eval:${ctx.componentName ?? "root"}:${counter.next()}`,
-          componentName: ctx.componentName,
-        };
-        const chain = composeModifierChain(
-          segment.modifiers, context, registry,
-        );
-        const codeResult = yield* chain();
-
-        if (codeResult.exitCode !== 0 && codeResult.output === "") {
-          result.push({
-            type: "error",
-            message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
-            source: segment.content,
-          });
-        } else if (codeResult.output !== "") {
-          result.push({
-            type: "execOutput",
-            command: segment.content,
-            result: {
-              exitCode: codeResult.exitCode,
-              stdout: codeResult.output,
-              stderr: codeResult.stderr,
-            },
-          });
-        }
-        break;
-      }
-
-      default:
-        result.push(segment);
-    }
-  }
-
-  return result;
-}
-```
-
-The modifier chain composition and handler registration are defined
-in §3.3. The expansion code above composes the chain from the info
-string and runs it via `composeModifierChain`.
+The modifier chain composition and handler registration are defined in §3.3.
 
 ### 6.2 Component expansion with cycle detection
 
-```typescript
-const MAX_EXPANSION_DEPTH = 64;
+Expanding a component invocation proceeds as:
 
-function* expandComponent(
-  name: string,
-  props: Record<string, Json>,
-  children: Segment[],
-  hideSet: Set<string>,
-): Workflow<Segment[]> {
-  // Cycle detection — Prosser's algorithm
-  if (hideSet.has(name)) {
-    return [{
-      type: "error",
-      message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
-      source: name,
-    }];
-  }
-
-  if (hideSet.size >= MAX_EXPANSION_DEPTH) {
-    return [{
-      type: "error",
-      message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
-      source: name,
-    }];
-  }
-
-  // Import — single durable effect (resolve + read)
-  const definition = yield* durableImportComponent(name);
-
-  // Extract reserved props before validation.
-  // `slot` and `as` are consumed by the expansion engine.
-  const asBinding = props.as;
-  const { slot: _slot, as: _as, ...propsForValidation } = props;
-
-  // Validate props against declared inputs
-  const validatedProps = validateProps(name, propsForValidation, definition.inputs);
-
-  // Capture the caller's eval env. For multi-level nesting, merge
-  // projectedEnv (from outer caller) with the current context env
-  // so ancestor bindings propagate through all levels (DEC-91, 92).
-  const contextEnv = yield* EvalEnvCtx.get();
-  const callerEvalEnv = projectedEnv
-    ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
-    : contextEnv;
-
-  // Substitute raw children into <Content /> positions.
-  // Children are NOT pre-expanded — they expand in document order
-  // when the substituted body is expanded. This ensures code blocks
-  // before <Content /> (e.g., provider middleware installation) run
-  // before children's code blocks.
-  // Children segments are tagged with callerEvalEnv so expression
-  // props resolve in the caller's lexical scope (DEC-91).
-  const substituted = substituteContent(
-    definition.bodySegments,
-    children,
-    definition.meta,
-    validatedProps,
-    callerEvalEnv ?? undefined,
-  );
-
-  // Recurse with augmented hide set.
-  // Each component gets its own fresh binding environment so that
-  // eval blocks within a component share bindings but don't leak
-  // into parent or sibling components. This is critical for the
-  // provider pattern (§6.6) where each provider has isolated
-  // port/URL bindings.
-  //
-  // Props are pre-populated into env.values (DEC-EX-09) so they
-  // are available as bare bindings in eval blocks.
-  const newHideSet = new Set([...hideSet, name]);
-  const componentEnv: EvalEnv = { values: { ...validatedProps } };
-
-  // Inject renderChildren() and render() closures (§4.8).
-  // These capture the expansion context so they work correctly
-  // when called from within evalScope.eval().
-  componentEnv.values.renderChildren = function* () { /* ... */ };
-  componentEnv.values.render = function* (markdown) { /* ... */ };
-
-  const expanded = yield* EvalEnvCtx.with(
-    componentEnv,
-    function* () {
-      return yield* expandSegments(
-        substituted,
-        definition.meta,
-        validatedProps,
-        newHideSet,
-      );
-    },
-  );
-
-  // Binding capture: route rendered output to parent env and suppress
-  // document output at the invocation site.
-  if (asBinding !== undefined) {
-    if (typeof asBinding !== "string" || asBinding.length === 0) {
-      throw new PropValidationError(name, [
-        'Prop "as" on <' + name + ' /> must be a non-empty string literal',
-      ]);
-    }
-    if (!isValidIdentifier(asBinding)) {
-      throw new PropValidationError(name, [
-        `Prop "as" on <${name} /> must be a valid JavaScript identifier`,
-      ]);
-    }
-
-    const parentEnv = yield* ephemeral(EvalEnvCtx.expect());
-    parentEnv.values[asBinding] = renderSegments(expanded);
-    return [];
-  }
-
-  return expanded;
-}
-```
+- **Cycle and depth guards.** A component already being expanded on the active
+  expansion path, or an expansion nested beyond the maximum depth (64),
+  produces an `ErrorSegment` instead of expanding — preventing infinite and
+  runaway expansion.
+- **Import and props.** The component is imported (§5.3); the reserved `slot`
+  and `as` props are consumed by the engine and stripped before the remaining
+  props are validated against the declared inputs (§6.3.5, §6.5).
+- **Body expansion.** The caller's children are substituted into `<Content />`
+  positions (§6.3), and the body is expanded in a fresh binding environment
+  seeded with the validated props, exposing `renderChildren()` / `render()`
+  (§4.8) to eval blocks. Expression props resolve in the caller's scope. When
+  the component declares `<Output>`, its placement is validated before any body
+  content executes and only its declared regions render (§6.9).
+- **Capture (`as=`).** With `as="binding"`, the rendered result is written to
+  that binding in the caller's environment and nothing is emitted at the call
+  site — capturing only the selected output when the component declares
+  `<Output>`.
 
 Cycle detection and depth limiting are runtime operations — no journal
 entries. They are deterministic from the component dependency graph read in
