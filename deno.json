@@ -35,6 +35,7 @@
   "tasks": {
     "xmd": "deno run --allow-all cli/src/cli.ts",
     "build": "deno compile --node-modules-dir=none --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd cli/src/cli.ts",
+    "gen:publish-workflow": "deno run -A scripts/gen-publish-workflow.ts",
     "test": "deno test --allow-all core/tests/ durable-streams/tests/ packages/code-review-agent/tests/",
     "check": "deno check core/mod.ts",
     "lint": "npx oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ runtime/ && npx oxfmt --check core/src/ cli/src/ durable-streams/ runtime/ test-support/",

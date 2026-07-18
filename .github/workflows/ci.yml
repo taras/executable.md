@@ -38,6 +38,12 @@ jobs:
       - name: Typecheck
         run: deno task check
 
+      - name: Publish workflow is generated from manifests
+        run: |
+          deno task gen:publish-workflow
+          git diff --exit-code .github/workflows/publish-packages.yml \
+            || { echo "::error::publish-packages.yml is out of date — run 'deno task gen:publish-workflow' and commit the result"; exit 1; }
+
       - name: Test
         run: deno task test
 
