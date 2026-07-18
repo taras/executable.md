@@ -23,9 +23,9 @@ jobs:
     if: ${{ vars.DENO_DEPLOY_PROJECT != '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.1
 
@@ -37,7 +37,7 @@ jobs:
         working-directory: site
 
       - name: Deploy to Deno Deploy
-        uses: denoland/deployctl@v1
+        uses: denoland/deployctl@35381c73621e1731268f80e51b54718d086f1e64 # v1
         with:
           project: ${{ vars.DENO_DEPLOY_PROJECT }}
           entrypoint: server-entry.js
