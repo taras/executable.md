@@ -17,6 +17,7 @@ import {
   persistent,
   content,
 } from "../src/component-api.ts";
+import { ephemeral } from "@executablemd/durable-streams";
 import { persistFactory } from "../src/modifiers/persist.ts";
 import type { ComponentDefinition, ErrorSegment } from "../src/types.ts";
 
@@ -184,8 +185,10 @@ describe("Component Api", () => {
   it("persistent() is true inside the persist modifier chain and false outside", function* () {
     let observed: boolean | undefined = undefined;
     const middleware = persistFactory(undefined);
+    // The terminal is Workflow-typed, so the contextual read bridges
+    // through ephemeral().
     const terminal = function* () {
-      observed = yield* persistent();
+      observed = yield* ephemeral(persistent());
       return { output: "", exitCode: 0, stderr: "" };
     };
     yield* middleware([], terminal) as unknown as Operation<unknown>;
