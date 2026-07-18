@@ -8,9 +8,10 @@ name: Publish packages
 # out one publish-one.yml run per @executablemd package, ordered with `needs:`
 # so dependencies publish before dependents (leaves run in parallel).
 #
-# Prerequisites (one-time):
-#   - npm: configure an OIDC trusted publisher for each @executablemd package
-#     pointing at this repo + publish-one.yml, so no npm token is needed.
+# Prerequisites (one-time) — see .github/PUBLISHING.md:
+#   - npm: an OIDC trusted publisher per @executablemd package. The workflow
+#     filename npm validates is the CALLER (publish-packages.yml), not the
+#     reusable publish-one.yml. No npm token is used.
 #   - JSR: create/link the @executablemd packages to this repo (best-effort).
 #
 # Note for consumers: core/runtime/cli depend on effection's 4.x prerelease,
@@ -34,12 +35,10 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
-      ref: ${{ steps.resolve.outputs.ref }}
       value: ${{ steps.resolve.outputs.value }}
     steps:
       - id: resolve
         run: |
-          echo "ref=${{ github.event.inputs.tag || github.ref }}" >> "$GITHUB_OUTPUT"
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -49,7 +48,6 @@ jobs:
     with:
       package: durable-streams
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   runtime:
     needs: [version]
@@ -57,7 +55,6 @@ jobs:
     with:
       package: runtime
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   core:
     needs: [version, durable-streams, runtime]
@@ -65,7 +62,6 @@ jobs:
     with:
       package: core
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   cli:
     needs: [version, core, durable-streams]
@@ -73,7 +69,6 @@ jobs:
     with:
       package: cli
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}
 
   code-review-agent:
     needs: [version]
@@ -81,4 +76,3 @@ jobs:
     with:
       package: packages/code-review-agent
       version: ${{ needs.version.outputs.value }}
-      ref: ${{ needs.version.outputs.ref }}

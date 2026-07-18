@@ -37,9 +37,10 @@ const HEADER = `name: Publish packages
 # out one publish-one.yml run per @executablemd package, ordered with \`needs:\`
 # so dependencies publish before dependents (leaves run in parallel).
 #
-# Prerequisites (one-time):
-#   - npm: configure an OIDC trusted publisher for each @executablemd package
-#     pointing at this repo + publish-one.yml, so no npm token is needed.
+# Prerequisites (one-time) — see .github/PUBLISHING.md:
+#   - npm: an OIDC trusted publisher per @executablemd package. The workflow
+#     filename npm validates is the CALLER (publish-packages.yml), not the
+#     reusable publish-one.yml. No npm token is used.
 #   - JSR: create/link the @executablemd packages to this repo (best-effort).
 #
 # Note for consumers: core/runtime/cli depend on effection's 4.x prerelease,
@@ -63,12 +64,10 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
-      ref: \${{ steps.resolve.outputs.ref }}
       value: \${{ steps.resolve.outputs.value }}
     steps:
       - id: resolve
         run: |
-          echo "ref=\${{ github.event.inputs.tag || github.ref }}" >> "$GITHUB_OUTPUT"
           TAG="\${{ github.event.inputs.tag || github.ref_name }}"
           echo "value=\${TAG#v}" >> "$GITHUB_OUTPUT"
 `;
@@ -133,7 +132,6 @@ await main(function* () {
     lines.push("    with:");
     lines.push(`      package: ${member.dir}`);
     lines.push("      version: ${{ needs.version.outputs.value }}");
-    lines.push("      ref: ${{ needs.version.outputs.ref }}");
     lines.push("");
   }
 
