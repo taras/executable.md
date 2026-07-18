@@ -30,6 +30,8 @@ const changedList = releaseChanged.join(", ");
 // spec document, not just whether the spec file was touched.
 ```
 
+<Output>
+
 <Show when={releaseChanged.length > 0 && !files.includes("specs/release-process-spec.md")}>
 
 > [!WARNING]
@@ -39,3 +41,5 @@ const changedList = releaseChanged.join(", ");
 > rule 8).
 
 </Show>
+
+</Output>
