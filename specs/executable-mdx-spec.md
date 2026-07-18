@@ -2938,108 +2938,33 @@ only when output is emitted, not what executes, so replay is deterministic.
 
 ### 8.1 `runDocument`
 
-```typescript
-interface RunDocumentOptions {
-  /** Path to the root markdown document. */
-  docPath: string;
+`runDocument(options)` executes a markdown document as a durable
+workflow and returns a `DocumentExecution` handle. Options:
 
-  /** Durable stream for journaling. */
-  stream: DurableStream;
+- `docPath` — path to the root markdown document
+- `stream` — the durable stream that journals the run
+- `componentDirs?` — component search directories (default:
+  `["components", "."]`)
+- `modifiers?` — custom modifier factories registered alongside the
+  built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
 
-  /** Component search directories (default: ["./components", "./"]) */
-  componentDirs?: string[];
+`DocumentExecution` is an `Operation<string>`: `yield* execution`
+completes with the document's full output. Its `output` property is a
+`Stream<string, string>` of the chunks emitted during execution
+(per-segment for streaming roots, one chunk for buffered `<Output>`
+roots — §5.4); the stream closes with the full output as its close
+value.
 
-  /** Custom modifier factories to register alongside built-ins. */
-  modifiers?: Record<string, ModifierFactory>;
+Execution runs in its own scope. Before the durable workflow starts,
+`runDocument` installs the document's scope-local runtime providers —
+the platform compiler, the Component providers for import, modifier
+execution, and the root eval scope (§5.5), and the output→stream
+bridge — so nothing leaks onto the caller's scope and the whole run
+inherits them contextually.
 
-  /** Sample Api middleware for the `sample` modifier. */
-  sampleHandler?: SampleApi;
-}
-
-/**
- * A document execution handle. Yield it to get the full output string,
- * or consume `.output` for chunk-by-chunk streaming.
- */
-interface DocumentExecution extends Operation<string> {
-  /** Stream of output chunks emitted during execution. */
-  output: Stream<string, string>;
-}
-
-function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution> {
-  const {
-    docPath,
-    stream,
-    runtime,
-    componentDirs = ["./components", "./"],
-    modifiers: customModifiers = {},
-  } = options;
-
-  // Completion signal — resolve/reject surface through yield* execution.
-  const { operation, resolve, reject } = withResolvers<string>();
-
-  // Create the output channel — internal to runDocument.
-  const channel = createChannel<string, string>();
-
-  // Spawn the execution scope. Runtime state lives inside this
-  // spawned task: runtime API middleware and eval scope,
-  // DocumentOutput→channel bridge. The channel and workflow share this scope;
-  // scope teardown cancels the producer and closes the channel.
-  yield* spawn(function* () {
-
-    // Install resolver middleware — maps __root__ to docPath,
-    // then falls through to directory resolver for components
-    const scope = yield* useScope();
-    scope.around(Resolve, {
-      *resolve([name], next): Operation<ResolveResult> {
-        if (name === "__root__") {
-          return { path: docPath };
-        }
-        return yield* next(name);
-      },
-    });
-    yield* useDirectoryResolver(componentDirs);
-
-    // Create eval scope before the journaled document workflow (§4.4).
-    // The document's Component providers — import, modifier execution,
-    // and this eval scope — are installed here so the workflow inherits
-    // them contextually (§5.5).
-    const rootEvalScope = yield* resource(useEvalScope());
-
-    // Install built-in modifier handlers (exec, silent, sample, eval, persist, timeout)
-    yield* useBuiltinModifiers();
-
-    // Install custom modifier handlers
-    for (const [name, factory] of Object.entries(customModifiers)) {
-      registry.set(name, factory);
-    }
-
-    // Channel delivery is the innermost DocumentOutput handler (installed first).
-    scope.around(DocumentOutput, {
-      *output([text]) {
-        yield* channel.send(text);
-      },
-    });
-
-    // Run the durable workflow. On completion, resolve with the
-    // stored output and close the channel; on failure, reject and close.
-    try {
-      const storedOutput = yield* durableRun(
-        () => documentWorkflow(docPath),
-        { stream },
-      );
-      channel.close(storedOutput);
-      resolve(storedOutput);
-    } catch (error) {
-      channel.close();
-      reject(error);
-    }
-  });
-
-  // Return the execution handle — caller can yield* it for the full
-  // output, or consume execution.output for streaming chunks.
-  return { ...operation, output: channel } as DocumentExecution;
-}
-```
+On successful completion, `yield* execution` returns the full output
+and the `output` stream closes with it. On failure, the stream closes
+and `yield* execution` throws the workflow error.
 
 ### 8.2 Usage from standalone code
 
