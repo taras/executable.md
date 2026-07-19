@@ -40,12 +40,14 @@ jobs:
           gh api "repos/${{ github.repository }}/releases/$DRAFT_ID" --jq .body > /tmp/body.md
           sed '/<!-- version-banner -->/,/<!-- \/version-banner -->/d' /tmp/body.md > /tmp/clean.md
           if git ls-remote --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            IFS=. read -r MAJ MIN PAT <<< "$VERSION"
+            NEXT="$MAJ.$MIN.$(( ${PAT%%[!0-9]*} + 1 ))"
             {
               echo "<!-- version-banner -->"
               echo "> [!WARNING]"
               echo "> The manifests still declare \`$VERSION\`, which is already released."
-              echo "> Run \`deno task bump <version>\` and merge the bump before publishing"
-              echo "> this draft (release spec §2)."
+              echo "> Run \`deno task bump $NEXT\` (or the next minor/major) and merge the"
+              echo "> bump before publishing this draft (release spec §2)."
               echo "<!-- /version-banner -->"
               echo
               cat /tmp/clean.md
