@@ -19,3 +19,41 @@ jobs:
       - uses: release-drafter/release-drafter@4d75298e00d9e34c483e5ff8c68d0ea1c1940c1e # v7.5.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      # The Releases page must tell the truth before Publish is clicked: when
+      # the manifest version is already released, the draft carries a warning
+      # banner; once the manifests are bumped, the banner clears and the
+      # draft's tag/title default to the guard-passing v<version>.
+      - name: Sync the draft with the manifest version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version cli/deno.json)"
+          DRAFT_ID="$(gh api "repos/${{ github.repository }}/releases?per_page=10" --jq '[.[] | select(.draft)][0].id // empty')"
+          if [ -z "$DRAFT_ID" ]; then
+            echo "no draft release found"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/releases/$DRAFT_ID" --jq .body > /tmp/body.md
+          sed '/<!-- version-banner -->/,/<!-- \/version-banner -->/d' /tmp/body.md > /tmp/clean.md
+          if git ls-remote --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            {
+              echo "<!-- version-banner -->"
+              echo "> [!WARNING]"
+              echo "> The manifests still declare \`$VERSION\`, which is already released."
+              echo "> Bump every manifest before publishing this draft (release spec §2)."
+              echo "<!-- /version-banner -->"
+              echo
+              cat /tmp/clean.md
+            } > /tmp/new.md
+            gh api -X PATCH "repos/${{ github.repository }}/releases/$DRAFT_ID" \
+              -F body=@/tmp/new.md >/dev/null
+            echo "draft flagged: manifests still at already-released $VERSION"
+          else
+            gh api -X PATCH "repos/${{ github.repository }}/releases/$DRAFT_ID" \
+              -f tag_name="v$VERSION" -f name="v$VERSION" -F body=@/tmp/clean.md >/dev/null
+            echo "draft synced to v$VERSION"
+          fi

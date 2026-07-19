@@ -8,8 +8,46 @@ permissions:
   contents: write
 
 jobs:
+  # Refuse a tag the manifests do not declare (spec §2) — the binary's
+  # --version comes from cli/deno.json. On failure, the mistake is made
+  # visible on the release itself, not just in this log.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Tag matches the manifest version
+        run: |
+          TAG="${{ github.ref_name }}"
+          declared="$(jq -r .version cli/deno.json)"
+          if [ "v$declared" != "$TAG" ]; then
+            echo "::error::cli/deno.json declares $declared but the tag is $TAG — bump the manifests first"
+            exit 1
+          fi
+
+      - name: Flag the release when the tag cannot build
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          TAG="${{ github.ref_name }}"
+          gh release view "$TAG" --json body --jq .body > /tmp/body.md 2>/dev/null || exit 0
+          {
+            echo "> [!CAUTION]"
+            echo "> This release did not build: the manifests do not declare \`${TAG#v}\`."
+            echo "> Delete this release and its tag, bump every manifest, and release again"
+            echo "> (release spec §2)."
+            echo
+            cat /tmp/body.md
+          } > /tmp/new.md
+          gh release edit "$TAG" --prerelease \
+            --title "$TAG — failed: manifests not bumped" \
+            --notes-file /tmp/new.md || true
+
   build:
     name: Compile ${{ matrix.target }}
+    needs: preflight
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,17 +65,6 @@ jobs:
             artifact: xmd-x86_64-pc-windows-msvc.exe
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-
-      # Refuse a tag the manifests do not declare (spec §2) — the binary's
-      # --version comes from cli/deno.json.
-      - name: Tag matches the manifest version
-        run: |
-          TAG="${{ github.ref_name }}"
-          declared="$(jq -r .version cli/deno.json)"
-          if [ "v$declared" != "$TAG" ]; then
-            echo "::error::cli/deno.json declares $declared but the tag is $TAG — bump the manifests first"
-            exit 1
-          fi
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
