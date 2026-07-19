@@ -60,5 +60,20 @@ await main(function* (args) {
     }
   }
 
+  // CI installs the released binary by pinned version; the pins move in
+  // lockstep with the manifests so reviews run the release being cut.
+  for (const workflow of [".github/workflows/review.yml", ".github/workflows/repo-analysis.yml"]) {
+    const url = new URL(workflow, repoRoot);
+    const text = yield* readTextFile(url);
+    const updated = text.replace(/XMD_VERSION=v\S+/, `XMD_VERSION=v${version}`);
+    if (updated === text) {
+      console.error(`no XMD_VERSION pin found in ${workflow}`);
+      yield* exit(1);
+      return;
+    }
+    yield* writeTextFile(url, updated);
+    console.log(`pinned ${workflow} -> v${version}`);
+  }
+
   console.log(`done — commit, merge, then publish the draft release as v${version}`);
 });

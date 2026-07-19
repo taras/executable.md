@@ -55,7 +55,8 @@ are the single source. The npm version derives from the tag, and both
 workflows refuse a tag the manifests do not declare, so the two cannot
 diverge.
 
-To cut a release: run `deno task bump <version>` (stamps every manifest),
+To cut a release: run `deno task bump <version>` (stamps every manifest and
+the `XMD_VERSION` binary pins in the review/analysis workflows),
 merge to `main`, then publish the draft release — its tag follows the
 manifests (§3).
 
