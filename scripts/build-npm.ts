@@ -165,9 +165,21 @@ await main(function* (args) {
     isolatedImports[name] = `npm:${name}@^${siblingVer}`;
     isolatedImports[`${name}/`] = `npm:${name}@^${siblingVer}/`;
   }
+  // Preserve the manifest fields alongside the rewritten imports: cli/src/cli.ts
+  // imports its own deno.json for `version`, so replacing the copy with a bare
+  // import map makes that property vanish from the JSON module's type.
   yield* writeTextFile(
     join(srcCopy, "deno.json"),
-    JSON.stringify({ imports: isolatedImports }, null, 2),
+    JSON.stringify(
+      {
+        name: denoJson.name,
+        version: denoJson.version,
+        exports: denoJson.exports,
+        imports: isolatedImports,
+      },
+      null,
+      2,
+    ),
   );
 
   try {
