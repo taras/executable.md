@@ -27,6 +27,7 @@ import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
 import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 import { FileStream } from "./file-stream.ts";
+import denoJson from "../deno.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
 // Workaround: field.default exists at runtime but is missing from the .d.ts
@@ -67,7 +68,7 @@ const runConfig = object({
 
 const xmd = program({
   name: "xmd",
-  version: "0.2.0",
+  version: denoJson.version,
   config: commands({ run: runConfig }, { default: "run" }),
 });
 

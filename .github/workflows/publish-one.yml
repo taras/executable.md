@@ -1,8 +1,7 @@
 name: Publish one package
 
-# Reusable: build one @executablemd workspace member with dnt and publish it to
-# npm (OIDC) and JSR (best-effort). publish-packages.yml calls this once per
-# package and orders the calls with `needs:`.
+# Reusable: build one @executablemd workspace member with dnt and publish it
+# to npm (OIDC) and JSR (best-effort). See specs/release-process-spec.md.
 
 on:
   workflow_call:
@@ -23,9 +22,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Environment protection rules (required reviewers, v* tag-only deployment
-    # rule) gate every publish; the npm trusted publisher is also bound to this
-    # environment name, so npm rejects OIDC tokens minted outside it.
+    # Gates every publish behind environment protection rules; the npm trusted
+    # publisher is bound to this name (spec §4).
     environment: npm-publish
     env:
       # @effectionx/* peer-depend on effection `^3 || ^4`, which npm won't match
@@ -60,9 +58,7 @@ jobs:
           echo "build failed after 4 attempts" >&2
           exit 1
 
-      # Skip an already-published version so re-running a tag's workflow (or
-      # tagging a version that was hand-bootstrapped) is idempotent instead of
-      # failing on npm's no-republish rule.
+      # Idempotent: skip a version npm already has, so tag re-runs succeed.
       - name: Publish to npm
         working-directory: ${{ inputs.package }}/npm
         run: |

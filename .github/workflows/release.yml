@@ -3,11 +3,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to build and release (e.g. v0.1.0)"
-        required: true
 
 permissions:
   contents: write
@@ -31,12 +26,18 @@ jobs:
           - target: x86_64-pc-windows-msvc
             artifact: xmd-x86_64-pc-windows-msvc.exe
     steps:
-      # For a tag push, github.ref is the tag. For workflow_dispatch, check out
-      # the requested tag explicitly so the built revision matches the release
-      # name (checkout fails if the tag does not exist — fail closed).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # Refuse a tag the manifests do not declare (spec §2) — the binary's
+      # --version comes from cli/deno.json.
+      - name: Tag matches the manifest version
+        run: |
+          TAG="${{ github.ref_name }}"
+          declared="$(jq -r .version cli/deno.json)"
+          if [ "v$declared" != "$TAG" ]; then
+            echo "::error::cli/deno.json declares $declared but the tag is $TAG — bump the manifests first"
+            exit 1
+          fi
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
@@ -78,7 +79,7 @@ jobs:
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ github.ref_name }}
           draft: false
           fail_on_unmatched_files: true
           files: |

@@ -42,6 +42,9 @@ const pr = parseDiff(rawDiff, rawFiles, {
   body: prBody.trim(),
   number: PR_NUMBER,
 });
+
+// TODO: we need an easier way to work with diffs here.
+const changedFilePaths = pr.files.map((file) => file.path);
 ```
 
 ```bash silent exec
@@ -138,6 +141,7 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
 <DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
   <Instruction system="You are a precise TypeScript code review assistant for the executable.md monorepo. Be concise. Report only findings, not praise.">
     <GitHubComment>
+      <ReleaseSpecWarning files={changedFilePaths} />
       <Format>
         <PrPolicyReport pr={pr} diagnostics={diagnostics} doctor={doctor} />
       </Format>
