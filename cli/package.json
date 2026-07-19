@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The xmd command-line interface for executable.md.",
   "bin": {
     "xmd": "./src/cli.ts"
