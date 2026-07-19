@@ -44,7 +44,8 @@ jobs:
               echo "<!-- version-banner -->"
               echo "> [!WARNING]"
               echo "> The manifests still declare \`$VERSION\`, which is already released."
-              echo "> Bump every manifest before publishing this draft (release spec §2)."
+              echo "> Run \`deno task bump <version>\` and merge the bump before publishing"
+              echo "> this draft (release spec §2)."
               echo "<!-- /version-banner -->"
               echo
               cat /tmp/clean.md

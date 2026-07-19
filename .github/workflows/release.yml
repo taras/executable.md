@@ -36,8 +36,8 @@ jobs:
           {
             echo "> [!CAUTION]"
             echo "> This release did not build: the manifests do not declare \`${TAG#v}\`."
-            echo "> Delete this release and its tag, bump every manifest, and release again"
-            echo "> (release spec §2)."
+            echo "> Delete this release and its tag, run \`deno task bump ${TAG#v}\`, merge"
+            echo "> the bump, and release again (release spec §2)."
             echo
             cat /tmp/body.md
           } > /tmp/new.md

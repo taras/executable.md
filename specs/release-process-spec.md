@@ -55,8 +55,9 @@ are the single source. The npm version derives from the tag, and both
 workflows refuse a tag the manifests do not declare, so the two cannot
 diverge.
 
-To cut a release: bump the version in every manifest, merge to `main`, then
-create the `vX.Y.Z` tag.
+To cut a release: run `deno task bump <version>` (stamps every manifest),
+merge to `main`, then publish the draft release — its tag follows the
+manifests (§3).
 
 ## 3. Workflows
 

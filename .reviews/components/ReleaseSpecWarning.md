@@ -19,6 +19,7 @@ list when a file is added or removed.
 - .github/release-drafter.yml
 - scripts/gen-publish-workflow.md
 - scripts/build-npm.ts
+- scripts/bump-version.ts
 
 </Capture>
 
