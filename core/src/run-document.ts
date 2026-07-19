@@ -8,7 +8,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { scoped, spawn, createChannel, withResolvers, until } from "effection";
+import { scoped, spawn, withResolvers, until } from "effection";
 import type { Operation, Stream } from "effection";
 import {
   durableRun,
@@ -18,6 +18,7 @@ import {
 } from "@executablemd/durable-streams";
 import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
+import { createReplayStream } from "./replay-stream.ts";
 import { useDenoCompiler } from "./deno-compiler.ts";
 import { useTempFileCompiler } from "./temp-file-compiler.ts";
 import type {
@@ -140,7 +141,28 @@ function* durableImportComponent(
   // Markdown component: parse at runtime — deterministic from content
   const parsed = matter(result.content);
   const { meta, inputs } = parseFrontmatter(parsed.data as Record<string, unknown>);
-  const bodySegments = scanSegments(parsed.content);
+  // The markdown body is a verbatim suffix of the raw file, so the body start
+  // is computed by length — never by content search, which could false-match
+  // body text repeated inside frontmatter. The invariant check turns any
+  // gray-matter normalization surprise into a loud error instead of silently
+  // wrong source positions.
+  const bodyStart = result.content.length - parsed.content.length;
+  if (result.content.slice(bodyStart) !== parsed.content) {
+    throw new Error(
+      `frontmatter parse did not preserve the markdown body verbatim: ${result.path}`,
+    );
+  }
+  let baseLine = 1;
+  for (let i = 0; i < bodyStart; i++) {
+    if (result.content[i] === "\n") {
+      baseLine++;
+    }
+  }
+  const bodySegments = scanSegments(parsed.content, {
+    path: result.path,
+    baseOffset: bodyStart,
+    baseLine,
+  });
 
   return {
     kind: "markdown" as const,
@@ -414,11 +436,15 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   // (which would propagate errors through scope teardown).
   // ---------------------------------------------------------------------------
 
-  const channel = createChannel<string, string>();
+  // Replay-safe transport: late subscribers receive every chunk and the
+  // close value, so subscription readiness before first emission is never
+  // required (spec §9; see replay-stream.ts).
+  const channel = createReplayStream<string, string>();
   const { operation, resolve, reject } = withResolvers<string>();
 
   yield* spawn(function* () {
     let emitted = false;
+    let emittedText = "";
 
     // Install platform-appropriate compiler middleware
     // deno-lint-ignore no-explicit-any
@@ -433,6 +459,7 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     yield* DocumentOutput.around({
       *output([text]) {
         emitted = true;
+        emittedText += text;
         yield* channel.send(text);
       },
     });
@@ -484,7 +511,9 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
       yield* channel.close(output);
       resolve(output);
     } catch (error) {
-      yield* channel.close("");
+      // Close with everything already emitted — diagnostics produced before
+      // an abort stay visible to consumers of the close value.
+      yield* channel.close(emittedText);
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });

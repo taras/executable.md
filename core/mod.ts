@@ -24,6 +24,9 @@ export type {
   ResolveResult,
   SampleContext,
   Json,
+  SourcePosition,
+  InvocationContext,
+  InvocationHandling,
 } from "./src/types.ts";
 
 export type { Workflow } from "@executablemd/durable-streams";
@@ -53,10 +56,24 @@ export {
   raise,
   env,
   evalScope,
+  expandInvocation,
   codeBlock,
   persistent,
   content,
 } from "./src/component-api.ts";
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+export { renderSegments } from "./src/render.ts";
+
+// ---------------------------------------------------------------------------
+// Replay-safe stream
+// ---------------------------------------------------------------------------
+
+export { createReplayStream } from "./src/replay-stream.ts";
+export type { ReplayStream } from "./src/replay-stream.ts";
 
 // ---------------------------------------------------------------------------
 // Eval system (generator eval blocks)

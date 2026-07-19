@@ -20,9 +20,12 @@ import type {
   CodeBlockContext,
   CodeBlockResult,
   ComponentDefinition,
+  ComponentInvocation,
   ErrorSegment,
   EvalEnv,
   FunctionComponentDefinition,
+  InvocationContext,
+  InvocationHandling,
   Modifier,
 } from "./types.ts";
 
@@ -38,6 +41,16 @@ export interface ComponentApi {
   raise(error: ErrorSegment): Operation<ErrorSegment>;
   env: EvalEnv | undefined;
   evalScope: EvalScope | undefined;
+  /**
+   * Offer a raw component invocation to extensions before built-in expansion.
+   * Extensions install middleware that returns `{ segments }` for the names
+   * they claim and delegates to `next` for everything else. The default
+   * answers `undefined` — unhandled — so expansion proceeds normally.
+   */
+  expandInvocation(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<InvocationHandling | undefined>;
   codeBlock(): Operation<CodeBlockContext>;
   /** Whether the current block runs with persistent resource lifetime. */
   persistent: boolean;
@@ -67,6 +80,10 @@ export const Component = createApi<ComponentApi>("Component", {
   env: undefined,
   evalScope: undefined,
   // deno-lint-ignore require-yield
+  *expandInvocation(): Operation<InvocationHandling | undefined> {
+    return undefined;
+  },
+  // deno-lint-ignore require-yield
   *codeBlock(): Operation<CodeBlockContext> {
     throw new Error(
       "Component.codeBlock() has no provider: no code block is executing in this scope.",
@@ -87,6 +104,7 @@ export const {
   raise,
   env,
   evalScope,
+  expandInvocation,
   codeBlock,
   persistent,
   content,

@@ -33,6 +33,7 @@ import {
   applyModifiers,
   env,
   evalScope,
+  expandInvocation,
   importComponent,
   raise,
 } from "./component-api.ts";
@@ -122,6 +123,26 @@ export function* expandSegments(
       }
 
       case "component": {
+        // Extension hook: an installed vocabulary may claim this invocation
+        // before built-in expansion. Returned error segments follow the
+        // ambient raise policy, like any component-produced error.
+        const handling = yield* expandInvocation(segment, {
+          meta: parentMeta,
+          props: parentProps,
+          projectedEnv: segment.projectedEnv,
+          expand: (segments) => expandSegments(segments, parentMeta, parentProps, hideSet, counter),
+        });
+        if (handling) {
+          for (const handled of handling.segments) {
+            if (handled.type === "error") {
+              result.push(yield* raise(handled));
+            } else {
+              result.push(handled);
+            }
+          }
+          break;
+        }
+
         if (segment.name === "Output") {
           // Definition-owned <Output> is consumed by buildBody before it
           // reaches here. Reaching this branch means a misplaced or

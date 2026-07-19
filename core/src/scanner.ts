@@ -17,6 +17,7 @@ import type {
   Modifier,
   ParsedInfoString,
   Json,
+  SourcePosition,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -68,12 +69,68 @@ export function parseInfoString(infoString: string): ParsedInfoString {
 // ---------------------------------------------------------------------------
 
 /**
+ * Where scanned text sits in its original file. `baseOffset`/`baseLine`
+ * translate body-relative positions to original-file positions (frontmatter
+ * included). Omitted for dynamically scanned strings.
+ */
+export interface SourceOrigin {
+  path: string;
+  baseOffset: number;
+  baseLine: number;
+}
+
+/**
+ * Positioning state threaded through the scan: the origin translation plus a
+ * precomputed line-start index so per-tag position lookups avoid rescanning.
+ */
+interface PositionIndex {
+  origin?: SourceOrigin;
+  lineStarts: number[];
+}
+
+function computeLineStarts(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") {
+      starts.push(i + 1);
+    }
+  }
+  return starts;
+}
+
+function positionAt(index: PositionIndex, offset: number): SourcePosition {
+  const { lineStarts, origin } = index;
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (lineStarts[mid]! <= offset) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const localLine = low + 1;
+  const column = offset - lineStarts[low]! + 1;
+  return {
+    path: origin?.path,
+    offset: (origin?.baseOffset ?? 0) + offset,
+    line: (origin?.baseLine ?? 1) + localLine - 1,
+    column,
+  };
+}
+
+/**
  * Scan raw markdown text into segments.
  *
  * Identifies component invocations (`<PascalCase ...>`), executable code
  * blocks (fenced with `exec` in info string), and everything else as text.
+ *
+ * When `origin` is provided, component invocations carry `position` values
+ * expressed in the original file's coordinates.
  */
-export function scanSegments(text: string): Segment[] {
+export function scanSegments(text: string, origin?: SourceOrigin): Segment[] {
+  const index: PositionIndex = { origin, lineStarts: computeLineStarts(text) };
   const segments: Segment[] = [];
   let pos = 0;
   let textStart = 0;
@@ -128,7 +185,7 @@ export function scanSegments(text: string): Segment[] {
     // Check for component invocation: `<` followed by uppercase letter
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       // Make sure we're not inside a fenced code block (handled above)
-      const component = parseComponentTag(text, pos);
+      const component = parseComponentTag(text, pos, index);
       if (component) {
         // Flush text before component
         if (pos > textStart) {
@@ -281,7 +338,11 @@ interface ParsedComponent {
  * Returns the parsed component invocation and the position after it,
  * or null if this is not a valid component tag.
  */
-function parseComponentTag(text: string, start: number): ParsedComponent | null {
+function parseComponentTag(
+  text: string,
+  start: number,
+  index: PositionIndex,
+): ParsedComponent | null {
   let pos = start + 1; // Skip '<'
 
   // Parse tag name — must start with uppercase, can contain dots
@@ -316,6 +377,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
         expressions,
         children: [],
         selfClosing: true,
+        position: positionAt(index, start),
       },
       end: pos,
     };
@@ -326,7 +388,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
   pos++; // Skip '>'
 
   // Parse children until closing tag
-  const { children, end: childEnd } = parseChildren(text, pos, name);
+  const { children, end: childEnd } = parseChildren(text, pos, name, index);
   if (childEnd === -1) return null;
 
   return {
@@ -337,6 +399,7 @@ function parseComponentTag(text: string, start: number): ParsedComponent | null 
       expressions,
       children,
       selfClosing: false,
+      position: positionAt(index, start),
     },
     end: childEnd,
   };
@@ -595,7 +658,12 @@ interface ParsedChildren {
   end: number; // position after closing tag
 }
 
-function parseChildren(text: string, start: number, tagName: string): ParsedChildren {
+function parseChildren(
+  text: string,
+  start: number,
+  tagName: string,
+  index: PositionIndex,
+): ParsedChildren {
   let pos = start;
   let textStart = pos;
   const children: Segment[] = [];
@@ -658,7 +726,7 @@ function parseChildren(text: string, start: number, tagName: string): ParsedChil
 
     // Check for nested component
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
-      const nested = parseComponentTag(text, pos);
+      const nested = parseComponentTag(text, pos, index);
       if (nested) {
         if (pos > textStart) {
           pushText(children, text.slice(textStart, pos));
