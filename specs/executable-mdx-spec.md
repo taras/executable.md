@@ -643,7 +643,7 @@ the block if it overruns. The silent handler discards the output.
 #### Overriding per-scope
 
 Because factories are stored in a registry that can be extended,
-custom modifiers can be provided vian `ExecuteOptions`:
+custom modifiers can be provided via `ExecuteOptions`:
 
 ```typescript
 yield* execute({
