@@ -165,6 +165,24 @@ describe("assertion components", () => {
     expect(run.output).toContain("unformattable");
   });
 
+  it("a non-string msg is rejected by type check, never formatted", function* () {
+    // If msg were formatted before the assertion, the hostile toJSON or
+    // toString would throw and replace the validation outcome.
+    const doc = [
+      "<Testing><Test>",
+      "<AssertEquals actual={1} expected={1} msg={({ toJSON() { throw new Error('hostile-json'); }, toString() { throw new Error('hostile-string'); } })} />",
+      "</Test></Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc });
+    expect(failureOf(run)).toBeInstanceOf(TestFailureError);
+    expect(run.results[0]?.status).toBe("fail");
+    expect(run.results[0]?.error?.kind).toBe("error");
+    expect(run.results[0]?.error?.message).toContain('"msg"');
+    expect(run.results[0]?.error?.message).not.toContain("hostile-json");
+    expect(run.results[0]?.error?.message).not.toContain("hostile-string");
+  });
+
   it("a throwing getter read at format time cannot change the outcome", function* () {
     const doc = [
       "<Testing><Test>",

@@ -254,7 +254,12 @@ export function* expandAssertion(
   };
 
   const resolved: Record<string, unknown> = {};
-  const resolutionOrder = ["expr", "actual", "expected", "msg"] as const;
+  const resolutionOrder: Array<"expr" | "actual" | "expected" | "msg"> = [
+    "expr",
+    "actual",
+    "expected",
+    "msg",
+  ];
   for (const name of resolutionOrder) {
     if (name in invocation.expressions) {
       try {
@@ -274,18 +279,18 @@ export function* expandAssertion(
     }
   }
 
+  // @std/assert takes msg as a string; a non-string is rejected by TYPE
+  // CHECK alone — formatting it here would run hostile toJSON/toString
+  // side effects before the assertion outcome is established.
+  if ("msg" in resolved && typeof resolved.msg !== "string") {
+    return [validationError(assertion.name, 'requires "msg" to be a string when supplied.')];
+  }
+
   const values: ResolvedValues = {
     expr: resolved.expr,
     actual: resolved.actual,
     expected: resolved.expected,
-    // Guarded coercion: a hostile toString on a non-string msg must not
-    // become a new failure before the assertion runs.
-    msg:
-      "msg" in resolved
-        ? typeof resolved.msg === "string"
-          ? resolved.msg
-          : safeFormat(resolved.msg)
-        : undefined,
+    msg: typeof resolved.msg === "string" ? resolved.msg : undefined,
   };
 
   if (hasChildren) {

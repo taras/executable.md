@@ -20,11 +20,21 @@ interface CliResult {
   stderr: string;
 }
 
+function cliEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === "string") {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
 function* runCli(args: string[]): Operation<CliResult> {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
     const proc = yield* exec("deno", {
       arguments: ["run", "--allow-all", "cli/src/cli.ts", ...args],
-      env: process.env as Record<string, string>,
+      env: cliEnv(),
     });
 
     const stdoutChunks: string[] = [];

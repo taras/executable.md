@@ -114,7 +114,6 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         },
         { at: "min" },
       );
-      // The report is the naturally expanded subtree — no summary appended.
       const report = yield* ctx.expand(invocation.children);
       yield* boundary({
         tests: local.length,
@@ -129,8 +128,6 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     ctx: InvocationContext,
   ): Operation<Segment[]> {
     if (!(yield* testing)) {
-      // Regular execution: the test and its entire body are skipped without
-      // output, bindings, or side effects.
       return [];
     }
     if (yield* inTest) {
@@ -160,8 +157,16 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
 
     // ONE stable binding environment, created before middleware install —
     // the accessor returns the same object on every read, so <Capture>
-    // writes persist for the assertion that follows.
-    const testEnv: EvalEnv = { values: { ...(parentEnv?.values ?? {}) } };
+    // writes persist for the assertion that follows. Caller-projected
+    // bindings merge UNDER the current environment (core's precedence,
+    // expand.ts §content projection), so a <Test> projected through
+    // <Content /> still sees the caller's eval bindings.
+    const testEnv: EvalEnv = {
+      values: {
+        ...(ctx.projectedEnv?.values ?? {}),
+        ...(parentEnv?.values ?? {}),
+      },
+    };
 
     const testOutput: Segment[] = [];
     let bodyError: unknown;

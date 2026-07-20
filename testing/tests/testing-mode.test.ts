@@ -200,6 +200,26 @@ describe("testing mode", () => {
     expect(run.results.map((r) => r.status)).toEqual(["pass", "pass"]);
   });
 
+  it("a <Test> projected through <Content /> sees caller bindings in its eval blocks", function* () {
+    const doc = [
+      "```js eval",
+      'const callerValue = "from-caller";',
+      "```",
+      "<Testing><Wrap>",
+      '<Test name="projected">',
+      "```js eval",
+      'const copied = callerValue + "!";',
+      "```",
+      '<AssertEquals actual={copied} expected={"from-caller!"} />',
+      "</Test>",
+      "</Wrap></Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc, "components/Wrap.md": "<Content />\n" });
+    expect(run.completion.ok).toBe(true);
+    expect(run.results.map((r) => [r.name, r.status])).toEqual([["projected", "pass"]]);
+  });
+
   it("captures persist for the immediately following assertion", function* () {
     const doc = [
       "<Testing><Test>",
@@ -214,8 +234,7 @@ describe("testing mode", () => {
   });
 
   it("effects spawned in one test are torn down before the next begins", function* () {
-    const globalValues = globalThis as Record<string, unknown>;
-    delete globalValues.__testingLeaseAlive;
+    Reflect.deleteProperty(globalThis, "__testingLeaseAlive");
     const doc = [
       "<Testing>",
       '<Test name="spawner">',

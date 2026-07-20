@@ -142,8 +142,7 @@ describe("executeDocument", () => {
   });
 
   it("an early caller-scope halt tears down the document and leased eval scope", function* () {
-    const globalValues = globalThis as Record<string, unknown>;
-    delete globalValues.__executeHaltMarker;
+    Reflect.deleteProperty(globalThis, "__executeHaltMarker");
     yield* API.Process.around({
       *exec(_args, _next) {
         yield* sleep(10_000);
@@ -182,6 +181,6 @@ describe("executeDocument", () => {
       yield* sleep(200);
     });
 
-    expect(globalValues.__executeHaltMarker).toBe(false);
+    expect(Reflect.get(globalThis, "__executeHaltMarker")).toBe(false);
   });
 });
