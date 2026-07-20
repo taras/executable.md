@@ -8,32 +8,6 @@ function isNextLine(previous, next) {
   return next.loc.start.line === previous.loc.end.line + 1;
 }
 
-function findClosing(comments, open) {
-  let cursor = open + 1;
-
-  while (
-    cursor < comments.length &&
-    comments[cursor].type === "Line" &&
-    !isDivider(comments[cursor]) &&
-    isNextLine(comments[cursor - 1], comments[cursor])
-  ) {
-    cursor++;
-  }
-
-  const hasTitle = cursor > open + 1;
-
-  if (
-    hasTitle &&
-    cursor < comments.length &&
-    isDivider(comments[cursor]) &&
-    isNextLine(comments[cursor - 1], comments[cursor])
-  ) {
-    return cursor;
-  }
-
-  return -1;
-}
-
 const noSectionDividerComments = {
   meta: {
     type: "layout",
@@ -57,13 +31,29 @@ const noSectionDividerComments = {
             continue;
           }
 
-          const closingIndex = findClosing(comments, index);
+          let cursor = index + 1;
 
-          if (closingIndex === -1) {
+          while (
+            cursor < comments.length &&
+            comments[cursor].type === "Line" &&
+            !isDivider(comments[cursor]) &&
+            isNextLine(comments[cursor - 1], comments[cursor])
+          ) {
+            cursor++;
+          }
+
+          const hasTitle = cursor > index + 1;
+
+          if (
+            !hasTitle ||
+            cursor >= comments.length ||
+            !isDivider(comments[cursor]) ||
+            !isNextLine(comments[cursor - 1], comments[cursor])
+          ) {
             continue;
           }
 
-          const closing = comments[closingIndex];
+          const closing = comments[cursor];
 
           context.report({
             loc: {
@@ -86,7 +76,7 @@ const noSectionDividerComments = {
             },
           });
 
-          index = closingIndex;
+          index = cursor;
         }
       },
     };
