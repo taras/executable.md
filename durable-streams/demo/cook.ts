@@ -25,19 +25,11 @@ import {
   useHttpDurableStream,
 } from "../mod.ts";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 const SERVER_URL = process.env.DURABLE_SERVER_URL ?? "http://localhost:4437";
 const STREAM_ID = process.env.DURABLE_STREAM_ID ?? "dinner-demo";
 
 // Fresh producerId each run — avoids seq/epoch bookkeeping in the demo
 const PRODUCER_ID = `cook-${randomUUID().slice(0, 8)}`;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /** Fake async work — simulate the named cooking step. */
 function fakeWork<T extends Json>(_name: string, value: T, ms = 50): () => Promise<T> {
@@ -52,10 +44,6 @@ function log(emoji: string, msg: string) {
   const ts = new Date().toISOString().slice(11, 23);
   console.log(`  ${ts}  ${emoji}  ${msg}`);
 }
-
-// ---------------------------------------------------------------------------
-// Dish 1: Tomato Sauce (sequential steps + timers)
-// ---------------------------------------------------------------------------
 
 function* makeSauce(): Workflow<string> {
   log("🧅", "Chopping onion...");
@@ -76,10 +64,6 @@ function* makeSauce(): Workflow<string> {
 
   return "sauce-done";
 }
-
-// ---------------------------------------------------------------------------
-// Dish 2: Focaccia (race: oven timer vs periodic check)
-// ---------------------------------------------------------------------------
 
 function* bakeFocaccia(): Workflow<string> {
   log("🫒", "Mixing dough...");
@@ -118,10 +102,6 @@ function* bakeFocaccia(): Workflow<string> {
   return "focaccia-done";
 }
 
-// ---------------------------------------------------------------------------
-// Dish 3: Roasted Vegetables (short parallel branch)
-// ---------------------------------------------------------------------------
-
 function* roastVeg(): Workflow<string> {
   log("🥕", "Prepping vegetables...");
   yield* durableCall("chop-veg", fakeWork("chop-veg", "veggies chopped"));
@@ -136,10 +116,6 @@ function* roastVeg(): Workflow<string> {
   return "veg-done";
 }
 
-// ---------------------------------------------------------------------------
-// Main: cookDinner — all three dishes in parallel
-// ---------------------------------------------------------------------------
-
 function* cookDinner(): Workflow<string> {
   log("👨‍🍳", "Starting dinner prep — 3 dishes in parallel!");
 
@@ -148,10 +124,6 @@ function* cookDinner(): Workflow<string> {
   log("🍽️", `All done! Results: ${results.join(", ")}`);
   return "Dinner is served!";
 }
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
 
 console.log(`\n  Durable Dinner Demo`);
 console.log(`  ═══════════════════`);

@@ -132,10 +132,6 @@ describe("Tier T1 — Source transform", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// User import extraction
-// ---------------------------------------------------------------------------
-
 describe("User import extraction", () => {
   // T17: Single-line import → extracted in userImports, removed from code
   it("T17: single-line import extracted", function* () {
@@ -235,10 +231,6 @@ describe("User import extraction", () => {
     expect(result.code).toContain("const x = a + b;");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Serialization helpers
-// ---------------------------------------------------------------------------
 
 describe("isJson", () => {
   it("primitives are JSON", function* () {

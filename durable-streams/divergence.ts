@@ -25,10 +25,6 @@ import { createApi } from "effection/experimental";
 import { ContinuePastCloseDivergenceError, DivergenceError } from "./errors.ts";
 import type { CoroutineId, EffectDescription } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 /** The two kinds of divergence detected during replay. */
 export type DivergenceKind = "description-mismatch" | "continue-past-close";
 
@@ -65,10 +61,6 @@ export type DivergenceInfo =
  */
 export type DivergenceDecision = { type: "throw"; error: Error } | { type: "run-live" };
 
-// ---------------------------------------------------------------------------
-// API shape (synchronous — not generator-based)
-// ---------------------------------------------------------------------------
-
 /**
  * The core shape of the Divergence API.
  *
@@ -86,10 +78,6 @@ interface DivergenceApi {
   decide(info: DivergenceInfo): DivergenceDecision;
 }
 
-// ---------------------------------------------------------------------------
-// Default policy (strict — all divergences are fatal)
-// ---------------------------------------------------------------------------
-
 /** The default (strict) decide function. */
 function defaultDecide(info: DivergenceInfo): DivergenceDecision {
   if (info.kind === "description-mismatch") {
@@ -104,10 +92,6 @@ function defaultDecide(info: DivergenceInfo): DivergenceDecision {
     };
   }
 }
-
-// ---------------------------------------------------------------------------
-// The Divergence API instance
-// ---------------------------------------------------------------------------
 
 /**
  * The Divergence API.

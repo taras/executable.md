@@ -21,10 +21,6 @@ import {
   durableRun,
 } from "../mod.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /** Create a DurableSource from an array of items. */
 function arraySource<T extends Json>(items: T[]): DurableSource<T> & { closed: boolean } {
   let index = 0;
@@ -58,10 +54,6 @@ function createCallTracker() {
 }
 
 describe("durableEach", () => {
-  // ---------------------------------------------------------------------------
-  // Test 1: Golden run — 3 items
-  // ---------------------------------------------------------------------------
-
   it("golden run — 3 items processed, correct journal", function* () {
     const stream = new InMemoryStream();
     const source = arraySource(["a", "b", "c"]);
@@ -125,10 +117,6 @@ describe("durableEach", () => {
     expect(closeEvents[0]!.coroutineId).toBe("root");
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 2: Empty source — loop body never executes
-  // ---------------------------------------------------------------------------
-
   it("empty source — loop body never executes", function* () {
     const stream = new InMemoryStream();
     const source = arraySource<string>([]);
@@ -159,10 +147,6 @@ describe("durableEach", () => {
       });
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 3: Full replay — no source calls, items replayed from journal
-  // ---------------------------------------------------------------------------
 
   it("full replay — items replayed from journal without calling source", function* () {
     // Pre-populate stream with all yield events but NO root Close.
@@ -217,10 +201,6 @@ describe("durableEach", () => {
     expect(sourceCalled).toBe(false);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 4: Crash recovery (partial replay)
-  // ---------------------------------------------------------------------------
-
   it("crash recovery — partial replay then live", function* () {
     // Journal has 2 items replayed, 3rd will be live
     const events: DurableEvent[] = [
@@ -270,10 +250,6 @@ describe("durableEach", () => {
     // Source called twice: once for "c", once for the done sentinel
     expect(sourceCallCount).toBe(2);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 5: With durableCall in loop body — interleaved events
-  // ---------------------------------------------------------------------------
 
   it("with durableCall in loop — interleaved journal events", function* () {
     const stream = new InMemoryStream();
@@ -325,10 +301,6 @@ describe("durableEach", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 6: Divergence detection — source name mismatch
-  // ---------------------------------------------------------------------------
-
   it("divergence — mismatched source name", function* () {
     // Journal was recorded with name "queue" but workflow uses "other"
     const events: DurableEvent[] = [
@@ -358,10 +330,6 @@ describe("durableEach", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 7: Source error — propagated through Effection
-  // ---------------------------------------------------------------------------
-
   it("source error — propagated to workflow", function* () {
     const stream = new InMemoryStream();
     const source: DurableSource<string> = {
@@ -386,10 +354,6 @@ describe("durableEach", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 8: Advance guard — missing durableEach.next()
-  // ---------------------------------------------------------------------------
-
   it("advance guard — throws when durableEach.next() is missing", function* () {
     const stream = new InMemoryStream();
     const source = arraySource(["a", "b"]);
@@ -410,10 +374,6 @@ describe("durableEach", () => {
       expect((e as Error).message).toContain("yield* durableEach.next() must be called");
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 9: Break exits cleanly, source closed
-  // ---------------------------------------------------------------------------
 
   it("break exits cleanly and closes source", function* () {
     const stream = new InMemoryStream();
@@ -437,10 +397,6 @@ describe("durableEach", () => {
     // Source should be closed via ensure() cleanup
     expect(source.closed).toBe(true);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 10: Null values in source — not confused with done signal
-  // ---------------------------------------------------------------------------
 
   it("null values are valid items, not done signals", function* () {
     const stream = new InMemoryStream();

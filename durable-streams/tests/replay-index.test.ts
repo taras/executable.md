@@ -12,10 +12,6 @@ import { expect } from "@effectionx/bdd/expect";
 import { ReplayIndex } from "../replay-index.ts";
 import type { DurableEvent, Json } from "../types.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function yieldEvent<T extends Json>(
   coroutineId: string,
   type: string,
@@ -58,10 +54,6 @@ function closeEvent<T extends Json>(
 }
 
 describe("ReplayIndex", () => {
-  // ---------------------------------------------------------------------------
-  // Empty index
-  // ---------------------------------------------------------------------------
-
   describe("empty index", () => {
     it("peekYield returns undefined", function* () {
       const idx = new ReplayIndex([]);
@@ -95,10 +87,6 @@ describe("ReplayIndex", () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // Single coroutine, single yield
-  // ---------------------------------------------------------------------------
-
   describe("single yield", () => {
     it("peekYield returns the entry", function* () {
       const idx = new ReplayIndex([yieldEvent("root.0", "call", "fetchOrder", 42)]);
@@ -120,10 +108,6 @@ describe("ReplayIndex", () => {
       expect(idx.yieldCount("root.0")).toBe(1);
     });
   });
-
-  // ---------------------------------------------------------------------------
-  // Multiple yields, single coroutine
-  // ---------------------------------------------------------------------------
 
   describe("multiple yields", () => {
     it("cursor advances through sequence", function* () {
@@ -157,10 +141,6 @@ describe("ReplayIndex", () => {
       expect(idx.getCursor("root.0")).toBe(2);
     });
   });
-
-  // ---------------------------------------------------------------------------
-  // Close events
-  // ---------------------------------------------------------------------------
 
   describe("close events", () => {
     it("hasClose returns true", function* () {
@@ -197,10 +177,6 @@ describe("ReplayIndex", () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // isFullyReplayed
-  // ---------------------------------------------------------------------------
-
   describe("isFullyReplayed", () => {
     it("true when all yields consumed and close exists", function* () {
       const idx = new ReplayIndex([
@@ -230,10 +206,6 @@ describe("ReplayIndex", () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // Multiple coroutines (interleaved events)
-  // ---------------------------------------------------------------------------
-
   describe("interleaved events", () => {
     it("per-coroutine cursors are independent", function* () {
       const idx = new ReplayIndex([
@@ -262,10 +234,6 @@ describe("ReplayIndex", () => {
       expect(idx.isFullyReplayed("root.0")).toBe(false); // not consumed
     });
   });
-
-  // ---------------------------------------------------------------------------
-  // Race scenario (from spec §10)
-  // ---------------------------------------------------------------------------
 
   describe("race scenario", () => {
     it("partial execution with cancellation", function* () {
@@ -298,10 +266,6 @@ describe("ReplayIndex", () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // Consuming yields on unknown coroutine
-  // ---------------------------------------------------------------------------
-
   describe("unknown coroutine", () => {
     it("consuming yield advances cursor", function* () {
       const idx = new ReplayIndex([]);
@@ -310,10 +274,6 @@ describe("ReplayIndex", () => {
       expect(idx.peekYield("nonexistent")).toBeUndefined();
     });
   });
-
-  // ---------------------------------------------------------------------------
-  // Sequential workflow (from spec §11.4)
-  // ---------------------------------------------------------------------------
 
   describe("sequential workflow", () => {
     it("matches spec §11.4 example", function* () {

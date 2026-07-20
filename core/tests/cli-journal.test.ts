@@ -17,10 +17,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const CLI_CMD = "deno";
 const CLI_ARGS = ["run", "--allow-all", "cli/src/cli.ts", "run"];
 const TIMEOUT = 15_000;
@@ -102,10 +98,6 @@ function* readJournal(filePath: string): Operation<JournalEventView[]> {
     .split("\n")
     .map((line) => JSON.parse(line) as JournalEventView);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("CLI journal integration", () => {
   // CJ1: Run without journal (raw)

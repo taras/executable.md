@@ -9,10 +9,6 @@
 
 import type { EffectionResult, Json, Result, SerializedError } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Error serialization
-// ---------------------------------------------------------------------------
-
 /** Serialize an Error to a JSON-safe SerializedError. */
 export function serializeError(error: Error): SerializedError {
   return {
@@ -29,10 +25,6 @@ export function deserializeError(se: SerializedError): Error {
   if (se.stack) error.stack = se.stack;
   return error;
 }
-
-// ---------------------------------------------------------------------------
-// Result conversion: Protocol ↔ Effection
-// ---------------------------------------------------------------------------
 
 /**
  * Convert a protocol Result to an Effection Result.

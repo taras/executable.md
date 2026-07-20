@@ -26,10 +26,6 @@ import { AssertionDiagnostic, expandAssertion } from "./assertions.ts";
 import type { AssertionEntry } from "./assertions.ts";
 import { persistBoundaryOutcome, persistTestResult } from "./journal.ts";
 
-// ---------------------------------------------------------------------------
-// Contained-failure carriers
-// ---------------------------------------------------------------------------
-
 /** An ErrorSegment raised anywhere inside a test body. */
 class RaisedSegmentError extends Error {
   override name = "RaisedSegmentError";
@@ -50,10 +46,6 @@ class TeardownError extends Error {
     this.cause = cause;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Test-owned child EvalScope lease
-// ---------------------------------------------------------------------------
 
 interface EvalScopeLease {
   scope: EvalScope;
@@ -77,10 +69,6 @@ function* leaseChildEvalScope(parentScope: EvalScope): Operation<EvalScopeLease>
   });
   return { scope: yield* published.operation, task: unbox(boxed) };
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
 
 export interface TestHandlers {
   expandTesting(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
@@ -260,10 +248,6 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
 
   return { expandTesting, expandTest, expandAssertion };
 }
-
-// ---------------------------------------------------------------------------
-// Result classification and diagnostics
-// ---------------------------------------------------------------------------
 
 function formatLocation(invocation: ComponentInvocation): string {
   const position = invocation.position;

@@ -12,10 +12,6 @@ import { parse } from "acorn";
 import MagicString from "magic-string";
 import type { Json } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 export interface TransformResult {
   /** Transformed body, without the generator wrapper */
   code: string;
@@ -33,10 +29,6 @@ export interface TransformResult {
    *  nodes during parsing and removed from the transformed code. */
   userImports: string[];
 }
-
-// ---------------------------------------------------------------------------
-// Main transform function (spec §4.3)
-// ---------------------------------------------------------------------------
 
 /**
  * Transform an eval block's source code for execution.
@@ -177,10 +169,6 @@ export function transformBlock(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Mode detection (spec §4.4)
-// ---------------------------------------------------------------------------
-
 // deno-lint-ignore no-explicit-any
 type AstNode = any;
 
@@ -248,10 +236,6 @@ function walkTopLevel(node: AstNode, visitor: (n: AstNode) => void): void {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Export collection (spec §4.2)
-// ---------------------------------------------------------------------------
 
 /**
  * Collect names exported by top-level declarations.
@@ -332,10 +316,6 @@ function extractPatternNames(pattern: AstNode): string[] {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Free variable collection (spec §4.2)
-// ---------------------------------------------------------------------------
-
 /**
  * Collect free variable references in the AST.
  *
@@ -410,10 +390,6 @@ function collectReferences(node: AstNode, references: Set<string>, localDecls: S
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Serialization helpers (spec §6.3)
-// ---------------------------------------------------------------------------
 
 /**
  * Check if a value is JSON-serializable.

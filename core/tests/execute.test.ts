@@ -18,10 +18,6 @@ import type { Operation } from "effection";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers — install stub middleware via API.*.around()
-// ---------------------------------------------------------------------------
-
 function* useStubExec(): Operation<void> {
   yield* API.Process.around({
     *exec([options], _next) {
@@ -41,10 +37,6 @@ function* useStubExec(): Operation<void> {
     },
   });
 }
-
-// ---------------------------------------------------------------------------
-// Tier B — Component import (durable integration tests)
-// ---------------------------------------------------------------------------
 
 describe("Tier B — durable import", () => {
   // B1: durableImportComponent golden run — journal shape
@@ -230,10 +222,6 @@ describe("Tier B — durable import", () => {
     expect(result).toContain("Banner from root");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Tier D — Code execution and modifier middleware
-// ---------------------------------------------------------------------------
 
 describe("Tier D — code execution and modifiers", () => {
   // D1: bash exec golden run
@@ -519,10 +507,6 @@ describe("Tier D — code execution and modifiers", () => {
     expect(receivedParams).toBe("30s");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Tier E — End-to-end tests
-// ---------------------------------------------------------------------------
 
 describe("execute", () => {
   // E1: Full document golden run
@@ -1004,10 +988,6 @@ describe("execute", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Journal shape through Component Api dispatch
-// ---------------------------------------------------------------------------
-
 describe("Component Api dispatch — journal shape", () => {
   it("import, exec, and eval journal entries keep their identities", function* () {
     const stream = new InMemoryStream();
@@ -1039,10 +1019,6 @@ describe("Component Api dispatch — journal shape", () => {
     expect(String(evals[0])).toMatch(/^eval:eval:root:\d+$/);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Component-declared output at the document level (spec §5.4, §6.9)
-// ---------------------------------------------------------------------------
 
 describe("component-declared output — document workflow", () => {
   it("applies <Output> to an imported component invoked from a streaming root", function* () {

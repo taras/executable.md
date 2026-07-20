@@ -22,10 +22,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-sc-test-"));
 }
@@ -96,10 +92,6 @@ function stubProvider(componentName: string): string {
     "<Content />",
   ].join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Tier SC — Sample component tests
-// ---------------------------------------------------------------------------
 
 describe("Tier SC — Sample component", () => {
   // SC1: Self-closing with prompt — prompt sent to Sample Api
@@ -453,10 +445,6 @@ describe("Tier SC — Sample component", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Tier EO — eval output() function tests
-// ---------------------------------------------------------------------------
-
 describe("Tier EO — eval output() function", () => {
   // EO1: output() sets eval block output
   it("EO1: output() produces eval block output", function* () {
@@ -563,10 +551,6 @@ describe("Tier EO — eval output() function", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Tier RC — renderChildren / render closure tests
-// ---------------------------------------------------------------------------
-
 describe("Tier RC — renderChildren and render closures", () => {
   // RC1: renderChildren() returns empty string for self-closing component
   it("RC1: renderChildren returns empty for self-closing component", function* () {
@@ -655,10 +639,6 @@ describe("Tier RC — renderChildren and render closures", () => {
     expect(output).toContain("rendered:[arbitrary **markdown** content]");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Tier IN — Instruction component tests
-// ---------------------------------------------------------------------------
 
 describe("Tier IN — Instruction component", () => {
   // IN1: Instruction enriches Sample context with instructions
@@ -829,10 +809,6 @@ describe("Tier IN — Instruction component", () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// Tier AG — Agent component pattern tests
-// ---------------------------------------------------------------------------
 
 describe("Tier AG — Agent component pattern", () => {
   // AG1: Agent component installs instruction middleware + Content

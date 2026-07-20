@@ -22,10 +22,6 @@ import type {
   CodeBlockResult,
 } from "../src/types.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers (same pattern as expand.test.ts)
-// ---------------------------------------------------------------------------
-
 function makeComponent(
   name: string,
   body: string,
@@ -108,10 +104,6 @@ function expandWithoutEnv(
     return renderSegments(expanded);
   });
 }
-
-// ---------------------------------------------------------------------------
-// Text interpolation tests (spec §9 test plan)
-// ---------------------------------------------------------------------------
 
 describe("Text interpolation — eval bindings in text segments", () => {
   // TI1: Bare binding in text resolves
@@ -307,10 +299,6 @@ describe("Text interpolation — eval bindings in text segments", () => {
     expect(captured[0]).toBe("echo 8080\n");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Escaping tests for interpolateEvalBindings
-// ---------------------------------------------------------------------------
 
 describe("interpolateEvalBindings — escaping", () => {
   it("escaped opening brace prevents interpolation", function* () {

@@ -24,10 +24,6 @@ import {
 } from "../mod.ts";
 
 describe("ephemeral", () => {
-  // ---------------------------------------------------------------------------
-  // Test 1: ephemeral executes and returns value
-  // ---------------------------------------------------------------------------
-
   it("executes operation and returns value", function* () {
     const stream = new InMemoryStream();
 
@@ -45,10 +41,6 @@ describe("ephemeral", () => {
 
     expect(result).toBe("hello from ephemeral");
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 2: ephemeral is transparent to journal — no Yield events
-  // ---------------------------------------------------------------------------
 
   it("transparent to journal — no Yield events written", function* () {
     const stream = new InMemoryStream();
@@ -82,10 +74,6 @@ describe("ephemeral", () => {
     );
     expect(ephemeralEvents.length).toBe(0);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 3: ephemeral re-runs on replay (not cached)
-  // ---------------------------------------------------------------------------
 
   it("re-runs on replay — not cached", function* () {
     const stream = new InMemoryStream();
@@ -136,10 +124,6 @@ describe("ephemeral", () => {
     expect(ephemeralCallCount).toBe(1);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 4: ephemeral propagates errors
-  // ---------------------------------------------------------------------------
-
   it("propagates errors from the operation", function* () {
     const stream = new InMemoryStream();
 
@@ -161,10 +145,6 @@ describe("ephemeral", () => {
       expect((e as Error).message).toBe("ephemeral boom");
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 5: ephemeral works inside durableAll children
-  // ---------------------------------------------------------------------------
 
   it("works inside durableAll children", function* () {
     const stream = new InMemoryStream();
@@ -190,10 +170,6 @@ describe("ephemeral", () => {
 
     expect(result).toBe("a-b");
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 6: nested durableAll works directly (no ephemeral needed)
-  // ---------------------------------------------------------------------------
 
   it("nested durableAll works without ephemeral wrapping", function* () {
     const stream = new InMemoryStream();

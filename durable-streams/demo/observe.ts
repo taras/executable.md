@@ -19,10 +19,6 @@ import type { Operation, Stream } from "effection";
 import process from "node:process";
 import type { DurableEvent } from "../mod.ts";
 
-// ---------------------------------------------------------------------------
-// ANSI helpers
-// ---------------------------------------------------------------------------
-
 const c = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
@@ -39,15 +35,7 @@ const c = {
   gray: "\x1b[90m",
 };
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 const STREAM_ID = process.env.DURABLE_STREAM_ID ?? "dinner-demo";
-
-// ---------------------------------------------------------------------------
-// Resources
-// ---------------------------------------------------------------------------
 
 function useDurableStreamTestServer(): Operation<DurableStreamTestServer> {
   return resource(function* (provide) {
@@ -100,10 +88,6 @@ function useDurableStreamTail(opts: TailOptions): Stream<DurableEvent, void> {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Formatting
-// ---------------------------------------------------------------------------
-
 function statusColor(status: string): string {
   switch (status) {
     case "ok":
@@ -153,10 +137,6 @@ function plainLength(s: string): number {
   // deno-lint-ignore no-control-regex
   return s.replace(/\x1b\[[0-9;]*m/g, "").length;
 }
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
 
 await main(function* () {
   const server = yield* useDurableStreamTestServer();

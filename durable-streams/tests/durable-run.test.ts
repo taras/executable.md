@@ -17,10 +17,6 @@ import {
   durableRun,
 } from "../mod.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /** Track which functions were actually called during live execution. */
 function createCallTracker() {
   const calls: string[] = [];
@@ -36,10 +32,6 @@ function createCallTracker() {
 }
 
 describe("durableRun", () => {
-  // ---------------------------------------------------------------------------
-  // Test 1: Golden run — execute workflow end-to-end
-  // ---------------------------------------------------------------------------
-
   it("golden run: executes all effects live and records events", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -81,10 +73,6 @@ describe("durableRun", () => {
       expect(events[2]!.result).toEqual({ status: "ok", value: "alpha-beta" });
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 2: Full replay — replay entire stream
-  // ---------------------------------------------------------------------------
 
   it("full replay: returns stored result without re-executing effects", function* () {
     // Pre-populate stream with a complete run
@@ -128,10 +116,6 @@ describe("durableRun", () => {
     expect(stream.appendCount).toBe(0);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 3: Crash before first effect — empty stream
-  // ---------------------------------------------------------------------------
-
   it("crash before first effect: empty stream, all live", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -149,10 +133,6 @@ describe("durableRun", () => {
     const events = stream.snapshot();
     expect(events.length).toBe(2); // 1 Yield + 1 Close
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 4: Crash at position N — partial replay
-  // ---------------------------------------------------------------------------
 
   it("crash at position N: first N replayed, rest live", function* () {
     // Stream has only the first Yield event (simulates crash after stepA)
@@ -193,10 +173,6 @@ describe("durableRun", () => {
     expect(stream.appendCount).toBe(2);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 5: Crash after last effect — all Yields but no Close
-  // ---------------------------------------------------------------------------
-
   it("crash after last effect: all Yields replayed, Close appended", function* () {
     // Stream has both Yield events but no Close
     const events: DurableEvent[] = [
@@ -234,10 +210,6 @@ describe("durableRun", () => {
     expect(finalEvents.length).toBe(3);
     expect(finalEvents[2]!.type).toBe("close");
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 6: Persist-before-resume — write completes before generator advances
-  // ---------------------------------------------------------------------------
 
   it("persist-before-resume: generator does not advance until write completes", function* () {
     const stream = new InMemoryStream();
@@ -278,10 +250,6 @@ describe("durableRun", () => {
       "resumed:after-step2",
     ]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 7: Actor handoff — Process A writes N events, Process B resumes
-  // ---------------------------------------------------------------------------
 
   it("actor handoff: Process B resumes from Process A's events", function* () {
     // Process A: execute first 2 steps then "crash" (we just take the events)
@@ -325,10 +293,6 @@ describe("durableRun", () => {
     const finalEvents = streamB.snapshot();
     expect(finalEvents.length).toBe(4);
   });
-
-  // ---------------------------------------------------------------------------
-  // Additional: error propagation
-  // ---------------------------------------------------------------------------
 
   it("golden run with error: records Close(err) event", function* () {
     const stream = new InMemoryStream();

@@ -18,10 +18,6 @@ import {
   durableRun,
 } from "../mod.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /** Extract all unique coroutine IDs from events, sorted. */
 function coroutineIds(events: DurableEvent[]): string[] {
   return [...new Set(events.map((e) => e.coroutineId))].sort();
@@ -51,10 +47,6 @@ function createCallTracker() {
 }
 
 describe("deterministic IDs", () => {
-  // ---------------------------------------------------------------------------
-  // Test 24: Stable IDs across runs — same inputs produce same IDs
-  // ---------------------------------------------------------------------------
-
   it("same workflow produces same coroutine IDs across two live runs", function* () {
     function makeWorkflow(tracker: ReturnType<typeof createCallTracker>) {
       return function* () {
@@ -88,10 +80,6 @@ describe("deterministic IDs", () => {
     // Event traces must be identical (same types, same coroutineIds, same descriptions)
     expect(eventTrace(events1)).toEqual(eventTrace(events2));
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 25: Stable IDs: live vs. replay
-  // ---------------------------------------------------------------------------
 
   it("live run and replay produce identical coroutine IDs", function* () {
     // Live run
@@ -149,10 +137,6 @@ describe("deterministic IDs", () => {
     expect(liveIds).toEqual(["root", "root.0", "root.1"]);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 26: Nested scope IDs are stable
-  // ---------------------------------------------------------------------------
-
   it("nested all produces hierarchical IDs", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -189,10 +173,6 @@ describe("deterministic IDs", () => {
     // root.1 is the second child of the outer all
     expect(ids).toEqual(["root", "root.0", "root.0.0", "root.0.1", "root.1"]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 27: Dynamic spawn count divergence
-  // ---------------------------------------------------------------------------
 
   it("changing child count produces divergence on replay", function* () {
     // Golden run with 2 children
@@ -264,10 +244,6 @@ describe("deterministic IDs", () => {
     expect(result).toBe("a,b,c-z");
     expect(tracker2.calls).toEqual(["childC", "after"]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test: Race coroutine IDs are stable
-  // ---------------------------------------------------------------------------
 
   it("race children get sequential IDs", function* () {
     const stream = new InMemoryStream();

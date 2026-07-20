@@ -9,10 +9,6 @@ import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
 import type { Segment, ComponentDefinition, TextSegment, Json } from "../src/types.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function makeComponent(
   name: string,
   body: string,
@@ -68,15 +64,7 @@ function expand(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Tier F — Markdown healing (remend) — spec §2.3, §11
-// ---------------------------------------------------------------------------
-
 describe("healSegment", () => {
-  // -----------------------------------------------------------------------
-  // Healing at component boundaries (F1–F8)
-  // -----------------------------------------------------------------------
-
   it("F1: unclosed bold before component", function* () {
     const texts = getTextSegments("Hello **world\n<Comp />");
     const healed = healSegment(texts[0]!);
@@ -131,10 +119,6 @@ describe("healSegment", () => {
     expect(segments).toMatchObject([{ type: "text" }]);
   });
 
-  // -----------------------------------------------------------------------
-  // Healing at exec block boundaries (F9–F10)
-  // -----------------------------------------------------------------------
-
   it("F9: unclosed bold before exec", function* () {
     const texts = getTextSegments("Hello **world\n```bash exec\nls\n```\n");
     const healed = healSegment(texts[0]!);
@@ -146,10 +130,6 @@ describe("healSegment", () => {
     const healed = healSegment(texts[0]!);
     expect(healed).toBe("Hello `code\n`");
   });
-
-  // -----------------------------------------------------------------------
-  // htmlTags: false — angle brackets in text (F11–F14)
-  // -----------------------------------------------------------------------
 
   it("F11: less-than in text unchanged", function* () {
     expect(healSegment("a < b\n")).toBe("a < b\n");
@@ -191,10 +171,6 @@ describe("healSegment", () => {
     expect(result).toBe("text* more*");
   });
 
-  // -----------------------------------------------------------------------
-  // Nested and multiple unclosed constructs (F17–F18)
-  // -----------------------------------------------------------------------
-
   it("F17: nested bold inside italic — both healed", function* () {
     const result = healSegment("*hello **world\n");
     // remend closes both after trailing newline
@@ -208,10 +184,6 @@ describe("healSegment", () => {
     expect(result).toContain("`");
     expect(typeof result === "string").toBeTruthy();
   });
-
-  // -----------------------------------------------------------------------
-  // No-op cases — healing is identity (F19–F22)
-  // -----------------------------------------------------------------------
 
   it("F19: complete markdown unchanged", function* () {
     const input = "Hello **world** more text";
@@ -231,10 +203,6 @@ describe("healSegment", () => {
     const input = "Hello \\*world\n";
     expect(healSegment(input)).toBe(input);
   });
-
-  // -----------------------------------------------------------------------
-  // Interaction with interpolation (F23–F24)
-  // -----------------------------------------------------------------------
 
   it("F23: unclosed bold containing interpolation placeholder", function* () {
     // healSegment runs before interpolation, so {meta.title} is literal text
@@ -257,10 +225,6 @@ describe("healSegment", () => {
     expect(output).toContain("**bold**");
   });
 
-  // -----------------------------------------------------------------------
-  // Interaction with Content slot (F25–F26)
-  // -----------------------------------------------------------------------
-
   it("F25: children with unclosed bold — healed before substitution", function* () {
     const comp = makeComponent("Wrap", "before <Content /> after");
     const ctx = { Wrap: comp };
@@ -279,10 +243,6 @@ describe("healSegment", () => {
     expect(output.includes("*intro*") || output.includes("*intro")).toBeTruthy();
     expect(output).toContain("child");
   });
-
-  // -----------------------------------------------------------------------
-  // Math blocks (F27–F28)
-  // -----------------------------------------------------------------------
 
   it("F27: unclosed inline math", function* () {
     const result = healSegment("$formula\n");

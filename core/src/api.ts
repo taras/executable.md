@@ -11,10 +11,6 @@
 import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
-// ---------------------------------------------------------------------------
-// Document Output Api definition
-// ---------------------------------------------------------------------------
-
 export interface DocumentOutputApi {
   output(text: string): Operation<void>;
 }

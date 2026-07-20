@@ -60,8 +60,8 @@
     "test:node": "tsx --tsconfig tsconfig.node.json --test durable-streams/tests/*.test.ts core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/document-output-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
     "test:bun": "bun test durable-streams/tests/ core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/document-output-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
     "test:deno": "deno task test",
-    "lint": "oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ runtime/ testing/ && oxfmt --check core/src/ cli/src/ durable-streams/ runtime/ testing/ test-support/",
-    "fmt": "oxfmt --write core/src/ cli/src/ durable-streams/ runtime/ testing/ test-support/ core/tests/ durable-streams/tests/ packages/code-review-agent/"
+    "lint": "oxlint -c .oxlintrc.json core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/ && oxfmt --check core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/",
+    "fmt": "oxfmt --write core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/"
   },
   "workspaces": [
     "core",

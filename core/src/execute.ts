@@ -61,10 +61,6 @@ import { Stdio } from "@effectionx/process";
 // Re-export gray-matter — we use it for YAML frontmatter extraction
 import matter from "gray-matter";
 
-// ---------------------------------------------------------------------------
-// execute options (spec §7.1)
-// ---------------------------------------------------------------------------
-
 export interface ExecuteOptions {
   /** Path to the root markdown document (workspace-relative). */
   docPath: string;
@@ -176,10 +172,6 @@ function* durableImportComponent(
     bodySegments,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Component path resolution — runs inside Operation context (not Workflow)
-// ---------------------------------------------------------------------------
 
 function* resolveComponentPath(name: string, searchPaths: string[]): Operation<string> {
   const baseName = name.replace(/\./g, "/");
@@ -355,10 +347,6 @@ function* documentWorkflow(): Workflow<string> {
   return yield* ephemeral(scopedExpansion);
 }
 
-// ---------------------------------------------------------------------------
-// execute (spec §7.1)
-// ---------------------------------------------------------------------------
-
 /**
  * A running document execution.
  *
@@ -527,10 +515,6 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
     output: channel,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Execution Api — the generic execution middleware hook
-// ---------------------------------------------------------------------------
 
 /**
  * Execution Api — a test-agnostic middleware surface around document

@@ -15,10 +15,6 @@ import type { Operation } from "effection";
 import type { ModifierFactory } from "../modifiers.ts";
 import type { CodeBlockResult } from "../types.ts";
 
-// ---------------------------------------------------------------------------
-// Duration parsing
-// ---------------------------------------------------------------------------
-
 /**
  * Parse a duration string into milliseconds.
  *
@@ -34,10 +30,6 @@ export function parseDuration(s: string): number {
   if (s.endsWith("s")) return parseInt(s, 10) * 1_000;
   return parseInt(s, 10);
 }
-
-// ---------------------------------------------------------------------------
-// timeoutFactory (spec §7.3)
-// ---------------------------------------------------------------------------
 
 /**
  * Wrapping modifier that constrains block execution time.

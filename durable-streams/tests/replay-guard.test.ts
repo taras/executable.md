@@ -26,10 +26,6 @@ import {
 } from "../mod.ts";
 
 describe("replay guard", () => {
-  // ---------------------------------------------------------------------------
-  // Test 1: No guards installed → normal replay
-  // ---------------------------------------------------------------------------
-
   it("no guards installed — normal replay proceeds", function* () {
     const events: DurableEvent[] = [
       {
@@ -72,10 +68,6 @@ describe("replay guard", () => {
     expect(result).toBe("alpha-beta");
     expect(liveCalls).toEqual([]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 2: Guard installed, event has no applicable fields → replay proceeds
-  // ---------------------------------------------------------------------------
 
   it("event without validation fields — replay proceeds", function* () {
     // Event has no path in description — guard should pass it through
@@ -123,10 +115,6 @@ describe("replay guard", () => {
     // No extra fields in description
     expect(checkEvents[0]!.description.path).toBeUndefined();
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 3: Description path and result hash match → replay proceeds
-  // ---------------------------------------------------------------------------
 
   it("description/result fields match — replay proceeds", function* () {
     // Simulate a file hash that hasn't changed
@@ -193,10 +181,6 @@ describe("replay guard", () => {
     expect(result.content).toBe("file contents");
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 4: Description path present but result hash differs → replay errors
-  // ---------------------------------------------------------------------------
-
   it("result hash mismatch — replay errors with StaleInputError", function* () {
     // File hash in journal result differs from current hash
     const events: DurableEvent[] = [
@@ -258,10 +242,6 @@ describe("replay guard", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 5: Multiple guards, one errors → replay halts
-  // ---------------------------------------------------------------------------
-
   it("multiple guards — error from any guard halts replay", function* () {
     const events: DurableEvent[] = [
       {
@@ -318,10 +298,6 @@ describe("replay guard", () => {
       expect((e as Error).message).toBe("Guard B failed");
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 6: Check runs before replay, not during
-  // ---------------------------------------------------------------------------
 
   it("check phase runs before workflow starts", function* () {
     // Note: NO Close event, so workflow actually runs and replays
@@ -380,10 +356,6 @@ describe("replay guard", () => {
     expect(result).toBe("result");
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 7: Decide is pure — same inputs, same output
-  // ---------------------------------------------------------------------------
-
   it("decide is pure — consistent results for same input", function* () {
     // Note: NO Close event, so workflow actually runs and replays
     const events: DurableEvent[] = [
@@ -432,10 +404,6 @@ describe("replay guard", () => {
     expect(decideResults[0]!.outcome).toBe("replay");
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 8: Decide not called if identity check fails
-  // ---------------------------------------------------------------------------
-
   it("decide not called if identity check fails", function* () {
     // Journal has call("stepA"), code yields call("stepX")
     const events: DurableEvent[] = [
@@ -481,10 +449,6 @@ describe("replay guard", () => {
     // Decide should NOT be called because identity check failed first
     expect(decideCalls.length).toBe(0);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 9: Check deduplicates file hashes via cache
-  // ---------------------------------------------------------------------------
 
   it("check deduplicates via cache", function* () {
     // 5 events all referencing the same file via description.path
@@ -543,10 +507,6 @@ describe("replay guard", () => {
     expect(hashComputations).toBe(1);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 10: Guard inherited by child scopes (via durableAll)
-  // ---------------------------------------------------------------------------
-
   // Note: This test would require durableAll but we'll test the simpler case
   // that the guard middleware installed on the parent scope is visible to
   // effects inside durableRun.
@@ -594,10 +554,6 @@ describe("replay guard", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 11: Default behavior is pass-through (logs are authoritative)
-  // ---------------------------------------------------------------------------
-
   it("default behavior is pass-through (logs are authoritative)", function* () {
     // Event has extra description fields that WOULD be stale if a guard
     // checked them, but no guard is installed — should replay normally.
@@ -644,10 +600,6 @@ describe("replay guard", () => {
     // Replay proceeds normally — extra fields are ignored without guards
     expect(result.content).toBe("result");
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 12: Rich result with contentHash is written during live execution
-  // ---------------------------------------------------------------------------
 
   it("rich result with contentHash is written during live execution", function* () {
     const stream = new InMemoryStream([]);

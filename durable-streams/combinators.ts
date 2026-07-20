@@ -32,10 +32,6 @@ import { ephemeral } from "./ephemeral.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Internal: wrap a child workflow with DurableContext + Close emission
-// ---------------------------------------------------------------------------
-
 /**
  * Run a child workflow within a spawned scope, setting up its own
  * DurableContext and emitting a Close event when it terminates.
@@ -144,10 +140,6 @@ function* runDurableChild<T extends WorkflowValue>(
   }
 }
 
-// ---------------------------------------------------------------------------
-// durableSpawn — spawn a single durable child, returns Task<T>
-// ---------------------------------------------------------------------------
-
 /**
  * Spawn a durable child workflow.
  *
@@ -177,10 +169,6 @@ export function durableSpawn<T extends WorkflowValue>(
     })(),
   );
 }
-
-// ---------------------------------------------------------------------------
-// durableAll — fork/join, wait for all children
-// ---------------------------------------------------------------------------
 
 /**
  * Run multiple durable workflows concurrently and wait for all to complete.
@@ -226,10 +214,6 @@ export function durableAll<T extends WorkflowValue>(
     })(),
   );
 }
-
-// ---------------------------------------------------------------------------
-// durableRace — first child to complete wins, others cancelled
-// ---------------------------------------------------------------------------
 
 /**
  * Race multiple durable workflows. The first to complete wins;

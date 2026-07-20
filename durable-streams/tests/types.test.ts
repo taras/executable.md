@@ -14,10 +14,6 @@ import type { Operation } from "effection";
 import { expect } from "@effectionx/bdd/expect";
 import type { DurableEffect, EffectionResult, Resolve, Workflow } from "../types.ts";
 
-// ---------------------------------------------------------------------------
-// Helper: create a minimal DurableEffect for testing
-// ---------------------------------------------------------------------------
-
 function testDurableEffect<T>(value: T): DurableEffect<T> {
   return {
     description: "test",
@@ -46,10 +42,6 @@ function anotherDurableOp(): Workflow<string> {
 }
 
 describe("Workflow types", () => {
-  // ---------------------------------------------------------------------------
-  // POSITIVE: These should compile
-  // ---------------------------------------------------------------------------
-
   it("Workflow can yield DurableEffect values", function* () {
     // This function compiles — DurableEffect is accepted as yield type
     function* _myWorkflow(): Workflow<number> {
@@ -83,10 +75,6 @@ describe("Workflow types", () => {
     expect(true).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// NEGATIVE: These SHOULD NOT compile (commented out with expected errors)
-// ---------------------------------------------------------------------------
 
 // Uncomment any of these to verify they produce type errors:
 

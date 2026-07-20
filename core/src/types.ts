@@ -8,15 +8,7 @@
 import type { Operation } from "effection";
 import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
 
-// ---------------------------------------------------------------------------
-// JSON-serializable value type
-// ---------------------------------------------------------------------------
-
 export type Json = DurableJson;
-
-// ---------------------------------------------------------------------------
-// Segment IR (spec §2.1)
-// ---------------------------------------------------------------------------
 
 export type Segment =
   | TextSegment
@@ -104,10 +96,6 @@ export interface EvalEnv {
   values: Record<string, unknown>;
 }
 
-// ---------------------------------------------------------------------------
-// Invocation-expansion extension hook
-// ---------------------------------------------------------------------------
-
 /**
  * Expansion context offered to `expandInvocation` extensions alongside the
  * raw invocation. Exposes exactly what an extension needs: the parent scope's
@@ -131,10 +119,6 @@ export interface InvocationContext {
 export interface InvocationHandling {
   segments: Segment[];
 }
-
-// ---------------------------------------------------------------------------
-// Modifier system (spec §3.2–3.5)
-// ---------------------------------------------------------------------------
 
 export interface ParsedInfoString {
   language: string;
@@ -160,10 +144,6 @@ export interface CodeBlockResult {
   stderr: string;
 }
 
-// ---------------------------------------------------------------------------
-// Component model (spec §4.1–4.3)
-// ---------------------------------------------------------------------------
-
 export interface InputDefinition {
   type: "string" | "number" | "boolean" | "array" | "object" | "any";
   default?: Json;
@@ -185,10 +165,6 @@ export interface ImportResult extends Record<string, Json> {
   path: string;
   content: string;
 }
-
-// ---------------------------------------------------------------------------
-// Function components (spec §5.3)
-// ---------------------------------------------------------------------------
 
 /**
  * A TypeScript function component — a generator function that receives
@@ -223,10 +199,6 @@ export interface FunctionComponentDefinition {
 export interface ResolveResult {
   path: string;
 }
-
-// ---------------------------------------------------------------------------
-// Sample Api context
-// ---------------------------------------------------------------------------
 
 export interface SampleContext {
   /** The content to send to the LLM (rendered children or prompt text). */
