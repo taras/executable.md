@@ -4,6 +4,8 @@ version: 0.1.0
 repo: https://github.com/thefrontside/effectionx
 ---
 
+<Capture as="guide">
+
 # {meta.title}
 
 This document is both a guide and a smoke test. Every feature described
@@ -518,3 +520,107 @@ EOF
 If you can read this table, every feature worked.
 
 </Section>
+
+</Capture>
+
+{guide}
+
+<Test name="Components">
+<AssertStringIncludes actual={guide} expected={"# Executable MDX"} />
+<AssertStringIncludes actual={guide} expected={"version **0.1.0**"} />
+<AssertStringIncludes actual={guide} expected={"https://github.com/thefrontside/effectionx"} />
+<AssertStringIncludes actual={guide} expected={"§ What is Executable MDX?"} />
+<AssertStringIncludes actual={guide} expected={"§ Components"} />
+<AssertStringIncludes actual={guide} expected={"§ Nested Components"} />
+<AssertStringIncludes actual={guide} expected={"§ Executable Code Blocks"} />
+<AssertStringIncludes actual={guide} expected={"§ Props and Interpolation"} />
+<AssertStringIncludes actual={guide} expected={"§ Markdown Healing"} />
+<AssertStringIncludes actual={guide} expected={"§ Durability"} />
+<AssertStringIncludes actual={guide} expected={"§ Smoke Test Summary"} />
+<AssertStringIncludes actual={guide} expected={"📝 **info:** This note uses the default level (info)."} />
+<AssertStringIncludes actual={guide} expected={"📝 **warning:** This note overrides the level to warning."} />
+<AssertStringIncludes actual={guide} expected={"**Recursive Expansion**"} />
+<AssertStringIncludes actual={guide} expected={"Components expand bottom-up"} />
+<AssertStringIncludes actual={guide} expected={"This note was generated inside the Feature component."} />
+<AssertStringIncludes actual={guide} expected={"💡 **Formatting tip:**"} />
+<AssertStringIncludes actual={guide} expected={"<Content />"} />
+<AssertStringIncludes actual={guide} expected={"\"Hey, world!\""} />
+<AssertStringIncludes actual={guide} expected={"✓ verified"} />
+<AssertStringIncludes actual={guide} expected={"| Feature"} />
+<AssertStringIncludes actual={guide} expected={"Root frontmatter"} />
+<AssertStringIncludes actual={guide} expected={"Component with props"} />
+<AssertStringIncludes actual={guide} expected={"Content slot"} />
+<AssertStringIncludes actual={guide} expected={"Nested expansion"} />
+<AssertStringIncludes actual={guide} expected={"Dotted component name"} />
+<AssertStringIncludes actual={guide} expected={"Markdown healing"} />
+</Test>
+
+<Test name="Execution">
+<AssertMatch actual={guide} expected={/\d+/} />
+<AssertStringIncludes actual={guide} expected={"Hello from a durable workflow"} />
+<AssertNotMatch actual={guide} expected={/This output is journaled but not shown in the document/} />
+<AssertStringIncludes actual={guide} expected={"# This is just a code block"} />
+<AssertStringIncludes actual={guide} expected={"type: string"} />
+<AssertStringIncludes actual={guide} expected={"Exec blocks are independent of eval bindings"} />
+<AssertStringIncludes actual={guide} expected={"exec modifier"} />
+<AssertStringIncludes actual={guide} expected={"silent modifier"} />
+<AssertStringIncludes actual={guide} expected={"eval + exec coexistence"} />
+</Test>
+
+<Test name="Captures">
+<AssertStringIncludes actual={guide} expected={"§ Binding Capture"} />
+<AssertStringIncludes actual={guide} expected={"Capture values:"} />
+<AssertStringIncludes actual={guide} expected={"component binding from Fragment"} />
+<AssertStringIncludes actual={guide} expected={"| inline binding from Capture"} />
+<AssertNotMatch actual={guide} expected={/Hidden capture should not render inline/} />
+<AssertStringIncludes actual={guide} expected={"Selected JSON: [\"alpha\",\"bravo\",42]"} />
+<AssertNotMatch actual={guide} expected={/Some prose before the data/} />
+<AssertStringIncludes actual={guide} expected={"component as capture"} />
+<AssertStringIncludes actual={guide} expected={"Capture directive"} />
+<AssertStringIncludes actual={guide} expected={"Capture select"} />
+</Test>
+
+<Test name="Evaluation">
+<AssertStringIncludes actual={guide} expected={"§ In-Process Evaluation"} />
+<AssertNotMatch actual={guide} expected={/Hello from eval/} />
+<AssertNotMatch actual={guide} expected={/with 3 numbers/} />
+<AssertNotMatch actual={guide} expected={/serverReady/} />
+<AssertNotMatch actual={guide} expected={/startedAt/} />
+<AssertStringIncludes actual={guide} expected={"kept the task alive"} />
+<AssertMatch actual={guide} expected={/Server would start on port \d+/} />
+<AssertStringIncludes actual={guide} expected={"eval modifier"} />
+<AssertStringIncludes actual={guide} expected={"persist modifier"} />
+<AssertStringIncludes actual={guide} expected={"persist resource survival"} />
+<AssertStringIncludes actual={guide} expected={"timeout modifier"} />
+<AssertStringIncludes actual={guide} expected={"findFreePort VM global"} />
+<AssertStringIncludes actual={guide} expected={"eval binding interpolation"} />
+<AssertStringIncludes actual={guide} expected={"per-component eval scope"} />
+<AssertStringIncludes actual={guide} expected={"props in env.values"} />
+</Test>
+
+<Test name="Providers">
+<AssertStringIncludes actual={guide} expected={"§ Background Processes"} />
+<AssertStringIncludes actual={guide} expected={"daemon-ok"} />
+<AssertStringIncludes actual={guide} expected={"§ Sample Component"} />
+<AssertStringIncludes actual={guide} expected={"[response-from-sample-stub]"} />
+<AssertStringIncludes actual={guide} expected={"§ Instruction Component"} />
+<AssertStringIncludes actual={guide} expected={"[response-from-instruction-stub|system:You are a helpful pirate.]"} />
+<AssertStringIncludes actual={guide} expected={"daemon modifier"} />
+<AssertStringIncludes actual={guide} expected={"provider pattern"} />
+<AssertStringIncludes actual={guide} expected={"Sample component"} />
+<AssertStringIncludes actual={guide} expected={"output() function"} />
+<AssertStringIncludes actual={guide} expected={"renderChildren() closure"} />
+<AssertStringIncludes actual={guide} expected={"Instruction component"} />
+<AssertStringIncludes actual={guide} expected={"composable instructions"} />
+</Test>
+
+<Test name="Output regions">
+<AssertStringIncludes actual={guide} expected={"§ Component-declared Output"} />
+<AssertStringIncludes actual={guide} expected={"OUTPUTDEMO_SELECTED"} />
+<AssertNotMatch actual={guide} expected={/OUTPUTDEMO_DOC_LEAK/} />
+</Test>
+
+<Test name="Durability">
+<AssertStringIncludes actual={guide} expected={"§ Durability"} />
+<AssertStringIncludes actual={guide} expected={"Run at:"} />
+</Test>
