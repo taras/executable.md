@@ -81,14 +81,6 @@ export interface Close {
 /** The two event types that make up the durable stream. */
 export type DurableEvent = Yield | Close;
 
-// ---------------------------------------------------------------------------
-// Effection integration types
-//
-// EffectionResult<T> and Resolve<T> are re-exported from Effection.
-// EffectionResult<T> is an alias for Effection's Result<T>, renamed to
-// avoid collision with our protocol's Result type.
-// ---------------------------------------------------------------------------
-
 /**
  * Effection's internal Result type, re-exported under a distinct name to
  * avoid collision with the protocol's Result type.

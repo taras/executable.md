@@ -26,39 +26,57 @@ const noSectionDividerComments = {
 
         for (let index = 0; index < comments.length - 2; index++) {
           const opening = comments[index];
-          const title = comments[index + 1];
-          const closing = comments[index + 2];
+
+          if (!isDivider(opening)) {
+            continue;
+          }
+
+          let cursor = index + 1;
+
+          while (
+            cursor < comments.length &&
+            comments[cursor].type === "Line" &&
+            !isDivider(comments[cursor]) &&
+            isNextLine(comments[cursor - 1], comments[cursor])
+          ) {
+            cursor++;
+          }
+
+          const hasTitle = cursor > index + 1;
 
           if (
-            isDivider(opening) &&
-            title.type === "Line" &&
-            isDivider(closing) &&
-            isNextLine(opening, title) &&
-            isNextLine(title, closing)
+            !hasTitle ||
+            cursor >= comments.length ||
+            !isDivider(comments[cursor]) ||
+            !isNextLine(comments[cursor - 1], comments[cursor])
           ) {
-            context.report({
-              loc: {
-                start: opening.loc.start,
-                end: closing.loc.end,
-              },
-              messageId: "forbidden",
-              fix(fixer) {
-                const lineStart =
-                  source.text.lastIndexOf("\n", opening.range[0] - 1) + 1;
-                const nextNewline = source.text.indexOf(
-                  "\n",
-                  closing.range[1],
-                );
-                const lineEnd = nextNewline === -1
-                  ? source.text.length
-                  : nextNewline + 1;
-
-                return fixer.removeRange([lineStart, lineEnd]);
-              },
-            });
-
-            index += 2;
+            continue;
           }
+
+          const closing = comments[cursor];
+
+          context.report({
+            loc: {
+              start: opening.loc.start,
+              end: closing.loc.end,
+            },
+            messageId: "forbidden",
+            fix(fixer) {
+              const lineStart =
+                source.text.lastIndexOf("\n", opening.range[0] - 1) + 1;
+              const nextNewline = source.text.indexOf(
+                "\n",
+                closing.range[1],
+              );
+              const lineEnd = nextNewline === -1
+                ? source.text.length
+                : nextNewline + 1;
+
+              return fixer.removeRange([lineStart, lineEnd]);
+            },
+          });
+
+          index = cursor;
         }
       },
     };

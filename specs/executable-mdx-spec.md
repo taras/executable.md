@@ -283,11 +283,13 @@ separation.
 | Code fence | ```` ``` ```` (unclosed) | ```` ``` ```` + closing fence |
 | Math | `$$formula` | `$$formula$$` |
 
+remend does not distinguish an orphaned *closing* marker from an opener:
+a trailing `**` or `*` is read as an unclosed emphasis run, so remend
+appends a matching closer (`world** more` → `world** more**`,
+`text* more` → `text* more*`).
+
 #### What remend does NOT heal
 
-- **Orphaned closing markers.** `more** text` (closing `**` without
-  opener) — remend doesn't strip these. They render as literal text
-  in most markdown engines, which is acceptable.
 - **JSX/HTML tags.** Disabled via `htmlTags: false`.
 - **Cross-boundary constructs.** If a user writes `**` before a
   component and `**` after, these are two separate incomplete
@@ -3588,12 +3590,12 @@ visible warning blocks, collect into a separate error report).
 | F13 | Lowercase HTML tag in text | `<div>content\n<Comp />` | Text segment unchanged — `htmlTags: false` prevents closing |
 | F14 | Angle brackets inside code span | `` `a < b` `` before `<Comp />` | Already complete — no healing needed |
 
-**Orphaned closing markers (NOT healed):**
+**Orphaned closing markers (treated as openers):**
 
 | # | Test | Input | Verify |
 |---|------|-------|--------|
-| F15 | Orphaned bold closer | Text segment starts with `world** more` | Unchanged — remend does not strip orphaned closers |
-| F16 | Orphaned italic closer | Text segment starts with `text* more` | Unchanged |
+| F15 | Orphaned bold closer | Text segment starts with `world** more` | Healed to `world** more**` — remend reads the trailing `**` as an opener and appends a closer |
+| F16 | Orphaned italic closer | Text segment starts with `text* more` | Healed to `text* more*` |
 
 **Nested and multiple unclosed constructs:**
 

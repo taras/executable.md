@@ -197,14 +197,6 @@ function* run(
       })
     : spawn(function* () {});
 
-  // ---------------------------------------------------------------------------
-  // Output middleware (spec §9).
-  //
-  // Middleware is installed on the DocumentOutput Api via Api.around() before
-  // execute is called. execute owns the output stream internally —
-  // the CLI just installs transformations and consumes the returned stream.
-  // ---------------------------------------------------------------------------
-
   if (!raw) {
     yield* useNormalizedOutput();
   }

@@ -41,11 +41,6 @@ function writeFiles(dir: string, files: Record<string, string>): void {
 // Note: S3 test installs stub Sample Api middleware via yield* Sample.around(...)
 // directly in the test body — no shared fixture needed.
 
-// ---------------------------------------------------------------------------
-// Provider component template
-// A minimal HTTP server started by daemon, with readiness via when+fetch.
-// ---------------------------------------------------------------------------
-
 /** Node one-liner HTTP server that responds "ok" on any request. */
 const NODE_HTTP_SERVER =
   "node -e \"require('http').createServer((q,s)=>{s.writeHead(200);s.end('ok')}).listen({port},'127.0.0.1')\"";
