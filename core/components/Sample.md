@@ -30,17 +30,15 @@ inputs:
 ---
 
 ```js persist eval
-const childrenOutput = yield * renderChildren();
-const content = childrenOutput || prompt || "";
+const childrenOutput = yield* renderChildren();
+const content = childrenOutput || prompt || '';
 
-const sampleResult =
-  yield *
-  Sample.operations.sample({
-    content,
-    params: params || undefined,
-    componentName: "Sample",
-    model: model || undefined,
-  });
+const sampleResult = yield* Sample.operations.sample({
+  content,
+  params: params || undefined,
+  componentName: 'Sample',
+  model: model || undefined,
+});
 
 return sampleResult;
 ```

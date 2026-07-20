@@ -171,7 +171,7 @@ Each invocation requires a new path. If the path already exists, `xmd` exits wit
 
 ## Project layout
 
-- `core/src/run-document.ts` - document entrypoint and durable import pipeline.
+- `core/src/execute.ts` - document entrypoint and durable import pipeline.
 - `core/src/scanner.ts` - boundary scanner for components and executable fences.
 - `core/src/` - component expansion, eval/exec handling, modifiers, and sampling helpers.
 - `core/components/` - reusable provider and demo components.

@@ -71,6 +71,30 @@ describe("useTesting composition", () => {
     }
   });
 
+  it("enforces one execute() call per session", function* () {
+    // Results are cumulative across a session: without the guard, a
+    // zero-test second document would succeed on the strength of the first
+    // document's passing test.
+    let thrown: Error | undefined;
+    const first = yield* scoped(function* () {
+      yield* useStubFs({
+        "README.md": '<Test name="one"><Assert expr={true} /></Test>\n',
+        "empty.md": "no tests here\n",
+      });
+      yield* useTesting();
+      const execution = yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+      const result = yield* execution;
+      try {
+        yield* execute({ docPath: "empty.md", stream: new InMemoryStream() });
+      } catch (failure) {
+        thrown = failure instanceof Error ? failure : new Error(String(failure));
+      }
+      return result;
+    });
+    expect(first.ok).toBe(true);
+    expect(thrown?.message).toContain("one execute() call");
+  });
+
   it("enforces one session per execution scope", function* () {
     let error: Error | undefined;
     yield* scoped(function* () {

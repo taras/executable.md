@@ -2,7 +2,7 @@
  * Test Api — contextual operations for testing mode (specs/testing-spec.md).
  *
  * `testing` is the activation switch: false by default, true beneath
- * `<Testing>` (or root activation via `executeDocument({ testing: true })`).
+ * `<Testing>` (or root activation via a `useTesting()` session).
  * Both perform the identical `Test.around({ testing: () => true })` install,
  * which is what makes `xmd test` equivalent to wrapping the entrypoint in
  * `<Testing>`.

@@ -643,7 +643,7 @@ the block if it overruns. The silent handler discards the output.
 #### Overriding per-scope
 
 Because factories are stored in a registry that can be extended,
-custom modifiers can be provided via `ExecuteOptions`:
+custom modifiers can be provided vian `ExecuteOptions`:
 
 ```typescript
 yield* execute({
@@ -3834,7 +3834,7 @@ visible warning blocks, collect into a separate error report).
 | OA7 | Channel close ends consumer | `channel.close()` causes `forEach` to complete |
 | OA8 | Multiple middleware compose | Normalize → terminal → channel: all three run in order |
 | OA9 | `ephemeral()` wrapper | `output()` inside durable context produces no journal entry |
-| OA10 | execute workflow error surfaces through execution | `execute` workflow error → `reject(error)` → `yield* execution` throws |
+| OA10 | execute workflow error surfaces through execution | `execute` workflow error → completion resolves `Err(error)` — `yield* execution` returns the `Result`, never throws |
 
 ### Tier WN — Whitespace normalization
 
@@ -3954,7 +3954,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
 | 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
-| 44 | Provider lifecycle expressed as a component, not a `ExecuteOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
+| 44 | Provider lifecycle expressed as a component, not an `ExecuteOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
 | 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; the binding environment is already the shared state carrier for within-component coordination; scope-correct because a fresh environment is provided per component expansion |
 | 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |

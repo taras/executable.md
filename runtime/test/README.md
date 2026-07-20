@@ -26,7 +26,7 @@ Installs an in-memory filesystem.
 - `stat(path)` reports `exists/isFile` based on whether `path` is a key
 - `glob()` throws with `"glob not stubbed"`
 
-This is the right default for `runDocument()` tests that want to supply a small
+This is the right default for `execute()` tests that want to supply a small
 virtual document tree inline.
 
 ```ts
@@ -93,7 +93,7 @@ Typical combinations:
 These helpers are Effection middleware. They are scoped to the current
 operation scope and its children.
 
-Install them before calling `runDocument()` or `durableRun()`:
+Install them before calling `execute()` or `durableRun()`:
 
 ```ts
 it("renders from stubbed inputs", function* () {
@@ -102,7 +102,7 @@ it("renders from stubbed inputs", function* () {
   yield* useStubFs({ "doc.md": "# Hello\n" });
   yield* useEchoExec();
 
-  const execution = yield* runDocument({ docPath: "doc.md", stream });
+  const execution = yield* execute({ docPath: "doc.md", stream });
   const output = yield* collect(execution);
 });
 ```

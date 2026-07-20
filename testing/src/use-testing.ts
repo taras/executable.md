@@ -56,8 +56,20 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
   // Err(TestFailureError) after its output closes when tests failed or none
   // were discovered. A core Err passes through unchanged, and `results`
   // stays available either way.
+  //
+  // One execute() per session: results are cumulative across the session,
+  // so a second document would inherit the first document's outcomes (a
+  // zero-test document after a passing one would succeed). Fail clearly
+  // BEFORE a handle exists — the pre-handle throw path.
+  let executed = false;
   yield* Execution.around({
     *execute([executeOptions], next) {
+      if (executed) {
+        throw new Error(
+          "a useTesting() session supports one execute() call — start a new session for another document",
+        );
+      }
+      executed = true;
       const inner = yield* next(executeOptions);
       return decorateCompletion(inner, () => {
         if (collected.length === 0) {

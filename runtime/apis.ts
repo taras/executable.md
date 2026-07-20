@@ -49,7 +49,7 @@
  *
  * Middleware is **scoped** — it only affects operations within the
  * current Effection scope and its children. Install before calling
- * `runDocument()` or `durableRun()`.
+ * `execute()` or `durableRun()`.
  *
  * ## Test stubs
  *
