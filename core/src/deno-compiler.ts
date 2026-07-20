@@ -12,6 +12,11 @@
 import { call } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
+// STANDARD_IMPORTS below resolve at runtime from generated eval modules;
+// without these static anchors, `deno compile --exclude-unused-npm` prunes
+// the packages from the binary and every eval block using them fails.
+import "@effectionx/converge";
+import "@effectionx/fetch";
 
 /**
  * Standard import statements prepended to every generated eval module.
