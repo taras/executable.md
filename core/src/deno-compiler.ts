@@ -28,7 +28,7 @@ const STANDARD_IMPORTS = [
 /**
  * Install the Deno data: URI compiler as middleware on the current scope.
  *
- * Must be called inside an Effection scope (e.g., inside `runDocument`'s
+ * Must be called inside an Effection scope (e.g., inside `execute`'s
  * spawned task) before any eval blocks execute.
  */
 export function* useDenoCompiler(): Operation<void> {

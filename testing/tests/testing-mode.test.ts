@@ -3,10 +3,8 @@ import { expect } from "@effectionx/bdd/expect";
 import { sleep } from "effection";
 import { API } from "@executablemd/runtime";
 import { useFailingExec } from "@executablemd/runtime/test";
-import { runDocument } from "@executablemd/core";
 import { TestFailureError } from "../src/test-api.ts";
 import { createTestHandlers } from "../src/handlers.ts";
-import { createExecuteDocument } from "../src/execute.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 
 describe("testing mode", () => {
@@ -283,10 +281,6 @@ describe("testing mode", () => {
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     });
-    const execute = createExecuteDocument({
-      runDocument,
-      handlers: createTestHandlers({ timeoutMs: 100 }),
-    });
     const doc = [
       "<Testing>",
       '<Test name="hangs">',
@@ -298,7 +292,10 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runDoc({ "README.md": doc }, { execute });
+    const run = yield* runDoc(
+      { "README.md": doc },
+      { handlers: createTestHandlers({ timeoutMs: 100 }) },
+    );
     expect(failureOf(run)).toBeInstanceOf(TestFailureError);
     expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
       ["hangs", "fail", "timeout"],

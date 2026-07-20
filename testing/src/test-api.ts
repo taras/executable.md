@@ -42,6 +42,8 @@ export interface TestApi {
   inTest: boolean;
   /** Whether assertion diagnostics render during regular execution. */
   verbose: boolean;
+  /** Whether a useTesting() session is already active in this scope. */
+  sessionActive: boolean;
   /** Record a completed test. Collectors delegate outward via `next`. */
   record(result: TestResult): Operation<void>;
   /** Completed tests recorded by the nearest collector, discovery order. */
@@ -54,6 +56,7 @@ export const Test = createApi<TestApi>("Test", {
   testing: false,
   inTest: false,
   verbose: false,
+  sessionActive: false,
   // deno-lint-ignore require-yield
   *record(_result: TestResult): Operation<void> {},
   // deno-lint-ignore require-yield
@@ -64,7 +67,8 @@ export const Test = createApi<TestApi>("Test", {
   *boundary(_outcome: BoundaryOutcome): Operation<void> {},
 });
 
-export const { testing, inTest, verbose, record, results, boundary } = Test.operations;
+export const { testing, inTest, verbose, sessionActive, record, results, boundary } =
+  Test.operations;
 
 /** A document execution failed its testing outcome (test failures or zero tests). */
 export class TestFailureError extends Error {

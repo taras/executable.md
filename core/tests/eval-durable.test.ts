@@ -10,7 +10,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Tier T4 — eval factory and journal integration", () => {
@@ -24,7 +24,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useEchoExec();
 
     yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -46,7 +46,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     // Golden run
     const output1 = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -54,7 +54,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     // Replay
     const output2 = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -73,7 +73,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useEchoExec();
 
     const output1 = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -81,7 +81,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     // Replay
     const output2 = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -100,7 +100,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -120,7 +120,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useEchoExec();
 
     yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -140,7 +140,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useEchoExec();
 
     yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -171,7 +171,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),

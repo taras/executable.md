@@ -89,6 +89,37 @@ const active = yield* testing;
 pass or fail status, optional name, source location, and structured error
 details when it failed. Rendered test output is not duplicated in the result.
 
+`useTesting` composes testing around the core execution entrypoint. It
+installs the testing vocabulary and collectors, activates testing mode for
+the execution, and returns a session whose `results` operation snapshots
+completed tests in discovery order:
+
+```ts
+import { execute } from "@executablemd/core";
+import { useTesting } from "@executablemd/testing";
+
+const tests = yield* useTesting();
+const execution = yield* execute(options);
+const outcome = yield* execution;
+const results = yield* tests.results;
+```
+
+Execution completion is an Effection `Result<string>`: `Ok(output)` on
+success, `Err(error)` on document, infrastructure, or testing failure —
+completion never throws once the execution handle exists. Under
+`useTesting`, an otherwise successful execution completes as
+`Err(TestFailureError)` after the output stream closes when any test failed
+or no tests were discovered. A failure produced by the document itself
+passes through unchanged, and the session's results remain available after
+failure. One `useTesting` session applies per execution scope; its
+middleware is removed with that scope. `xmd test` composes `useTesting`
+around the same `execute` call the `run` command uses.
+
+Registering the testing vocabulary without `useTesting` leaves testing mode
+inactive: `<Test>` is skipped, assertion components stay usable, and an
+explicit `<Testing>` boundary still activates its subtree and turns its
+failures — or an empty boundary — into an `Err` outcome for the execution.
+
 ## Assertions
 
 Assertion components use `@std/assert` and follow its function names and

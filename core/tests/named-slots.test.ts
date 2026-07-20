@@ -17,7 +17,7 @@ import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { validateProps } from "../src/validate.ts";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Segment, ComponentDefinition, Json, CodeBlockResult } from "../src/types.ts";
@@ -694,7 +694,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       });
       const stream = new InMemoryStream();
       const output = yield* collect(
-        yield* runDocument({
+        yield* execute({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -731,7 +731,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       });
       const stream = new InMemoryStream();
       const output = yield* collect(
-        yield* runDocument({
+        yield* execute({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -769,7 +769,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       });
       const stream = new InMemoryStream();
       const output = yield* collect(
-        yield* runDocument({
+        yield* execute({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -897,7 +897,7 @@ describe("Tier NS-F — Edge cases", () => {
       });
       const stream = new InMemoryStream();
       yield* collect(
-        yield* runDocument({
+        yield* execute({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -931,7 +931,7 @@ describe("Tier NS-F — Edge cases", () => {
       });
       const stream = new InMemoryStream();
       const output1 = yield* collect(
-        yield* runDocument({
+        yield* execute({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -939,7 +939,7 @@ describe("Tier NS-F — Edge cases", () => {
       );
       // Replay — same stream, same output
       const output2 = yield* collect(
-        yield* runDocument({
+        yield* execute({
           docPath: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],

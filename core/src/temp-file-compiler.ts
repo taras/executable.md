@@ -8,7 +8,7 @@
  * Standard imports (Effection, executable.md APIs) are captured in the middleware
  * closure — they are not part of the Compiler API interface.
  *
- * Installed automatically by `runDocument` when running on Node or Bun.
+ * Installed automatically by `execute` when running on Node or Bun.
  */
 
 import { call } from "effection";

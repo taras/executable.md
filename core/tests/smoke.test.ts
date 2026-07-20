@@ -12,7 +12,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     const stream = new InMemoryStream();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "smoke-test/README.md",
         stream,
         componentDirs: ["smoke-test", "core/components"],
@@ -196,7 +196,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
 
     // Golden run
     const firstOutput = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "smoke-test/README.md",
         stream,
         componentDirs: ["smoke-test", "core/components"],
@@ -206,7 +206,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     // Replay — durableRun short-circuits on the Close event in the
     // journal, returning the stored result without any I/O calls.
     const secondOutput = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "smoke-test/README.md",
         stream,
         componentDirs: ["smoke-test", "core/components"],

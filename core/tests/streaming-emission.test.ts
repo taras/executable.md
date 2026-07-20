@@ -2,14 +2,14 @@
  * Tier SE — Streaming emission tests + Tier BC — Block ID counter (spec §9, §6.1).
  *
  * Tests per-segment emission through the document stream returned by
- * runDocument, and blockId stability across per-segment expansion calls.
+ * execute, and blockId stability across per-segment expansion calls.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { createBlockCounter } from "../src/expand.ts";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 
 describe("Tier BC — Block ID counter", () => {
   // BC1: Counter increments across calls
@@ -36,7 +36,7 @@ describe("Tier SE — Streaming emission", () => {
   it("SE1: segments emitted in document order via stream", function* () {
     const chunks: string[] = [];
 
-    const execution = yield* runDocument({
+    const execution = yield* execute({
       docPath: "core/tests/fixtures/streaming/multi-segment.md",
       stream: new InMemoryStream(),
     });
@@ -55,7 +55,7 @@ describe("Tier SE — Streaming emission", () => {
   it("SE10: no empty strings in output chunks", function* () {
     const chunks: string[] = [];
 
-    const execution = yield* runDocument({
+    const execution = yield* execute({
       docPath: "core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
     });
@@ -74,7 +74,7 @@ describe("Tier SE — Streaming emission", () => {
   it("SE9: output() inside durable workflow reaches stream consumer", function* () {
     const chunks: string[] = [];
 
-    const execution = yield* runDocument({
+    const execution = yield* execute({
       docPath: "core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
     });

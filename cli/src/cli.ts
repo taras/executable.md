@@ -25,8 +25,8 @@ import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
-import { useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
-import { executeDocument, TestFailureError } from "@executablemd/testing";
+import { execute, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
@@ -217,7 +217,7 @@ function* run(
   // Output middleware (spec §9).
   //
   // Middleware is installed on the DocumentOutput Api via Api.around() before
-  // runDocument is called. runDocument owns the channel internally —
+  // execute is called. execute owns the output stream internally —
   // the CLI just installs transformations and consumes the returned stream.
   // ---------------------------------------------------------------------------
 
@@ -229,15 +229,20 @@ function* run(
     yield* useTerminalOutput();
   }
 
-  // Run the document through the testing wrapper — the vocabulary is
-  // registered for both commands (assertions work in regular documents),
-  // while testing MODE activates only for `xmd test`.
-  const execution = yield* executeDocument({
+  // Compose testing around the single core execution entrypoint: both
+  // commands register the vocabulary (assertions work in regular documents,
+  // explicit <Testing> boundaries affect the outcome), while `xmd test`
+  // additionally activates root testing through a useTesting() session.
+  if (mode.testing) {
+    yield* useTesting({ verbose });
+  } else {
+    yield* installTestingVocabulary({ verbose });
+  }
+
+  const execution = yield* execute({
     docPath,
     stream,
     componentDirs: componentDir,
-    testing: mode.testing,
-    verbose,
   });
 
   // Consume the output stream with forEach.
@@ -260,15 +265,14 @@ function* run(
     yield* writer;
   }
 
-  // Observe the execution's outcome AFTER the report finished streaming:
+  // Inspect the completion Result AFTER the report finished streaming:
   // test failures, assertion aborts, and any document abort exit nonzero.
-  try {
-    yield* execution;
-  } catch (error) {
-    if (error instanceof TestFailureError) {
-      console.error(`\ntests failed: ${error.message}`);
+  const result = yield* execution;
+  if (!result.ok) {
+    if (result.error instanceof TestFailureError) {
+      console.error(`\ntests failed: ${result.error.message}`);
     } else {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(result.error.message);
     }
     yield* exit(1);
   }

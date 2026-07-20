@@ -4,7 +4,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { scanSegments } from "../src/scanner.ts";
 import { Component } from "../src/component-api.ts";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { ComponentInvocation, SourcePosition } from "../src/types.ts";
 
@@ -75,7 +75,7 @@ describe("source positions", () => {
       },
     });
 
-    const output = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
     expect(output).toContain("probed");
 
     const probeLine = doc.split("\n").indexOf("<Probe />") + 1;
@@ -107,7 +107,7 @@ describe("source positions", () => {
       },
     });
 
-    const output = yield* collect(yield* runDocument({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
     expect(output).toContain("probed");
 
     const probe = positions.find((p) => p.name === "Probe");
