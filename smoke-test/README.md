@@ -4,25 +4,23 @@ version: 0.1.0
 repo: https://github.com/thefrontside/effectionx
 ---
 
-<Capture as="introHeading"># {meta.title}</Capture>
-{introHeading}
+# {meta.title}
 
-This document is both a guide and a smoke test. Every feature described
-here is exercised by the document itself — if it renders correctly,
-the system works. Each chapter below is a self-testing feature document:
-it captures each demonstrated result at its production site, re-emits
-it, and carries a sibling test that inspects the capture.
+This document is both a guide and a smoke test. Each chapter explains a
+feature in prose and carries atomic tests that run the demonstrated
+scenario end to end — setup, action, capture, and assertion live inside
+each test, so regular execution renders the guide while `xmd test` runs
+every scenario. This is version **{meta.version}** of {meta.title},
+built from the source at [{meta.repo}]({meta.repo}).
 
-<Capture as="introVersion">This is version **{meta.version}** of {meta.title}.</Capture>
-{introVersion}
+<Test name="Root frontmatter interpolates into the heading">
+<Capture as="heading"># {meta.title}</Capture>
+<AssertEquals actual={heading} expected={"# Executable MDX"} />
+</Test>
 
-<Capture as="introRepo">Built from the source at [{meta.repo}]({meta.repo}).</Capture>
-{introRepo}
-
-<Test name="Root frontmatter">
-<AssertEquals actual={introHeading} expected={"# Executable MDX"} />
-<AssertEquals actual={introVersion} expected={"This is version **0.1.0** of Executable MDX."} />
-<AssertEquals actual={introRepo} expected={"Built from the source at [https://github.com/thefrontside/effectionx](https://github.com/thefrontside/effectionx)."} />
+<Test name="Root frontmatter interpolates into prose">
+<Capture as="versionLine">This is version **{meta.version}** of {meta.title}, built from the source at [{meta.repo}]({meta.repo}).</Capture>
+<AssertEquals actual={versionLine} expected={"This is version **0.1.0** of Executable MDX, built from the source at [https://github.com/thefrontside/effectionx](https://github.com/thefrontside/effectionx)."} />
 </Test>
 
 <Guide.Overview />
