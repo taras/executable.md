@@ -24,10 +24,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-// ---------------------------------------------------------------------------
-// Helper — create a temp directory for test artifacts
-// ---------------------------------------------------------------------------
-
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-daemon-test-"));
 }
@@ -35,10 +31,6 @@ function makeTempDir(): string {
 function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
-
-// ---------------------------------------------------------------------------
-// Helper — write test documents to a temp directory
-// ---------------------------------------------------------------------------
 
 function writeFiles(dir: string, files: Record<string, string>): void {
   for (const [filePath, content] of Object.entries(files)) {

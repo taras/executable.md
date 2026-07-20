@@ -3,6 +3,13 @@
 
   "plugins": ["typescript", "unicorn", "import"],
 
+  "jsPlugins": [
+    {
+      "name": "local",
+      "specifier": "./scripts/oxlint-plugin.js"
+    }
+  ],
+
   "categories": {
     "correctness": "warn",
     "suspicious": "warn",
@@ -32,7 +39,9 @@
     "typescript/no-unnecessary-type-arguments": "warn",
     "typescript/no-unnecessary-type-assertion": "warn",
     "typescript/no-redundant-type-constituents": "warn",
-    "typescript/no-unnecessary-boolean-literal-compare": "warn"
+    "typescript/no-unnecessary-boolean-literal-compare": "warn",
+
+    "local/no-section-divider-comments": "error"
   },
 
   "overrides": [

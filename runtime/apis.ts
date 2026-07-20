@@ -66,10 +66,6 @@ import { exec as processExec } from "@effectionx/process";
 import { each, race, sleep } from "effection";
 import type { Operation } from "effection";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 /**
  * Result of a `stat` call.
  *
@@ -105,10 +101,6 @@ export interface RuntimeFetchResponse {
   text(): Operation<string>;
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
 function* withTimeout<T>(
   label: string,
   timeout: number | undefined,
@@ -130,10 +122,6 @@ function* withTimeout<T>(
     })(),
   ])) as T;
 }
-
-// ---------------------------------------------------------------------------
-// Handler interfaces
-// ---------------------------------------------------------------------------
 
 interface ProcessHandler {
   exec(options: {
@@ -178,10 +166,6 @@ interface CompilerHandler {
     options?: { imports: string[] },
   ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>>;
 }
-
-// ---------------------------------------------------------------------------
-// Context APIs
-// ---------------------------------------------------------------------------
 
 export const API: {
   Process: Api<ProcessHandler>;

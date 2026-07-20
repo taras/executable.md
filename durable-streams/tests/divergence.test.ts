@@ -21,10 +21,6 @@ import {
 } from "../mod.ts";
 
 describe("divergence detection", () => {
-  // ---------------------------------------------------------------------------
-  // Test 8: Added step divergence
-  // ---------------------------------------------------------------------------
-
   it("added step — generator yields more effects than journal (completed workflow stays completed)", function* () {
     // Journal recorded a workflow with 2 steps, but now code has 3
     const events: DurableEvent[] = [
@@ -100,10 +96,6 @@ describe("divergence detection", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 9: Removed step divergence
-  // ---------------------------------------------------------------------------
-
   it("removed step — generator finishes before journal exhausted", function* () {
     // Journal has 3 steps, but new code only has 2
     const events: DurableEvent[] = [
@@ -149,10 +141,6 @@ describe("divergence detection", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 10: Reordered steps divergence
-  // ---------------------------------------------------------------------------
-
   it("reordered steps — description mismatch at position", function* () {
     // Journal: stepA then stepB. Code: stepB then stepA.
     const events: DurableEvent[] = [
@@ -193,10 +181,6 @@ describe("divergence detection", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 11: Type mismatch divergence
-  // ---------------------------------------------------------------------------
-
   it("type mismatch — call vs sleep", function* () {
     // Journal recorded a "call" effect, but code now yields a "sleep"
     const events: DurableEvent[] = [
@@ -228,10 +212,6 @@ describe("divergence detection", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 12: Name mismatch divergence
-  // ---------------------------------------------------------------------------
-
   it("name mismatch — same type, different name", function* () {
     // Journal has call("fetchOrder"), code has call("fetchUser")
     const events: DurableEvent[] = [
@@ -261,10 +241,6 @@ describe("divergence detection", () => {
       }
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 13: Generator finishes early divergence
-  // ---------------------------------------------------------------------------
 
   it("generator finishes early — returns with unconsumed yields", function* () {
     // Journal has 3 yields, generator returns after consuming only 1
@@ -310,10 +286,6 @@ describe("divergence detection", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 14: Generator continues past close divergence
-  // ---------------------------------------------------------------------------
-
   it("continues past close — journal has Close but generator keeps yielding (completed workflow stays completed)", function* () {
     // Journal: 1 yield + Close. Code adds a second step.
     const events: DurableEvent[] = [
@@ -354,10 +326,6 @@ describe("divergence detection", () => {
     expect(err.coroutineId).toBe("root.0");
     expect(err.yieldCount).toBe(2);
   });
-
-  // ---------------------------------------------------------------------------
-  // Additional divergence: action vs call type mismatch
-  // ---------------------------------------------------------------------------
 
   it("action type mismatch — action vs call", function* () {
     const events: DurableEvent[] = [

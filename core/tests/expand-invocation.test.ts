@@ -8,10 +8,6 @@ import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import type { ComponentDefinition, EvalEnv, InvocationContext, Segment } from "../src/types.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function makeComponent(name: string, body: string): ComponentDefinition {
   return {
     kind: "markdown",
@@ -42,10 +38,6 @@ function useTestComponents(components: Record<string, ComponentDefinition>): Ope
 function useTestEnv(testEnv: EvalEnv): Operation<void> {
   return Component.around({ env: () => testEnv }, { at: "min" });
 }
-
-// ---------------------------------------------------------------------------
-// expandInvocation hook
-// ---------------------------------------------------------------------------
 
 describe("expandInvocation hook", () => {
   it("falls through to normal expansion when no extension is installed", function* () {

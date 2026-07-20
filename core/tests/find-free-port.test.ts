@@ -20,10 +20,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-// ---------------------------------------------------------------------------
-// Helpers for integration tests
-// ---------------------------------------------------------------------------
-
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-r-test-"));
 }
@@ -141,10 +137,6 @@ describe("Tier R — Eval module globals", () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// Tier R — Behavioral integration tests (via execute)
-// ---------------------------------------------------------------------------
 
 describe("Tier R — findFreePort in eval blocks", () => {
   // R1 (integration): findFreePort accessible and returns a port inside eval

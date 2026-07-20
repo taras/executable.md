@@ -17,10 +17,6 @@ import type { ModifierFactory } from "../modifiers.ts";
 import { useCodeBlock } from "../modifiers.ts";
 import { evalScope } from "../component-api.ts";
 
-// ---------------------------------------------------------------------------
-// daemonFactory — terminal modifier (spec §3.3)
-// ---------------------------------------------------------------------------
-
 /**
  * Terminal modifier factory for long-running background processes.
  *

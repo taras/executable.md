@@ -18,10 +18,6 @@ import {
   durableRun,
 } from "../mod.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /** Track which functions were actually called during live execution. */
 function createCallTracker() {
   const calls: string[] = [];
@@ -37,10 +33,6 @@ function createCallTracker() {
 }
 
 describe("structured concurrency", () => {
-  // ---------------------------------------------------------------------------
-  // Test 15: Fork/join — all children complete (golden run)
-  // ---------------------------------------------------------------------------
-
   it("all: golden run — all children execute live", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -80,10 +72,6 @@ describe("structured concurrency", () => {
     // Root Close should be last
     expect(closeEvents[closeEvents.length - 1]!.coroutineId).toBe("root");
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 15b: Fork/join — full replay
-  // ---------------------------------------------------------------------------
 
   it("all: full replay — returns stored result without re-executing", function* () {
     // First: golden run
@@ -130,10 +118,6 @@ describe("structured concurrency", () => {
     // No effects re-executed
     expect(tracker2.calls).toEqual([]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 16: Fork/join — partial completion (crash after some children)
-  // ---------------------------------------------------------------------------
 
   it("all: partial replay — completed children replayed, incomplete re-execute", function* () {
     // Golden run to capture full stream
@@ -195,10 +179,6 @@ describe("structured concurrency", () => {
     expect(tracker.calls).toEqual(["fetchC"]);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 17: Nested scopes — inner all inside outer all
-  // ---------------------------------------------------------------------------
-
   it("all: nested — inner all inside outer all", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -236,10 +216,6 @@ describe("structured concurrency", () => {
     expect(coroutineIds).toEqual(["root", "root.0", "root.0.0", "root.0.1", "root.1"]);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 18: Race — first to complete wins, others cancelled
-  // ---------------------------------------------------------------------------
-
   it("race: golden run — first to complete wins", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -271,10 +247,6 @@ describe("structured concurrency", () => {
       expect(winnerClose.result.status).toBe("ok");
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 19: Race full replay
-  // ---------------------------------------------------------------------------
 
   it("race: full replay — returns stored result without re-executing", function* () {
     const stream = new InMemoryStream();
@@ -318,10 +290,6 @@ describe("structured concurrency", () => {
     expect(tracker2.calls).toEqual([]);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 20: Error in child — siblings cancelled, error propagated
-  // ---------------------------------------------------------------------------
-
   it("all: child error — siblings cancelled, error propagated", function* () {
     const stream = new InMemoryStream();
 
@@ -353,10 +321,6 @@ describe("structured concurrency", () => {
     expect(errCloses.length >= 1).toBe(true);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 21: Error boundary — parent catches child error
-  // ---------------------------------------------------------------------------
-
   it("all: error boundary — parent catches child error", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -387,10 +351,6 @@ describe("structured concurrency", () => {
     expect(result).toBe("recovered");
     expect(tracker.calls.includes("recovery")).toBe(true);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 22: Race — winner Close(ok), loser gets Close event
-  // ---------------------------------------------------------------------------
 
   it("race: winner Close(ok), loser gets Close(cancelled)", function* () {
     const stream = new InMemoryStream();
@@ -445,10 +405,6 @@ describe("structured concurrency", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 23: Race replay — full replay (all events including root Close)
-  // ---------------------------------------------------------------------------
-
   it("race: full replay — returns stored result without re-executing", function* () {
     const stream = new InMemoryStream();
     const tracker = createCallTracker();
@@ -492,10 +448,6 @@ describe("structured concurrency", () => {
     expect(result2).toBe(result1);
     expect(tracker2.calls).toEqual([]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 23b: Race partial replay — root Close stripped, cancelled losers replayed
-  // ---------------------------------------------------------------------------
 
   it("race: partial replay — cancelled loser replays via suspend", function* () {
     const stream = new InMemoryStream();
@@ -546,10 +498,6 @@ describe("structured concurrency", () => {
     // No effects re-executed — winner replayed from Close, loser suspended
     expect(tracker2.calls).toEqual([]);
   });
-
-  // ---------------------------------------------------------------------------
-  // Mixed: durableCall then durableAll
-  // ---------------------------------------------------------------------------
 
   it("mixed: durableCall then durableAll", function* () {
     const stream = new InMemoryStream();

@@ -57,10 +57,6 @@ export type Executor = (
   reject: (error: Error) => void,
 ) => () => void;
 
-// ---------------------------------------------------------------------------
-// Shared replay path
-// ---------------------------------------------------------------------------
-
 /**
  * Result of the replay check: either the effect was replayed (and enter()
  * should return immediately) or the live path should execute.
@@ -178,10 +174,6 @@ function checkReplay<T>(
   return { path: "live" };
 }
 
-// ---------------------------------------------------------------------------
-// createDurableEffect — callback-based (Executor pattern)
-// ---------------------------------------------------------------------------
-
 /**
  * Creates a DurableEffect using a callback-based executor.
  *
@@ -283,10 +275,6 @@ export function createDurableEffect<T>(
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// createDurableOperation — Operation-based (structured concurrency)
-// ---------------------------------------------------------------------------
 
 /**
  * Creates a DurableEffect from an Operation-returning function.

@@ -48,10 +48,6 @@ import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
 
-// ---------------------------------------------------------------------------
-// Block ID counter (spec §6.1)
-// ---------------------------------------------------------------------------
-
 /**
  * Mutable counter for generating unique, deterministic blockId values.
  * Threaded through the expansion context to ensure stable IDs across
@@ -75,10 +71,6 @@ function provideEnv(value: EvalEnv): Operation<void> {
 function provideEvalScope(value: EvalScope): Operation<void> {
   return Component.around({ evalScope: () => value }, { at: "min" });
 }
-
-// ---------------------------------------------------------------------------
-// Expansion algorithm (spec §5.1)
-// ---------------------------------------------------------------------------
 
 const MAX_EXPANSION_DEPTH = 64;
 const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
@@ -368,10 +360,6 @@ function* expandCapture(
   return undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Component expansion with cycle detection (spec §5.2)
-// ---------------------------------------------------------------------------
-
 function* expandComponent(
   name: string,
   props: Record<string, Json>,
@@ -634,10 +622,6 @@ function* expandComponent(
   return expanded;
 }
 
-// ---------------------------------------------------------------------------
-// Function component expansion (spec §5.3)
-// ---------------------------------------------------------------------------
-
 /**
  * Expand a function component (.ts file).
  *
@@ -787,10 +771,6 @@ function validateBindingName(
   return { ok: true, value };
 }
 
-// ---------------------------------------------------------------------------
-// Expression prop evaluation (spec §5.1)
-// ---------------------------------------------------------------------------
-
 /**
  * Resolve eval expression props against env.values using the shared VM
  * context. Merges resolved values into the props record.
@@ -884,10 +864,6 @@ function* resolveExpressionProps(
 
   return resolved;
 }
-
-// ---------------------------------------------------------------------------
-// Named slot support (spec §6.3)
-// ---------------------------------------------------------------------------
 
 /**
  * Slot name validation pattern: must start with a letter, followed by
@@ -987,10 +963,6 @@ export function stripSlotProp(segment: Segment): Segment {
   }
   return segment;
 }
-
-// ---------------------------------------------------------------------------
-// Content slot substitution (spec §6.3)
-// ---------------------------------------------------------------------------
 
 type ProjectFn = (segments: Segment[]) => Segment[];
 

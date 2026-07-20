@@ -3,10 +3,6 @@
  * and Oxlint diagnostic structures.
  */
 
-// ---------------------------------------------------------------------------
-// Diff types
-// ---------------------------------------------------------------------------
-
 export interface PR {
   files: DiffFile[];
   added: DiffLine[];
@@ -55,10 +51,6 @@ export interface DiffLine {
   isTest: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Oxlint diagnostic types
-// ---------------------------------------------------------------------------
-
 export interface OxlintDiagnostic {
   ruleId: string;
   severity: "error" | "warning";
@@ -92,10 +84,6 @@ export interface Diagnostics {
   density: number;
 }
 
-// ---------------------------------------------------------------------------
-// Doctor result types
-// ---------------------------------------------------------------------------
-
 export interface DoctorResult {
   oxlintInstalled: boolean;
   oxlintVersion: string;
@@ -117,10 +105,6 @@ export interface DoctorResult {
     npm: number;
   };
 }
-
-// ---------------------------------------------------------------------------
-// Policy types
-// ---------------------------------------------------------------------------
 
 export type PolicyMode = "pr" | "repo";
 

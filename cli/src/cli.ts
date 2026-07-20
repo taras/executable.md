@@ -30,17 +30,9 @@ import { installTestingVocabulary, TestFailureError, useTesting } from "@executa
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
-// ---------------------------------------------------------------------------
-// Workaround: field.default exists at runtime but is missing from the .d.ts
-// ---------------------------------------------------------------------------
-
 const defaults =
   <T>(value: T) =>
   (mods: Mods): Mods => ({ ...mods, default: value });
-
-// ---------------------------------------------------------------------------
-// Program schema
-// ---------------------------------------------------------------------------
 
 const runConfig = object({
   docPath: {
@@ -98,10 +90,6 @@ const xmd = program({
   config: commands({ run: runConfig, test: testConfig }, { default: "run" }),
 });
 
-// ---------------------------------------------------------------------------
-// Journal entry formatting
-// ---------------------------------------------------------------------------
-
 const pretty = (value: unknown): string =>
   inspect(value, {
     colors: true,
@@ -143,10 +131,6 @@ function summarizeEvent(event: DurableEvent): string {
     status === "err" && "error" in event.result ? ` (${event.result.error.message})` : "";
   return `[close] ${event.coroutineId} → ${status}${detail}`;
 }
-
-// ---------------------------------------------------------------------------
-// Document runner
-// ---------------------------------------------------------------------------
 
 function* createJournalFile(filePath: string): Operation<void> {
   let handle: FileHandle;
@@ -277,10 +261,6 @@ function* run(
     yield* exit(1);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
 
 await main(function* (args) {
   const parser = xmd.createParser({ args });

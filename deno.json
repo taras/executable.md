@@ -41,7 +41,7 @@
     "bump": "deno run -A scripts/bump-version.ts",
     "test": "deno test --allow-all core/tests/ durable-streams/tests/ testing/tests/ packages/code-review-agent/tests/",
     "check": "deno check core/mod.ts testing/mod.ts",
-    "lint": "npx oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ runtime/ testing/ && npx oxfmt --check core/src/ cli/src/ durable-streams/ runtime/ testing/ test-support/",
+    "lint": "npx oxlint -c .oxlintrc.json core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/ && npx oxfmt --check core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/",
     "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.jsonl",
     "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.jsonl",

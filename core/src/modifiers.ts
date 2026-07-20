@@ -30,10 +30,6 @@ export function useCodeBlock(): Workflow<CodeBlockContext> {
   return ephemeral(codeBlock());
 }
 
-// ---------------------------------------------------------------------------
-// Modifier middleware types
-// ---------------------------------------------------------------------------
-
 /**
  * The generator type returned by modifier middleware — a workflow that
  * yields durable effects and returns a CodeBlockResult.
@@ -68,10 +64,6 @@ export type ModifierMiddleware = Middleware<[], CodeBlockWorkflow>;
  */
 export type ModifierFactory = (params: string | undefined) => ModifierMiddleware;
 
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
-
 export type ModifierRegistry = Map<string, ModifierFactory>;
 
 /**
@@ -86,10 +78,6 @@ export function createModifierRegistry(parent?: ModifierRegistry): ModifierRegis
   }
   return registry;
 }
-
-// ---------------------------------------------------------------------------
-// Chain composition (spec §3.3)
-// ---------------------------------------------------------------------------
 
 /**
  * Compose a modifier chain from the info string.
@@ -154,10 +142,6 @@ export function composeModifierChain(
     );
   };
 }
-
-// ---------------------------------------------------------------------------
-// Command construction (spec §3.6)
-// ---------------------------------------------------------------------------
 
 /**
  * Build the command array for executing a code block.

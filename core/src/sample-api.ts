@@ -16,10 +16,6 @@ import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { SampleContext } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Sample Api definition
-// ---------------------------------------------------------------------------
-
 interface SampleApi {
   sample(context: SampleContext): Operation<string>;
 }

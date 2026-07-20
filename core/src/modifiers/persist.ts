@@ -20,10 +20,6 @@ import { ephemeral } from "@executablemd/durable-streams";
 import type { ModifierFactory } from "../modifiers.ts";
 import { Component } from "../component-api.ts";
 
-// ---------------------------------------------------------------------------
-// persistFactory (spec §7.1)
-// ---------------------------------------------------------------------------
-
 /**
  * Wrapping modifier that marks a block for persistent resource lifetime.
  *

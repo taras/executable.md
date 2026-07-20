@@ -10,10 +10,6 @@ import type { PR, DiffFile, DiffHunk, DiffLine } from "./types.ts";
 
 const DIFF_PREVIEW_MAX = 80_000;
 
-// ---------------------------------------------------------------------------
-// Language inference
-// ---------------------------------------------------------------------------
-
 const EXTENSION_LANGUAGE: Record<string, string> = {
   ".ts": "typescript",
   ".tsx": "typescript",
@@ -62,10 +58,6 @@ function inferLanguage(filePath: string): string {
   return EXTENSION_LANGUAGE[ext] ?? "unknown";
 }
 
-// ---------------------------------------------------------------------------
-// File classification
-// ---------------------------------------------------------------------------
-
 function isTestFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
   return (
@@ -102,10 +94,6 @@ function isConfigFile(filePath: string): boolean {
 function isTypeDeclaration(filePath: string): boolean {
   return filePath.endsWith(".d.ts");
 }
-
-// ---------------------------------------------------------------------------
-// Diff parsing
-// ---------------------------------------------------------------------------
 
 /**
  * Parse the `git diff --name-status` output into a map of path → status.
@@ -237,10 +225,6 @@ function computeDirectories(files: DiffFile[]): Set<string> {
   }
   return dirs;
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /**
  * Parse raw `git diff` and `git diff --name-status` output into a typed PR object.

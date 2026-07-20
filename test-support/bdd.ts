@@ -12,10 +12,6 @@ import { createTestAdapter } from "@effectionx/test-adapter";
 import type { TestAdapter } from "@effectionx/test-adapter";
 import type { Operation } from "effection";
 
-// ---------------------------------------------------------------------------
-// Runtime detection + dynamic primitives
-// ---------------------------------------------------------------------------
-
 interface TestPrimitives {
   // deno-lint-ignore no-explicit-any
   describe: (name: string, options: any, fn: () => void) => void;
@@ -103,10 +99,6 @@ if (typeof (globalThis as any).Deno !== "undefined") {
   // Node/Bun: top-level await
   p = await primitivesPromise;
 }
-
-// ---------------------------------------------------------------------------
-// Effection-aware BDD interface
-// ---------------------------------------------------------------------------
 
 let current: TestAdapter | undefined;
 

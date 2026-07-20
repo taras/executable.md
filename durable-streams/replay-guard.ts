@@ -35,10 +35,6 @@ import type { Api, Operation } from "effection";
 import { createApi } from "effection/experimental";
 import type { Yield } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 /**
  * The outcome of a replay guard's decision.
  *
@@ -50,10 +46,6 @@ import type { Yield } from "./types.ts";
  * - "fork": Create a new execution branch from this point.
  */
 export type ReplayOutcome = { outcome: "replay" } | { outcome: "error"; error?: Error };
-
-// ---------------------------------------------------------------------------
-// API shape
-// ---------------------------------------------------------------------------
 
 /**
  * The core shape of the ReplayGuard API.
@@ -73,10 +65,6 @@ interface ReplayGuardApi {
   decide(event: Yield): ReplayOutcome;
 }
 
-// ---------------------------------------------------------------------------
-// Default implementation (pass-through)
-// ---------------------------------------------------------------------------
-
 /**
  * Default check — no-op. Events pass through without observation.
  */
@@ -92,10 +80,6 @@ function* defaultCheck(_event: Yield): Operation<void> {
 function defaultDecide(_event: Yield): ReplayOutcome {
   return { outcome: "replay" };
 }
-
-// ---------------------------------------------------------------------------
-// The ReplayGuard API instance
-// ---------------------------------------------------------------------------
 
 /**
  * The ReplayGuard API.

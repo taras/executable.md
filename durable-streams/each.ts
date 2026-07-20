@@ -20,10 +20,6 @@ import { createDurableOperation } from "./effect.ts";
 import { ephemeral } from "./ephemeral.ts";
 import type { Json, Workflow } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 /**
  * Source of items for durable iteration.
  *
@@ -45,10 +41,6 @@ export interface DurableSource<T extends Json> {
    */
   close?(): void;
 }
-
-// ---------------------------------------------------------------------------
-// Internal state
-// ---------------------------------------------------------------------------
 
 /** Sentinel for source exhaustion. Not exported — cannot collide with JSON. */
 const DONE: unique symbol = Symbol("durableEach.done");
@@ -89,10 +81,6 @@ interface DurableEachState<T extends Json> {
  */
 let activeState: DurableEachState<Json> | null = null;
 
-// ---------------------------------------------------------------------------
-// durableEachFetch — shared helper for fetching one item
-// ---------------------------------------------------------------------------
-
 /**
  * Fetch a single item from the source (or replay it from the journal).
  *
@@ -121,10 +109,6 @@ function durableEachFetch<T extends Json>(
     return result.value;
   })();
 }
-
-// ---------------------------------------------------------------------------
-// durableEach — initial fetch + returns synchronous iterable
-// ---------------------------------------------------------------------------
 
 /**
  * Durable iteration over a DurableSource (internal implementation).
@@ -215,10 +199,6 @@ function _durableEach<T extends Json>(
   return ephemeral(_durableEachOp(name, source));
 }
 
-// ---------------------------------------------------------------------------
-// durableEach.next — static method to advance iteration
-// ---------------------------------------------------------------------------
-
 /**
  * Advance the current durable iteration.
  *
@@ -241,10 +221,6 @@ function* _durableEachNext<T extends Json>(): Workflow<void> {
   state.current = yield* durableEachFetch<T>(state.name, state.source);
   state.advanced = true;
 }
-
-// ---------------------------------------------------------------------------
-// Public API — durableEach with static .next() method
-// ---------------------------------------------------------------------------
 
 /**
  * Durable iteration over a DurableSource.

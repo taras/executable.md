@@ -20,10 +20,6 @@ import type {
   SourcePosition,
 } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Info string parsing (spec §3.5)
-// ---------------------------------------------------------------------------
-
 export function parseInfoString(infoString: string): ParsedInfoString {
   const tokens = infoString.trim().split(/\s+/);
   const language = tokens[0] ?? "";
@@ -63,10 +59,6 @@ export function parseInfoString(infoString: string): ParsedInfoString {
     executable: modifiers.some((m) => m.name === "exec" || m.name === "eval"),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Segment scanner
-// ---------------------------------------------------------------------------
 
 /**
  * Where scanned text sits in its original file. `baseOffset`/`baseLine`
@@ -209,10 +201,6 @@ export function scanSegments(text: string, origin?: SourceOrigin): Segment[] {
   return segments;
 }
 
-// ---------------------------------------------------------------------------
-// Fenced code block detection
-// ---------------------------------------------------------------------------
-
 interface FenceOpen {
   fenceChar: string;
   fenceLen: number;
@@ -324,10 +312,6 @@ function findFenceClose(
   return { contentEnd: text.length, fenceEnd: text.length };
 }
 
-// ---------------------------------------------------------------------------
-// JSX component tag parser (12-state machine, spec §2.2)
-// ---------------------------------------------------------------------------
-
 interface ParsedComponent {
   segment: ComponentInvocation;
   end: number;
@@ -404,10 +388,6 @@ function parseComponentTag(
     end: childEnd,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Attribute parsing
-// ---------------------------------------------------------------------------
 
 interface ParsedAttributes {
   props: Record<string, Json>;
@@ -586,10 +566,6 @@ function findClosingQuote(text: string, start: number, quote: string): number {
   return -1;
 }
 
-// ---------------------------------------------------------------------------
-// Expression value parsing — discriminated union result
-// ---------------------------------------------------------------------------
-
 /** A value fully resolved at scan time (JSON literal). */
 export interface ResolvedValue {
   kind: "resolved";
@@ -648,10 +624,6 @@ export function parseExpressionValue(expr: string): ExpressionResult {
   // Everything else is an eval expression — evaluate at expansion time
   return { kind: "eval", expression: trimmed };
 }
-
-// ---------------------------------------------------------------------------
-// Children parsing
-// ---------------------------------------------------------------------------
 
 interface ParsedChildren {
   children: Segment[];
@@ -745,10 +717,6 @@ function parseChildren(
   return { children, end: -1 };
 }
 
-// ---------------------------------------------------------------------------
-// Inline code span skipping
-// ---------------------------------------------------------------------------
-
 /**
  * If `pos` is at a backtick, skip past the closing backtick sequence
  * of the inline code span. Returns the position after the closing
@@ -787,10 +755,6 @@ function skipInlineCode(text: string, pos: number): number {
 
   return -1; // unclosed code span
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function skipWhitespace(text: string, pos: number): number {
   while (pos < text.length && /\s/.test(text[pos]!)) {

@@ -19,10 +19,6 @@ import type {
   CodeBlockResult,
 } from "../src/types.ts";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function makeComponent(
   name: string,
   body: string,
@@ -106,10 +102,6 @@ function expandWithEnv(
     return { output: renderSegments(expanded), env: testEnv.values };
   });
 }
-
-// ---------------------------------------------------------------------------
-// Tier C — Expansion and prop validation (spec §11)
-// ---------------------------------------------------------------------------
 
 describe("expansion", () => {
   // C1: Basic expansion
@@ -388,10 +380,6 @@ describe("expansion", () => {
     expect(output).toContain("must be a string literal");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Component-declared output — <Output> (spec §6.9)
-// ---------------------------------------------------------------------------
 
 /**
  * Install a recording applyModifiers provider and return the captured
@@ -683,10 +671,6 @@ describe("component-declared output", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Prop validation (spec §5.5)
-// ---------------------------------------------------------------------------
-
 describe("validateProps", () => {
   // C14: Undeclared prop rejected
   it("C14: undeclared prop → PropValidationError", function* () {
@@ -761,10 +745,6 @@ describe("validateProps", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Interpolation
-// ---------------------------------------------------------------------------
-
 describe("interpolate", () => {
   it("replaces meta references", function* () {
     expect(interpolate("{meta.title}", { title: "Hello" }, {})).toBe("Hello");
@@ -790,10 +770,6 @@ describe("interpolate", () => {
     expect(interpolate("\\{meta.title}", { title: "Hello" }, {})).toBe("{meta.title}");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Function-component content through the contextual content() operation
-// ---------------------------------------------------------------------------
 
 describe("function component content", () => {
   it("renders default content and a named slot via useContent", function* () {

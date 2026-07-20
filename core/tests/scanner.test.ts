@@ -4,10 +4,6 @@ import assert from "node:assert/strict";
 import { scanSegments, parseInfoString } from "../src/scanner.ts";
 import type { ComponentInvocation, ExecutableCodeBlock, TextSegment } from "../src/types.ts";
 
-// ---------------------------------------------------------------------------
-// Tier A — Boundary scanner tests (spec §11)
-// ---------------------------------------------------------------------------
-
 describe("scanSegments", () => {
   // A1: Self-closing component
   it("A1: self-closing component", function* () {

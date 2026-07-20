@@ -8,10 +8,6 @@ import { env, evalScope, persistent } from "./component-api.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
 
-// ---------------------------------------------------------------------------
-// evalFactory — terminal modifier (spec §6.2)
-// ---------------------------------------------------------------------------
-
 export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const ctx = yield* useCodeBlock();

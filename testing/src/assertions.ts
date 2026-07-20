@@ -39,10 +39,6 @@ import type {
 } from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
-
 type AssertionKind =
   | "unary-truthy"
   | "unary-exists"
@@ -118,10 +114,6 @@ function requireRegExp(value: unknown): RegExp {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Live expression evaluation
-// ---------------------------------------------------------------------------
-
 const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
 function evaluateExpression(expression: string, values: Record<string, unknown>): unknown {
@@ -129,10 +121,6 @@ function evaluateExpression(expression: string, values: Record<string, unknown>)
   const fn = new Function(...names, `return (${expression});`);
   return fn(...names.map((name) => values[name]));
 }
-
-// ---------------------------------------------------------------------------
-// Guarded value formatting — runs only AFTER the assertion outcome is fixed
-// ---------------------------------------------------------------------------
 
 function safeFormat(value: unknown): string {
   try {
@@ -156,10 +144,6 @@ function safeFormat(value: unknown): string {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Diagnostic-carrying assertion error
-// ---------------------------------------------------------------------------
-
 /**
  * An assertion failure enriched with its Markdown diagnostic. Still an
  * `AssertionError`, so containment and classification treat it as the
@@ -177,10 +161,6 @@ export class AssertionDiagnostic extends AssertionError {
     this.cause = cause;
   }
 }
-
-// ---------------------------------------------------------------------------
-// expandAssertion
-// ---------------------------------------------------------------------------
 
 const KIND_PROPS: Record<AssertionKind, { allowed: string[]; required: string[] }> = {
   "unary-truthy": { allowed: ["expr", "msg"], required: ["expr"] },

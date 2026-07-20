@@ -26,10 +26,6 @@ import {
 } from "../mod.ts";
 
 describe("Divergence API", () => {
-  // ---------------------------------------------------------------------------
-  // Test 1: Default strict — description mismatch → DivergenceError
-  // ---------------------------------------------------------------------------
-
   it("default strict — description mismatch throws DivergenceError", function* () {
     // Journal has call("stepA"), code yields call("stepX")
     const events: DurableEvent[] = [
@@ -60,10 +56,6 @@ describe("Divergence API", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 2: Default strict — continue past close → ContinuePastCloseDivergenceError
-  // ---------------------------------------------------------------------------
-
   it("default strict — continue past close throws ContinuePastCloseDivergenceError", function* () {
     const scope = yield* useScope();
     const decision = Divergence.invoke(scope, "decide", [
@@ -75,10 +67,6 @@ describe("Divergence API", () => {
       expect(decision.error).toBeInstanceOf(ContinuePastCloseDivergenceError);
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 3: Middleware override — mismatch → run-live → continues with new effect
-  // ---------------------------------------------------------------------------
 
   it("middleware override — mismatch triggers run-live and executes new effect", function* () {
     // Journal has call("stepA") then call("stepB").
@@ -138,10 +126,6 @@ describe("Divergence API", () => {
     expect(liveCalls).toEqual(["stepX"]);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 4: Middleware is per-scope — two runs, only one with middleware
-  // ---------------------------------------------------------------------------
-
   it("middleware is per-scope — only the configured run tolerates divergence", function* () {
     // Same journal for both runs
     const makeEvents = (): DurableEvent[] => [
@@ -190,10 +174,6 @@ describe("Divergence API", () => {
       expect(e).toBeInstanceOf(DivergenceError);
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 5: No regression — replay feeds stored results when matching
-  // ---------------------------------------------------------------------------
 
   it("no regression — replay still feeds stored results when descriptions match", function* () {
     // Full journal with Close — should replay without any live execution

@@ -20,11 +20,8 @@ jobs:
 
       - run: pnpm install
 
-      - name: Lint
-        run: pnpm exec oxlint -c .oxlintrc.json core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ testing/
-
-      - name: Format
-        run: pnpm exec oxfmt --check core/src/ cli/src/ durable-streams/ durable-effects/ runtime/ testing/ vendor/ test-support/
+      - name: Lint + Format
+        run: pnpm lint
 
   test-deno:
     runs-on: ubuntu-latest
