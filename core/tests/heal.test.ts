@@ -148,15 +148,6 @@ describe("healSegment", () => {
     expect(healSegment("`a < b`")).toBe("`a < b`");
   });
 
-  // -----------------------------------------------------------------------
-  // Orphaned closing markers (F15–F16)
-  //
-  // Note: remend actually DOES try to match orphaned closers — its behavior
-  // is to close them. The spec says they should be unchanged, but remend's
-  // streaming-oriented design treats them as potential unclosed constructs.
-  // We test remend's actual behavior here.
-  // -----------------------------------------------------------------------
-
   it("F15: orphaned bold closer", function* () {
     const input = "world** more";
     const result = healSegment(input);

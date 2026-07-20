@@ -8,6 +8,32 @@ function isNextLine(previous, next) {
   return next.loc.start.line === previous.loc.end.line + 1;
 }
 
+function findClosing(comments, open) {
+  let cursor = open + 1;
+
+  while (
+    cursor < comments.length &&
+    comments[cursor].type === "Line" &&
+    !isDivider(comments[cursor]) &&
+    isNextLine(comments[cursor - 1], comments[cursor])
+  ) {
+    cursor++;
+  }
+
+  const hasTitle = cursor > open + 1;
+
+  if (
+    hasTitle &&
+    cursor < comments.length &&
+    isDivider(comments[cursor]) &&
+    isNextLine(comments[cursor - 1], comments[cursor])
+  ) {
+    return cursor;
+  }
+
+  return -1;
+}
+
 const noSectionDividerComments = {
   meta: {
     type: "layout",
@@ -26,39 +52,41 @@ const noSectionDividerComments = {
 
         for (let index = 0; index < comments.length - 2; index++) {
           const opening = comments[index];
-          const title = comments[index + 1];
-          const closing = comments[index + 2];
 
-          if (
-            isDivider(opening) &&
-            title.type === "Line" &&
-            isDivider(closing) &&
-            isNextLine(opening, title) &&
-            isNextLine(title, closing)
-          ) {
-            context.report({
-              loc: {
-                start: opening.loc.start,
-                end: closing.loc.end,
-              },
-              messageId: "forbidden",
-              fix(fixer) {
-                const lineStart =
-                  source.text.lastIndexOf("\n", opening.range[0] - 1) + 1;
-                const nextNewline = source.text.indexOf(
-                  "\n",
-                  closing.range[1],
-                );
-                const lineEnd = nextNewline === -1
-                  ? source.text.length
-                  : nextNewline + 1;
-
-                return fixer.removeRange([lineStart, lineEnd]);
-              },
-            });
-
-            index += 2;
+          if (!isDivider(opening)) {
+            continue;
           }
+
+          const closingIndex = findClosing(comments, index);
+
+          if (closingIndex === -1) {
+            continue;
+          }
+
+          const closing = comments[closingIndex];
+
+          context.report({
+            loc: {
+              start: opening.loc.start,
+              end: closing.loc.end,
+            },
+            messageId: "forbidden",
+            fix(fixer) {
+              const lineStart =
+                source.text.lastIndexOf("\n", opening.range[0] - 1) + 1;
+              const nextNewline = source.text.indexOf(
+                "\n",
+                closing.range[1],
+              );
+              const lineEnd = nextNewline === -1
+                ? source.text.length
+                : nextNewline + 1;
+
+              return fixer.removeRange([lineStart, lineEnd]);
+            },
+          });
+
+          index = closingIndex;
         }
       },
     };

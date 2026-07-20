@@ -359,13 +359,6 @@ export const API: {
   }),
 };
 
-// ---------------------------------------------------------------------------
-// Convenience operation exports
-//
-// Use these for normal operation calls. Use API.* only when installing
-// middleware with .around().
-// ---------------------------------------------------------------------------
-
 export const exec: typeof API.Process.operations.exec = API.Process.operations.exec;
 
 export const readTextFile: typeof API.Fs.operations.readTextFile = API.Fs.operations.readTextFile;

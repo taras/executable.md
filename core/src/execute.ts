@@ -75,15 +75,6 @@ export interface ExecuteOptions {
   modifiers?: Record<string, ModifierFactory>;
 }
 
-// ---------------------------------------------------------------------------
-// durableImportComponent (spec §4.3)
-//
-// This is a Workflow<ComponentDefinition | FunctionComponentDefinition> —
-// it yields durable import effects and returns either markdown or function
-// component definitions.
-// See DEC-001, DEC-004 in specs/decisions.md.
-// ---------------------------------------------------------------------------
-
 function* durableImportComponent(
   name: string,
   rootDocPath: string | undefined,
@@ -218,13 +209,6 @@ function normalizePath(path: string): string {
   return path.replace(/^\.\//, "");
 }
 
-// ---------------------------------------------------------------------------
-// Built-in modifier handlers (spec §3.3)
-//
-// Modifier handlers return Workflow<CodeBlockResult> since terminal
-// handlers (exec) yield DurableEffects. See DEC-003 in specs/decisions.md.
-// ---------------------------------------------------------------------------
-
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const context = yield* useCodeBlock();
@@ -256,15 +240,6 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
     yield* next(); // inner chain runs — exec journals its result
     return { output: "", exitCode: 0, stderr: "" };
   })();
-
-// ---------------------------------------------------------------------------
-// Document workflow (spec §7.1)
-//
-// This is a Workflow<string> — it yields DurableEffects (via
-// durableImportComponent, exec handler). Non-journaled work
-// (interpolation, validation, parsing) runs as synchronous function
-// calls inside the expansion engine. See DEC-002.
-// ---------------------------------------------------------------------------
 
 function* documentWorkflow(): Workflow<string> {
   // Import root — same pipeline as any component. The provider middleware
@@ -411,18 +386,6 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
   for (const [name, handler] of Object.entries(customModifiers)) {
     registry.set(name, handler);
   }
-
-  // ---------------------------------------------------------------------------
-  // Document execution.
-  //
-  // The workflow runs in a spawned child scope that contains all
-  // execution state: eval context/scope and the
-  // DocumentOutput→channel bridge. Nothing leaks onto the caller's scope.
-  //
-  // withResolvers captures the completion result so `yield* execution`
-  // can wait for it without needing to await the spawned Task directly
-  // (which would propagate errors through scope teardown).
-  // ---------------------------------------------------------------------------
 
   // Replay-safe transport: late subscribers receive every chunk and the
   // close value, so subscription readiness before first emission is never
