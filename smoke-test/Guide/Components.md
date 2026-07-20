@@ -1,4 +1,10 @@
-<Capture as="rendered">
+The Section component receives a title prop and renders its children
+inside a headed section via the `<Content />` slot. The sentinel below
+proves the slot renders caller content in place:
+
+<Capture as="slotSentinel"><Section title="Slot Sentinel">SENTINEL-CONTENT</Section></Capture>
+
+{slotSentinel}
 
 <Section title="Components">
 
@@ -20,22 +26,18 @@ Components are invoked with JSX syntax. Props must match the declared
 inputs — undeclared props are rejected, required props must be provided,
 and defaults fill in for omitted optional props.
 
-<Note message="This note uses the default level (info)." />
+<Capture as="noteDefault"><Note message="This note uses the default level (info)." /></Capture>
 
-<Note level="warning" message="This note overrides the level to warning." />
+{noteDefault}
 
-Components can wrap content using the `<Content />` slot. The Section
-component wrapping this text works exactly that way — it receives a
-title prop and renders its children inside a headed section.
+<Capture as="noteOverride"><Note level="warning" message="This note overrides the level to warning." /></Capture>
 
-</Section>
-
-</Capture>
-
-{rendered}
+{noteOverride}
 
 <Test name="Components">
-<AssertStringIncludes actual={rendered} expected={"\u00a7 Components"} />
-<AssertStringIncludes actual={rendered} expected={"\ud83d\udcdd **info:** This note uses the default level (info)."} />
-<AssertStringIncludes actual={rendered} expected={"\ud83d\udcdd **warning:** This note overrides the level to warning."} />
+<AssertEquals actual={noteDefault} expected={"\n> 📝 **info:** This note uses the default level (info)."} />
+<AssertEquals actual={noteOverride} expected={"\n> 📝 **warning:** This note overrides the level to warning."} />
+<AssertEquals actual={slotSentinel} expected={"\n## § Slot Sentinel\n\nSENTINEL-CONTENT\n\n---"} />
 </Test>
+
+</Section>

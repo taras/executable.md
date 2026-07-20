@@ -1,13 +1,3 @@
-/**
- * Smoke harness — infrastructure only. The smoke guide is composed from
- * self-testing feature documents (smoke-test/Guide/*.md): each captures
- * its own rendered content, re-emits it, and carries a sibling <Test>
- * that inspects the capture; README.md keeps only the root-frontmatter
- * behavior and its test. This harness composes useTesting() around core
- * execute(), asserts the exact embedded tests pass in discovery order,
- * keeps the journal-size check host-side, and verifies a full replay
- * reproduces the identical outcome without appending journal events.
- */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";
@@ -20,12 +10,12 @@ import type { TestResult } from "../src/test-api.ts";
 
 const EMBEDDED_TESTS = [
   "Root frontmatter",
-  "Overview",
   "Components",
   "Nested components",
   "Execution",
   "Props",
-  "Interpolation",
+  "Expression props",
+  "Text interpolation",
   "Captures",
   "Healing",
   "Evaluation",
@@ -35,7 +25,6 @@ const EMBEDDED_TESTS = [
   "Instructions",
   "Durability",
   "Output regions",
-  "Summary",
 ];
 
 interface SmokeSession {

@@ -1,5 +1,3 @@
-<Capture as="rendered">
-
 <Section title="Binding Capture">
 
 Binding capture routes rendered output into the eval binding environment
@@ -14,14 +12,11 @@ Inline capture uses the built-in `<Capture>` directive:
 <Capture as="capturedInline">inline binding from Capture
 </Capture>
 
-Captured bindings are available to later executable blocks:
+Capture with CSS selector extracts specific content from rendered output.
+The site below renders only its explanatory sentence — the captured prose
+and JSON never render inline:
 
-```bash exec
-echo "Capture values: {capturedFromComponent} | {capturedInline}"
-```
-
-Capture with CSS selector extracts specific content from rendered output:
-
+<Capture as="jsonSite">Selecting from rich content:
 <Capture as="capturedJson" select="code[lang=json]">
 Some prose before the data.
 
@@ -30,28 +25,24 @@ Some prose before the data.
 ```
 
 More prose after.
-</Capture>
-
-```bash exec
-printf 'Selected JSON: %s\n' '{capturedJson}'
-```
+</Capture></Capture>
+{jsonSite}
 
 This Note is captured but intentionally not rendered inline:
 
-<Note as="hiddenCapturedNote" message="Hidden capture should not render inline." />
-
-</Section>
-
-</Capture>
-
-{rendered}
+<Capture as="hiddenNoteSite">Hidden note site:
+<Note as="hiddenCapturedNote" message="Hidden capture should not render inline." /></Capture>
+{hiddenNoteSite}
 
 <Test name="Captures">
-<AssertStringIncludes actual={rendered} expected={"\u00a7 Binding Capture"} />
-<AssertStringIncludes actual={rendered} expected={"Capture values:"} />
-<AssertStringIncludes actual={rendered} expected={"component binding from Fragment"} />
-<AssertStringIncludes actual={rendered} expected={"| inline binding from Capture"} />
-<AssertNotMatch actual={rendered} expected={/Hidden capture should not render inline/} />
-<AssertStringIncludes actual={rendered} expected={"Selected JSON: [\"alpha\",\"bravo\",42]"} />
-<AssertNotMatch actual={rendered} expected={/Some prose before the data/} />
+<AssertEquals actual={capturedFromComponent} expected={"\ncomponent binding from Fragment\n"} />
+<AssertEquals actual={capturedInline} expected={"inline binding from Capture"} />
+<AssertEquals actual={capturedJson} expected={"[\"alpha\",\"bravo\",42]"} />
+<AssertEquals actual={hiddenCapturedNote} expected={"\n> 📝 **info:** Hidden capture should not render inline.\n"} />
+<AssertEquals actual={jsonSite} expected={"Selecting from rich content:"} />
+<AssertEquals actual={hiddenNoteSite} expected={"Hidden note site:"} />
+<AssertNotMatch actual={jsonSite} expected={/Some prose before the data/} />
+<AssertNotMatch actual={hiddenNoteSite} expected={/Hidden capture should not render inline/} />
 </Test>
+
+</Section>

@@ -4,26 +4,25 @@ version: 0.1.0
 repo: https://github.com/thefrontside/effectionx
 ---
 
-<Capture as="intro">
-
-# {meta.title}
+<Capture as="introHeading"># {meta.title}</Capture>
+{introHeading}
 
 This document is both a guide and a smoke test. Every feature described
 here is exercised by the document itself — if it renders correctly,
-the system works. This is version **{meta.version}** of {meta.title},
-built from the source at [{meta.repo}]({meta.repo}). Each chapter below
-is a self-testing feature document: it captures its own rendered
-content, re-emits it, and carries a sibling test that inspects the
-capture.
+the system works. Each chapter below is a self-testing feature document:
+it captures each demonstrated result at its production site, re-emits
+it, and carries a sibling test that inspects the capture.
 
-</Capture>
+<Capture as="introVersion">This is version **{meta.version}** of {meta.title}.</Capture>
+{introVersion}
 
-{intro}
+<Capture as="introRepo">Built from the source at [{meta.repo}]({meta.repo}).</Capture>
+{introRepo}
 
 <Test name="Root frontmatter">
-<AssertStringIncludes actual={intro} expected={"# Executable MDX"} />
-<AssertStringIncludes actual={intro} expected={"version **0.1.0**"} />
-<AssertStringIncludes actual={intro} expected={"https://github.com/thefrontside/effectionx"} />
+<AssertEquals actual={introHeading} expected={"# Executable MDX"} />
+<AssertEquals actual={introVersion} expected={"This is version **0.1.0** of Executable MDX."} />
+<AssertEquals actual={introRepo} expected={"Built from the source at [https://github.com/thefrontside/effectionx](https://github.com/thefrontside/effectionx)."} />
 </Test>
 
 <Guide.Overview />

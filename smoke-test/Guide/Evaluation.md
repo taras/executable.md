@@ -1,14 +1,12 @@
-<Capture as="rendered">
-
 <Section title="In-Process Evaluation">
 
 Eval blocks run JavaScript **in-process** as Effection generator operations.
 Unlike `exec` blocks (which run shell commands in a subprocess), `eval`
 blocks execute in the same process, sharing a binding environment across
-blocks within a component.
+blocks within a component. Eval blocks produce **no rendered output** —
+they exist for bindings and side effects:
 
-Bindings declared in one eval block are available in subsequent blocks:
-
+<Capture as="evalRendered">
 ```js eval
 const greeting = "Hello from eval";
 const numbers = [1, 2, 3];
@@ -19,10 +17,9 @@ The bindings from the previous block are available here:
 ```js eval
 const message = `${greeting} with ${numbers.length} numbers`;
 ```
+</Capture>
 
-Eval blocks produce **no rendered output** — they exist for bindings
-and side effects. The output from eval blocks is empty, so nothing
-appears between this text and the next section.
+{evalRendered}
 
 The `persist` modifier extends a block's resource lifetime from the
 block scope to the component scope. Without `persist`, spawned tasks
@@ -54,8 +51,7 @@ const serverReady = status.ready;
 ```
 
 The `timeout` modifier cancels the block if it does not complete within
-the specified duration. Accepted units: `ms`, `s`, `m`. If the block
-times out, an error is recorded in the output and execution halts.
+the specified duration. Accepted units: `ms`, `s`, `m`.
 
 ```js timeout=30s eval
 const startedAt = Date.now();
@@ -71,9 +67,13 @@ Eval binding interpolation substitutes bare `{name}` references in code
 block content with values from the eval binding environment. The port
 allocated above flows into subsequent blocks via `{port}`:
 
+<Capture as="portEcho">
 ```bash exec
 echo "Server would start on port {port}"
 ```
+</Capture>
+
+{portEcho}
 
 Eval and exec blocks coexist independently in the same document:
 
@@ -81,19 +81,13 @@ Eval and exec blocks coexist independently in the same document:
 echo "Exec blocks are independent of eval bindings"
 ```
 
-</Section>
-
-</Capture>
-
-{rendered}
-
 <Test name="Evaluation">
-<AssertStringIncludes actual={rendered} expected={"\u00a7 In-Process Evaluation"} />
-<AssertNotMatch actual={rendered} expected={/Hello from eval/} />
-<AssertNotMatch actual={rendered} expected={/with 3 numbers/} />
-<AssertNotMatch actual={rendered} expected={/serverReady/} />
-<AssertNotMatch actual={rendered} expected={/startedAt/} />
-<AssertStringIncludes actual={rendered} expected={"kept the task alive"} />
-<AssertMatch actual={rendered} expected={/Server would start on port \d+/} />
-<AssertStringIncludes actual={rendered} expected={"Exec blocks are independent of eval bindings"} />
+<AssertEquals actual={evalRendered} expected={"\n\nThe bindings from the previous block are available here:"} />
+<AssertEquals actual={message} expected={"Hello from eval with 3 numbers"} />
+<AssertStrictEquals actual={serverReady} expected={true} />
+<AssertExists actual={startedAt} />
+<AssertGreater actual={port} expected={0} />
+<AssertEquals actual={portEcho} expected={"\nServer would start on port " + port} />
 </Test>
+
+</Section>

@@ -1,5 +1,3 @@
-<Capture as="rendered">
-
 <Section title="Background Processes">
 
 The `daemon` modifier starts a long-running process that survives across
@@ -30,22 +28,22 @@ yield *
   );
 ```
 
-The daemon is alive — let's verify by hitting it:
+The daemon is alive — the response below is the evidence that startup,
+readiness polling, and the daemon's lifetime all worked:
 
+<Capture as="daemonResponse">
 ```bash exec
 curl -s http://127.0.0.1:{daemonPort}
 ```
+</Capture>
+
+{daemonResponse}
 
 When this section ends, the daemon process is terminated by structured
 concurrency — no manual cleanup needed.
 
-</Section>
-
-</Capture>
-
-{rendered}
-
 <Test name="Daemons">
-<AssertStringIncludes actual={rendered} expected={"\u00a7 Background Processes"} />
-<AssertStringIncludes actual={rendered} expected={"daemon-ok"} />
+<AssertEquals actual={daemonResponse} expected={"\ndaemon-ok"} />
 </Test>
+
+</Section>

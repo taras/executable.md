@@ -1,11 +1,9 @@
-<Capture as="rendered">
-
 <Section title="Smoke Test Summary">
 
 This document exercises every feature of the system:
 
 ```bash exec
-cat <<'EOF'
+cat <<'TABLE'
 | Feature                   | Exercised by                            |
 |---------------------------|-----------------------------------------|
 | Root frontmatter          | Title and version in opening paragraph  |
@@ -52,45 +50,9 @@ cat <<'EOF'
 | Escaped text bindings     | \{textPort} produces literal braces     |
 | Verbatim unresolved       | {undefinedBinding} left as-is           |
 | Non-string text coercion  | {itemCount} coerced via String()        |
-EOF
+TABLE
 ```
 
 If you can read this table, every feature worked.
 
 </Section>
-
-</Capture>
-
-{rendered}
-
-<Test name="Summary">
-<AssertStringIncludes actual={rendered} expected={"\u00a7 Smoke Test Summary"} />
-<AssertStringIncludes actual={rendered} expected={"| Feature"} />
-<AssertStringIncludes actual={rendered} expected={"Root frontmatter"} />
-<AssertStringIncludes actual={rendered} expected={"Component with props"} />
-<AssertStringIncludes actual={rendered} expected={"Content slot"} />
-<AssertStringIncludes actual={rendered} expected={"Nested expansion"} />
-<AssertStringIncludes actual={rendered} expected={"Dotted component name"} />
-<AssertStringIncludes actual={rendered} expected={"exec modifier"} />
-<AssertStringIncludes actual={rendered} expected={"silent modifier"} />
-<AssertStringIncludes actual={rendered} expected={"Markdown healing"} />
-<AssertStringIncludes actual={rendered} expected={"eval modifier"} />
-<AssertStringIncludes actual={rendered} expected={"persist modifier"} />
-<AssertStringIncludes actual={rendered} expected={"persist resource survival"} />
-<AssertStringIncludes actual={rendered} expected={"timeout modifier"} />
-<AssertStringIncludes actual={rendered} expected={"eval + exec coexistence"} />
-<AssertStringIncludes actual={rendered} expected={"findFreePort VM global"} />
-<AssertStringIncludes actual={rendered} expected={"eval binding interpolation"} />
-<AssertStringIncludes actual={rendered} expected={"daemon modifier"} />
-<AssertStringIncludes actual={rendered} expected={"provider pattern"} />
-<AssertStringIncludes actual={rendered} expected={"per-component eval scope"} />
-<AssertStringIncludes actual={rendered} expected={"props in env.values"} />
-<AssertStringIncludes actual={rendered} expected={"Sample component"} />
-<AssertStringIncludes actual={rendered} expected={"output() function"} />
-<AssertStringIncludes actual={rendered} expected={"renderChildren() closure"} />
-<AssertStringIncludes actual={rendered} expected={"Instruction component"} />
-<AssertStringIncludes actual={rendered} expected={"composable instructions"} />
-<AssertStringIncludes actual={rendered} expected={"component as capture"} />
-<AssertStringIncludes actual={rendered} expected={"Capture directive"} />
-<AssertStringIncludes actual={rendered} expected={"Capture select"} />
-</Test>
