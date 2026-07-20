@@ -35,6 +35,7 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
    require changes to specs/release-process-spec.md to match.
 9. Prefer stateless generators - use a function when calling a function that
    returns an operation; Do not do this function*(arg) { return yield* generator(arg) }
+10. Structure source through names and modules. Do not use decorative section-divider comments.
 
 ## PR Process
 

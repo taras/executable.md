@@ -1,15 +1,18 @@
 /**
- * Entry point — runDocument (spec §7).
+ * Entry point — execute (spec §7).
  *
  * Wires together the boundary scanner, component import, expansion engine,
- * modifier system, and journal infrastructure.
+ * modifier system, and journal infrastructure. `execute` is delivered
+ * through the Execution Api so extensions can decorate the execution
+ * lifecycle as middleware.
  *
  * Journal runtime integration is concentrated at execution boundaries.
  * See DEC-005 in specs/decisions.md.
  */
 
-import { scoped, spawn, createChannel, withResolvers, until } from "effection";
-import type { Operation, Stream } from "effection";
+import { Err, Ok, scoped, spawn, withResolvers, until } from "effection";
+import type { Operation, Result, Stream } from "effection";
+import { createApi } from "@effectionx/context-api";
 import {
   durableRun,
   createDurableOperation,
@@ -18,6 +21,7 @@ import {
 } from "@executablemd/durable-streams";
 import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
+import { createReplayStream } from "./replay-stream.ts";
 import { useDenoCompiler } from "./deno-compiler.ts";
 import { useTempFileCompiler } from "./temp-file-compiler.ts";
 import type {
@@ -58,10 +62,10 @@ import { Stdio } from "@effectionx/process";
 import matter from "gray-matter";
 
 // ---------------------------------------------------------------------------
-// runDocument options (spec §7.1)
+// execute options (spec §7.1)
 // ---------------------------------------------------------------------------
 
-export interface RunDocumentOptions {
+export interface ExecuteOptions {
   /** Path to the root markdown document (workspace-relative). */
   docPath: string;
 
@@ -140,7 +144,28 @@ function* durableImportComponent(
   // Markdown component: parse at runtime — deterministic from content
   const parsed = matter(result.content);
   const { meta, inputs } = parseFrontmatter(parsed.data as Record<string, unknown>);
-  const bodySegments = scanSegments(parsed.content);
+  // The markdown body is a verbatim suffix of the raw file, so the body start
+  // is computed by length — never by content search, which could false-match
+  // body text repeated inside frontmatter. The invariant check turns any
+  // gray-matter normalization surprise into a loud error instead of silently
+  // wrong source positions.
+  const bodyStart = result.content.length - parsed.content.length;
+  if (result.content.slice(bodyStart) !== parsed.content) {
+    throw new Error(
+      `frontmatter parse did not preserve the markdown body verbatim: ${result.path}`,
+    );
+  }
+  let baseLine = 1;
+  for (let i = 0; i < bodyStart; i++) {
+    if (result.content[i] === "\n") {
+      baseLine++;
+    }
+  }
+  const bodySegments = scanSegments(parsed.content, {
+    path: result.path,
+    baseOffset: bodyStart,
+    baseLine,
+  });
 
   return {
     kind: "markdown" as const,
@@ -251,7 +276,7 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
 
 function* documentWorkflow(): Workflow<string> {
   // Import root — same pipeline as any component. The provider middleware
-  // installed by runDocument maps "__root__" to the document path. The
+  // installed by execute maps "__root__" to the document path. The
   // ephemeral() wrapper bridges typing only — the import inside remains a
   // durable, journaled operation.
   const root = yield* ephemeral(importComponent("__root__"));
@@ -331,58 +356,55 @@ function* documentWorkflow(): Workflow<string> {
 }
 
 // ---------------------------------------------------------------------------
-// runDocument (spec §7.1)
+// execute (spec §7.1)
 // ---------------------------------------------------------------------------
 
 /**
  * A running document execution.
  *
- * `yield* execution` waits for the workflow to complete and returns
- * the full output string (or throws on error).
+ * `yield* execution` waits for completion and returns a `Result<string>`:
+ * `Ok(output)` on success, `Err(error)` on document, infrastructure, or
+ * policy failure. Completion never throws once the handle exists.
  *
- * `execution.output` is a `Stream<string, string>` for consuming
- * chunks as they arrive. The close value is the full output.
+ * `execution.output` is a `Stream<string, string>` for consuming chunks as
+ * they arrive. The close value is the complete rendered output — or the
+ * partial output rendered before a failure.
  */
-export interface DocumentExecution extends Operation<string> {
-  /** Stream of output chunks. Close value is the full output. */
+export interface DocumentExecution extends Operation<Result<string>> {
+  /** Stream of output chunks. Close value is the full (or partial) output. */
   output: Stream<string, string>;
 }
 
 /**
  * Execute a markdown document as a durable workflow.
  *
- * Returns a `DocumentExecution` — an operation you can `yield*` to
- * get the full output, with a `.output` stream for chunk-by-chunk
- * consumption.
+ * Returns a `DocumentExecution` — an operation you can `yield*` for the
+ * completion `Result<string>`, with a `.output` stream for chunk-by-chunk
+ * consumption. Once the handle exists, completion never throws: every
+ * later failure — document, infrastructure, or policy middleware — closes
+ * `output` (with the complete or partial rendered text) and resolves
+ * `Err(error)`.
  *
- * Simple — just get the output:
+ * Simple — get the outcome:
  *
  * ```ts
- * const execution = yield* runDocument(options);
- * const output = yield* execution;
+ * const execution = yield* execute(options);
+ * const result = yield* execution;
+ * if (result.ok) {
+ *   console.log(result.value);
+ * }
  * ```
  *
  * Streaming — consume chunks as they arrive:
  *
  * ```ts
- * const execution = yield* runDocument(options);
+ * const execution = yield* execute(options);
  * const output = yield* forEach(function* (chunk) {
  *   process.stdout.write(chunk);
  * }, execution.output);
  * ```
- *
- * Error handling:
- *
- * ```ts
- * const execution = yield* runDocument(options);
- * try {
- *   const output = yield* execution;
- * } catch (e) {
- *   // workflow error
- * }
- * ```
  */
-export function* runDocument(options: RunDocumentOptions): Operation<DocumentExecution> {
+function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution> {
   const {
     docPath,
     stream,
@@ -414,63 +436,70 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
   // (which would propagate errors through scope teardown).
   // ---------------------------------------------------------------------------
 
-  const channel = createChannel<string, string>();
-  const { operation, resolve, reject } = withResolvers<string>();
+  // Replay-safe transport: late subscribers receive every chunk and the
+  // close value, so subscription readiness before first emission is never
+  // required (spec §9; see replay-stream.ts).
+  const channel = createReplayStream<string, string>();
+  const { operation, resolve } = withResolvers<Result<string>>();
 
   yield* spawn(function* () {
     let emitted = false;
+    let emittedText = "";
 
-    // Install platform-appropriate compiler middleware
-    // deno-lint-ignore no-explicit-any
-    if (typeof (globalThis as any).Deno !== "undefined") {
-      yield* useDenoCompiler();
-    } else {
-      yield* useTempFileCompiler();
-    }
-
-    // DocumentOutput → channel bridge (innermost middleware — output flows
-    // through caller-installed normalize/terminal middleware first, then here).
-    yield* DocumentOutput.around({
-      *output([text]) {
-        emitted = true;
-        yield* channel.send(text);
-      },
-    });
-
-    yield* Stdio.around({
-      *stdout() {},
-      *stderr() {},
-    });
-
-    // Create per-document eval scope (spec §3.1).
-    // Created in the same scope as durableRun so that DurableCtx
-    // (set by durableRun) is visible to eval code that calls
-    // renderChildren → importComponent → createDurableOperation.
-    const rootEvalScope = yield* useEvalScope();
-
-    // Install the document's runtime Component providers before durableRun
-    // so the workflow inherits them: component import, modifier execution,
-    // and the root eval scope.
-    yield* Component.around(
-      {
-        *importComponent([name], _next) {
-          return yield* durableImportComponent(
-            name,
-            name === "__root__" ? docPath : undefined,
-            componentDirs,
-          );
-        },
-        *applyModifiers([modifiers, context], _next) {
-          const chain = composeModifierChain(modifiers, context, registry);
-          return yield* chain();
-        },
-        evalScope: () => rootEvalScope,
-      },
-      { at: "min" },
-    );
-
-    // Run the durable workflow.
+    // The ENTIRE setup and workflow sit inside one error boundary: once the
+    // handle exists, any failure closes output (with whatever rendered so
+    // far) and resolves Err — completion never throws.
     try {
+      // Install platform-appropriate compiler middleware
+      // deno-lint-ignore no-explicit-any
+      if (typeof (globalThis as any).Deno !== "undefined") {
+        yield* useDenoCompiler();
+      } else {
+        yield* useTempFileCompiler();
+      }
+
+      // DocumentOutput → channel bridge (innermost middleware — output flows
+      // through caller-installed normalize/terminal middleware first, then here).
+      yield* DocumentOutput.around({
+        *output([text]) {
+          emitted = true;
+          emittedText += text;
+          yield* channel.send(text);
+        },
+      });
+
+      yield* Stdio.around({
+        *stdout() {},
+        *stderr() {},
+      });
+
+      // Create per-document eval scope (spec §3.1).
+      // Created in the same scope as durableRun so that DurableCtx
+      // (set by durableRun) is visible to eval code that calls
+      // renderChildren → importComponent → createDurableOperation.
+      const rootEvalScope = yield* useEvalScope();
+
+      // Install the document's runtime Component providers before durableRun
+      // so the workflow inherits them: component import, modifier execution,
+      // and the root eval scope.
+      yield* Component.around(
+        {
+          *importComponent([name], _next) {
+            return yield* durableImportComponent(
+              name,
+              name === "__root__" ? docPath : undefined,
+              componentDirs,
+            );
+          },
+          *applyModifiers([modifiers, context], _next) {
+            const chain = composeModifierChain(modifiers, context, registry);
+            return yield* chain();
+          },
+          evalScope: () => rootEvalScope,
+        },
+        { at: "min" },
+      );
+
       const output = yield* durableRun(() => documentWorkflow(), {
         stream,
       });
@@ -482,10 +511,12 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
       }
 
       yield* channel.close(output);
-      resolve(output);
+      resolve(Ok(output));
     } catch (error) {
-      yield* channel.close("");
-      reject(error instanceof Error ? error : new Error(String(error)));
+      // Close with everything already emitted — diagnostics produced before
+      // an abort stay visible to consumers of the close value.
+      yield* channel.close(emittedText);
+      resolve(Err(error instanceof Error ? error : new Error(String(error))));
     }
   });
 
@@ -496,3 +527,26 @@ export function* runDocument(options: RunDocumentOptions): Operation<DocumentExe
     output: channel,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Execution Api — the generic execution middleware hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Execution Api — a test-agnostic middleware surface around document
+ * execution. The default provider runs the document; extensions decorate the
+ * execution lifecycle with `Execution.around({ execute })` — observing
+ * options, wrapping the returned handle, or mapping its completion Result —
+ * without introducing another execution function.
+ */
+export interface ExecutionApi {
+  execute(options: ExecuteOptions): Operation<DocumentExecution>;
+}
+
+export const Execution = createApi<ExecutionApi>("Execution", {
+  *execute(options: ExecuteOptions): Operation<DocumentExecution> {
+    return yield* executeDocument(options);
+  },
+});
+
+export const { execute } = Execution.operations;

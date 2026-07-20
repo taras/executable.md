@@ -24,6 +24,9 @@ export type {
   ResolveResult,
   SampleContext,
   Json,
+  SourcePosition,
+  InvocationContext,
+  InvocationHandling,
 } from "./src/types.ts";
 
 export type { Workflow } from "@executablemd/durable-streams";
@@ -34,11 +37,7 @@ export { healSegment } from "./src/heal.ts";
 export type { Middleware } from "@effectionx/middleware";
 export { combine } from "@effectionx/middleware";
 
-export type {
-  ModifierFactory,
-  ModifierMiddleware,
-  CodeBlockWorkflow,
-} from "./src/modifiers.ts";
+export type { ModifierFactory, ModifierMiddleware, CodeBlockWorkflow } from "./src/modifiers.ts";
 export { useCodeBlock } from "./src/modifiers.ts";
 
 // ---------------------------------------------------------------------------
@@ -53,10 +52,24 @@ export {
   raise,
   env,
   evalScope,
+  expandInvocation,
   codeBlock,
   persistent,
   content,
 } from "./src/component-api.ts";
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+export { renderSegments } from "./src/render.ts";
+
+// ---------------------------------------------------------------------------
+// Replay-safe stream
+// ---------------------------------------------------------------------------
+
+export { createReplayStream } from "./src/replay-stream.ts";
+export type { ReplayStream } from "./src/replay-stream.ts";
 
 // ---------------------------------------------------------------------------
 // Eval system (generator eval blocks)
@@ -91,11 +104,7 @@ export { interpolateEvalBindings } from "./src/eval-interpolate.ts";
 export { findFreePort } from "@executablemd/runtime";
 
 export type { TransformResult } from "./src/eval-transform.ts";
-export {
-  transformBlock,
-  serializeExports,
-  isJson,
-} from "./src/eval-transform.ts";
+export { transformBlock, serializeExports, isJson } from "./src/eval-transform.ts";
 
 // ---------------------------------------------------------------------------
 // Output Api & middleware
@@ -110,8 +119,8 @@ export { useTerminalOutput } from "./src/output/terminal.ts";
 // Document runner
 // ---------------------------------------------------------------------------
 
-export { runDocument } from "./src/run-document.ts";
-export type { RunDocumentOptions, DocumentExecution } from "./src/run-document.ts";
+export { execute, Execution } from "./src/execute.ts";
+export type { ExecuteOptions, ExecutionApi, DocumentExecution } from "./src/execute.ts";
 export { useDenoCompiler } from "./src/deno-compiler.ts";
 export { useTempFileCompiler } from "./src/temp-file-compiler.ts";
 

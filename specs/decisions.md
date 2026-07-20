@@ -170,13 +170,13 @@ experimental implementation detail. Its API may change.
 ### Decision
 
 Keep stream protocol integration in the execution boundary
-(`src/run-document.ts`, `src/eval-handler.ts`, and terminal effect handlers).
+(`src/execute.ts`, `src/eval-handler.ts`, and terminal effect handlers).
 All other modules (scanner, frontmatter, expand, interpolate, validate,
 render) have zero dependency on the stream package.
 
 The expansion engine reaches import and modifier execution through the
 contextual Component Api (DEC-012) — it doesn't know about durable
-effects. The document's providers, installed by `run-document.ts`, are
+effects. The document's providers, installed by `execute.ts`, are
 the only place expansion meets the stream protocol.
 
 ---

@@ -5,6 +5,7 @@
  * modifier system types, and shared interfaces.
  */
 
+import type { Operation } from "effection";
 import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,21 @@ export interface ComponentInvocation {
    * by substituteContent when projecting children into <Content /> slots.
    */
   projectedEnv?: { values: Record<string, unknown> };
+  /**
+   * Source location of the opening tag in the original file, frontmatter
+   * included. Absent for dynamically scanned strings (render(markdown)).
+   */
+  position?: SourcePosition;
+}
+
+/** A location in an original source file. Lines and columns are 1-based. */
+export interface SourcePosition {
+  /** Workspace-relative file path. Undefined for dynamically scanned text. */
+  path?: string;
+  /** Character offset in the original file. */
+  offset: number;
+  line: number;
+  column: number;
 }
 
 export interface ExecutableCodeBlock {
@@ -86,6 +102,34 @@ export interface ExecResult {
  */
 export interface EvalEnv {
   values: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Invocation-expansion extension hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Expansion context offered to `expandInvocation` extensions alongside the
+ * raw invocation. Exposes exactly what an extension needs: the parent scope's
+ * interpolation inputs, caller-projected bindings, and incremental expansion
+ * in the current context. Engine internals (hide set, block counter) stay
+ * captured inside the `expand` closure.
+ */
+export interface InvocationContext {
+  meta: Record<string, unknown>;
+  props: Record<string, Json>;
+  /** Caller-projected bindings (segment.projectedEnv) for expression evaluation. */
+  projectedEnv?: EvalEnv;
+  /** Incrementally expand segments in the current expansion context. */
+  expand(segments: Segment[]): Operation<Segment[]>;
+}
+
+/**
+ * A claimed invocation's replacement segments. `{ segments: [] }` means
+ * handled-with-no-output — distinct from `undefined` (unhandled).
+ */
+export interface InvocationHandling {
+  segments: Segment[];
 }
 
 // ---------------------------------------------------------------------------

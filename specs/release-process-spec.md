@@ -47,7 +47,7 @@ sequenceDiagram
 
 ## 2. Version lockstep
 
-Every package (`core`, `cli`, `durable-streams`, `runtime`,
+Every package (`core`, `cli`, `durable-streams`, `runtime`, `testing`,
 `packages/code-review-agent`) declares the same version in its `deno.json` and
 `package.json`. `cli/src/cli.ts` imports `cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
@@ -146,7 +146,7 @@ versions succeed. No dispatch path publishes outside a tag.
 
 ## 8. Consumer note
 
-`@executablemd/core`, `@executablemd/runtime`, and `@executablemd/cli` depend
-on effection's 4.x prerelease, which npm's peer resolver rejects against
-`@effectionx/*` (`^3 || ^4`). Installing them requires `--legacy-peer-deps`
-until effection 4 is stable.
+`@executablemd/core`, `@executablemd/runtime`, `@executablemd/testing`, and
+`@executablemd/cli` depend on effection's 4.x prerelease, which npm's peer
+resolver rejects against `@effectionx/*` (`^3 || ^4`). Installing them
+requires `--legacy-peer-deps` until effection 4 is stable.

@@ -3,7 +3,7 @@
  *
  * These helpers install `around()` middleware on the runtime context APIs
  * to replace real I/O with in-memory implementations. They are scoped to
- * the current Effection scope — call them before `runDocument()` or
+ * the current Effection scope — call them before `execute()` or
  * `durableRun()` in your test body.
  *
  * @example
@@ -14,7 +14,7 @@
  *   yield* useStubFs({ "doc.md": "# Hello\n" });
  *   yield* useEchoExec();
  *
- *   const execution = yield* runDocument({ docPath: "doc.md", stream });
+ *   const execution = yield* execute({ docPath: "doc.md", stream });
  *   const output = yield* execution;
  * });
  * ```

@@ -8,12 +8,17 @@
  * Standard imports (Effection, executable.md APIs) are captured in the middleware
  * closure — they are not part of the Compiler API interface.
  *
- * Installed automatically by `runDocument` when running on Node or Bun.
+ * Installed automatically by `execute` when running on Node or Bun.
  */
 
 import { call } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
+// STANDARD_IMPORTS below resolve at runtime from generated eval modules;
+// without these static anchors, `deno compile --exclude-unused-npm` prunes
+// the packages from the binary and every eval block using them fails.
+import "@effectionx/converge";
+import "@effectionx/fetch";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";

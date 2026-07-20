@@ -106,7 +106,7 @@ The journal records:
 ### 1.2 Workspace-relative paths
 
 All paths stored in a diagnostic trace are **relative to the workspace root**
-(the current working directory when `runDocument` is called). This
+(the current working directory when `execute` is called). This
 makes traces easier to compare and avoids leaking absolute local paths.
 
 Runtime operations (`readTextFile`, `stat`, `exec`, `glob`) all resolve
@@ -451,7 +451,7 @@ registry.set("timeout", timeoutFactory);
 registry.set("daemon", daemonFactory);
 ```
 
-Custom factories can be provided via `RunDocumentOptions.modifiers`.
+Custom factories can be provided via `ExecuteOptions.modifiers`.
 
 #### Built-in terminal handlers
 
@@ -643,10 +643,10 @@ the block if it overruns. The silent handler discards the output.
 #### Overriding per-scope
 
 Because factories are stored in a registry that can be extended,
-custom modifiers can be provided via `RunDocumentOptions`:
+custom modifiers can be provided via `ExecuteOptions`:
 
 ```typescript
-yield* runDocument({
+yield* execute({
   docPath: "README.md",
   stream,
   runtime,
@@ -1134,7 +1134,7 @@ lifetime matches the document's expansion. Resources spawned by `persist`
 blocks are retained in this scope until expansion completes. The current
 eval scope is read contextually via the `evalScope` value (§5.5).
 
-The eval scope is created in `runDocument()` (§8.1) **before**
+The eval scope is created in `execute()` (§8.1) **before**
 `durableRun` via `resource(useEvalScope())`. This is critical:
 `evalScope.eval()` sends to a channel whose processor must be
 reachable by the Effection scheduler — this only works when both sender
@@ -1850,7 +1850,7 @@ returning without calling it.
   never observe each other's state. Caller-projected content, the
   current code block, the persistent flag, and function-component
   content all rely on this.
-- `runDocument` installs the document's `importComponent` /
+- `execute` installs the document's `importComponent` /
   `applyModifiers` / root `evalScope` providers before starting the
   durable workflow, so the whole run inherits them; the journal shape
   of import, exec, and eval effects is unchanged by contextual
@@ -2517,7 +2517,7 @@ A **provider component** is a regular markdown component whose body
 follows a structured pattern that manages background process lifecycle
 for its subtree. It composes `eval` + `daemon` + `eval` (readiness)
 + `eval` (middleware install) + `<children />` into a reusable
-component — no framework-level configuration, no `RunDocumentOptions`
+component — no framework-level configuration, no `ExecuteOptions`
 changes.
 
 #### Structure
@@ -2936,9 +2936,9 @@ only when output is emitted, not what executes, so replay is deterministic.
 
 ## 7. Entry point
 
-### 8.1 `runDocument`
+### 8.1 `execute`
 
-`runDocument(options)` executes a markdown document as a durable
+`execute(options)` executes a markdown document as a durable
 workflow and returns a `DocumentExecution` handle. Options:
 
 - `docPath` — path to the root markdown document
@@ -2948,23 +2948,31 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `modifiers?` — custom modifier factories registered alongside the
   built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
 
-`DocumentExecution` is an `Operation<string>`: `yield* execution`
-completes with the document's full output. Its `output` property is a
-`Stream<string, string>` of the chunks emitted during execution
-(per-segment for streaming roots, one chunk for buffered `<Output>`
-roots — §5.4); the stream closes with the full output as its close
-value.
+`DocumentExecution` is an `Operation<Result<string>>`: `yield* execution`
+completes with `Ok(output)` on success and `Err(error)` on document,
+infrastructure, or policy failure. Once `execute` has returned a handle,
+completion never throws — every later failure closes the output stream
+(with the complete or partial rendered output) and resolves `Err`. A
+failure before a handle can be created may still throw. Its `output`
+property is a replay-safe `Stream<string, string>` of the chunks emitted
+during execution (per-segment for streaming roots, one chunk for buffered
+`<Output>` roots — §5.4); late and repeated subscribers receive the full
+sequence, and the stream closes with the full (or partial) output as its
+close value.
 
 Execution runs in its own scope. Before the durable workflow starts,
-`runDocument` installs the document's scope-local runtime providers —
+`execute` installs the document's scope-local runtime providers —
 the platform compiler, the Component providers for import, modifier
 execution, and the root eval scope (§5.5), and the output→stream
 bridge — so nothing leaks onto the caller's scope and the whole run
 inherits them contextually.
 
-On successful completion, `yield* execution` returns the full output
-and the `output` stream closes with it. On failure, the stream closes
-and `yield* execution` throws the workflow error.
+`execute` is delivered through the `Execution` context Api. The default
+provider runs the document; extensions decorate the execution lifecycle
+with `Execution.around({ execute })` middleware — observing options,
+wrapping the returned handle, or mapping its completion `Result` — without
+introducing another execution function. Core itself has no knowledge of
+any particular extension.
 
 ### 8.2 Usage from standalone code
 
@@ -2973,13 +2981,17 @@ import { run } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 
 await run(function* () {
-  const execution = yield* runDocument({
+  const execution = yield* execute({
     docPath: "./README.md",
     stream: new InMemoryStream(),
   });
 
-  const output = yield* execution;
-  console.log(output);
+  const result = yield* execution;
+  if (result.ok) {
+    console.log(result.value);
+  } else {
+    console.error(result.error.message);
+  }
 });
 ```
 
@@ -3050,7 +3062,7 @@ Three concerns, three mechanisms:
 | Concern | Mechanism | Where |
 |---|---|---|
 | **Transformation** | Middleware (`scope.around`) | `output/normalize.ts`, `output/terminal.ts` |
-| **Delivery** | Channel (`createChannel`, internal to `runDocument`) | `run-document.ts` |
+| **Delivery** | Channel (`createChannel`, internal to `execute`) | `execute.ts` |
 | **Consumption** | Stream (`forEach` on `execution.output`) | Caller (`cli.ts`, tests) |
 
 Middleware only intercepts and transforms. Buffering and streaming are not
@@ -3141,20 +3153,20 @@ export function* useTerminalOutput(): Operation<void> {
 **File:** `cli/src/cli.ts` (separate `cli` workspace package)
 
 The CLI installs output middleware (transforms only — no channel wiring
-needed), calls `runDocument` to get a `DocumentExecution`, consumes
+needed), calls `execute` to get a `DocumentExecution`, consumes
 `execution.output` with `forEach` for streaming, and can `yield*`
 the execution directly to get the full output or catch errors.
 
 ```typescript
 // cli/src/cli.ts
 import { forEach } from "@effectionx/stream-helpers";
-import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import { execute, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 
 function* run(/* ... config params ... */) {
   if (!raw) yield* useNormalizedOutput();
   if (process.stdout.isTTY && !raw) yield* useTerminalOutput();
 
-  const execution = yield* runDocument({ docPath, stream, runtime, ... });
+  const execution = yield* execute({ docPath, stream, runtime, ... });
 
   const fullOutput = yield* forEach(function* (chunk: string) {
     if (process.stdout.isTTY) {
@@ -3176,7 +3188,7 @@ function* run(/* ... config params ... */) {
 output(text)
   → normalize (middleware, caller-installed)
   → terminal format (middleware, caller-installed)
-  → channel.send(text) (internal to runDocument)
+  → channel.send(text) (internal to execute)
   → execution.output stream (caller's forEach/collect)
 ```
 
@@ -3187,7 +3199,7 @@ User sees cleaned, colorized text streaming segment-by-segment.
 ```
 output(text)
   → normalize (middleware, caller-installed)
-  → channel.send(text) (internal to runDocument)
+  → channel.send(text) (internal to execute)
   → execution.output stream (caller's forEach/collect)
   → fullOutput written to stdout at end
 ```
@@ -3198,7 +3210,7 @@ User gets cleaned raw markdown dumped at end.
 
 ```
 output(text)
-  → channel.send(text) (internal to runDocument, no transformation)
+  → channel.send(text) (internal to execute, no transformation)
   → execution.output stream (caller's forEach/collect)
 ```
 
@@ -3242,16 +3254,17 @@ All middleware and side effects triggered by `output()` (normalization,
 formatting, channel send) execute on the ephemeral side. No durable state
 capture occurs in the output pipeline.
 
-The entire workflow runs in a `spawn()` inside `runDocument`. The channel
+The entire workflow runs in a `spawn()` inside `execute`. The channel
 and all execution state (runtime API middleware and eval scope,
 DocumentOutput→channel bridge) share this spawned scope. The consumer
 (`forEach`/`collect` on `execution.output`) runs in the **caller's**
 scope. This cross-boundary communication is safe because scope teardown
 of the spawned task cancels the producer and closes the channel, which
 terminates the consumer's forEach loop. The `withResolvers` completion
-signal also lives in the spawned scope — `resolve()` and `reject()` are
-called from inside the spawn, and the resulting operation is returned to
-the caller as part of the `DocumentExecution` handle.
+signal also lives in the spawned scope — `resolve(Ok(...))` and
+`resolve(Err(...))` are called from inside the spawn, and the resulting
+operation is returned to the caller as part of the `DocumentExecution`
+handle.
 
 ### 9.10 Known issues
 
@@ -3287,7 +3300,7 @@ core/src/
     mod.ts                Barrel export
     normalize.ts          Whitespace normalization middleware
     terminal.ts           Terminal ANSI formatting middleware
-  run-document.ts         Document runner (owns channel, returns stream)
+  execute.ts         Document runner (owns channel, returns stream)
 
 cli/src/
   cli.ts                  CLI entrypoint with forEach stream consumption
@@ -3767,7 +3780,7 @@ visible warning blocks, collect into a separate error report).
 | S1 | Full provider golden run | eval → daemon → when → children → cleanup |
 | S2 | Port flows from eval to daemon | `{port}` in daemon content matches `findFreePort()` result |
 | S3 | Children can call sample after daemon ready | `sample` calls in children reach daemon endpoint |
-| S4 | Daemon terminated after children expand | After `runDocument` completes, process not running |
+| S4 | Daemon terminated after children expand | After `execute` completes, process not running |
 | S5 | Provider crash during `when` | Daemon exits before ready → `when` fails → `ErrorSegment` |
 | S6 | Provider crash during children | Daemon exits mid-child-expansion → error propagated |
 | S7 | Nested providers | Outer + inner provider → both start, inner tears down first |
@@ -3821,7 +3834,7 @@ visible warning blocks, collect into a separate error report).
 | OA7 | Channel close ends consumer | `channel.close()` causes `forEach` to complete |
 | OA8 | Multiple middleware compose | Normalize → terminal → channel: all three run in order |
 | OA9 | `ephemeral()` wrapper | `output()` inside durable context produces no journal entry |
-| OA10 | runDocument workflow error surfaces through execution | `runDocument` workflow error → `reject(error)` → `yield* execution` throws |
+| OA10 | execute workflow error surfaces through execution | `execute` workflow error → completion resolves `Err(error)` — `yield* execution` returns the `Result`, never throws |
 
 ### Tier WN — Whitespace normalization
 
@@ -3941,7 +3954,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
 | 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
-| 44 | Provider lifecycle expressed as a component, not a `RunDocumentOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
+| 44 | Provider lifecycle expressed as a component, not an `ExecuteOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
 | 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; the binding environment is already the shared state carrier for within-component coordination; scope-correct because a fresh environment is provided per component expansion |
 | 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
@@ -3953,7 +3966,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 53 | Sample component calls `Sample.operations.sample()` directly | The enclosing eval operation journals the complete block result |
 | 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |
 | 55 | `daemon()` uses `shell: true` | Matches `bash exec` block semantics — the same command string passed to `bash -c` is passed to the shell; handles shell expansions and PATH lookups correctly |
-| 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `runDocument()` would execute in the outer scope at call time, where the binding environment has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
+| 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `execute()` would execute in the outer scope at call time, where the binding environment has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
 | 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
 | 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import executable.md globals from `@executablemd/core`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
@@ -3970,7 +3983,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
-| 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<string>` (`yield*` for result) and has `.output` stream for chunks; errors surface through `yield* execution` via `withResolvers` `reject()`; eliminates `Result<string>` / `unbox` in consumer code |
+| 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<Result<string>>` (`yield*` for the completion Result) and has `.output` stream for chunks; once a handle exists every failure resolves `Err(error)` — completion never throws, so policy middleware (e.g. testing) can map outcomes without exception control flow |
 | 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
 | 75 | `useContent()` is contextual, not a function argument | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same contextual pattern as `env`/`evalScope`; supports named slots via `useContent("header")` |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |

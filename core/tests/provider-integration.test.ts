@@ -14,7 +14,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { Sample } from "../src/sample-api.ts";
 import * as fs from "node:fs";
@@ -139,7 +139,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -168,7 +168,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -211,7 +211,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -227,10 +227,10 @@ describe(
     });
 
     // S4: Daemon terminated after children expand
-    // After runDocument completes, the daemon process is not running.
-    // Verified by: runDocument returns (doesn't hang), proving structured
+    // After execute completes, the daemon process is not running.
+    // Verified by: execute returns (doesn't hang), proving structured
     // concurrency cleaned up the daemon.
-    it("S4: daemon terminated after children expand — runDocument completes", function* () {
+    it("S4: daemon terminated after children expand — execute completes", function* () {
       const tmpDir = makeTempDir();
 
       try {
@@ -241,14 +241,14 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
         );
 
-        // runDocument returned — daemon was cleaned up by structured concurrency.
+        // execute returned — daemon was cleaned up by structured concurrency.
         // If daemon wasn't terminated, the process would hang indefinitely.
         expect(output).toContain("expansion-done");
       } finally {
@@ -293,7 +293,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -354,7 +354,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -364,7 +364,7 @@ describe(
         // The daemon crashed during children expansion.
         // The output should contain some indication of the error
         // (DaemonExitError) or the child output, depending on timing.
-        // Key property: runDocument completed (didn't hang).
+        // Key property: execute completed (didn't hang).
         expect(output).toBeTruthy();
       } finally {
         cleanup(tmpDir);
@@ -399,7 +399,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -472,7 +472,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -537,7 +537,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -602,7 +602,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -663,7 +663,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -694,7 +694,7 @@ describe(
 
         // Golden run
         const output1 = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs,
@@ -706,7 +706,7 @@ describe(
 
         // Replay — eval blocks replay from journal, daemon spawns fresh
         const output2 = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs,
@@ -739,7 +739,7 @@ describe(
         // Golden run
         const stream1 = new InMemoryStream();
         const output1 = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream: stream1,
             componentDirs,
@@ -766,7 +766,7 @@ describe(
         // Fresh stream — provider starts a new daemon, new child runs live
         const stream2 = new InMemoryStream();
         const output2 = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream: stream2,
             componentDirs,
@@ -805,7 +805,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -885,7 +885,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
@@ -954,7 +954,7 @@ describe(
 
         const stream = new InMemoryStream();
         const output = yield* collect(
-          yield* runDocument({
+          yield* execute({
             docPath: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],

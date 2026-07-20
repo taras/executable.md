@@ -25,7 +25,8 @@ import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
-import { runDocument, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import { execute, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
@@ -66,10 +67,35 @@ const runConfig = object({
   },
 });
 
+const testConfig = object({
+  docPath: {
+    description: "markdown document to test",
+    ...field(z.string(), cli.argument()),
+  },
+  componentDir: {
+    description: "component search directory",
+    ...field(z.array(z.string()), defaults(["components", "."]), field.array()),
+  },
+  verbose: {
+    description: "log journal entries to stderr",
+    aliases: ["-V"],
+    ...field(z.boolean(), defaults(false)),
+  },
+  journal: {
+    description: "write a diagnostic JSONL trace (path must not exist)",
+    aliases: ["-j"],
+    ...field(z.string().optional()),
+  },
+  raw: {
+    description: "output raw markdown without normalization or terminal formatting",
+    ...field(z.boolean(), defaults(false)),
+  },
+});
+
 const xmd = program({
   name: "xmd",
   version: denoJson.version,
-  config: commands({ run: runConfig }, { default: "run" }),
+  config: commands({ run: runConfig, test: testConfig }, { default: "run" }),
 });
 
 // ---------------------------------------------------------------------------
@@ -142,13 +168,16 @@ function* createJournalFile(filePath: string): Operation<void> {
   yield* until(handle.close());
 }
 
-function* run(config: {
-  docPath: string;
-  componentDir: string[];
-  verbose: boolean;
-  journal: string | undefined;
-  raw: boolean;
-}): Operation<void> {
+function* run(
+  config: {
+    docPath: string;
+    componentDir: string[];
+    verbose: boolean;
+    journal: string | undefined;
+    raw: boolean;
+  },
+  mode: { testing: boolean },
+): Operation<void> {
   const { docPath, componentDir, verbose, journal, raw } = config;
 
   // Every CLI invocation starts from an empty stream. --journal writes
@@ -188,7 +217,7 @@ function* run(config: {
   // Output middleware (spec §9).
   //
   // Middleware is installed on the DocumentOutput Api via Api.around() before
-  // runDocument is called. runDocument owns the channel internally —
+  // execute is called. execute owns the output stream internally —
   // the CLI just installs transformations and consumes the returned stream.
   // ---------------------------------------------------------------------------
 
@@ -200,9 +229,17 @@ function* run(config: {
     yield* useTerminalOutput();
   }
 
-  // Run the document — returns a DocumentExecution.
-  // yield* execution waits for completion. execution.output streams chunks.
-  const execution = yield* runDocument({
+  // Compose testing around the single core execution entrypoint: both
+  // commands register the vocabulary (assertions work in regular documents,
+  // explicit <Testing> boundaries affect the outcome), while `xmd test`
+  // additionally activates root testing through a useTesting() session.
+  if (mode.testing) {
+    yield* useTesting({ verbose });
+  } else {
+    yield* installTestingVocabulary({ verbose });
+  }
+
+  const execution = yield* execute({
     docPath,
     stream,
     componentDirs: componentDir,
@@ -226,6 +263,18 @@ function* run(config: {
   if (signal) {
     signal.close();
     yield* writer;
+  }
+
+  // Inspect the completion Result AFTER the report finished streaming:
+  // test failures, assertion aborts, and any document abort exit nonzero.
+  const result = yield* execution;
+  if (!result.ok) {
+    if (result.error instanceof TestFailureError) {
+      console.error(`\ntests failed: ${result.error.message}`);
+    } else {
+      console.error(result.error.message);
+    }
+    yield* exit(1);
   }
 }
 
@@ -254,7 +303,10 @@ await main(function* (args) {
       }
       switch (parsed.value.name) {
         case "run":
-          yield* run(parsed.value.config);
+          yield* run(parsed.value.config, { testing: false });
+          break;
+        case "test":
+          yield* run(parsed.value.config, { testing: true });
           break;
       }
     }

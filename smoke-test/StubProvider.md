@@ -15,7 +15,7 @@ yield* Sample.around({
       return yield* next(context);
     }
     const sys = context.system ? '|system:' + context.system : '';
-    return '[response-from-' + model + sys + ']';
+    return '[response-from-' + model + sys + '|content:' + context.content + ']';
   },
 }, { at: 'min' });
 ```

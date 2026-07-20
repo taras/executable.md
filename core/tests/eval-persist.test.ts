@@ -11,7 +11,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { unbox } from "effection";
 import type { Result } from "effection";
@@ -26,7 +26,7 @@ describe("Tier T6 — persist modifier", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -45,7 +45,7 @@ describe("Tier T6 — persist modifier", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -65,7 +65,7 @@ describe("Tier T6 — persist modifier", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -84,14 +84,14 @@ describe("Tier T6 — persist modifier", () => {
     yield* useEchoExec();
 
     const output1 = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
     );
 
     const output2 = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -145,7 +145,7 @@ describe("Tier T6 — persist modifier", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),

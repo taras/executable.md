@@ -1,2 +1,5 @@
 [test]
 tsconfig-override = "tsconfig.node.json"
+
+[install.scopes]
+"@jsr" = "https://npm.jsr.io"

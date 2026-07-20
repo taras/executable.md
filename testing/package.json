@@ -1,0 +1,18 @@
+{
+  "name": "@executablemd/testing",
+  "version": "0.3.1",
+  "description": "Testing vocabulary for executable.md documents: <Testing>, <Test>, and assertion components.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "dependencies": {
+    "@effectionx/context-api": "0.6.0",
+    "@effectionx/scope-eval": "0.1.3",
+    "@effectionx/timebox": "0.4.3",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "@std/assert": "npm:@jsr/std__assert@^1.0.17",
+    "effection": "4.1.0-alpha.7"
+  }
+}

@@ -8,7 +8,7 @@ import { expect } from "@effectionx/bdd/expect";
 import { parseDuration } from "../src/modifiers/timeout.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
-import { runDocument } from "../src/run-document.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Tier T7 — timeout modifier", () => {
@@ -21,7 +21,7 @@ describe("Tier T7 — timeout modifier", () => {
     yield* useEchoExec();
 
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
@@ -62,7 +62,7 @@ describe("Tier T7 — timeout modifier", () => {
 
     // Should work with default timeout
     const output = yield* collect(
-      yield* runDocument({
+      yield* execute({
         docPath: "test.md",
         stream,
       }),
