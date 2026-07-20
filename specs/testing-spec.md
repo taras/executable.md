@@ -36,7 +36,16 @@ fails after expansion when any test failed or when no tests were discovered.
 `xmd test` exits with status `0` when every test passes and status `1`
 otherwise.
 
-Testing uses the standard journal and replay behavior.
+Testing uses the standard journal and replay behavior. Each completed test
+and each `<Testing>` boundary outcome is journaled as a testing-owned
+durable operation (`test_result`, `testing_boundary`) while expansion runs,
+before the root close event, identified deterministically by source
+position. On a full replay of a completed journal the recorded results and
+boundary outcomes are restored from the stream into the current collectors
+— test bodies and their effects are not rerun — so the testing outcome and
+recorded results are preserved. On live and partial runs nothing is
+restored: re-expansion records each result exactly once, in discovery
+order, with completed records replaying in place.
 
 ## Atomic Tests
 

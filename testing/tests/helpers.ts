@@ -9,6 +9,7 @@ import { scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
@@ -34,6 +35,8 @@ export interface RunDocOptions {
   docPath?: string;
   /** Inject handlers (e.g. a short timeout) instead of the public set. */
   handlers?: TestHandlers;
+  /** Supply a journal stream (e.g. for replay scenarios). */
+  stream?: DurableStream;
 }
 
 export function* runDoc(
@@ -69,7 +72,7 @@ export function* runDoc(
 
     const execution = yield* execute({
       docPath: options.docPath ?? "README.md",
-      stream: new InMemoryStream(),
+      stream: options.stream ?? new InMemoryStream(),
     });
 
     const chunks: string[] = [];

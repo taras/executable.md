@@ -18,8 +18,9 @@ import { Err } from "effection";
 import type { Operation } from "effection";
 import { Component, Execution } from "@executablemd/core";
 import type { DocumentExecution } from "@executablemd/core";
-import { Test, TestFailureError } from "./test-api.ts";
+import { boundary, record, Test, TestFailureError } from "./test-api.ts";
 import type { BoundaryOutcome } from "./test-api.ts";
+import { readCompletedRun } from "./journal.ts";
 import { ASSERTIONS } from "./assertions.ts";
 import { createTestHandlers } from "./handlers.ts";
 import type { TestHandlers } from "./handlers.ts";
@@ -67,6 +68,23 @@ export function* installHandlers(
           yield* nextBoundary(outcome);
         },
       });
+      // Confirmed full replay: durableRun returns the stored root result
+      // without re-expanding, so nothing would re-record. Restore the
+      // journaled testing records into the current collectors — through
+      // the same record/boundary operations live expansion uses, so every
+      // session collector and observer sees them in discovery order. A
+      // live or partial journal (no root Close) hydrates nothing;
+      // re-expansion records each result exactly once via its durable
+      // operation.
+      const replayed = yield* readCompletedRun(executeOptions.stream);
+      if (replayed) {
+        for (const result of replayed.results) {
+          yield* record(result);
+        }
+        for (const outcome of replayed.boundaries) {
+          yield* boundary(outcome);
+        }
+      }
       const inner = yield* next(executeOptions);
       return decorateCompletion(inner, () => {
         const failed = boundaries.filter((b) => b.failed > 0);

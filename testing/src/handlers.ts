@@ -24,6 +24,7 @@ import { Test, boundary, inTest, record, testing } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import { AssertionDiagnostic, expandAssertion } from "./assertions.ts";
 import type { AssertionEntry } from "./assertions.ts";
+import { persistBoundaryOutcome, persistTestResult } from "./journal.ts";
 
 // ---------------------------------------------------------------------------
 // Contained-failure carriers
@@ -115,10 +116,16 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         { at: "min" },
       );
       const report = yield* ctx.expand(invocation.children);
-      yield* boundary({
-        tests: local.length,
-        failed: local.filter((result) => result.status === "fail").length,
-      });
+      // Journal the outcome before the root Close so a full replay can
+      // restore it without re-expanding this boundary.
+      const outcome = yield* persistBoundaryOutcome(
+        {
+          tests: local.length,
+          failed: local.filter((result) => result.status === "fail").length,
+        },
+        formatLocation(invocation),
+      );
+      yield* boundary(outcome);
       return report;
     });
   }
@@ -147,10 +154,12 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     const parentEnv = yield* env;
     const parentScope = yield* evalScope;
     if (!parentScope) {
-      const result = failResult(name, location, {
-        kind: "error",
-        message: "<Test> requires an eval scope in context.",
-      });
+      const result = yield* persistTestResult(
+        failResult(name, location, {
+          kind: "error",
+          message: "<Test> requires an eval scope in context.",
+        }),
+      );
       yield* record(result);
       return [failureDiagnostic(result, { detail: true })];
     }
@@ -223,7 +232,13 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
       }
     }
 
-    const result = classify(name, location, bodyError, timedOut, timeoutMs);
+    // Journal the result before the root Close. On partial replay the
+    // stored record wins over the recomputation (short-circuited effects
+    // can change what the re-run observes, e.g. a halted exec no longer
+    // times out), keeping the original outcome authoritative.
+    const result = yield* persistTestResult(
+      classify(name, location, bodyError, timedOut, timeoutMs),
+    );
     yield* record(result);
 
     if (result.status === "fail") {
