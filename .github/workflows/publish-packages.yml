@@ -83,7 +83,7 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   testing:
-    needs: [version, core]
+    needs: [version, core, durable-streams]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: testing
