@@ -36,6 +36,8 @@ for (const line of lines) {
   }
 }
 
+const why =
+  "referenced ≤1× within the added diff (pre-existing usages not counted)";
 const unused = decls
   .map(d => ({
     ...d,
@@ -43,26 +45,28 @@ const unused = decls
   }))
   .filter(d => d.refs <= 1);
 
-if (unused.length > 0) {
-  const icon = severity === "error" ? "🔴" : "🟡";
-  const summary = icon + " " + message
-    .replace("{names}", unused.map(u => u.name).join(", "))
-    .replace("{count}", String(unused.length));
-  const why =
-    "referenced ≤1× within the added diff (pre-existing usages not counted)";
-  const rows = unused.map(u =>
-    `| \`${u.name}\` | \`${u.file}:${u.lineNumber}\` | ${u.refs} | ${why} |`
-  ).join("\n");
-
-  return [
-    "<details>",
-    `<summary>${summary}</summary>`,
-    "",
-    "| Symbol | Declared at | Refs in diff | Why flagged |",
-    "| --- | --- | --- | --- |",
-    rows,
-    "",
-    "</details>",
-  ].join("\n");
-}
+const rows = unused.map(u => [
+  `\`${u.name}\``,
+  `\`${u.file}:${u.lineNumber}\``,
+  String(u.refs),
+  why,
+]);
+const hasUnused = unused.length > 0;
+const icon = severity === "error" ? "🔴" : "🟡";
+const summary = icon + " " + message
+  .replace("{names}", unused.map(u => u.name).join(", "))
+  .replace("{count}", String(unused.length));
 ```
+
+<Show when={hasUnused}>
+
+<details>
+<summary>{summary}</summary>
+
+<Table
+  headers={["Symbol", "Declared at", "Refs in diff", "Why flagged"]}
+  rows={rows} />
+
+</details>
+
+</Show>
