@@ -15,6 +15,7 @@
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
+import { parse } from "acorn";
 import type {
   Segment,
   TextSegment,
@@ -71,6 +72,53 @@ function provideEnv(value: EvalEnv): Operation<void> {
 
 function provideEvalScope(value: EvalScope): Operation<void> {
   return Component.around({ evalScope: () => value }, { at: "min" });
+}
+
+/**
+ * Expand segments in a fresh scope whose eval env is the caller's values
+ * plus an optional per-render override. The override is a shallow layer —
+ * spread into a new object, never assigned onto the caller's env — so it is
+ * discarded when the scope exits and cannot leak to the caller, siblings, or
+ * later renders. Returns the expanded segments; callers decide whether to
+ * render them to a string. Shared by `renderChildren`/`render` and `<Each>`.
+ */
+function expandChildrenScoped(
+  segments: Segment[],
+  callerEnv: EvalEnv | undefined,
+  override: Record<string, unknown> | undefined,
+  scope: EvalScope | undefined,
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<Segment[]> {
+  return scoped(function* () {
+    yield* provideEnv({ values: { ...(callerEnv?.values ?? {}), ...(override ?? {}) } });
+    if (scope) {
+      yield* provideEvalScope(scope);
+    }
+    return yield* expandSegments(segments, meta, props, hideSet, counter);
+  });
+}
+
+/**
+ * Normalize a dynamically-supplied `renderChildren` override. Because eval
+ * code passes the argument at runtime, an explicit value must be validated:
+ * only a plain object is accepted; null, arrays, and primitives are rejected
+ * rather than silently spread. Omission behaves like a plain `renderChildren()`.
+ */
+function validateRenderOverride(override: unknown): Record<string, unknown> | undefined {
+  if (override === undefined) {
+    return undefined;
+  }
+  if (typeof override !== "object" || override === null || Array.isArray(override)) {
+    throw new Error("renderChildren(override) requires a plain object.");
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(override)) {
+    result[key] = value;
+  }
+  return result;
 }
 
 const MAX_EXPANSION_DEPTH = 64;
@@ -155,6 +203,18 @@ export function* expandSegments(
           );
           if (captureResult) {
             result.push(yield* raise(captureResult));
+          }
+          break;
+        }
+
+        if (segment.name === "Each") {
+          const eachResult = yield* expandEach(segment, parentMeta, parentProps, hideSet, counter);
+          for (const eachSegment of eachResult) {
+            if (eachSegment.type === "error") {
+              result.push(yield* raise(eachSegment));
+            } else {
+              result.push(eachSegment);
+            }
           }
           break;
         }
@@ -361,6 +421,125 @@ function* expandCapture(
   return undefined;
 }
 
+function eachError(message: string): ErrorSegment {
+  return { type: "error", message, source: "Each" };
+}
+
+const EACH_PROPS = new Set(["in", "let", "as"]);
+
+/**
+ * Expand `<Each in={list} let="item">…</Each>` — a native, block-scoped
+ * iteration directive. `<Each>` is structural: each iteration expands the body
+ * to segments that are appended verbatim, so ErrorSegment/ExecOutputSegment
+ * survive. Output is rendered to a string only when `as` captures the loop.
+ *
+ * The loop binding lives in a fresh per-iteration env (see expandChildrenScoped)
+ * that shadows without leaking to siblings, the parent, or later iterations.
+ */
+function* expandEach(
+  segment: Extract<Segment, { type: "component" }>,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<Segment[]> {
+  // <Each> bypasses validateProps, so enforce the whole prop contract here.
+  const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
+    (n) => !EACH_PROPS.has(n),
+  );
+  if (unknownProp !== undefined) {
+    return [eachError(`<Each> only accepts "in", "let", and "as" props. Got: "${unknownProp}".`)];
+  }
+
+  if ("let" in segment.expressions) {
+    return [eachError('Prop "let" on <Each /> must be a string literal.')];
+  }
+  if (segment.props.let === undefined) {
+    return [eachError('<Each> requires a "let" prop (the item binding name).')];
+  }
+  const letBinding = validateBindingName(segment.props.let);
+  if (!letBinding.ok) {
+    return [eachError(`Prop "let" on <Each /> ${letBinding.error}`)];
+  }
+  const name = letBinding.value;
+  if (name === undefined) {
+    return [eachError('<Each> requires a "let" prop (the item binding name).')];
+  }
+
+  if ("as" in segment.expressions) {
+    return [eachError('Prop "as" on <Each /> must be a string literal.')];
+  }
+  const asResult = validateBindingName(segment.props.as);
+  if (!asResult.ok) {
+    return [eachError(`Prop "as" on <Each /> ${asResult.error}`)];
+  }
+  const asBinding = asResult.value;
+
+  let items: Json | undefined;
+  if ("in" in segment.props) {
+    items = segment.props.in;
+  } else if ("in" in segment.expressions) {
+    try {
+      const resolved = yield* resolveExpressionProps(
+        {},
+        { in: segment.expressions.in },
+        "Each",
+        segment.projectedEnv,
+      );
+      items = resolved.in;
+    } catch (error) {
+      return [eachError(error instanceof Error ? error.message : String(error))];
+    }
+  } else {
+    return [eachError('<Each> requires an "in" prop (the array to iterate).')];
+  }
+  if (!Array.isArray(items)) {
+    return [eachError('Prop "in" on <Each /> must resolve to an array.')];
+  }
+
+  // Effective caller env honors projection through <Content />, mirroring
+  // expandComponent, so a projected <Each> resolves both lexical caller
+  // bindings and the current component's bindings.
+  const contextEnv = yield* env;
+  const callerEnv = segment.projectedEnv
+    ? { values: { ...segment.projectedEnv.values, ...(contextEnv?.values ?? {}) } }
+    : contextEnv;
+  const parentEvalScope = yield* evalScope;
+
+  const out: Segment[] = [];
+  for (const item of items) {
+    const expanded = yield* expandChildrenScoped(
+      segment.children,
+      callerEnv ?? undefined,
+      { [name]: item },
+      parentEvalScope ?? undefined,
+      parentMeta,
+      parentProps,
+      hideSet,
+      counter,
+    );
+    out.push(...expanded);
+  }
+
+  if (asBinding === undefined) {
+    return out;
+  }
+
+  const captureEnv = yield* env;
+  if (!captureEnv) {
+    return [eachError('Prop "as" on <Each /> requires a parent evaluation environment.')];
+  }
+  // Consumer boundary (spec §6.9): re-raise transported errors so a captured
+  // loop never hides an error inside the rendered string.
+  for (const outSegment of out) {
+    if (outSegment.type === "error") {
+      yield* raise(outSegment);
+    }
+  }
+  captureEnv.values[asBinding] = renderSegments(out);
+  return [];
+}
+
 function* expandComponent(
   name: string,
   props: Record<string, Json>,
@@ -556,23 +735,23 @@ function* expandComponent(
   // JSX was written, not the wrapping component's env. Falls back to
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
 
-  const renderInCallerScope = (segments: Segment[]) =>
-    scoped(function* () {
-      yield* provideEnv(capturedCallerEnv);
-      if (capturedParentEvalScope) {
-        yield* provideEvalScope(capturedParentEvalScope);
-      }
-      const expanded = yield* expandSegments(
+  const renderInCallerScope = (segments: Segment[], override?: Record<string, unknown>) =>
+    (function* () {
+      const expanded = yield* expandChildrenScoped(
         segments,
+        capturedCallerEnv,
+        override,
+        capturedParentEvalScope,
         capturedMeta,
         capturedProps,
         capturedChildrenHideSet,
         counter,
       );
       return renderSegments(expanded);
-    });
+    })();
 
-  componentEnv.values.renderChildren = () => renderInCallerScope(children);
+  componentEnv.values.renderChildren = (override?: unknown) =>
+    renderInCallerScope(children, validateRenderOverride(override));
 
   componentEnv.values.render = (markdown: string) => renderInCallerScope(scanSegments(markdown));
 
@@ -757,7 +936,26 @@ export function validateBindingName(
       error: `must be a valid JavaScript identifier. Got: "${value}"`,
     };
   }
+  // The identifier shape is not sufficient: reserved and contextual words
+  // (in, let, await, ...) match the regex but cannot form an ES-module
+  // binding, which is where these names end up (eval preamble destructures
+  // `const { name } = env;`). Parse the destructuring shape to reject them.
+  if (!isModuleBindingName(value)) {
+    return {
+      ok: false,
+      error: `must be a valid JavaScript binding name. Got: "${value}"`,
+    };
+  }
   return { ok: true, value };
+}
+
+function isModuleBindingName(name: string): boolean {
+  try {
+    parse(`const { ${name} } = 0;`, { ecmaVersion: "latest", sourceType: "module" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

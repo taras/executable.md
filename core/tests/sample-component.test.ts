@@ -644,6 +644,84 @@ describe("Tier RC — renderChildren and render closures", () => {
 
     expect(output).toContain("rendered:[arbitrary **markdown** content]");
   });
+
+  // RC4: renderChildren(override) exposes and shadows bindings in the body
+  it("RC4: renderChildren(override) is visible to child text and shadows caller values", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "const shadow = 'caller-value';",
+        "const result = yield* renderChildren({ item: 'injected', shadow: 'override-wins' });",
+        "output('r:[' + result.trim() + ']');",
+        "```",
+      ].join("\n"),
+      "test.md": ["<TestComp>", "", "item={item} shadow={shadow}", "", "</TestComp>"].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+
+    expect(output).toContain("r:[item=injected shadow=override-wins]");
+  });
+
+  // RC5: renderChildren(override) does not leak into the caller environment
+  it("RC5: renderChildren(override) does not leak into the caller env", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "yield* renderChildren({ item: 'injected' });",
+        "output('after:[' + (typeof item === 'undefined' ? 'undefined' : item) + ']');",
+        "```",
+      ].join("\n"),
+      "test.md": "<TestComp>body</TestComp>",
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+
+    expect(output).toContain("after:[undefined]");
+    expect(output).not.toContain("ERROR");
+  });
+
+  // RC6: renderChildren rejects a non-object override
+  it("RC6: renderChildren(override) rejects null/array/primitive overrides", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "try {",
+        "  yield* renderChildren([1, 2, 3]);",
+        "  output('no-error');",
+        "} catch (e) {",
+        "  output('caught:[' + e.message + ']');",
+        "}",
+        "```",
+      ].join("\n"),
+      "test.md": "<TestComp>body</TestComp>",
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+
+    expect(output).toContain("caught:[renderChildren(override) requires a plain object.]");
+  });
 });
 
 describe("Tier IN — Instruction component", () => {
