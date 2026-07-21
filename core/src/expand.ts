@@ -515,16 +515,18 @@ function* expandEach(
     return out;
   }
 
+  // Consumer boundary (spec §6.9): a capture never swallows an error. Hand the
+  // error segments back so expandSegments applies the ambient policy exactly
+  // once — a collecting policy keeps them in the document, a throwing policy
+  // aborts — and leave the binding unset either way.
+  const errors = out.filter((outSegment) => outSegment.type === "error");
+  if (errors.length > 0) {
+    return errors;
+  }
+
   const captureEnv = yield* env;
   if (!captureEnv) {
     return [eachError('Prop "as" on <Each /> requires a parent evaluation environment.')];
-  }
-  // Consumer boundary (spec §6.9): re-raise transported errors so a captured
-  // loop never hides an error inside the rendered string.
-  for (const outSegment of out) {
-    if (outSegment.type === "error") {
-      yield* raise(outSegment);
-    }
   }
   captureEnv.values[asBinding] = renderSegments(out);
   return [];
@@ -762,6 +764,15 @@ function* expandComponent(
   });
 
   if (asBinding) {
+    // Consumer boundary (spec §6.9): a capture never swallows an error. Hand
+    // the error segments back so expandSegments applies the ambient policy
+    // exactly once — a collecting policy keeps them in the document, a
+    // throwing policy aborts — and leave the binding unset either way.
+    const errors = expanded.filter((capturedSegment) => capturedSegment.type === "error");
+    if (errors.length > 0) {
+      return errors;
+    }
+
     const parentEnv = yield* env;
     if (!parentEnv) {
       return [
@@ -771,13 +782,6 @@ function* expandComponent(
           source: name,
         }),
       ];
-    }
-    // Consumer boundary (spec §6.9): raise transported errors unconditionally
-    // so documentation never captures and hides an error comment.
-    for (const capturedSegment of expanded) {
-      if (capturedSegment.type === "error") {
-        yield* raise(capturedSegment);
-      }
     }
     parentEnv.values[asBinding] = renderSegments(expanded);
     return [];

@@ -2437,8 +2437,14 @@ Props (only these three are accepted; any other prop is an error):
 `<Each>` is **structural**: each iteration expands the body to segments that
 are appended to the loop output, so `ErrorSegment` and `execOutput` segments
 survive and the ambient raise policy applies to them exactly as elsewhere. The
-loop is rendered to a string only when `as` captures it (transported errors
-are re-raised before capture so a captured loop never hides an error).
+loop is rendered to a string only when `as` captures it.
+
+A capture never swallows an error. When the expanded body contains any
+`ErrorSegment`, `as` creates no binding: the error segments are returned in
+place of the capture, so the enclosing consumer boundary applies the ambient
+raise policy to them exactly once — a collecting policy keeps them in the
+document, a throwing policy aborts. This holds for component `as` capture as
+well.
 
 **Block scoping.** Each iteration expands its body in a fresh env object —
 `{ values: { ...caller.values, [let]: item } }` — created inside a scope that
