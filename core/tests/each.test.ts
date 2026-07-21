@@ -80,8 +80,6 @@ describe("Tier Each — native iteration directive", () => {
     const run = yield* runEach(
       '<Each in={[{v: "O", items: [1, 2]}]} let="x">before={x.v};<Each in={x.items} let="x">in={x};</Each>after={x.v};</Each>',
     );
-    // before/after read the outer x (an object); in= reads the inner x (a number),
-    // proving the inner binding shadows and the outer is restored on exit.
     expect(run.output).toBe("before=O;in=1;in=2;after=O;");
     expect(run.env?.x).toBeUndefined();
   });

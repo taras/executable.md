@@ -659,7 +659,6 @@ describe("Tier RC — renderChildren and render closures", () => {
         "output('r:[' + result.trim() + ']');",
         "```",
       ].join("\n"),
-      // `shadow` is a genuine caller binding; the override must win over it.
       "test.md": [
         "```js eval",
         "const shadow = 'caller-value';",
@@ -694,7 +693,6 @@ describe("Tier RC — renderChildren and render closures", () => {
         "yield* renderChildren({ item: 'injected' });",
         "```",
       ].join("\n"),
-      // The caller checks its own env after the component runs.
       "test.md": [
         "<TestComp>x={item}</TestComp>",
         "```js eval",
