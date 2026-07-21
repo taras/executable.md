@@ -140,7 +140,12 @@ In this model:
 - `<Sample agent="...">` invokes a specific declared agent.
 - `as="result"` captures validated workflow data rather than relying on prose
   parsing by a later step.
-- `<Loop>` makes iteration visible and bounded.
+- `<Loop>` makes bounded control flow visible: it repeats its body up to a
+  limit, with `<Break />` ending the loop when a condition is met. This is
+  distinct from collection iteration — the native `<Each in={list} let="item">`
+  directive renders its body once per element of an array (see the executable
+  MDX spec §6.5). `<Each>` walks data; `<Loop>`/`<Break>` bound retries and
+  other repeated control flow.
 - Conditional execution and `<Break />` make the termination rule part of the
   document.
 - Control components perform contextual behavior; child expansion does not

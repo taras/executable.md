@@ -37,6 +37,8 @@ built from the source at [{meta.repo}]({meta.repo}).
 
 <Guide.Interpolation />
 
+<Guide.Each />
+
 <Guide.Captures />
 
 <Guide.Healing />

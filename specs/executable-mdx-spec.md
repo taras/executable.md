@@ -1287,14 +1287,23 @@ Every component's binding environment (`env.values`) is pre-populated
 with two closure functions that eval blocks can `yield*` to render
 content within the current expansion context:
 
-**`renderChildren()`** — expands and renders the component's children
-segments. Returns the rendered string. For self-closing components
+**`renderChildren(override?)`** — expands and renders the component's
+children segments. Returns the rendered string. For self-closing components
 (no children), returns an empty string.
 
 ```typescript
 const childrenOutput = yield* renderChildren();
 // childrenOutput contains the fully expanded + rendered children text
 ```
+
+An optional `override` layers extra bindings over the caller env for that
+render only: children expand against `{ ...caller.values, ...override }` in a
+fresh scope, so the override shadows caller values but is discarded afterward
+and never mutates or leaks into the caller env. An explicit `override` must be
+a plain object — `null`, arrays, and primitives are rejected with a diagnostic
+rather than silently spread. Omitting the argument behaves exactly like a bare
+`renderChildren()`. This per-render binding layer is the same mechanism the
+native `<Each>` directive (§6.5) uses to inject each item.
 
 **`render(markdown)`** — scans, expands, and renders an arbitrary
 markdown string within the current component's context. Useful for
@@ -2240,6 +2249,14 @@ When a component invocation has `as="name"`:
 /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
 ```
 
+The regex is the allowed identifier **shape**, but it is not sufficient:
+reserved and contextual words (`in`, `let`, `await`, …) match it yet cannot
+form an ES-module binding, which is where these names end up (eval blocks
+destructure `const { name } = env;`). Binding-name validation therefore also
+parses the destructuring shape and rejects any name that is not a legal
+ES-module binding. This rule governs every binding name — component `as`,
+`<Capture as>`, and `<Each let>`/`<Each as>`.
+
 Invalid values produce `PropValidationError`.
 
 ##### `<Capture as="name">...</Capture>`
@@ -2387,6 +2404,61 @@ color: blue
 <!-- Error: Unknown prop "size" passed to <Badge /> -->
 <Badge size="lg" />
 ```
+
+#### `<Each>` iteration directive
+
+`<Each>` renders its body once per element of an array, with each element
+bound to a name that is visible to `{...}` interpolation and to eval blocks
+in the body. It is a native directive handled by the expansion engine — like
+`<Capture>`, it is not imported from the filesystem — because its `in` prop
+would otherwise be a component input named after a JavaScript reserved word,
+which cannot appear in an eval block's binding preamble.
+
+```markdown
+<Each in={findings} let="finding">
+| `{finding.symbol}` | `{finding.file}:{finding.line}` | {finding.refs} |
+</Each>
+```
+
+Props (only these three are accepted; any other prop is an error):
+
+- `in` — the array to iterate. An eval expression (`in={findings}`) resolves
+  against the caller/projected env at expansion time; a JSON literal
+  (`in={[1, 2, 3]}`) resolves at scan time. A value that is not an array is an
+  error.
+- `let` — a **string-literal** identifier naming the per-item binding.
+  `let={expr}` is an error. The name must be a valid ES-module binding, so
+  reserved and contextual words (`in`, `let`, `await`) are rejected even
+  though they match the identifier shape (see §6.5 binding names).
+- `as` — optional. A **string-literal** identifier; when present the whole
+  rendered loop is captured into `env.values[as]` and the directive emits no
+  output at the invocation site (as with component `as` / `<Capture>`).
+
+`<Each>` is **structural**: each iteration expands the body to segments that
+are appended to the loop output, so `ErrorSegment` and `execOutput` segments
+survive and the ambient raise policy applies to them exactly as elsewhere. The
+loop is rendered to a string only when `as` captures it (transported errors
+are re-raised before capture so a captured loop never hides an error).
+
+**Block scoping.** Each iteration expands its body in a fresh env object —
+`{ values: { ...caller.values, [let]: item } }` — created inside a scope that
+is discarded when the iteration ends. Therefore the loop binding:
+
+- exists only while that iteration's body renders, then is discarded;
+- does not leak to siblings, the parent, or later iterations (the caller env
+  is never mutated — it is shallow-copied);
+- shadows correctly when `<Each>` nests, with the outer binding intact on exit;
+- is visible to body eval blocks, whose env mutations stay in that iteration's
+  throwaway object.
+
+An empty array produces no output. A projected `<Each>` (reached through a
+component's `<Content />`) resolves `in`, the item, and other caller bindings
+against the same caller/context-merged env used for expression props (§6.5).
+
+**Known limitation.** This is runtime scoping that behaves like block scope;
+there is no static/lexical analysis. An unknown reference in the body (e.g.
+`{itm.name}` when the binding is `item`) is left verbatim rather than raising
+(§6.6).
 
 ### 6.6 Eval binding interpolation
 
@@ -3779,6 +3851,23 @@ visible warning blocks, collect into a separate error report).
 | RC1 | `renderChildren()` returns empty for self-closing | Self-closing component → empty string |
 | RC2 | `renderChildren()` captures children text | Block component children → rendered text string |
 | RC3 | `render()` expands arbitrary markdown | `render("# Hello")` → rendered heading |
+| RC4 | `renderChildren(override)` visible + shadows | Override binding resolves in body text/eval; shadows caller value |
+| RC5 | `renderChildren(override)` no leak | Override absent from caller env after the render |
+| RC6 | `renderChildren(override)` rejects non-object | `null`/array/primitive override → diagnostic |
+
+### Tier Each — `<Each>` iteration directive
+
+| # | Test | Verify |
+|---|------|--------|
+| EA1 | Renders once per item | Body appears once per element; `{item.field}` dotted paths resolve |
+| EA2 | Empty array | No output, no error |
+| EA3 | Nested `<Each>` shadowing | Inner binding shadows; outer intact; neither leaks |
+| EA4 | No binding leak | Item binding absent from sibling/parent env after the loop |
+| EA5 | Body eval reads the item | Eval block in the body sees the current item |
+| EA6 | Segment preservation | Uncaptured loop keeps `ErrorSegment`/`execOutput` (not stringified) |
+| EA7 | `as` captures the loop | Full rendered loop stored in binding; no inline output |
+| EA8 | Prop contract | Missing/non-array `in`, missing `let`, `let={expr}`, `as={expr}`, reserved-word/unknown props rejected; `as` without env rejected |
+| EA9 | Projection | `<Each>` through `<Content />` resolves `in`, the item, and other caller bindings |
 
 ### Tier SC — Sample component (integration)
 
