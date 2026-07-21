@@ -36,8 +36,6 @@ for (const line of lines) {
   }
 }
 
-const why =
-  "referenced ≤1× within the added diff (pre-existing usages not counted)";
 const unused = decls
   .map(d => ({
     ...d,
@@ -45,12 +43,6 @@ const unused = decls
   }))
   .filter(d => d.refs <= 1);
 
-const rows = unused.map(u => [
-  `\`${u.name}\``,
-  `\`${u.file}:${u.lineNumber}\``,
-  String(u.refs),
-  why,
-]);
 const hasUnused = unused.length > 0;
 const icon = severity === "error" ? "🔴" : "🟡";
 const summary = icon + " " + message
@@ -63,9 +55,10 @@ const summary = icon + " " + message
 <details>
 <summary>{summary}</summary>
 
-<Table
-  headers={["Symbol", "Declared at", "Refs in diff", "Why flagged"]}
-  rows={rows} />
+| Symbol | Declared at | Refs in diff | Why flagged |
+| --- | --- | --- | --- |
+<Each in={unused} let="u">| `{u.name}` | `{u.file}:{u.lineNumber}` | {u.refs} | referenced ≤1× within the added diff (pre-existing usages not counted) |
+</Each>
 
 </details>
 
