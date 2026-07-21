@@ -22,10 +22,11 @@ const lines = pr.added.filter(l =>
 const source = lines.map(l => l.content).join("\n");
 
 // Anchoring the keyword to statement position (line start, after an optional
-// export/declare) excludes `import { type X }` specifiers, whose `type`
-// keyword sits inside braces rather than at the start of a declaration.
+// export/default/declare prefix) excludes `import { type X }` specifiers,
+// whose `type` keyword sits inside braces rather than at the start of a
+// declaration.
 const declPattern = new RegExp(
-  `^\\s*(?:export\\s+)?(?:declare\\s+)?${construct}\\s+(\\w+)`
+  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${construct}\\s+(\\w+)`
 );
 
 const decls = [];
