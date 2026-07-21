@@ -148,13 +148,8 @@ export interface CodeBlockResult {
   stderr: string;
 }
 
-/**
- * A component's declared input interface: a canonical JSON Schema (draft-07)
- * object schema (spec §5.1.1). The root always declares `type: "object"`;
- * nested subschemas are ordinary draft-07 schemas (objects or booleans).
- * Held as `JsonObject` so it doubles as a stable `WeakMap` key for the
- * compiled-validator cache.
- */
+// Canonical draft-07 JSON Schema object (spec §5.1.1). Held as `JsonObject` so
+// it doubles as a stable `WeakMap` key for the compiled-validator cache.
 export type InputSchema = JsonObject;
 
 export interface ComponentDefinition {

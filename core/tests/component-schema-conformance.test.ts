@@ -1,10 +1,3 @@
-/**
- * Migration/schema conformance: every real Markdown component's `inputs`
- * frontmatter must parse and compile as a canonical draft-07 schema under the
- * project contract. This covers the `.reviews` component/policy directories the
- * smoke run never loads, and fails with the offending source path.
- */
-
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import matter from "gray-matter";

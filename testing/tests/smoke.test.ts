@@ -25,6 +25,8 @@ const EMBEDDED_TESTS = [
   "A wrong array element type is rejected",
   "A missing required object key is rejected, exposing the cause",
   "An undeclared object property is rejected",
+  "A wrong-typed object field is rejected",
+  "An invalid nested enum value is rejected",
   "Expression props resolve from eval bindings",
   "JSON literal props resolve at scan time",
   "Non-string bindings coerce in text",

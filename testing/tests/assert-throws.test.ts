@@ -1,6 +1,8 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { AssertionError } from "@std/assert";
+import type { ComponentInvocation, InvocationContext } from "@executablemd/core";
+import { createTestHandlers } from "../src/handlers.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 
 const STRICT = [
@@ -73,6 +75,35 @@ describe("<AssertThrows>", () => {
     );
     expect(run.results[0]?.status).toBe("fail");
     expect(run.output).toContain("must be a string literal, not an expression");
+  });
+
+  it("rejects an as binding when no eval environment is active", function* () {
+    // Exercised directly: normal expansion always installs a root env, so the
+    // guard is unreachable through a document. Ajv/env context defaults to
+    // undefined when no provider is installed on the scope.
+    const handlers = createTestHandlers({ timeoutMs: 100 });
+    const invocation: ComponentInvocation = {
+      type: "component",
+      name: "AssertThrows",
+      props: { message: "must", as: "thrown" },
+      expressions: {},
+      children: [],
+      selfClosing: false,
+    };
+    const ctx: InvocationContext = {
+      meta: {},
+      props: {},
+      // deno-lint-ignore require-yield
+      *expand(segments) {
+        return segments;
+      },
+    };
+    const segments = yield* handlers.expandAssertThrows(invocation, ctx);
+    const segment = segments[0];
+    expect(segment).toMatchObject({ type: "error" });
+    if (segment && segment.type === "error") {
+      expect(segment.message).toContain("requires an eval scope");
+    }
   });
 
   it("rejects an invalid as identifier", function* () {

@@ -12,6 +12,10 @@ inputs:
           line:
             type: number
             default: 0
+          level:
+            type: string
+            enum: [info, warn]
+            default: info
         required: [symbol]
         additionalProperties: false
   required: [rows]
@@ -19,5 +23,5 @@ inputs:
 ---
 
 ```ts eval
-return rows.map((row) => `${row.symbol}@${row.line}`).join(", ");
+return rows.map((row) => `${row.symbol}@${row.line}:${row.level}`).join(", ");
 ```

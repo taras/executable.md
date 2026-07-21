@@ -1680,7 +1680,9 @@ function* durableImportComponent(
       kind: "function" as const,
       name,
       path: result.path,
-      inputs: mod.inputs ?? {},
+      inputs: mod.inputs === undefined
+        ? { type: "object", properties: {}, additionalProperties: false }
+        : parseJsonObject(mod.inputs),
       fn: mod.default,
     };
   }
@@ -1729,36 +1731,37 @@ interface ComponentDefinition {
 
 #### Frontmatter parsing
 
-`inputs` is passed through as the component's JSON Schema; parsing does
-not rewrite it into any other shape. The project contract (root
-`type: "object"`, reserved `slot`/`as`, local refs only, no `$async`) is
-enforced later, when the schema is compiled to a validator (§6.5). Meta
-is everything except `inputs`; a `meta` entry written as a typed
-definition (an object with a `type` key) resolves to its `default`.
+The frontmatter root is narrowed from `unknown` through the shared JSON
+parser (§5.1.1), so a non-JSON value anywhere rejects the frontmatter
+before Ajv sees it. `inputs` is passed through as the component's JSON
+Schema; parsing does not rewrite it into any other shape. The project
+contract (root `type: "object"`, reserved `slot`/`as`, local refs only,
+no `$async`) is enforced later, when the schema is compiled to a validator
+(§6.5). Meta is everything except `inputs`; a `meta` entry written as a
+typed definition (an object with a `type` key) resolves to its `default`.
 
 ```typescript
-function parseFrontmatter(raw: Record<string, unknown>): {
+function parseFrontmatter(raw: unknown): {
   meta: Record<string, unknown>;
   inputs: InputSchema;
 } {
-  // `inputs` is the component's JSON Schema. Absent → the closed
-  // empty-object schema, so a component with no declared inputs accepts
-  // no props. A fresh object per component keeps the compiled-validator
-  // cache from sharing state across definitions.
-  const inputs: InputSchema = (raw.inputs as InputSchema | undefined)
-    ?? { type: "object", properties: {}, additionalProperties: false };
+  const root: JsonObject = raw === null || raw === undefined ? {} : parseJsonObject(raw);
 
-  // Meta: everything except 'inputs'. If a 'meta' key exists, a typed
-  // definition (object with a 'type' key) resolves to its default.
+  // `inputs` is the component's JSON Schema. Absent → the closed
+  // empty-object schema. A fresh object per component keeps the
+  // compiled-validator cache from sharing state across definitions.
+  const inputs: InputSchema = root.inputs === undefined
+    ? { type: "object", properties: {}, additionalProperties: false }
+    : parseJsonObject(root.inputs);
+
   const meta: Record<string, unknown> = {};
-  if (raw.meta && typeof raw.meta === "object" && !Array.isArray(raw.meta)) {
-    for (const [key, value] of Object.entries(raw.meta as Record<string, unknown>)) {
-      meta[key] = isTypedDefinition(value)
-        ? (value as { default?: unknown }).default
-        : value;
+  const rawMeta = root.meta;
+  if (isPlainObject(rawMeta)) {
+    for (const [key, value] of Object.entries(rawMeta)) {
+      meta[key] = isTypedDefinition(value) ? value.default : value;
     }
   } else {
-    for (const [key, value] of Object.entries(raw)) {
+    for (const [key, value] of Object.entries(root)) {
       if (key !== "inputs") {
         meta[key] = value;
       }

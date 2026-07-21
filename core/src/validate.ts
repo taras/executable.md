@@ -1,21 +1,4 @@
-/**
- * Prop validation for component invocations (spec §5.5, §6.5).
- *
- * A component's `inputs` is a canonical JSON Schema (draft-07). Caller props
- * are validated against it by Ajv. Runtime operation — deterministic, no
- * journal entry.
- *
- * Project contract on top of draft-07:
- * - the root input schema must declare `type: "object"`;
- * - `slot`/`as` are reserved and cannot be declared properties;
- * - schemas are self-contained with local references only (no remote `$ref`);
- * - asynchronous schemas (`$async: true`) are rejected — validation stays
- *   synchronous so it never introduces a promise into the Effection path;
- * - `format` is an annotation, not an assertion.
- *
- * Applying `default` values is an executable.md extension enabled through Ajv
- * `useDefaults`, not portable JSON Schema validation behavior.
- */
+// Prop validation for component invocations (spec §5.5, §6.5).
 
 import { Ajv } from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
@@ -24,6 +7,8 @@ import type { InputSchema, Json } from "./types.ts";
 
 const RESERVED_INPUT_NAMES = ["slot", "as"];
 
+// `validateFormats: false` keeps `format` an annotation (no assertion, no extra
+// dependency). `useDefaults` mutates the validated value to fill defaults.
 const ajv = new Ajv({
   strict: true,
   allErrors: true,
@@ -35,10 +20,6 @@ const ajv = new Ajv({
   validateFormats: false,
 });
 
-/**
- * Error thrown when an input schema violates the project contract or fails
- * Ajv meta-schema validation. Raised at component-definition load time.
- */
 export class InputSchemaError extends Error {
   constructor(message: string) {
     super(message);
@@ -46,9 +27,6 @@ export class InputSchemaError extends Error {
   }
 }
 
-/**
- * A single normalized, JSON-safe Ajv validation issue.
- */
 export interface NormalizedIssue {
   instancePath: string;
   schemaPath: string;
@@ -57,15 +35,11 @@ export interface NormalizedIssue {
   message: string;
 }
 
-/**
- * Error thrown when caller props fail validation.
- *
- * `errors` are readable messages (the existing API). `issues` are the
- * normalized, JSON-safe structured records used for `ErrorSegment.cause`.
- */
 export class PropValidationError extends Error {
   componentName: string;
+  // Readable messages (existing API).
   errors: string[];
+  // Normalized JSON-safe records used for `ErrorSegment.cause`.
   issues: NormalizedIssue[];
 
   constructor(componentName: string, ajvErrors: ErrorObject[]) {
@@ -81,14 +55,6 @@ export class PropValidationError extends Error {
 
 const compiledCache = new WeakMap<InputSchema, ValidateFunction>();
 
-/**
- * Compile an input schema to a synchronous Ajv validator, enforcing the
- * project contract and caching by schema identity. Throws `InputSchemaError`
- * on a malformed schema, a contract violation, or an asynchronous schema.
- *
- * Called at both definition-loading boundaries (Markdown and function
- * components) to fail fast; `validateProps` reuses the cached result.
- */
 export function compileInputSchema(schema: InputSchema): ValidateFunction {
   const cached = compiledCache.get(schema);
   if (cached) {
@@ -96,6 +62,9 @@ export function compileInputSchema(schema: InputSchema): ValidateFunction {
   }
 
   enforceRootContract(schema);
+  // Ajv does not reject an async schema — it compiles an async validator that
+  // returns a promise. Reject it before and after compiling so validation
+  // stays synchronous within the Effection path.
   if (schema["$async"] === true) {
     throw new InputSchemaError("asynchronous input schemas ($async: true) are not supported");
   }
@@ -117,11 +86,8 @@ export function compileInputSchema(schema: InputSchema): ValidateFunction {
   return validate;
 }
 
-/**
- * Validate caller props against the component's input schema. Returns a clone
- * with defaults applied — Ajv's `useDefaults` mutates the validated object, so
- * the caller's environment value is never touched.
- */
+// Validates against a clone, not `callerProps` — Ajv's `useDefaults` mutates
+// the validated object, and the caller's env value must never change.
 export function validateProps(
   componentName: string,
   callerProps: Record<string, Json>,
@@ -182,6 +148,26 @@ function safeParams(params: unknown): Json {
 }
 
 function readableMessage(issue: NormalizedIssue): string {
-  const location = issue.instancePath ? `"${issue.instancePath}"` : "(root)";
+  const path = preciseInstancePath(issue);
+  const location = path ? `"${path}"` : "(root)";
   return `${location} ${issue.message}`.trim();
+}
+
+// Ajv reports `required` and `additionalProperties` at the container's path;
+// append the offending property so the message names the exact member.
+function preciseInstancePath(issue: NormalizedIssue): string {
+  const params = issue.params;
+  if (params === null || typeof params !== "object" || Array.isArray(params)) {
+    return issue.instancePath;
+  }
+  if (issue.keyword === "required" && typeof params["missingProperty"] === "string") {
+    return `${issue.instancePath}/${params["missingProperty"]}`;
+  }
+  if (
+    issue.keyword === "additionalProperties" &&
+    typeof params["additionalProperty"] === "string"
+  ) {
+    return `${issue.instancePath}/${params["additionalProperty"]}`;
+  }
+  return issue.instancePath;
 }

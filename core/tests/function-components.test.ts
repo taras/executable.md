@@ -83,6 +83,33 @@ describe("Tier FC — Function components", () => {
     }
   });
 
+  it("FC-reserved: rejects a reserved slot property at the function-component load boundary", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Bad.ts": [
+          "export const inputs = {",
+          '  type: "object",',
+          '  properties: { slot: { type: "string" } },',
+          "  additionalProperties: false,",
+          "};",
+          'export default function*() { return "x"; }',
+        ].join("\n"),
+        "doc.md": "<Bad />",
+      });
+      const output = yield* collect(
+        yield* execute({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("reserved");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
   it("FC2: function component with props", function* () {
     const tmpDir = makeTempDir();
     try {

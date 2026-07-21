@@ -76,9 +76,15 @@ describe("parseFrontmatter", () => {
     expect(() => parseFrontmatter({ inputs: [1, 2, 3] })).toThrow("JSON object");
   });
 
-  it("rejects a non-mapping frontmatter root", function* () {
-    expect(() => parseFrontmatter("nope")).toThrow("frontmatter must be a mapping");
-    expect(() => parseFrontmatter([1, 2])).toThrow("frontmatter must be a mapping");
+  it("rejects a non-object frontmatter root", function* () {
+    expect(() => parseFrontmatter("nope")).toThrow("JSON object");
+    expect(() => parseFrontmatter([1, 2])).toThrow("JSON object");
+    expect(() => parseFrontmatter(42)).toThrow("JSON object");
+  });
+
+  it("rejects a non-JSON value anywhere in the frontmatter", function* () {
+    expect(() => parseFrontmatter({ meta: { handler: () => {} } })).toThrow("function");
+    expect(() => parseFrontmatter({ title: 1 / 0 })).toThrow("non-finite");
   });
 
   it("treats null/undefined frontmatter as empty", function* () {

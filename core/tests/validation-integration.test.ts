@@ -1,10 +1,3 @@
-/**
- * Integration coverage for prop validation at the expansion and
- * definition-loading boundaries: the structured `cause` on a raised error
- * segment, and rejection of async / reserved-name schemas when a component is
- * loaded (both the Markdown and function-component boundaries).
- */
-
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";

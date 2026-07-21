@@ -163,6 +163,11 @@ describe("validateProps — defaults", () => {
     });
     expect(validateProps("C", { pair: [] }, schema)).toEqual({ pair: ["a", "b"] });
     expect(validateProps("C", { pair: ["x"] }, schema)).toEqual({ pair: ["x", "b"] });
+
+    // The caller's array is untouched even though tuple defaults extend the clone.
+    const caller: Record<string, Json> = { pair: [] };
+    expect(validateProps("C", caller, schema)).toEqual({ pair: ["a", "b"] });
+    expect(caller).toEqual({ pair: [] });
   });
 
   it("never mutates the caller's props object", function* () {
@@ -200,6 +205,56 @@ describe("validateProps — structured cause & error normalization", () => {
         expect(() => JSON.stringify(error.issues)).not.toThrow();
       }
     }
+  });
+
+  it("readable errors name the precise nested property; cause.errors keep raw Ajv paths", function* () {
+    const row = {
+      type: "object",
+      properties: { symbol: { type: "string" } },
+      required: ["symbol"],
+      additionalProperties: false,
+    };
+    const schema = closed({ rows: { type: "array", items: row } }, ["rows"]);
+
+    try {
+      validateProps("C", { rows: [{}] }, schema);
+      throw new Error("should have thrown");
+    } catch (error) {
+      if (!(error instanceof PropValidationError)) throw error;
+      expect(error.errors.some((m) => m.includes('"/rows/0/symbol"'))).toBe(true);
+      expect(
+        error.issues.some((i) => i.instancePath === "/rows/0" && i.keyword === "required"),
+      ).toBe(true);
+    }
+
+    try {
+      validateProps("C", { rows: [{ symbol: "x", extra: 1 }] }, schema);
+      throw new Error("should have thrown");
+    } catch (error) {
+      if (!(error instanceof PropValidationError)) throw error;
+      expect(error.errors.some((m) => m.includes('"/rows/0/extra"'))).toBe(true);
+      expect(
+        error.issues.some(
+          (i) => i.instancePath === "/rows/0" && i.keyword === "additionalProperties",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("normalizes failure-safe when Ajv omits message or supplies non-JSON params", function* () {
+    const error = new PropValidationError("C", [
+      {
+        keyword: "custom",
+        instancePath: "/a",
+        schemaPath: "#/a",
+        params: { fn: () => {}, nested: { ok: 1 } },
+        message: undefined,
+      },
+    ]);
+    expect(error.issues[0]?.message).toBe("");
+    // Non-JSON params fall back to {} rather than throwing during normalization.
+    expect(error.issues[0]?.params).toEqual({});
+    expect(() => JSON.stringify(error.issues)).not.toThrow();
   });
 
   it("treats format as an annotation, not an assertion", function* () {

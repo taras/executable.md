@@ -1,12 +1,5 @@
-/**
- * Shared `unknown → JSON` parsing (spec §5.1.1, §6.5).
- *
- * Frontmatter parsing, function-component loading, and Ajv error normalization
- * all need to narrow an `unknown` value to `Json` before handing it to Ajv or
- * storing it on a segment. Parsing (not casting) satisfies Code Rule 6 and
- * guarantees the value is genuinely serializable — Ajv and durable streams both
- * assume that.
- */
+// Parse an `unknown` value into `Json`, rejecting non-serializable values
+// (Code Rule 6 — parse, don't cast).
 
 import type { Json, JsonObject } from "./types.ts";
 
@@ -17,21 +10,12 @@ export class JsonParseError extends Error {
   }
 }
 
-/**
- * Narrow an `unknown` value to `Json`, rejecting anything a JSON document
- * cannot hold: `undefined`, functions, symbols, bigints, non-finite numbers,
- * cycles, and non-plain objects (class instances, `Map`, `Date`, arrays with
- * holes carrying `undefined`, etc.).
- */
 export function parseJson(value: unknown): Json {
   return parseValue(value, new Set(), "$");
 }
 
-/**
- * Narrow an `unknown` value to a plain JSON object. Used for the root `inputs`
- * schema and for a function component's `inputs` export — never for a whole
- * module namespace, which carries the default generator function.
- */
+// Never called on a whole module namespace — that carries the default
+// generator function, which is not JSON. Only the `inputs` export/value.
 export function parseJsonObject(value: unknown): JsonObject {
   const parsed = parseJson(value);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
