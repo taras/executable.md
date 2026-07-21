@@ -90,7 +90,11 @@ manifests (§3).
   one package with dnt (`scripts/build-npm.ts`) and publishes it. Runs in the
   `npm-publish` environment. npm publishing is idempotent: it skips an
   already-published version. JSR publishing is best-effort and does not fail
-  the run.
+  the run. dnt runs `npm install` inside the generated output dir, so
+  `build-npm.ts` writes an `.npmrc` there mapping the `@jsr` scope to
+  `https://npm.jsr.io` — a package with a `jsr:` dependency (e.g. `testing`'s
+  `@std/assert`) becomes a `@jsr/*` dependency the default registry does not
+  serve, so the install would otherwise 404.
 
 ## 4. npm authentication (OIDC, no token)
 
