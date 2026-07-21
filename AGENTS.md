@@ -39,7 +39,8 @@ Do not commit if any check fails. Fix the issue first, then re-run all three.
     section-divider comments. Enforced by the
     `local/no-section-divider-comments` Oxlint rule
     (`scripts/oxlint-plugin.js`), which autofixes with `oxlint --fix`.
-11. Prefer expending Executable.md capabilities over using JavaScript; Do not use JavaScript in MD without verifying with the user or planner agent.
+11. Prefer expanding Executable.md capabilities over using JavaScript; Do not
+    use JavaScript in MD without verifying with the user or planner agent.
 
 ## PR Process
 
