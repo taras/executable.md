@@ -2443,8 +2443,15 @@ A capture never swallows an error. When the expanded body contains any
 `ErrorSegment`, `as` creates no binding: the error segments are returned in
 place of the capture, so the enclosing consumer boundary applies the ambient
 raise policy to them exactly once — a collecting policy keeps them in the
-document, a throwing policy aborts. This holds for component `as` capture as
-well.
+document, a throwing policy aborts.
+
+This holds for every `as` capture. A Markdown component refuses the capture
+when its expanded body carries an `ErrorSegment`. A function component does
+the same for content errors: `useContent()` must return a string, so the
+engine tracks the `ErrorSegment`s produced while rendering the default and
+named slots and returns them instead of binding the rendered text. An
+uncaptured function component is unaffected — its content errors render
+inline as before.
 
 **Block scoping.** Each iteration expands its body in a fresh env object —
 `{ values: { ...caller.values, [let]: item } }` — created inside a scope that

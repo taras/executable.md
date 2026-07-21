@@ -855,6 +855,12 @@ function* expandFunctionComponent(
 
   const slots = partitionBySlot(children);
 
+  // useContent() must hand the component a string, so a collecting policy would
+  // otherwise let a rendered error comment become the captured value and drop
+  // the ErrorSegment from the document. Keep the structured errors alongside
+  // the string so `as` can refuse the capture below.
+  const contentErrors: Segment[] = [];
+
   // Call the function component with content middleware in scope so it can
   // render children via `yield* useContent()` / `useContent("slot")`.
   try {
@@ -868,9 +874,11 @@ function* expandFunctionComponent(
                 return "";
               }
               const expanded = yield* expandSegments(slotChildren, {}, {}, hideSet, counter);
+              contentErrors.push(...expanded.filter((segment) => segment.type === "error"));
               return renderSegments(expanded);
             }
             const expanded = yield* expandSegments(slots.default, {}, {}, hideSet, counter);
+            contentErrors.push(...expanded.filter((segment) => segment.type === "error"));
             return renderSegments(expanded);
           },
         },
@@ -879,6 +887,13 @@ function* expandFunctionComponent(
       return yield* definition.fn(validatedProps);
     });
     if (asBinding) {
+      // Consumer boundary (spec §6.9): a capture never swallows an error. Hand
+      // the content errors back so expandSegments applies the ambient policy
+      // and leave the binding unset.
+      if (contentErrors.length > 0) {
+        return contentErrors;
+      }
+
       const parentEnv = yield* env;
       if (!parentEnv) {
         return [
