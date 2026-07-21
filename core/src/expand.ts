@@ -201,8 +201,8 @@ export function* expandSegments(
             hideSet,
             counter,
           );
-          if (captureResult) {
-            result.push(yield* raise(captureResult));
+          for (const captureSegment of captureResult) {
+            result.push(yield* raise(captureSegment));
           }
           break;
         }
@@ -321,71 +321,47 @@ export function* expandSegments(
   return result;
 }
 
+function captureError(message: string): ErrorSegment {
+  return { type: "error", message, source: "Capture" };
+}
+
 function* expandCapture(
   segment: Extract<Segment, { type: "component" }>,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<ErrorSegment | undefined> {
+): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
-    return {
-      type: "error",
-      message: '<Capture> must have content. Use <Capture as="x">...</Capture>.',
-      source: "Capture",
-    };
+    return [captureError('<Capture> must have content. Use <Capture as="x">...</Capture>.')];
   }
 
   const propNames = Object.keys(segment.props);
   if (propNames.some((name) => name !== "as" && name !== "select")) {
-    return {
-      type: "error",
-      message: '<Capture> only accepts "as" and "select" props.',
-      source: "Capture",
-    };
+    return [captureError('<Capture> only accepts "as" and "select" props.')];
   }
 
   const expressionNames = Object.keys(segment.expressions);
   if (expressionNames.length > 0) {
     if (expressionNames.includes("as")) {
-      return {
-        type: "error",
-        message: '<Capture as={...}> is invalid: "as" must be a string literal.',
-        source: "Capture",
-      };
+      return [captureError('<Capture as={...}> is invalid: "as" must be a string literal.')];
     }
     if (!expressionNames.every((n) => n === "select")) {
-      return {
-        type: "error",
-        message: '<Capture> only accepts "as" and "select" props.',
-        source: "Capture",
-      };
+      return [captureError('<Capture> only accepts "as" and "select" props.')];
     }
   }
 
   if (segment.props.as === undefined) {
-    return {
-      type: "error",
-      message: '<Capture> requires an "as" prop (non-empty string).',
-      source: "Capture",
-    };
+    return [captureError('<Capture> requires an "as" prop (non-empty string).')];
   }
 
   const asBinding = validateBindingName(segment.props.as);
   if (!asBinding.ok) {
-    return {
-      type: "error",
-      message: asBinding.error,
-      source: "Capture",
-    };
+    return [captureError(asBinding.error)];
   }
   const bindingName = asBinding.value;
   if (bindingName === undefined) {
-    return {
-      type: "error",
-      message: '<Capture> requires an "as" prop (non-empty string).',
-      source: "Capture",
-    };
+    return [captureError('<Capture> requires an "as" prop (non-empty string).')];
   }
 
   const expandedChildren = yield* expandSegments(
@@ -395,6 +371,20 @@ function* expandCapture(
     hideSet,
     counter,
   );
+
+  // Consumer boundary (spec §6.9): a capture never swallows an error. Hand the
+  // error segments back before rendering or `select` folds them into text, so
+  // expandSegments applies the ambient policy and the binding stays unset.
+  const errors: ErrorSegment[] = [];
+  for (const child of expandedChildren) {
+    if (child.type === "error") {
+      errors.push(child);
+    }
+  }
+  if (errors.length > 0) {
+    return errors;
+  }
+
   const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
 
   // Apply CSS selector if select prop is present (spec §6.5)
@@ -411,14 +401,10 @@ function* expandCapture(
 
   const bindingEnv = yield* env;
   if (!bindingEnv) {
-    return {
-      type: "error",
-      message: "<Capture> requires an evaluation environment.",
-      source: "Capture",
-    };
+    return [captureError("<Capture> requires an evaluation environment.")];
   }
   bindingEnv.values[bindingName] = captured;
-  return undefined;
+  return [];
 }
 
 function eachError(message: string): ErrorSegment {

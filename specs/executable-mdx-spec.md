@@ -2277,11 +2277,15 @@ Behavior:
 
 1. Expand children in the **current env/scope** (no new `EvalEnv`, no
    new `EvalScope`).
-2. Render children to string.
-3. Trim trailing whitespace (`/\s+$/`).
-4. If `select` prop is present, apply CSS selector extraction (see below).
-5. Store the resulting string in `env.values[as]`.
-6. Produce no output segment.
+2. If the expanded children contain any `ErrorSegment`, store no binding and
+   return those error segments so the enclosing consumer boundary applies the
+   ambient raise policy (§6.9). Steps 3–7 do not run, so rendering and
+   `select` never fold an error comment into the captured value.
+3. Render children to string.
+4. Trim trailing whitespace (`/\s+$/`).
+5. If `select` prop is present, apply CSS selector extraction (see below).
+6. Store the resulting string in `env.values[as]`.
+7. Produce no output segment.
 
 Overwrites are allowed for both mechanisms: last writer wins.
 
@@ -2445,13 +2449,23 @@ place of the capture, so the enclosing consumer boundary applies the ambient
 raise policy to them exactly once — a collecting policy keeps them in the
 document, a throwing policy aborts.
 
-This holds for every `as` capture. A Markdown component refuses the capture
-when its expanded body carries an `ErrorSegment`. A function component does
-the same for content errors: `useContent()` must return a string, so the
-engine tracks the `ErrorSegment`s produced while rendering the default and
-named slots and returns them instead of binding the rendered text. An
-uncaptured function component is unaffected — its content errors render
-inline as before.
+This holds for all four capture paths:
+
+| Path | Refuses the capture when |
+| --- | --- |
+| Native `<Capture as>` | its expanded children carry an `ErrorSegment` — checked before rendering and before `select` is applied |
+| `<Each as>` | the expanded loop output carries an `ErrorSegment` |
+| Markdown component `as=` | its expanded body carries an `ErrorSegment` |
+| Function component `as=` | rendering its content produced an `ErrorSegment` |
+
+A function component cannot inspect segments after the fact, because
+`useContent()` must return a string. The engine therefore tracks the
+`ErrorSegment`s produced while rendering the default and named slots and
+returns them instead of binding the rendered text.
+
+Uncaptured forms are unaffected: without `as`, a function component's content
+errors render inline as before, and `<Each>` keeps emitting its body segments
+structurally.
 
 **Block scoping.** Each iteration expands its body in a fresh env object —
 `{ values: { ...caller.values, [let]: item } }` — created inside a scope that
