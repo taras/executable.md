@@ -33,7 +33,7 @@ jobs:
       # analysis behavior; bump the pin as part of each release.
       - name: Install xmd release binary
         run: |
-          curl -fsSL https://executable.md/install.sh | XMD_VERSION=v0.3.1 sh
+          curl -fsSL https://executable.md/install.sh | XMD_VERSION=v0.4.0 sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run repo analysis
