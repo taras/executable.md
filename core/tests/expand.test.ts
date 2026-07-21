@@ -685,7 +685,7 @@ describe("component-declared output", () => {
 });
 
 describe("validateProps", () => {
-  const closed = (properties: Record<string, unknown>, required?: string[]) => ({
+  const closed = (properties: Record<string, Json>, required?: string[]): Record<string, Json> => ({
     type: "object",
     properties,
     ...(required ? { required } : {}),
