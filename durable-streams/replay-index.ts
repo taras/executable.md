@@ -59,7 +59,9 @@ export class ReplayIndex {
    * or undefined if the cursor is past the end or replay is disabled.
    */
   peekYield(coroutineId: CoroutineId): YieldEntry | undefined {
-    if (this.disabled.has(coroutineId)) return undefined;
+    if (this.disabled.has(coroutineId)) {
+      return undefined;
+    }
     const list = this.yields.get(coroutineId);
     const cursor = this.cursors.get(coroutineId) ?? 0;
     return list?.[cursor];
@@ -78,13 +80,17 @@ export class ReplayIndex {
 
   /** Returns true if a Close event exists for this coroutine (and replay is not disabled). */
   hasClose(coroutineId: CoroutineId): boolean {
-    if (this.disabled.has(coroutineId)) return false;
+    if (this.disabled.has(coroutineId)) {
+      return false;
+    }
     return this.closes.has(coroutineId);
   }
 
   /** Returns the Close event for this coroutine, or undefined. */
   getClose(coroutineId: CoroutineId): Close | undefined {
-    if (this.disabled.has(coroutineId)) return undefined;
+    if (this.disabled.has(coroutineId)) {
+      return undefined;
+    }
     return this.closes.get(coroutineId);
   }
 
@@ -96,9 +102,13 @@ export class ReplayIndex {
    */
   hasAnyUnconsumedYields(): boolean {
     for (const [coroutineId, entries] of this.yields.entries()) {
-      if (this.disabled.has(coroutineId)) continue;
+      if (this.disabled.has(coroutineId)) {
+        continue;
+      }
       const cursor = this.cursors.get(coroutineId) ?? 0;
-      if (cursor < entries.length) return true;
+      if (cursor < entries.length) {
+        return true;
+      }
     }
     return false;
   }
@@ -121,8 +131,12 @@ export class ReplayIndex {
       }
     | undefined {
     for (const [coroutineId, entries] of this.yields.entries()) {
-      if (this.disabled.has(coroutineId)) continue;
-      if (this.closes.has(coroutineId)) continue;
+      if (this.disabled.has(coroutineId)) {
+        continue;
+      }
+      if (this.closes.has(coroutineId)) {
+        continue;
+      }
       const cursor = this.cursors.get(coroutineId) ?? 0;
       if (cursor < entries.length) {
         return { coroutineId, cursor, totalYields: entries.length };
@@ -139,7 +153,9 @@ export class ReplayIndex {
    * Returns false if replay is disabled (run-live mode).
    */
   isFullyReplayed(coroutineId: CoroutineId): boolean {
-    if (this.disabled.has(coroutineId)) return false;
+    if (this.disabled.has(coroutineId)) {
+      return false;
+    }
     return this.peekYield(coroutineId) === undefined && this.hasClose(coroutineId);
   }
 

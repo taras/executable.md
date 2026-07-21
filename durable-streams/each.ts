@@ -105,7 +105,9 @@ function durableEachFetch<T extends Json>(
       () => source.next(),
     )) as { value: T } | { done: true };
 
-    if ("done" in result) return DONE;
+    if ("done" in result) {
+      return DONE;
+    }
     return result.value;
   })();
 }

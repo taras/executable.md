@@ -384,7 +384,9 @@ describe("durableEach", () => {
       function* () {
         for (const msg of yield* durableEach("queue", source)) {
           processed.push(msg);
-          if (msg === "b") break;
+          if (msg === "b") {
+            break;
+          }
           yield* durableEach.next();
         }
         return "stopped";

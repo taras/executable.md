@@ -18,6 +18,7 @@
   },
 
   "rules": {
+    "eslint/curly": "error",
     "eslint/no-unused-vars": ["warn", {
       "args": "all",
       "argsIgnorePattern": "^_",

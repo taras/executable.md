@@ -203,7 +203,9 @@ describe("deterministic IDs", () => {
 
     // Keep only: child yields + child closes (no root close, no "after" yield)
     const partialEvents = allEvents.filter((e) => {
-      if (e.coroutineId === "root") return false;
+      if (e.coroutineId === "root") {
+        return false;
+      }
       return true;
     });
 

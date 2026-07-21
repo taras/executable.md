@@ -25,9 +25,15 @@ import type { CodeBlockResult } from "../types.ts";
  * - `500`   → 500 (raw number, treated as ms)
  */
 export function parseDuration(s: string): number {
-  if (s.endsWith("ms")) return parseInt(s, 10);
-  if (s.endsWith("m")) return parseInt(s, 10) * 60_000;
-  if (s.endsWith("s")) return parseInt(s, 10) * 1_000;
+  if (s.endsWith("ms")) {
+    return parseInt(s, 10);
+  }
+  if (s.endsWith("m")) {
+    return parseInt(s, 10) * 60_000;
+  }
+  if (s.endsWith("s")) {
+    return parseInt(s, 10) * 1_000;
+  }
   return parseInt(s, 10);
 }
 
