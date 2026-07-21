@@ -27,7 +27,6 @@ describe("component schema conformance", () => {
           }
           const source = yield* readTextFile(entry.path);
           const parsed = matter(source);
-          // Only files that actually carry frontmatter declare inputs.
           if (Object.keys(parsed.data).length === 0) {
             return;
           }

@@ -198,7 +198,6 @@ describe("validateProps — structured cause & error normalization", () => {
         const issue = error.issues.find((i) => i.instancePath === "/n");
         expect(issue).toBeDefined();
         expect(issue?.keyword).toBe("type");
-        // JSON-safe: params round-trips through JSON without throwing.
         expect(() => JSON.stringify(error.issues)).not.toThrow();
       }
     }

@@ -67,15 +67,21 @@ describe("prop-validation error segment", () => {
     }
   });
 
-  it("omits cause for a non-validation error (unknown prop path still validates)", function* () {
+  it("emits an ErrorSegment without cause for a non-validation error", function* () {
     const open = markdownComponent("Ok", {
       type: "object",
-      properties: { n: { type: "number" } },
+      properties: {},
       additionalProperties: false,
     });
-    const segments = yield* expandRaw("<Ok />", { Ok: open });
-    // No props, no required → clean expansion, no error segment.
-    expect(segments.some((segment) => segment.type === "error")).toBe(false);
+    // An invalid `as` binding fails via an ordinary Error, not PropValidationError.
+    const segments = yield* expandRaw('<Ok as="not-valid" />', { Ok: open });
+    const error = segments.find((segment) => segment.type === "error");
+    expect(error).toBeDefined();
+    if (error && error.type === "error") {
+      expect(error.message).toContain('"as"');
+      expect(error.message).toContain("identifier");
+      expect("cause" in error).toBe(false);
+    }
   });
 });
 

@@ -44,7 +44,6 @@ class RaisedSegmentError extends Error {
   }
 }
 
-/** An ErrorSegment intercepted by `<AssertThrows>`'s own scope-local hook. */
 class CapturedRaise extends Error {
   override name = "CapturedRaise";
   segment: ErrorSegment;
