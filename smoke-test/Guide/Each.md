@@ -9,7 +9,9 @@ renders nothing, and `as` captures the whole rendered loop into a binding
 instead of emitting it inline.
 
 `<Each>` keeps iteration declarative: the body is Markdown, not a
-JavaScript `.map().join()`, so data shaping stays out of eval blocks.
+JavaScript `.map().join()`, so row rendering and presentation stay out of
+eval blocks. Eval blocks still compute the array being iterated — `<Each>`
+moves presentation out of JavaScript, not data shaping.
 
 </Section>
 

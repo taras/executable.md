@@ -201,8 +201,8 @@ export function* expandSegments(
             hideSet,
             counter,
           );
-          if (captureResult) {
-            result.push(yield* raise(captureResult));
+          for (const captureSegment of captureResult) {
+            result.push(yield* raise(captureSegment));
           }
           break;
         }
@@ -321,71 +321,47 @@ export function* expandSegments(
   return result;
 }
 
+function captureError(message: string): ErrorSegment {
+  return { type: "error", message, source: "Capture" };
+}
+
 function* expandCapture(
   segment: Extract<Segment, { type: "component" }>,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<ErrorSegment | undefined> {
+): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
-    return {
-      type: "error",
-      message: '<Capture> must have content. Use <Capture as="x">...</Capture>.',
-      source: "Capture",
-    };
+    return [captureError('<Capture> must have content. Use <Capture as="x">...</Capture>.')];
   }
 
   const propNames = Object.keys(segment.props);
   if (propNames.some((name) => name !== "as" && name !== "select")) {
-    return {
-      type: "error",
-      message: '<Capture> only accepts "as" and "select" props.',
-      source: "Capture",
-    };
+    return [captureError('<Capture> only accepts "as" and "select" props.')];
   }
 
   const expressionNames = Object.keys(segment.expressions);
   if (expressionNames.length > 0) {
     if (expressionNames.includes("as")) {
-      return {
-        type: "error",
-        message: '<Capture as={...}> is invalid: "as" must be a string literal.',
-        source: "Capture",
-      };
+      return [captureError('<Capture as={...}> is invalid: "as" must be a string literal.')];
     }
     if (!expressionNames.every((n) => n === "select")) {
-      return {
-        type: "error",
-        message: '<Capture> only accepts "as" and "select" props.',
-        source: "Capture",
-      };
+      return [captureError('<Capture> only accepts "as" and "select" props.')];
     }
   }
 
   if (segment.props.as === undefined) {
-    return {
-      type: "error",
-      message: '<Capture> requires an "as" prop (non-empty string).',
-      source: "Capture",
-    };
+    return [captureError('<Capture> requires an "as" prop (non-empty string).')];
   }
 
   const asBinding = validateBindingName(segment.props.as);
   if (!asBinding.ok) {
-    return {
-      type: "error",
-      message: asBinding.error,
-      source: "Capture",
-    };
+    return [captureError(asBinding.error)];
   }
   const bindingName = asBinding.value;
   if (bindingName === undefined) {
-    return {
-      type: "error",
-      message: '<Capture> requires an "as" prop (non-empty string).',
-      source: "Capture",
-    };
+    return [captureError('<Capture> requires an "as" prop (non-empty string).')];
   }
 
   const expandedChildren = yield* expandSegments(
@@ -395,6 +371,20 @@ function* expandCapture(
     hideSet,
     counter,
   );
+
+  // Consumer boundary (spec §6.9): a capture never swallows an error. Hand the
+  // error segments back before rendering or `select` folds them into text, so
+  // expandSegments applies the ambient policy and the binding stays unset.
+  const errors: ErrorSegment[] = [];
+  for (const child of expandedChildren) {
+    if (child.type === "error") {
+      errors.push(child);
+    }
+  }
+  if (errors.length > 0) {
+    return errors;
+  }
+
   const rendered = renderSegments(expandedChildren).replace(/\s+$/, "");
 
   // Apply CSS selector if select prop is present (spec §6.5)
@@ -411,14 +401,10 @@ function* expandCapture(
 
   const bindingEnv = yield* env;
   if (!bindingEnv) {
-    return {
-      type: "error",
-      message: "<Capture> requires an evaluation environment.",
-      source: "Capture",
-    };
+    return [captureError("<Capture> requires an evaluation environment.")];
   }
   bindingEnv.values[bindingName] = captured;
-  return undefined;
+  return [];
 }
 
 function eachError(message: string): ErrorSegment {
@@ -515,16 +501,18 @@ function* expandEach(
     return out;
   }
 
+  // Consumer boundary (spec §6.9): a capture never swallows an error. Hand the
+  // error segments back so expandSegments applies the ambient policy exactly
+  // once — a collecting policy keeps them in the document, a throwing policy
+  // aborts — and leave the binding unset either way.
+  const errors = out.filter((outSegment) => outSegment.type === "error");
+  if (errors.length > 0) {
+    return errors;
+  }
+
   const captureEnv = yield* env;
   if (!captureEnv) {
     return [eachError('Prop "as" on <Each /> requires a parent evaluation environment.')];
-  }
-  // Consumer boundary (spec §6.9): re-raise transported errors so a captured
-  // loop never hides an error inside the rendered string.
-  for (const outSegment of out) {
-    if (outSegment.type === "error") {
-      yield* raise(outSegment);
-    }
   }
   captureEnv.values[asBinding] = renderSegments(out);
   return [];
@@ -762,6 +750,15 @@ function* expandComponent(
   });
 
   if (asBinding) {
+    // Consumer boundary (spec §6.9): a capture never swallows an error. Hand
+    // the error segments back so expandSegments applies the ambient policy
+    // exactly once — a collecting policy keeps them in the document, a
+    // throwing policy aborts — and leave the binding unset either way.
+    const errors = expanded.filter((capturedSegment) => capturedSegment.type === "error");
+    if (errors.length > 0) {
+      return errors;
+    }
+
     const parentEnv = yield* env;
     if (!parentEnv) {
       return [
@@ -771,13 +768,6 @@ function* expandComponent(
           source: name,
         }),
       ];
-    }
-    // Consumer boundary (spec §6.9): raise transported errors unconditionally
-    // so documentation never captures and hides an error comment.
-    for (const capturedSegment of expanded) {
-      if (capturedSegment.type === "error") {
-        yield* raise(capturedSegment);
-      }
     }
     parentEnv.values[asBinding] = renderSegments(expanded);
     return [];
@@ -851,6 +841,12 @@ function* expandFunctionComponent(
 
   const slots = partitionBySlot(children);
 
+  // useContent() must hand the component a string, so a collecting policy would
+  // otherwise let a rendered error comment become the captured value and drop
+  // the ErrorSegment from the document. Keep the structured errors alongside
+  // the string so `as` can refuse the capture below.
+  const contentErrors: Segment[] = [];
+
   // Call the function component with content middleware in scope so it can
   // render children via `yield* useContent()` / `useContent("slot")`.
   try {
@@ -864,9 +860,11 @@ function* expandFunctionComponent(
                 return "";
               }
               const expanded = yield* expandSegments(slotChildren, {}, {}, hideSet, counter);
+              contentErrors.push(...expanded.filter((segment) => segment.type === "error"));
               return renderSegments(expanded);
             }
             const expanded = yield* expandSegments(slots.default, {}, {}, hideSet, counter);
+            contentErrors.push(...expanded.filter((segment) => segment.type === "error"));
             return renderSegments(expanded);
           },
         },
@@ -875,6 +873,13 @@ function* expandFunctionComponent(
       return yield* definition.fn(validatedProps);
     });
     if (asBinding) {
+      // Consumer boundary (spec §6.9): a capture never swallows an error. Hand
+      // the content errors back so expandSegments applies the ambient policy
+      // and leave the binding unset.
+      if (contentErrors.length > 0) {
+        return contentErrors;
+      }
+
       const parentEnv = yield* env;
       if (!parentEnv) {
         return [

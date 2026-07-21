@@ -2277,11 +2277,15 @@ Behavior:
 
 1. Expand children in the **current env/scope** (no new `EvalEnv`, no
    new `EvalScope`).
-2. Render children to string.
-3. Trim trailing whitespace (`/\s+$/`).
-4. If `select` prop is present, apply CSS selector extraction (see below).
-5. Store the resulting string in `env.values[as]`.
-6. Produce no output segment.
+2. If the expanded children contain any `ErrorSegment`, store no binding and
+   return those error segments so the enclosing consumer boundary applies the
+   ambient raise policy (§6.9). Steps 3–7 do not run, so rendering and
+   `select` never fold an error comment into the captured value.
+3. Render children to string.
+4. Trim trailing whitespace (`/\s+$/`).
+5. If `select` prop is present, apply CSS selector extraction (see below).
+6. Store the resulting string in `env.values[as]`.
+7. Produce no output segment.
 
 Overwrites are allowed for both mechanisms: last writer wins.
 
@@ -2437,8 +2441,31 @@ Props (only these three are accepted; any other prop is an error):
 `<Each>` is **structural**: each iteration expands the body to segments that
 are appended to the loop output, so `ErrorSegment` and `execOutput` segments
 survive and the ambient raise policy applies to them exactly as elsewhere. The
-loop is rendered to a string only when `as` captures it (transported errors
-are re-raised before capture so a captured loop never hides an error).
+loop is rendered to a string only when `as` captures it.
+
+A capture never swallows an error. When the expanded body contains any
+`ErrorSegment`, `as` creates no binding: the error segments are returned in
+place of the capture, so the enclosing consumer boundary applies the ambient
+raise policy to them exactly once — a collecting policy keeps them in the
+document, a throwing policy aborts.
+
+This holds for all four capture paths:
+
+| Path | Refuses the capture when |
+| --- | --- |
+| Native `<Capture as>` | its expanded children carry an `ErrorSegment` — checked before rendering and before `select` is applied |
+| `<Each as>` | the expanded loop output carries an `ErrorSegment` |
+| Markdown component `as=` | its expanded body carries an `ErrorSegment` |
+| Function component `as=` | rendering its content produced an `ErrorSegment` |
+
+A function component cannot inspect segments after the fact, because
+`useContent()` must return a string. The engine therefore tracks the
+`ErrorSegment`s produced while rendering the default and named slots and
+returns them instead of binding the rendered text.
+
+Uncaptured forms are unaffected: without `as`, a function component's content
+errors render inline as before, and `<Each>` keeps emitting its body segments
+structurally.
 
 **Block scoping.** Each iteration expands its body in a fresh env object —
 `{ values: { ...caller.values, [let]: item } }` — created inside a scope that
