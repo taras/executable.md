@@ -101,17 +101,17 @@ function expandChildrenScoped(
   });
 }
 
-/**
- * Normalize a dynamically-supplied `renderChildren` override. Because eval
- * code passes the argument at runtime, an explicit value must be validated:
- * only a plain object is accepted; null, arrays, and primitives are rejected
- * rather than silently spread. Omission behaves like a plain `renderChildren()`.
- */
 function validateRenderOverride(override: unknown): Record<string, unknown> | undefined {
   if (override === undefined) {
     return undefined;
   }
   if (typeof override !== "object" || override === null || Array.isArray(override)) {
+    throw new Error("renderChildren(override) requires a plain object.");
+  }
+  // Reject Date/Map/class instances: only Object.prototype and null-prototype
+  // records are plain objects whose keys layer cleanly over the caller env.
+  const proto = Object.getPrototypeOf(override);
+  if (proto !== null && proto !== Object.prototype) {
     throw new Error("renderChildren(override) requires a plain object.");
   }
   const result: Record<string, unknown> = {};
@@ -427,15 +427,6 @@ function eachError(message: string): ErrorSegment {
 
 const EACH_PROPS = new Set(["in", "let", "as"]);
 
-/**
- * Expand `<Each in={list} let="item">…</Each>` — a native, block-scoped
- * iteration directive. `<Each>` is structural: each iteration expands the body
- * to segments that are appended verbatim, so ErrorSegment/ExecOutputSegment
- * survive. Output is rendered to a string only when `as` captures the loop.
- *
- * The loop binding lives in a fresh per-iteration env (see expandChildrenScoped)
- * that shadows without leaking to siblings, the parent, or later iterations.
- */
 function* expandEach(
   segment: Extract<Segment, { type: "component" }>,
   parentMeta: Record<string, unknown>,
@@ -443,7 +434,6 @@ function* expandEach(
   hideSet: Set<string>,
   counter: BlockCounter,
 ): Operation<Segment[]> {
-  // <Each> bypasses validateProps, so enforce the whole prop contract here.
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
   );

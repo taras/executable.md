@@ -1,15 +1,3 @@
-/**
- * Tier Each — native `<Each>` iteration directive (spec §6).
- *
- * `<Each in={list} let="item">…</Each>` renders its body once per element with
- * the item bound under `let`. It is structural: iterations append expanded
- * Segment[] (ErrorSegment/ExecOutputSegment survive), and a string is produced
- * only when `as` captures the loop. The per-item binding lives in a fresh env
- * that shadows without leaking.
- *
- * Structural/validation/scoping cases use a mocked expandSegments harness;
- * eval-in-loop cases run real eval through execute().
- */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";
@@ -88,13 +76,14 @@ describe("Tier Each — native iteration directive", () => {
     expect(run.output).toBe("(row=A)(row=B)");
   });
 
-  it("E4: nested <Each> shadows correctly without leaking", function* () {
+  it("E4: nested <Each> reusing the same binding shadows then restores it", function* () {
     const run = yield* runEach(
-      '<Each in={[{name: "G", items: [1, 2]}]} let="g"><Each in={g.items} let="item">{g.name}={item};</Each></Each>',
+      '<Each in={[{v: "O", items: [1, 2]}]} let="x">before={x.v};<Each in={x.items} let="x">in={x};</Each>after={x.v};</Each>',
     );
-    expect(run.output).toBe("G=1;G=2;");
-    expect(run.env?.g).toBeUndefined();
-    expect(run.env?.item).toBeUndefined();
+    // before/after read the outer x (an object); in= reads the inner x (a number),
+    // proving the inner binding shadows and the outer is restored on exit.
+    expect(run.output).toBe("before=O;in=1;in=2;after=O;");
+    expect(run.env?.x).toBeUndefined();
   });
 
   it("E5: the item binding does not leak to siblings or the parent env", function* () {
@@ -235,6 +224,34 @@ describe("Tier Each — eval in the loop body", () => {
 
     expect(output).toContain("| x | 1 |");
     expect(output).toContain("| y | 2 |");
+    expect(output).not.toContain("ERROR");
+  });
+
+  it("E22: each iteration's eval env is fresh — body bindings do not carry over", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "test.md": [
+        "```js eval",
+        "const items = [1, 2];",
+        "```",
+        '<Each in={items} let="n">',
+        "```js eval",
+        "output('iter' + n + ':' + ('carry' in env ? env.carry : 'absent'));",
+        "env.carry = 'from-' + n;",
+        "```",
+        "</Each>",
+        "```js eval",
+        "output('final:' + (typeof carry === 'undefined' ? 'absent' : carry));",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+
+    expect(output).toContain("iter1:absent");
+    expect(output).toContain("iter2:absent");
+    expect(output).toContain("final:absent");
     expect(output).not.toContain("ERROR");
   });
 
