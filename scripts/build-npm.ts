@@ -136,6 +136,18 @@ await main(function* (args) {
   const outDir = new URL("npm/", pkgDir);
   yield* emptyDir(fromFileUrl(outDir));
 
+  // dnt runs `npm install` inside outDir, which has its own package.json, so npm
+  // treats outDir as the project root and never walks up to the repo-root
+  // `.npmrc`. Any `jsr:` import (e.g. testing's `@std/assert`) becomes a
+  // `@jsr/*` dependency served from npm.jsr.io, not the default registry — so
+  // without this scoped mapping the install 404s. dnt writes package.json and
+  // .npmignore into outDir but never an .npmrc, so this file survives the build.
+  // npm excludes .npmrc from published tarballs, so it stays build-only.
+  yield* writeTextFile(
+    new URL(".npmrc", outDir),
+    "@jsr:registry=https://npm.jsr.io\n",
+  );
+
   // dnt externalizes any import that resolves to an `npm:` specifier (that's how
   // effection/@effectionx end up as dependencies) and inlines anything that
   // resolves to a local file. Sibling @executablemd packages resolve locally via
