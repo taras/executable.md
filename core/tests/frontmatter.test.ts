@@ -87,6 +87,12 @@ describe("parseFrontmatter", () => {
     expect(() => parseFrontmatter({ title: 1 / 0 })).toThrow("non-finite");
   });
 
+  it("rejects a sparse array in the frontmatter", function* () {
+    const holed = ["x"];
+    holed[2] = "y";
+    expect(() => parseFrontmatter({ tags: holed })).toThrow("missing array element");
+  });
+
   it("treats null/undefined frontmatter as empty", function* () {
     expect(parseFrontmatter(null).inputs).toEqual({
       type: "object",

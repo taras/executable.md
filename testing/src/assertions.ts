@@ -175,12 +175,8 @@ export function validationError(name: string, message: string): ErrorSegment {
   return { type: "error", message: `<${name}> ${message}`, source: name };
 }
 
-/**
- * Build the failure diagnostic, emit it directly when visible outside a test
- * (the throw below would otherwise abort before the segment could render),
- * then throw `AssertionDiagnostic`. Shared by every assertion, including
- * `<AssertThrows>`, so failure behavior never diverges.
- */
+// Outside a test the throw would abort before the segment could render, so
+// emit the visible diagnostic first.
 export function* failVisiblyThenThrow(
   name: string,
   msg: string | undefined,

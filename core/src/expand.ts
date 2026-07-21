@@ -860,11 +860,6 @@ function* resolveExpressionProps(
  */
 const SLOT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 
-/**
- * Build the error segment for a failed prop validation. A `PropValidationError`
- * carries structured `cause` ({ componentName, errors }); any other failure
- * carries no `cause` key. `parseJson` guarantees the payload is JSON-safe.
- */
 function propValidationErrorSegment(error: unknown, name: string): ErrorSegment {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof PropValidationError) {

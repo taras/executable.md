@@ -142,7 +142,6 @@ describe("<AssertThrows>", () => {
       ),
     );
     expect(run.results[0]?.status).toBe("fail");
-    // The failure is the inner AssertEquals, not a "no error raised" from AssertThrows.
     expect(run.results[0]?.error?.message ?? "").not.toContain("none was raised");
   });
 

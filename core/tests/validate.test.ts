@@ -143,9 +143,7 @@ describe("validateProps — defaults", () => {
         additionalProperties: false,
       },
     });
-    // present parent → nested default fills
     expect(validateProps("C", { cfg: {} }, schema)).toEqual({ cfg: { x: 5 } });
-    // absent optional parent with no default → NOT synthesized
     expect(validateProps("C", {}, schema)).toEqual({});
   });
 
@@ -164,7 +162,6 @@ describe("validateProps — defaults", () => {
     expect(validateProps("C", { pair: [] }, schema)).toEqual({ pair: ["a", "b"] });
     expect(validateProps("C", { pair: ["x"] }, schema)).toEqual({ pair: ["x", "b"] });
 
-    // The caller's array is untouched even though tuple defaults extend the clone.
     const caller: Record<string, Json> = { pair: [] };
     expect(validateProps("C", caller, schema)).toEqual({ pair: ["a", "b"] });
     expect(caller).toEqual({ pair: [] });
@@ -220,7 +217,9 @@ describe("validateProps — structured cause & error normalization", () => {
       validateProps("C", { rows: [{}] }, schema);
       throw new Error("should have thrown");
     } catch (error) {
-      if (!(error instanceof PropValidationError)) throw error;
+      if (!(error instanceof PropValidationError)) {
+        throw error;
+      }
       expect(error.errors.some((m) => m.includes('"/rows/0/symbol"'))).toBe(true);
       expect(
         error.issues.some((i) => i.instancePath === "/rows/0" && i.keyword === "required"),
@@ -231,13 +230,43 @@ describe("validateProps — structured cause & error normalization", () => {
       validateProps("C", { rows: [{ symbol: "x", extra: 1 }] }, schema);
       throw new Error("should have thrown");
     } catch (error) {
-      if (!(error instanceof PropValidationError)) throw error;
+      if (!(error instanceof PropValidationError)) {
+        throw error;
+      }
       expect(error.errors.some((m) => m.includes('"/rows/0/extra"'))).toBe(true);
       expect(
         error.issues.some(
           (i) => i.instancePath === "/rows/0" && i.keyword === "additionalProperties",
         ),
       ).toBe(true);
+    }
+  });
+
+  it("escapes JSON Pointer tokens (/ and ~) in required and additionalProperties paths", function* () {
+    try {
+      validateProps("C", {}, closed({ "a/b~c": { type: "string" } }, ["a/b~c"]));
+      throw new Error("should have thrown");
+    } catch (error) {
+      if (!(error instanceof PropValidationError)) {
+        throw error;
+      }
+      expect(error.errors.some((m) => m.includes('"/a~1b~0c"'))).toBe(true);
+      const issue = error.issues.find((i) => i.keyword === "required");
+      expect(issue?.instancePath).toBe("");
+      expect(issue?.params).toMatchObject({ missingProperty: "a/b~c" });
+    }
+
+    try {
+      validateProps("C", { "a/b~c": 1 }, closed({}));
+      throw new Error("should have thrown");
+    } catch (error) {
+      if (!(error instanceof PropValidationError)) {
+        throw error;
+      }
+      expect(error.errors.some((m) => m.includes('"/a~1b~0c"'))).toBe(true);
+      expect(error.issues.find((i) => i.keyword === "additionalProperties")?.params).toMatchObject({
+        additionalProperty: "a/b~c",
+      });
     }
   });
 
@@ -252,7 +281,6 @@ describe("validateProps — structured cause & error normalization", () => {
       },
     ]);
     expect(error.issues[0]?.message).toBe("");
-    // Non-JSON params fall back to {} rather than throwing during normalization.
     expect(error.issues[0]?.params).toEqual({});
     expect(() => JSON.stringify(error.issues)).not.toThrow();
   });

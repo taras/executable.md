@@ -32,7 +32,6 @@ function parseMeta(root: JsonObject): Record<string, unknown> {
   const rawMeta = root["meta"];
   if (isPlainObject(rawMeta)) {
     for (const [key, value] of Object.entries(rawMeta)) {
-      // A typed meta definition resolves to its `default` value.
       meta[key] = isTypedDefinition(value) ? value["default"] : value;
     }
     return meta;

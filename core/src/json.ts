@@ -1,6 +1,3 @@
-// Parse an `unknown` value into `Json`, rejecting non-serializable values
-// (Code Rule 6 — parse, don't cast).
-
 import type { Json, JsonObject } from "./types.ts";
 
 export class JsonParseError extends Error {
@@ -47,7 +44,16 @@ function parseValue(value: unknown, seen: Set<object>, path: string): Json {
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      return value.map((item, index) => parseValue(item, seen, `${path}[${index}]`));
+      // Parse every index rather than `.map`, which skips sparse holes and
+      // would admit an unsound `Json[]`. A hole is rejected like `undefined`.
+      const result: Json[] = [];
+      for (let index = 0; index < value.length; index++) {
+        if (!(index in value)) {
+          throw new JsonParseError(`missing array element at ${path}[${index}]`);
+        }
+        result.push(parseValue(value[index], seen, `${path}[${index}]`));
+      }
+      return result;
     }
     if (!isPlainObject(value)) {
       throw new JsonParseError(`non-plain object at ${path}`);

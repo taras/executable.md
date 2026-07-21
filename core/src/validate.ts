@@ -1,5 +1,3 @@
-// Prop validation for component invocations (spec §5.5, §6.5).
-
 import { Ajv } from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { parseJson } from "./json.ts";
@@ -37,9 +35,7 @@ export interface NormalizedIssue {
 
 export class PropValidationError extends Error {
   componentName: string;
-  // Readable messages (existing API).
   errors: string[];
-  // Normalized JSON-safe records used for `ErrorSegment.cause`.
   issues: NormalizedIssue[];
 
   constructor(componentName: string, ajvErrors: ErrorObject[]) {
@@ -154,20 +150,25 @@ function readableMessage(issue: NormalizedIssue): string {
 }
 
 // Ajv reports `required` and `additionalProperties` at the container's path;
-// append the offending property so the message names the exact member.
+// append the offending property (as an escaped JSON Pointer token, RFC 6901)
+// so the message names the exact member.
 function preciseInstancePath(issue: NormalizedIssue): string {
   const params = issue.params;
   if (params === null || typeof params !== "object" || Array.isArray(params)) {
     return issue.instancePath;
   }
   if (issue.keyword === "required" && typeof params["missingProperty"] === "string") {
-    return `${issue.instancePath}/${params["missingProperty"]}`;
+    return `${issue.instancePath}/${escapePointerToken(params["missingProperty"])}`;
   }
   if (
     issue.keyword === "additionalProperties" &&
     typeof params["additionalProperty"] === "string"
   ) {
-    return `${issue.instancePath}/${params["additionalProperty"]}`;
+    return `${issue.instancePath}/${escapePointerToken(params["additionalProperty"])}`;
   }
   return issue.instancePath;
+}
+
+function escapePointerToken(token: string): string {
+  return token.replace(/~/g, "~0").replace(/\//g, "~1");
 }
