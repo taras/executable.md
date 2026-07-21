@@ -1,23 +1,21 @@
 ---
 inputs:
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
-  fileList:
-    type: string
-    required: true
-  fileCount:
-    type: number
-    required: true
-  lineCount:
-    type: number
-    required: true
-  cleanupAnalysis:
-    type: object
-    required: false
+  type: object
+  properties:
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+    fileList:
+      type: string
+    fileCount:
+      type: number
+    lineCount:
+      type: number
+    cleanupAnalysis:
+      type: object
+  required: [diagnostics, doctor, fileList, fileCount, lineCount]
+  additionalProperties: false
 ---
 
 ## Repository Analysis

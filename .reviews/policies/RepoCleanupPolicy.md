@@ -1,17 +1,17 @@
 ---
 inputs:
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
-  fileList:
-    type: string
-    required: true
-  cleanupAnalysis:
-    type: object
-    required: false
+  type: object
+  properties:
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+    fileList:
+      type: string
+    cleanupAnalysis:
+      type: object
+  required: [diagnostics, doctor, fileList]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Cleanup Policy"

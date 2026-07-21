@@ -1,11 +1,20 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  minFiles: 5
-  severity: warning
-  message: "PR mixes config and source changes."
+  type: object
+  properties:
+    pr:
+      type: object
+    minFiles:
+      type: number
+      default: 5
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "PR mixes config and source changes."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval

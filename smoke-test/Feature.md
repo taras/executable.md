@@ -1,11 +1,13 @@
 ---
 inputs:
-  title:
-    type: string
-    required: true
-  description:
-    type: string
-    required: true
+  type: object
+  properties:
+    title:
+      type: string
+    description:
+      type: string
+  required: [title, description]
+  additionalProperties: false
 ---
 
 **{props.title}** — {props.description}

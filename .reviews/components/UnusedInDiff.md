@@ -1,15 +1,18 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  construct:
-    type: string
-    required: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    construct:
+      type: string
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, construct, message]
+  additionalProperties: false
 ---
 
 ```ts eval

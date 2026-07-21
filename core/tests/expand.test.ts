@@ -32,7 +32,7 @@ function makeComponent(
     name,
     path: `components/${name}.md`,
     meta: opts.meta ?? {},
-    inputs: opts.inputs ?? {},
+    inputs: opts.inputs ?? { type: "object", properties: {}, additionalProperties: false },
     bodySegments: scanSegments(body),
   };
 }
@@ -178,7 +178,12 @@ describe("expansion", () => {
   // C9: Props interpolation
   it("C9: props interpolation — {props.name}", function* () {
     const comp = makeComponent("Greeting", "Hello, {props.name}!", {
-      inputs: { name: { type: "string", required: true } },
+      inputs: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        additionalProperties: false,
+      },
     });
     const ctx = { Greeting: comp };
     const segments = scanSegments('<Greeting name="world" />');
@@ -227,7 +232,11 @@ describe("expansion", () => {
   // C16: Default applied
   it("C16: default applied — props.greeting resolves to default", function* () {
     const comp = makeComponent("Greeting", "{props.greeting}, world!", {
-      inputs: { greeting: { type: "string", default: "Hello" } },
+      inputs: {
+        type: "object",
+        properties: { greeting: { type: "string", default: "Hello" } },
+        additionalProperties: false,
+      },
     });
     const ctx = { Greeting: comp };
     const segments = scanSegments("<Greeting />");
@@ -247,7 +256,11 @@ describe("expansion", () => {
   // C22: Optional with no default, not passed → empty string
   it("C22: optional with no default, not passed → empty in interpolation", function* () {
     const comp = makeComponent("Comp", "val:{props.opt}", {
-      inputs: { opt: { type: "string", required: false } },
+      inputs: {
+        type: "object",
+        properties: { opt: { type: "string" } },
+        additionalProperties: false,
+      },
     });
     const ctx = { Comp: comp };
     const segments = scanSegments("<Comp />");
@@ -672,35 +685,32 @@ describe("component-declared output", () => {
 });
 
 describe("validateProps", () => {
+  const closed = (properties: Record<string, unknown>, required?: string[]) => ({
+    type: "object",
+    properties,
+    ...(required ? { required } : {}),
+    additionalProperties: false,
+  });
+
   // C14: Undeclared prop rejected
   it("C14: undeclared prop → PropValidationError", function* () {
-    expect(() => validateProps("Comp", { foo: "bar" }, {})).toThrow('Unknown prop "foo"');
+    expect(() => validateProps("Comp", { foo: "bar" }, closed({}))).toThrow(
+      "must NOT have additional properties",
+    );
   });
 
   // C15: Required prop missing
   it("C15: required prop missing → PropValidationError", function* () {
-    expect(() =>
-      validateProps(
-        "Comp",
-        {},
-        {
-          name: { type: "string", required: true },
-        },
-      ),
-    ).toThrow('Required prop "name"');
+    expect(() => validateProps("Comp", {}, closed({ name: { type: "string" } }, ["name"]))).toThrow(
+      "must have required property",
+    );
   });
 
   // C17: Type mismatch rejected
   it("C17: type mismatch → PropValidationError", function* () {
     expect(() =>
-      validateProps(
-        "Comp",
-        { count: "abc" },
-        {
-          count: { type: "number" },
-        },
-      ),
-    ).toThrow("expected number");
+      validateProps("Comp", { count: "abc" }, closed({ count: { type: "number" } })),
+    ).toThrow("must be number");
   });
 
   // C18: Enum validated — invalid value
@@ -709,11 +719,9 @@ describe("validateProps", () => {
       validateProps(
         "Comp",
         { model: "bad" },
-        {
-          model: { type: "string", enum: ["a", "b"] },
-        },
+        closed({ model: { type: "string", enum: ["a", "b"] } }),
       ),
-    ).toThrow("must be one of");
+    ).toThrow("must be equal to one of the allowed values");
   });
 
   // C19: Enum accepted — valid value
@@ -721,25 +729,21 @@ describe("validateProps", () => {
     const result = validateProps(
       "Comp",
       { model: "a" },
-      {
-        model: { type: "string", enum: ["a", "b"] },
-      },
+      closed({ model: { type: "string", enum: ["a", "b"] } }),
     );
     expect(result["model"]).toBe("a");
   });
 
   // C21: No inputs, some props → error
   it("C21: no inputs, some props → PropValidationError", function* () {
-    expect(() => validateProps("Badge", { size: "lg" }, {})).toThrow(PropValidationError);
+    expect(() => validateProps("Badge", { size: "lg" }, closed({}))).toThrow(PropValidationError);
   });
 
   it("applies default when prop not provided", function* () {
     const result = validateProps(
       "Comp",
       {},
-      {
-        greeting: { type: "string", default: "Hello" },
-      },
+      closed({ greeting: { type: "string", default: "Hello" } }),
     );
     expect(result["greeting"]).toBe("Hello");
   });
@@ -777,7 +781,7 @@ describe("function component content", () => {
       kind: "function",
       name: "Card",
       path: "components/Card.ts",
-      inputs: {},
+      inputs: { type: "object", properties: {}, additionalProperties: false },
       *fn(_props) {
         const header = yield* ephemeral(useContent("header"));
         const body = yield* ephemeral(useContent());

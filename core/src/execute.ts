@@ -28,11 +28,13 @@ import type {
   ComponentDefinition,
   FunctionComponent,
   FunctionComponentDefinition,
-  InputDefinition,
+  InputSchema,
   ImportResult,
 } from "./types.ts";
 import { scanSegments } from "./scanner.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { parseJsonObject } from "./json.ts";
+import { compileInputSchema } from "./validate.ts";
 import {
   expandSegments,
   expandBody,
@@ -103,34 +105,38 @@ function* durableImportComponent(
     // Resolve to absolute path for dynamic import
     const currentDir = yield* ephemeral(cwd());
     const absolutePath = result.path.startsWith("/") ? result.path : `${currentDir}/${result.path}`;
-    const mod = (yield* ephemeral(until(import(`file://${absolutePath}`)))) as {
-      default?: unknown;
-      inputs?: unknown;
-    };
+    const mod = yield* ephemeral(until(import(`file://${absolutePath}`)));
+    if (typeof mod !== "object" || mod === null) {
+      throw new Error(`Function component "${name}" at ${result.path} did not load a module`);
+    }
 
-    const fn = mod.default;
-    if (typeof fn !== "function") {
+    const defaultExport = "default" in mod ? mod.default : undefined;
+    if (!isFunctionComponent(defaultExport)) {
       throw new Error(
         `Function component "${name}" at ${result.path} must have a default export that is a generator function`,
       );
     }
 
-    const typedFn = fn as FunctionComponent;
-
-    const inputs = (mod.inputs ?? {}) as Record<string, InputDefinition>;
+    const inputsExport = "inputs" in mod ? mod.inputs : undefined;
+    const inputs: InputSchema =
+      inputsExport === undefined
+        ? { type: "object", properties: {}, additionalProperties: false }
+        : parseJsonObject(inputsExport);
+    compileInputSchema(inputs);
 
     return {
       kind: "function" as const,
       name,
       path: result.path,
       inputs,
-      fn: typedFn,
+      fn: defaultExport,
     };
   }
 
   // Markdown component: parse at runtime — deterministic from content
   const parsed = matter(result.content);
-  const { meta, inputs } = parseFrontmatter(parsed.data as Record<string, unknown>);
+  const { meta, inputs } = parseFrontmatter(parsed.data);
+  compileInputSchema(inputs);
   // The markdown body is a verbatim suffix of the raw file, so the body start
   // is computed by length — never by content search, which could false-match
   // body text repeated inside frontmatter. The invariant check turns any
@@ -162,6 +168,10 @@ function* durableImportComponent(
     inputs,
     bodySegments,
   };
+}
+
+function isFunctionComponent(value: unknown): value is FunctionComponent {
+  return typeof value === "function";
 }
 
 function* resolveComponentPath(name: string, searchPaths: string[]): Operation<string> {

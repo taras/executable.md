@@ -1,8 +1,13 @@
 ---
 inputs:
-  files:
-    type: array
-    required: true
+  type: object
+  properties:
+    files:
+      type: array
+      items:
+        type: string
+  required: [files]
+  additionalProperties: false
 ---
 
 # Release Config Files

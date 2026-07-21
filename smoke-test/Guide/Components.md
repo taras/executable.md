@@ -8,10 +8,15 @@ via `inputs`. Here's the frontmatter from the Note component tested below:
 # components/Note.md frontmatter
 emoji: 📝
 inputs:
-  level: info
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    level:
+      type: string
+      default: info
+    message:
+      type: string
+  required: [message]
+  additionalProperties: false
 ```
 
 Components are invoked with JSX syntax. Props must match the declared

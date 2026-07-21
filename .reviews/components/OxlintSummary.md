@@ -1,11 +1,13 @@
 ---
 inputs:
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
+  type: object
+  properties:
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+  required: [diagnostics, doctor]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Static Analysis"

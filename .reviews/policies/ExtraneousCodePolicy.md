@@ -1,14 +1,15 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+  required: [pr, diagnostics, doctor]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Correctness"

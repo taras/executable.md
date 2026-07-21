@@ -10,6 +10,8 @@ import type { Json as DurableJson, Workflow } from "@executablemd/durable-stream
 
 export type Json = DurableJson;
 
+export type JsonObject = { [key: string]: Json };
+
 export type Segment =
   | TextSegment
   | ComponentInvocation
@@ -79,6 +81,8 @@ export interface ErrorSegment {
   type: "error";
   message: string;
   source?: string;
+  /** Structured detail for the error. Present on prop-validation failures. */
+  cause?: Json;
 }
 
 export interface ExecResult {
@@ -144,20 +148,21 @@ export interface CodeBlockResult {
   stderr: string;
 }
 
-export interface InputDefinition {
-  type: "string" | "number" | "boolean" | "array" | "object" | "any";
-  default?: Json;
-  required?: boolean;
-  enum?: Json[];
-  description?: string;
-}
+/**
+ * A component's declared input interface: a canonical JSON Schema (draft-07)
+ * object schema (spec §5.1.1). The root always declares `type: "object"`;
+ * nested subschemas are ordinary draft-07 schemas (objects or booleans).
+ * Held as `JsonObject` so it doubles as a stable `WeakMap` key for the
+ * compiled-validator cache.
+ */
+export type InputSchema = JsonObject;
 
 export interface ComponentDefinition {
   kind: "markdown";
   name: string;
   path: string;
   meta: Record<string, unknown>;
-  inputs: Record<string, InputDefinition>;
+  inputs: InputSchema;
   bodySegments: Segment[];
 }
 
@@ -192,7 +197,7 @@ export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   path: string;
-  inputs: Record<string, InputDefinition>;
+  inputs: InputSchema;
   fn: FunctionComponent;
 }
 

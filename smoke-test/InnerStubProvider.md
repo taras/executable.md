@@ -3,9 +3,12 @@ meta:
   componentName: InnerStubProvider
 
 inputs:
-  model:
-    type: string
-    required: true
+  type: object
+  properties:
+    model:
+      type: string
+  required: [model]
+  additionalProperties: false
 ---
 
 ```js persist eval

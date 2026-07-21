@@ -116,7 +116,7 @@ function requireRegExp(value: unknown): RegExp {
 
 const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
-function evaluateExpression(expression: string, values: Record<string, unknown>): unknown {
+export function evaluateExpression(expression: string, values: Record<string, unknown>): unknown {
   const names = Object.keys(values).filter((name) => IDENTIFIER_RE.test(name));
   const fn = new Function(...names, `return (${expression});`);
   return fn(...names.map((name) => values[name]));
@@ -171,8 +171,29 @@ const KIND_PROPS: Record<AssertionKind, { allowed: string[]; required: string[] 
   numeric: { allowed: ["actual", "expected", "msg"], required: ["actual", "expected"] },
 };
 
-function validationError(name: string, message: string): ErrorSegment {
+export function validationError(name: string, message: string): ErrorSegment {
   return { type: "error", message: `<${name}> ${message}`, source: name };
+}
+
+/**
+ * Build the failure diagnostic, emit it directly when visible outside a test
+ * (the throw below would otherwise abort before the segment could render),
+ * then throw `AssertionDiagnostic`. Shared by every assertion, including
+ * `<AssertThrows>`, so failure behavior never diverges.
+ */
+export function* failVisiblyThenThrow(
+  name: string,
+  msg: string | undefined,
+  detail: { actual?: string; expected?: string },
+  failure: Error,
+): Operation<never> {
+  const diagnostic = buildDiagnostic(name, "failed", msg, detail, failure);
+  const visible = (yield* testing) || (yield* verbose);
+  const inTestScope = yield* inTest;
+  if (visible && !inTestScope) {
+    yield* DocumentOutput.operations.output(diagnostic);
+  }
+  throw new AssertionDiagnostic(failure, diagnostic, detail);
 }
 
 /**
@@ -298,15 +319,7 @@ export function* expandAssertion(
   }
 
   if (failure) {
-    const diagnostic = buildDiagnostic(assertion.name, "failed", values.msg, detail, failure);
-    const visible = (yield* testing) || (yield* verbose);
-    const inTestScope = yield* inTest;
-    if (visible && !inTestScope) {
-      // Outside a test the throw below aborts expansion before the segment
-      // could render — emit the diagnostic directly so it reaches the output.
-      yield* DocumentOutput.operations.output(diagnostic);
-    }
-    throw new AssertionDiagnostic(failure, diagnostic, detail);
+    yield* failVisiblyThenThrow(assertion.name, values.msg, detail, failure);
   }
 
   const visible = (yield* testing) || (yield* verbose);
@@ -316,7 +329,7 @@ export function* expandAssertion(
   return [{ type: "text", content: buildDiagnostic(assertion.name, "passed", values.msg, detail) }];
 }
 
-function buildDiagnostic(
+export function buildDiagnostic(
   name: string,
   outcome: "passed" | "failed",
   msg: string | undefined,

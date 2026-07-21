@@ -1,23 +1,28 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  numerator:
-    type: string
-    required: true
-  denominator:
-    type: string
-    required: true
-  threshold:
-    type: number
-    required: true
-  minDenominator: 10
-  excludeTests: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    numerator:
+      type: string
+    denominator:
+      type: string
+    threshold:
+      type: number
+    minDenominator:
+      type: number
+      default: 10
+    excludeTests:
+      type: boolean
+      default: true
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, numerator, denominator, threshold, message]
+  additionalProperties: false
 ---
 
 ```ts eval

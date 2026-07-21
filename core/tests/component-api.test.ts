@@ -23,7 +23,14 @@ import { persistFactory } from "../src/modifiers/persist.ts";
 import type { ComponentDefinition, ErrorSegment } from "../src/types.ts";
 
 function stubComponent(name: string): ComponentDefinition {
-  return { kind: "markdown", name, path: `${name}.md`, meta: {}, inputs: {}, bodySegments: [] };
+  return {
+    kind: "markdown",
+    name,
+    path: `${name}.md`,
+    meta: {},
+    inputs: { type: "object", properties: {}, additionalProperties: false },
+    bodySegments: [],
+  };
 }
 
 function* messageOf(operation: Operation<unknown>): Operation<string> {

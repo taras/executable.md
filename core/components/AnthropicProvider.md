@@ -3,13 +3,16 @@ meta:
   componentName: AnthropicProvider
 
 inputs:
-  model:
-    type: string
-    required: true
-    description: >
-      Anthropic model identifier. Passed as the `model` field in every
-      /v1/messages request and used as the routing key for sample calls.
-      Requires ANTHROPIC_API_KEY environment variable to be set.
+  type: object
+  properties:
+    model:
+      type: string
+      description: >
+        Anthropic model identifier. Passed as the `model` field in every
+        /v1/messages request and used as the routing key for sample calls.
+        Requires ANTHROPIC_API_KEY environment variable to be set.
+  required: [model]
+  additionalProperties: false
 ---
 
 ```ts persist eval

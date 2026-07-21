@@ -1,17 +1,24 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  pattern:
-    type: string
-    required: true
-  min: 1
-  excludeTests: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    pattern:
+      type: string
+    min:
+      type: number
+      default: 1
+    excludeTests:
+      type: boolean
+      default: true
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, pattern, message]
+  additionalProperties: false
 ---
 
 ```ts eval

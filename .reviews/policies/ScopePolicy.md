@@ -1,8 +1,11 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Scope" clean="✅ PR scope looks good.">

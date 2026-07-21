@@ -1,12 +1,16 @@
 ---
 inputs:
-  when:
-    type: boolean
-    required: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    when:
+      type: boolean
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [when, message]
+  additionalProperties: false
 ---
 
 ```ts eval

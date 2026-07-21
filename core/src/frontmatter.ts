@@ -1,113 +1,100 @@
 /**
- * Frontmatter parsing for component definitions (spec §4.1).
+ * Frontmatter parsing for component definitions (spec §4.1, §5.1.1).
  *
- * Extracts meta values and input definitions from YAML frontmatter.
- * Supports shorthand syntax (value-as-default) and full JSON Schema subset.
+ * Extracts meta values and the input schema from YAML frontmatter. `inputs`
+ * is a canonical JSON Schema (draft-07) object; the root-input contract and
+ * reserved-name policy are enforced in the shared schema-compilation path
+ * (`validate.ts`), so Markdown and function components share them.
  */
 
-import type { InputDefinition, Json } from "./types.ts";
+import { parseJsonObject } from "./json.ts";
+import type { InputSchema } from "./types.ts";
 
 export interface ParsedFrontmatter {
   meta: Record<string, unknown>;
-  inputs: Record<string, InputDefinition>;
+  inputs: InputSchema;
 }
 
+const DRAFT_07 = "http://json-schema.org/draft-07/schema#";
+
 /**
- * Parse raw frontmatter object into meta and inputs.
+ * Parse raw frontmatter into meta and the input schema.
  *
- * - `inputs` key: declared input interface
- * - Everything else (or `meta` key with typed definitions): component metadata
+ * - `inputs` key: the component's JSON Schema input interface
+ * - Everything else (or a `meta` key with typed definitions): component metadata
  */
-export function parseFrontmatter(raw: Record<string, unknown>): ParsedFrontmatter {
-  const rawInputs = (raw["inputs"] ?? {}) as Record<string, unknown>;
-  const inputs: Record<string, InputDefinition> = {};
-
-  // Reserved input names — consumed by the expansion engine, not
-  // available as component inputs. See spec §6.3 (named slots).
-  const RESERVED_INPUT_NAMES = new Set(["slot", "as"]);
-
-  for (const [key, value] of Object.entries(rawInputs)) {
-    if (RESERVED_INPUT_NAMES.has(key)) {
-      throw new Error(
-        `"${key}" is a reserved prop name and cannot be declared as a component input`,
-      );
-    }
-    inputs[key] = normalizeInputDef(value);
-  }
-
-  // Meta: everything except 'inputs'
-  // If 'meta' key exists and contains typed definitions, resolve defaults
-  const meta: Record<string, unknown> = {};
-
-  if (raw["meta"] && typeof raw["meta"] === "object" && !Array.isArray(raw["meta"])) {
-    for (const [key, value] of Object.entries(raw["meta"] as Record<string, unknown>)) {
-      if (isTypedDefinition(value)) {
-        meta[key] = (value as { default?: unknown })["default"];
-      } else {
-        meta[key] = value;
-      }
-    }
-  } else {
-    for (const [key, value] of Object.entries(raw)) {
-      if (key !== "inputs") {
-        meta[key] = value;
-      }
-    }
-  }
-
+export function parseFrontmatter(raw: unknown): ParsedFrontmatter {
+  const root = asRecord(raw);
+  const inputs = parseInputSchema(root["inputs"]);
+  const meta = parseMeta(root);
   return { meta, inputs };
 }
 
-/**
- * Convert shorthand or full definition to InputDefinition.
- */
-export function normalizeInputDef(value: unknown): InputDefinition {
-  // Full definition: object with a 'type' key
-  if (isTypedDefinition(value)) {
-    const def = value as Record<string, unknown>;
-    const hasDefault = "default" in def;
-    return {
-      type: (def["type"] as InputDefinition["type"]) ?? "any",
-      ...(hasDefault ? { default: def["default"] as Json } : {}),
-      required: def["required"] === true || (!hasDefault && def["required"] !== false),
-      ...(def["enum"] ? { enum: def["enum"] as Json[] } : {}),
-      ...(def["description"] ? { description: def["description"] as string } : {}),
-    };
+function parseInputSchema(value: unknown): InputSchema {
+  if (value === undefined) {
+    return emptyInputSchema();
+  }
+  const schema = parseJsonObject(value);
+  const dialect = schema["$schema"];
+  if (dialect !== undefined && dialect !== DRAFT_07) {
+    throw new Error(
+      `inputs "$schema" must be draft-07 (${DRAFT_07}), got ${JSON.stringify(dialect)}`,
+    );
+  }
+  return schema;
+}
+
+function parseMeta(root: Record<string, unknown>): Record<string, unknown> {
+  const meta: Record<string, unknown> = {};
+
+  const rawMeta = root["meta"];
+  if (
+    rawMeta !== undefined &&
+    typeof rawMeta === "object" &&
+    rawMeta !== null &&
+    !Array.isArray(rawMeta)
+  ) {
+    for (const [key, value] of Object.entries(rawMeta)) {
+      meta[key] = isTypedDefinition(value) ? value["default"] : value;
+    }
+    return meta;
   }
 
-  // Shorthand: null means required with no default
-  if (value === null) {
-    return { type: "any", required: true };
+  for (const [key, value] of Object.entries(root)) {
+    if (key !== "inputs") {
+      meta[key] = value;
+    }
   }
-
-  // Shorthand: value is the default, type inferred
-  return {
-    type: inferType(value),
-    default: value as Json,
-    required: false,
-  };
+  return meta;
 }
 
 /**
- * Check if a value is a typed definition object (has a `type` key).
+ * The closed empty-object schema used when a component declares no inputs. A
+ * fresh object per component so the compiled-validator cache never shares
+ * state across definitions.
  */
-export function isTypedDefinition(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "type" in (value as Record<string, unknown>)
-  );
+function emptyInputSchema(): InputSchema {
+  return { type: "object", properties: {}, additionalProperties: false };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("frontmatter must be a mapping");
+  }
+  const record: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    record[key] = item;
+  }
+  return record;
 }
 
 /**
- * Infer the InputDefinition type from a JavaScript value.
+ * A typed `meta` definition object — has a `type` key. Used only to resolve
+ * typed-meta defaults; unrelated to the `inputs` schema.
  */
-export function inferType(value: unknown): InputDefinition["type"] {
-  if (typeof value === "string") return "string";
-  if (typeof value === "number") return "number";
-  if (typeof value === "boolean") return "boolean";
-  if (Array.isArray(value)) return "array";
-  if (typeof value === "object" && value !== null) return "object";
-  return "any";
+function isTypedDefinition(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "type" in value;
 }

@@ -1,9 +1,14 @@
 ---
 inputs:
-  model:
-    type: string
-    required: true
-  baseUrl: "http://localhost:11434"
+  type: object
+  properties:
+    model:
+      type: string
+    baseUrl:
+      type: string
+      default: "http://localhost:11434"
+  required: [model]
+  additionalProperties: false
 ---
 
 ```ts persist eval
