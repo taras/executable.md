@@ -1,11 +1,13 @@
 ---
 inputs:
-  cleanupAnalysis:
-    type: object
-    required: true
-  diagnostics:
-    type: object
-    required: true
+  type: object
+  properties:
+    cleanupAnalysis:
+      type: object
+    diagnostics:
+      type: object
+  required: [cleanupAnalysis, diagnostics]
+  additionalProperties: false
 ---
 
 ```ts persist eval

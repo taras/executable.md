@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/core",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "exports": {
     ".": "./mod.ts"
   },
@@ -9,6 +9,7 @@
     "@executablemd/runtime": "../runtime/mod.ts",
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",
     "acorn": "npm:acorn@^8.16.0",
+    "ajv": "npm:ajv@^8.17.1",
     "gray-matter": "npm:gray-matter@^4.0.3",
     "magic-string": "npm:magic-string@^0.30.21",
     "marked": "npm:marked@^17.0.4",

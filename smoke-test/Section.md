@@ -2,9 +2,12 @@
 emoji: "§"
 
 inputs:
-  title:
-    type: string
-    required: true
+  type: object
+  properties:
+    title:
+      type: string
+  required: [title]
+  additionalProperties: false
 ---
 
 ## {meta.emoji} {props.title}

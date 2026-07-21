@@ -68,9 +68,11 @@ ls ./src
 emoji: 👋
 
 inputs:
-  name:
-    type: string
-    required: true
+  type: object
+  properties:
+    name: { type: string }
+  required: [name]
+  additionalProperties: false
 ---
 
 {meta.emoji} Hello, {props.name}!
@@ -166,6 +168,7 @@ interface ErrorSegment {
   type: "error";
   message: string;
   source?: string;                       // Component name or command that failed
+  cause?: Json;                          // Structured detail (e.g. prop-validation issues)
 }
 ```
 
@@ -1360,12 +1363,12 @@ both the component's own metadata and its input interface.
 emoji: 👋
 
 inputs:
-  name:
-    type: string
-    required: true
-  greeting:
-    type: string
-    default: Hello
+  type: object
+  properties:
+    name: { type: string }
+    greeting: { type: string, default: Hello }
+  required: [name]
+  additionalProperties: false
 ---
 
 {meta.emoji} {props.greeting}, {props.name}!
@@ -1383,75 +1386,75 @@ Meta values are the component's own constants, accessible via
 `{meta.key}` in the body. They can be any YAML value: strings,
 numbers, booleans, arrays, objects.
 
-**Inputs** — the reserved `inputs` key declares what props callers
-can pass. Each input has a name and a definition that specifies its
-type and optionally a default value.
+**Inputs** — the reserved `inputs` key declares the props callers can
+pass. Its value is a complete JSON Schema (draft-07) describing the
+props object.
 
 #### Input definitions
 
-An input definition is either a **shorthand** (just a default value)
-or a **full definition** (type, default, required, description):
+`inputs` is a canonical JSON Schema (draft-07) whose root is an object
+schema. `properties` names the accepted props, and each property value
+is an ordinary draft-07 subschema. Requiredness is expressed by the
+parent-level `required` array — never a per-field flag. An object that
+rejects unknown keys sets `additionalProperties: false`.
 
 ```yaml
 inputs:
-  # Shorthand — type inferred from default value
-  greeting: Hello              # string, default "Hello"
-  count: 0                     # number, default 0
-  verbose: false               # boolean, default false
-  tags: [alpha, beta]          # array, default ["alpha", "beta"]
-
-  # Full definition — JSON Schema subset
-  name:
-    type: string
-    required: true
-  temperature:
-    type: number
-    default: 0.7
-    description: LLM temperature parameter
-  model:
-    type: string
-    enum: [gpt-4, claude-3, llama-3]
-    default: gpt-4
-  config:
-    type: object
-    default: { retries: 3 }
+  type: object
+  properties:
+    files: { type: array, items: { type: string } }
+    rows:
+      type: array
+      items:
+        type: object
+        properties:
+          symbol: { type: string }
+          line: { type: number, default: 0 }
+        required: [symbol]
+        additionalProperties: false
+  required: [files, rows]
+  additionalProperties: false
 ```
 
-**Shorthand rule:** If an input's value is not an object with a `type`
-key, it is treated as a default value. The type is inferred:
+The schema follows draft-07 verbatim, with these conventions:
 
-| YAML value | Inferred type |
-|-----------|---------------|
-| `greeting: Hello` | `string` |
-| `count: 42` | `number` |
-| `verbose: true` | `boolean` |
-| `tags: [a, b]` | `array` |
-| `config: { k: v }` | `object` |
-| `name: null` | `any` (required, no default) |
+- **Requiredness is a parent `required` array.** It lists the names of
+  the props a caller must supply. There is no per-field `required: true`
+  or `required: false`, and no inferred requiredness.
+- **Unconstrained props** accept any value and declare the empty schema
+  `{}` (or `true`).
+- **Closed objects** reject unknown keys with
+  `additionalProperties: false`. The root object is normally closed, so
+  undeclared props are rejected (§6.5).
+- **No declared inputs.** A component that declares no `inputs` uses the
+  closed empty-object schema
+  `{ type: object, properties: {}, additionalProperties: false }` and so
+  accepts no props.
+- **Defaults.** A subschema's `default` fills the prop when the caller
+  omits it (§6.5). Object-property defaults fill missing properties
+  recursively.
+- **Enums and the rest of draft-07.** `enum`, `items`, nested
+  `properties`, and every other draft-07 keyword apply. `format` is an
+  annotation only, never an assertion.
 
-When the value is `null`, the input is required (no default).
+**Project contract.** The root schema MUST declare `type: "object"`. The
+reserved prop names `slot` and `as` (§6.3.5) cannot be declared as
+properties. Schemas are self-contained: only local `$ref`s are allowed
+(no remote references), and asynchronous schemas (`$async: true`) are
+rejected. These rules are enforced when the component definition loads.
 
-**Full definition fields** (JSON Schema subset):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `string` | One of: `string`, `number`, `boolean`, `array`, `object`, `any` |
-| `default` | any | Default value when prop is not passed by caller |
-| `required` | `boolean` | If `true`, caller must provide this prop (default: `false` unless no `default`) |
-| `enum` | `array` | Allowed values (only for `string` and `number`) |
-| `description` | `string` | Human-readable description (documentation only) |
-
-**Implied required:** An input is required when it has no `default`
-value and `required` is not explicitly `false`. An input with a
-`default` is never required unless `required: true` is set explicitly.
+There is no shorthand, no per-field `required`, no inferred
+requiredness, and no `type: any`. The earlier mini-language has been
+replaced wholesale with canonical JSON Schema, with no compatibility
+layer.
 
 #### Meta with type constraints (optional)
 
-Meta values are normally plain YAML values. For components that want
-schema validation on their own metadata (e.g., when meta values are
-overridden by a parent component's frontmatter), meta entries can
-use the same full definition syntax by placing them under a `meta`
-key:
+Meta values are normally plain YAML values. For components that want a
+resolved default for their own metadata (e.g., when meta values are
+overridden by a parent component's frontmatter), a meta entry may be
+written as a **typed definition** — an object with a `type` key —
+placed under a `meta` key. Its `default` is used as the resolved value:
 
 ```yaml
 ---
@@ -1465,18 +1468,22 @@ meta:
     default: 0.7
 
 inputs:
-  prompt:
-    type: string
-    required: true
+  type: object
+  properties:
+    prompt: { type: string }
+  required: [prompt]
+  additionalProperties: false
 ---
 ```
 
-When `meta` is a mapping of definitions (objects with `type` keys),
-the values are resolved to their defaults. When `meta` is absent,
-all top-level keys except `inputs` are meta values (the simple case).
+When `meta` is a mapping and an entry is a typed definition (an object
+with a `type` key), its `default` becomes the resolved value; any other
+entry is used verbatim. When `meta` is absent, all top-level keys except
+`inputs` are meta values (the simple case).
 
-This dual syntax allows components to range from minimal (just
-key-value pairs) to fully typed (every field constrained).
+This convention is independent of `inputs`, which is always a canonical
+draft-07 JSON Schema — it lets a component's own metadata range from
+minimal (plain key-value pairs) to typed defaults.
 
 #### 5.1.2 Function components
 
@@ -1489,9 +1496,14 @@ validated props directly and return rendered output as a string.
 import type { Json } from "@executablemd/core";
 
 export const inputs = {
-  name: { type: "string" as const, required: true },
-  greeting: { type: "string" as const, default: "Hello" },
-};
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    greeting: { type: "string", default: "Hello" },
+  },
+  required: ["name"],
+  additionalProperties: false,
+} as const;
 
 export default function*(props: Record<string, Json>) {
   return `${props.greeting}, ${props.name}!`;
@@ -1509,14 +1521,16 @@ export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   path: string;
-  inputs: Record<string, InputDefinition>;
+  inputs: InputSchema;   // canonical draft-07 JSON Schema (§5.1.1)
   fn: FunctionComponent;
 }
 ```
 
 **Input declaration.** Function components declare their inputs via
-a named `export const inputs = { ... }`. This is equivalent to the
-`inputs:` key in markdown component frontmatter. If no `inputs`
+a named `export const inputs = { ... }` holding a canonical draft-07
+JSON Schema (§5.1.1), enforced by the same project contract as Markdown
+components at load time. This is equivalent to the `inputs:` key in
+markdown component frontmatter. If no `inputs`
 export exists, the component accepts no props.
 
 **Children via `useContent()`.** Function components access children
@@ -1666,7 +1680,9 @@ function* durableImportComponent(
       kind: "function" as const,
       name,
       path: result.path,
-      inputs: mod.inputs ?? {},
+      inputs: mod.inputs === undefined
+        ? { type: "object", properties: {}, additionalProperties: false }
+        : parseJsonObject(mod.inputs),
       fn: mod.default,
     };
   }
@@ -1699,50 +1715,53 @@ One journal entry per component. The entry captures both *which file was found*
 (path) and *what was in it* (content) for current-run diagnostics.
 
 ```typescript
-interface InputDefinition {
-  type: "string" | "number" | "boolean" | "array" | "object" | "any";
-  default?: Json;
-  required?: boolean;
-  enum?: Json[];
-  description?: string;
-}
+// A component's declared input interface is a canonical draft-07 JSON
+// Schema object (§5.1.1). Held as a plain JSON object so it doubles as a
+// stable key for the compiled-validator cache.
+type InputSchema = JsonObject;
 
 interface ComponentDefinition {
   name: string;
   path: string;
-  meta: Record<string, unknown>;            // Resolved meta values
-  inputs: Record<string, InputDefinition>;  // Declared input interface
-  bodySegments: Segment[];                  // Parsed body (after frontmatter)
+  meta: Record<string, unknown>;   // Resolved meta values
+  inputs: InputSchema;             // Declared input interface (draft-07 schema)
+  bodySegments: Segment[];         // Parsed body (after frontmatter)
 }
 ```
 
 #### Frontmatter parsing
 
+The frontmatter root is narrowed from `unknown` through the shared JSON
+parser (§5.1.1), so a non-JSON value anywhere rejects the frontmatter
+before Ajv sees it. `inputs` is passed through as the component's JSON
+Schema; parsing does not rewrite it into any other shape. The project
+contract (root `type: "object"`, reserved `slot`/`as`, local refs only,
+no `$async`) is enforced later, when the schema is compiled to a validator
+(§6.5). Meta is everything except `inputs`; a `meta` entry written as a
+typed definition (an object with a `type` key) resolves to its `default`.
+
 ```typescript
-function parseFrontmatter(raw: Record<string, unknown>): {
+function parseFrontmatter(raw: unknown): {
   meta: Record<string, unknown>;
-  inputs: Record<string, InputDefinition>;
+  inputs: InputSchema;
 } {
-  const rawInputs = (raw.inputs ?? {}) as Record<string, unknown>;
-  const inputs: Record<string, InputDefinition> = {};
+  const root: JsonObject = raw === null || raw === undefined ? {} : parseJsonObject(raw);
 
-  for (const [key, value] of Object.entries(rawInputs)) {
-    inputs[key] = normalizeInputDef(value);
-  }
+  // `inputs` is the component's JSON Schema. Absent → the closed
+  // empty-object schema. A fresh object per component keeps the
+  // compiled-validator cache from sharing state across definitions.
+  const inputs: InputSchema = root.inputs === undefined
+    ? { type: "object", properties: {}, additionalProperties: false }
+    : parseJsonObject(root.inputs);
 
-  // Meta: everything except 'inputs'
-  // If 'meta' key exists and contains typed definitions, resolve defaults
   const meta: Record<string, unknown> = {};
-  if (raw.meta && typeof raw.meta === "object" && !Array.isArray(raw.meta)) {
-    for (const [key, value] of Object.entries(raw.meta as Record<string, unknown>)) {
-      if (isTypedDefinition(value)) {
-        meta[key] = (value as { default?: unknown }).default;
-      } else {
-        meta[key] = value;
-      }
+  const rawMeta = root.meta;
+  if (isPlainObject(rawMeta)) {
+    for (const [key, value] of Object.entries(rawMeta)) {
+      meta[key] = isTypedDefinition(value) ? value.default : value;
     }
   } else {
-    for (const [key, value] of Object.entries(raw)) {
+    for (const [key, value] of Object.entries(root)) {
       if (key !== "inputs") {
         meta[key] = value;
       }
@@ -1752,46 +1771,11 @@ function parseFrontmatter(raw: Record<string, unknown>): {
   return { meta, inputs };
 }
 
-/** Convert shorthand or full definition to InputDefinition. */
-function normalizeInputDef(value: unknown): InputDefinition {
-  // Full definition: object with a 'type' key
-  if (isTypedDefinition(value)) {
-    const def = value as Record<string, unknown>;
-    const hasDefault = "default" in def;
-    return {
-      type: (def.type as InputDefinition["type"]) ?? "any",
-      ...(hasDefault ? { default: def.default as Json } : {}),
-      required: def.required === true || (!hasDefault && def.required !== false),
-      ...(def.enum ? { enum: def.enum as Json[] } : {}),
-      ...(def.description ? { description: def.description as string } : {}),
-    };
-  }
-
-  // Shorthand: null means required with no default
-  if (value === null) {
-    return { type: "any", required: true };
-  }
-
-  // Shorthand: value is the default, type inferred
-  return {
-    type: inferType(value),
-    default: value as Json,
-    required: false,
-  };
-}
-
+/** A typed `meta` definition — an object with a `type` key. Used only to
+ *  resolve typed-meta defaults; unrelated to the `inputs` schema. */
 function isTypedDefinition(value: unknown): boolean {
   return typeof value === "object" && value !== null
     && !Array.isArray(value) && "type" in (value as Record<string, unknown>);
-}
-
-function inferType(value: unknown): InputDefinition["type"] {
-  if (typeof value === "string") return "string";
-  if (typeof value === "number") return "number";
-  if (typeof value === "boolean") return "boolean";
-  if (Array.isArray(value)) return "array";
-  if (typeof value === "object" && value !== null) return "object";
-  return "any";
 }
 ```
 
@@ -2168,84 +2152,66 @@ references are left verbatim.
 
 ### 6.5 Prop validation
 
-Components only accept props declared in their `inputs` frontmatter.
-Undeclared props are rejected at expansion time. Missing required props
-produce errors. Default values fill in for omitted optional props.
+Components only accept props described by their `inputs` schema. When
+the root object is closed (`additionalProperties: false`), undeclared
+props are rejected; missing required props are rejected; and default
+values fill in for omitted props. Validation is by [Ajv](https://ajv.js.org).
 
 ```typescript
 function validateProps(
   componentName: string,
   callerProps: Record<string, Json>,
-  inputs: Record<string, InputDefinition>,
+  schema: InputSchema,
 ): Record<string, Json> {
-  const validated: Record<string, Json> = {};
-  const errors: string[] = [];
-
-  // Check for undeclared props
-  for (const key of Object.keys(callerProps)) {
-    if (!(key in inputs)) {
-      errors.push(
-        `Unknown prop "${key}" passed to <${componentName} />. ` +
-        `Declared inputs: ${Object.keys(inputs).join(", ") || "(none)"}`
-      );
-    }
+  const validate = compileInputSchema(schema);   // cached per schema
+  const clone = structuredClone(callerProps);     // useDefaults mutates
+  if (!validate(clone)) {
+    throw new PropValidationError(componentName, validate.errors ?? []);
   }
-
-  // Validate and fill defaults for each declared input
-  for (const [key, def] of Object.entries(inputs)) {
-    if (key in callerProps) {
-      const value = callerProps[key];
-
-      // Type check
-      if (def.type !== "any" && !checkType(value, def.type)) {
-        errors.push(
-          `Prop "${key}" on <${componentName} /> expected ${def.type}, ` +
-          `got ${typeof value}`
-        );
-      }
-
-      // Enum check
-      if (def.enum && !def.enum.includes(value)) {
-        errors.push(
-          `Prop "${key}" on <${componentName} /> must be one of: ` +
-          `${def.enum.join(", ")}. Got: ${JSON.stringify(value)}`
-        );
-      }
-
-      validated[key] = value;
-    } else if ("default" in def && def.default !== undefined) {
-      // Apply default
-      validated[key] = def.default;
-    } else if (def.required) {
-      errors.push(
-        `Required prop "${key}" missing on <${componentName} />`
-      );
-    }
-    // Optional with no default and not provided → not in validated
-  }
-
-  if (errors.length > 0) {
-    throw new PropValidationError(componentName, errors);
-  }
-
-  return validated;
-}
-
-function checkType(value: Json, type: InputDefinition["type"]): boolean {
-  switch (type) {
-    case "string": return typeof value === "string";
-    case "number": return typeof value === "number";
-    case "boolean": return typeof value === "boolean";
-    case "array": return Array.isArray(value);
-    case "object": return typeof value === "object" && value !== null && !Array.isArray(value);
-    case "any": return true;
-  }
+  return clone;                                    // defaults applied
 }
 ```
 
+The caller's props are cloned first because Ajv's `useDefaults` mutates
+the validated object in place; the caller's environment value is never
+touched. The compiled validator runs against the clone, and the defaulted
+clone is returned as the component's resolved props. A failure raises a
+structured `PropValidationError` (see below).
+
+**Ajv contract.** A single shared, synchronous Ajv instance validates
+every component, configured `strict`, `allErrors`, `validateSchema`,
+`useDefaults`, `coerceTypes: false`, `removeAdditional: false`,
+`addUsedSchema: false`, `validateFormats: false`. On top of draft-07 the
+project imposes:
+
+- the root input schema MUST declare `type: "object"`;
+- `slot` and `as` are reserved and cannot be declared properties (§6.3.5);
+- schemas are self-contained with **local references only** — no remote
+  `$ref`;
+- asynchronous schemas (`$async: true`) are rejected, so validation never
+  introduces a promise into the Effection path;
+- `format` is an annotation, not an assertion.
+
+These rules — plus Ajv's own meta-schema check — are enforced when a
+component definition loads, for both Markdown and function components, so
+a malformed schema fails fast rather than at the first invocation. The
+compiled validator is cached by schema identity and reused by
+`validateProps`.
+
+**Defaults are an extension.** Applying `default` values is an
+executable.md extension enabled through Ajv's `useDefaults` — not portable
+JSON Schema validation behavior. Object-property defaults fill missing
+properties recursively; a missing parent object is not synthesized. A
+tuple-form `items` default MAY extend an array (native Ajv behavior).
+
 Validation is a runtime operation — deterministic from the component
 definition and the caller's props. It runs after import but before
-expansion. Errors are thrown immediately, not deferred.
+expansion. Errors are raised immediately, not deferred.
+
+**Failure shape.** On a validation failure the component raises an error
+segment whose `cause` is `{ componentName, errors }`, where `errors` is a
+JSON-safe array of normalized Ajv issues, each
+`{ instancePath, schemaPath, keyword, params, message }`.
 
 #### Binding capture: `as` and `<Capture>`
 
@@ -2377,9 +2343,9 @@ The boundary scanner extracts props into `Record<string, Json>`:
 
 Validated props are available inside the component body via
 `{props.name}`, `{props.greeting}`, etc. Default values from the
-input definition are applied before interpolation, so `{props.greeting}`
+`inputs` schema are applied before interpolation, so `{props.greeting}`
 resolves to `"Hello"` even if the caller wrote `<Greeting name="world" />`
-(assuming `greeting` has default `"Hello"`).
+(assuming the `greeting` property declares `default: "Hello"`).
 
 Props also affect expansion when passed through to child components:
 
@@ -2387,9 +2353,11 @@ Props also affect expansion when passed through to child components:
 <!-- Wrapper.md -->
 ---
 inputs:
-  label:
-    type: string
-    required: true
+  type: object
+  properties:
+    label: { type: string }
+  required: [label]
+  additionalProperties: false
 ---
 <Inner label={props.label} />
 <Content />
@@ -2544,22 +2512,24 @@ code changes to the executable.md runtime are required to add it.
 ````markdown
 ---
 inputs:
-  model:
-    type: string
-    required: true
-    description: >
-      Model identifier. Serves two purposes: it is passed as the `model` field
-      in every /v1/chat/completions request, and it is the routing key that
-      sample calls use to target this provider. Must be unique among all
-      LlamafileProvider instances active simultaneously in the same document run.
-      Example: "phi3-mini", "qwen3-0.6b"
-  command:
-    type: string
-    required: true
-    description: >
-      Shell command to start the llamafile or llama.cpp server.
-      {port} is substituted with the allocated port number before execution.
-      Example: "./phi3-mini.llamafile --nobrowser"
+  type: object
+  properties:
+    model:
+      type: string
+      description: >
+        Model identifier. Serves two purposes: it is passed as the `model` field
+        in every /v1/chat/completions request, and it is the routing key that
+        sample calls use to target this provider. Must be unique among all
+        LlamafileProvider instances active simultaneously in the same document run.
+        Example: "phi3-mini", "qwen3-0.6b"
+    command:
+      type: string
+      description: >
+        Shell command to start the llamafile or llama.cpp server.
+        {port} is substituted with the allocated port number before execution.
+        Example: "./phi3-mini.llamafile --nobrowser"
+  required: [model, command]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -2778,18 +2748,12 @@ meta:
   componentName: Sample
 
 inputs:
-  prompt:
-    type: string
-    required: false
-    default: ""
-  model:
-    type: string
-    required: false
-    default: ""
-  params:
-    type: string
-    required: false
-    default: ""
+  type: object
+  properties:
+    prompt: { type: string, default: "" }
+    model: { type: string, default: "" }
+    params: { type: string, default: "" }
+  additionalProperties: false
 ---
 
 ```js persist eval
@@ -3458,13 +3422,13 @@ visible warning blocks, collect into a separate error report).
 | B3 | Runtime parsing | Current content parsed to meta/inputs/segments |
 | B4 | Import with simple frontmatter | `meta` correctly parsed, keys except `inputs` |
 | B5 | Import with typed meta | `meta` key with type definitions, defaults resolved |
-| B6 | Import with inputs (shorthand) | `greeting: Hello` → InputDefinition with type string, default "Hello" |
-| B7 | Import with inputs (full) | `name: { type: string, required: true }` → InputDefinition |
-| B8 | Import with inputs (null shorthand) | `name: null` → required, type any, no default |
+| B6 | Import with inputs (schema passthrough) | `inputs` is kept verbatim as the component's draft-07 JSON Schema |
+| B7 | Import with inputs (property default) | A property's `default` fills the prop when a caller omits it |
+| B8 | Import with inputs (required array) | `required: [name]` makes `name` a required prop |
 | B9 | Import missing component | Resolve Api throws, error propagated |
 | B12 | Root document as component | `__root__` import, same journal shape |
 | B13 | Dotted name resolution | `Ns.Sub` → `components/Ns/Sub.md` |
-| B14 | No inputs key | Component accepts no props, `inputs` is empty record |
+| B14 | No inputs key | Component accepts no props; `inputs` is the closed empty-object schema |
 | B15 | Default resolver middleware | Resolves via `runtime.stat` probe in search path order |
 | B19 | Resolver middleware composition | Custom alias middleware + directory resolver |
 
@@ -3485,13 +3449,13 @@ visible warning blocks, collect into a separate error report).
 | C11 | Nested key access | `{meta.config.db.host}` → deep value |
 | C12 | No Content slot | Children silently discarded |
 | C13 | Multiple Content slots | Each replaced with same children |
-| C14 | **Undeclared prop rejected** | `<Comp foo="bar" />` where Comp has no input `foo` → PropValidationError |
-| C15 | **Required prop missing** | `<Comp />` where Comp declares `name: { required: true }` → PropValidationError |
-| C16 | **Default applied** | `<Comp />` where Comp declares `greeting: Hello` → `{props.greeting}` resolves to "Hello" |
-| C17 | **Type mismatch rejected** | `<Comp count="abc" />` where count is `type: number` → PropValidationError |
-| C18 | **Enum validated** | `<Comp model="bad" />` where model has `enum: [a, b]` → PropValidationError |
-| C19 | **Enum accepted** | `<Comp model="a" />` where model has `enum: [a, b]` → valid |
-| C20 | **No inputs, no props** | Component with no `inputs`, invoked with no props → valid |
+| C14 | **Undeclared prop rejected** | `<Comp foo="bar" />` where Comp's closed schema does not list `foo` → PropValidationError |
+| C15 | **Required prop missing** | `<Comp />` where Comp lists `required: [name]` → PropValidationError |
+| C16 | **Default applied** | `<Comp />` where `greeting` has `default: Hello` → `{props.greeting}` resolves to "Hello" |
+| C17 | **Type mismatch rejected** | `<Comp count="abc" />` where `count` is `{ type: number }` → PropValidationError |
+| C18 | **Enum validated** | `<Comp model="bad" />` where `model` has `enum: [a, b]` → PropValidationError |
+| C19 | **Enum accepted** | `<Comp model="a" />` where `model` has `enum: [a, b]` → valid |
+| C20 | **No inputs, no props** | Component with no `inputs` (closed empty-object schema), invoked with no props → valid |
 | C21 | **No inputs, some props** | Component with no `inputs`, invoked with props → PropValidationError |
 | C22 | **Optional with no default, not passed** | Input not in validated props, `{props.key}` → empty string |
 | C23 | Component `as` capture | `<Comp as="x" />` stores rendered output in `env.values.x`, invocation emits no segments |
@@ -3515,6 +3479,10 @@ visible warning blocks, collect into a separate error report).
 | C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<Show when={false}>` or a content-discarding component) produces one aggregate diagnostic and runs no body side effects |
 | C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's policy |
 | C43 | Documentation fail-fast | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; errors inside `<Output>` or with no `<Output>` remain comments |
+| C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
+| C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
+| C46 | **Nested default filled** | A row omitting `line` (declared `{ type: number, default: 0 }`) resolves with `line` set to `0` |
+| C47 | **Nested enum rejected** | A property with `enum: [a, b]` nested inside an object/array item rejects a value outside the set → PropValidationError |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -3929,9 +3897,9 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 12 | `<Content />` is the content slot | Valid JSX, familiar (Astro/React), zero parser changes |
 | 13 | `{meta.key}` / `{props.key}` for interpolation | MDX-compatible expression syntax, parsed by regex |
 | 16 | Props must be declared in `inputs` frontmatter | Undeclared props are rejected — components are contracts |
-| 17 | Input definitions support JSON Schema subset | `type`, `default`, `required`, `enum`, `description` — enough for validation without full JSON Schema complexity |
-| 18 | Shorthand input syntax: value-as-default | `greeting: Hello` is equivalent to `greeting: { type: string, default: Hello }` — ergonomic for simple cases |
-| 19 | `null` shorthand means required, no default | `name: null` declares a required input with no default — the minimal way to say "caller must provide this" |
+| 17 | `inputs` is a canonical draft-07 JSON Schema | The declared input interface is a complete draft-07 schema validated by a shared Ajv instance (strict, `useDefaults`); no bespoke mini-language and no compatibility layer |
+| 18 | Requiredness via a parent `required` array | Draft-07 `required` lists the props a caller must supply — no per-field `required` flag, no inferred requiredness |
+| 19 | No declared inputs = closed empty-object schema | A component with no `inputs` uses `{ type: object, properties: {}, additionalProperties: false }` and accepts no props |
 | 20 | Meta supports optional typed definitions | `meta:` key with JSON Schema subset for components that need schema validation on their own metadata |
 | 21 | Prop validation is runtime, not durable | Deterministic from component definition + caller props — no journal entry needed |
 | 22 | Components are semantic boundaries for markdown constructs | Bold, italic, links, code spans cannot span across a component or exec block — each text segment is healed independently |

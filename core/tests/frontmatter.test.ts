@@ -1,6 +1,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { parseFrontmatter, normalizeInputDef, inferType } from "../src/frontmatter.ts";
+import { parseFrontmatter } from "../src/frontmatter.ts";
 
 describe("parseFrontmatter", () => {
   // B4: Simple frontmatter (meta only, no inputs)
@@ -10,7 +10,7 @@ describe("parseFrontmatter", () => {
       title: "Hello",
     });
     expect(result.meta).toEqual({ emoji: "wave", title: "Hello" });
-    expect(result.inputs).toEqual({});
+    expect(result.inputs).toEqual({ type: "object", properties: {}, additionalProperties: false });
   });
 
   // B5: Typed meta definitions
@@ -20,188 +20,93 @@ describe("parseFrontmatter", () => {
         model: { type: "string", enum: ["gpt-4", "claude-3"], default: "gpt-4" },
         temperature: { type: "number", default: 0.7 },
       },
-      inputs: {},
+      inputs: { type: "object", properties: {}, additionalProperties: false },
     });
     expect(result.meta).toMatchObject({ model: "gpt-4", temperature: 0.7 });
   });
 
-  // B6: Shorthand input — value as default
-  it("B6: shorthand input — greeting: Hello", function* () {
-    const result = parseFrontmatter({
-      inputs: {
-        greeting: "Hello",
-      },
-    });
-    const input = result.inputs["greeting"]!;
-    expect(input).toMatchObject({ type: "string", default: "Hello", required: false });
-  });
-
-  // B7: Full input definition
-  it("B7: full input definition — name: { type: string, required: true }", function* () {
-    const result = parseFrontmatter({
-      inputs: {
-        name: { type: "string", required: true },
-      },
-    });
-    const input = result.inputs["name"]!;
-    expect(input).toMatchObject({ type: "string", required: true });
-    expect(input.default).toBeUndefined();
-  });
-
-  // B8: Null shorthand — required, no default
-  it("B8: null shorthand — required, type any, no default", function* () {
-    const result = parseFrontmatter({
-      inputs: {
-        name: null,
-      },
-    });
-    const input = result.inputs["name"]!;
-    expect(input).toMatchObject({ type: "any", required: true });
-    expect(input.default).toBeUndefined();
-  });
-
-  // B14: No inputs key — empty inputs
-  it("B14: no inputs key — empty inputs record", function* () {
-    const result = parseFrontmatter({
-      color: "blue",
-    });
-    expect(result.inputs).toEqual({});
+  // B14: No inputs key — closed empty-object schema
+  it("B14: no inputs key — closed empty-object schema", function* () {
+    const result = parseFrontmatter({ color: "blue" });
+    expect(result.inputs).toEqual({ type: "object", properties: {}, additionalProperties: false });
     expect(result.meta["color"]).toBe("blue");
   });
 
-  it("shorthand number default", function* () {
-    const result = parseFrontmatter({
-      inputs: { count: 0 },
-    });
-    const input = result.inputs["count"]!;
-    expect(input).toMatchObject({ type: "number", default: 0, required: false });
+  it("passes a declared input schema through verbatim", function* () {
+    const schema = {
+      type: "object",
+      properties: {
+        files: { type: "array", items: { type: "string" } },
+      },
+      required: ["files"],
+      additionalProperties: false,
+    };
+    const result = parseFrontmatter({ inputs: schema });
+    expect(result.inputs).toEqual(schema);
   });
 
-  it("shorthand boolean default", function* () {
-    const result = parseFrontmatter({
-      inputs: { verbose: false },
-    });
-    const input = result.inputs["verbose"]!;
-    expect(input).toMatchObject({ type: "boolean", default: false, required: false });
-  });
-
-  it("shorthand array default", function* () {
-    const result = parseFrontmatter({
-      inputs: { tags: ["alpha", "beta"] },
-    });
-    const input = result.inputs["tags"]!;
-    expect(input.type).toBe("array");
-    expect(input.default).toEqual(["alpha", "beta"]);
-  });
-
-  it("full definition with enum", function* () {
+  it("accepts a draft-07 $schema dialect", function* () {
     const result = parseFrontmatter({
       inputs: {
-        model: {
-          type: "string",
-          enum: ["gpt-4", "claude-3", "llama-3"],
-          default: "gpt-4",
+        $schema: "http://json-schema.org/draft-07/schema#",
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    });
+    expect(result.inputs["$schema"]).toBe("http://json-schema.org/draft-07/schema#");
+  });
+
+  it("rejects a non-draft-07 $schema dialect", function* () {
+    expect(() =>
+      parseFrontmatter({
+        inputs: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
         },
-      },
-    });
-    const input = result.inputs["model"]!;
-    expect(input).toMatchObject({ type: "string", default: "gpt-4", required: false });
-    expect(input.enum).toEqual(["gpt-4", "claude-3", "llama-3"]);
+      }),
+    ).toThrow("draft-07");
   });
 
-  it("full definition with description", function* () {
-    const result = parseFrontmatter({
-      inputs: {
-        temperature: {
-          type: "number",
-          default: 0.7,
-          description: "LLM temperature parameter",
-        },
-      },
-    });
-    const input = result.inputs["temperature"]!;
-    expect(input.description).toBe("LLM temperature parameter");
+  it("rejects a non-object inputs value", function* () {
+    expect(() => parseFrontmatter({ inputs: "not-a-schema" })).toThrow("JSON object");
   });
 
-  it("implied required — no default, required not explicitly set", function* () {
-    const result = parseFrontmatter({
-      inputs: {
-        name: { type: "string" },
-      },
-    });
-    const input = result.inputs["name"]!;
-    expect(input.required).toBe(true);
+  it("rejects an array inputs value", function* () {
+    expect(() => parseFrontmatter({ inputs: [1, 2, 3] })).toThrow("JSON object");
   });
 
-  it("not required — has default, required not explicitly set", function* () {
-    const result = parseFrontmatter({
-      inputs: {
-        greeting: { type: "string", default: "Hello" },
-      },
+  it("rejects a non-object frontmatter root", function* () {
+    expect(() => parseFrontmatter("nope")).toThrow("JSON object");
+    expect(() => parseFrontmatter([1, 2])).toThrow("JSON object");
+    expect(() => parseFrontmatter(42)).toThrow("JSON object");
+  });
+
+  it("rejects a non-JSON value anywhere in the frontmatter", function* () {
+    expect(() => parseFrontmatter({ meta: { handler: () => {} } })).toThrow("function");
+    expect(() => parseFrontmatter({ title: 1 / 0 })).toThrow("non-finite");
+  });
+
+  it("rejects a sparse array in the frontmatter", function* () {
+    const holed = ["x"];
+    holed[2] = "y";
+    expect(() => parseFrontmatter({ tags: holed })).toThrow("missing array element");
+  });
+
+  it("treats null/undefined frontmatter as empty", function* () {
+    expect(parseFrontmatter(null).inputs).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
     });
-    const input = result.inputs["greeting"]!;
-    expect(input.required).toBe(false);
+    expect(parseFrontmatter(undefined).meta).toEqual({});
   });
 
   it("meta with non-typed values under meta key", function* () {
     const result = parseFrontmatter({
-      meta: {
-        color: "blue",
-        count: 42,
-      },
-      inputs: {},
+      meta: { color: "blue", count: 42 },
+      inputs: { type: "object", properties: {}, additionalProperties: false },
     });
     expect(result.meta).toMatchObject({ color: "blue", count: 42 });
-  });
-
-  it("reserved input name as is rejected", function* () {
-    expect(() =>
-      parseFrontmatter({
-        inputs: {
-          as: { type: "string" },
-        },
-      }),
-    ).toThrow('"as" is a reserved prop name');
-  });
-});
-
-describe("normalizeInputDef", () => {
-  it("null → required, type any", function* () {
-    const result = normalizeInputDef(null);
-    expect(result).toMatchObject({ type: "any", required: true });
-  });
-
-  it("string shorthand", function* () {
-    const result = normalizeInputDef("Hello");
-    expect(result).toMatchObject({ type: "string", default: "Hello", required: false });
-  });
-
-  it("object with type key → full definition", function* () {
-    const result = normalizeInputDef({
-      type: "number",
-      default: 42,
-    });
-    expect(result).toMatchObject({ type: "number", default: 42, required: false });
-  });
-});
-
-describe("inferType", () => {
-  it("string", function* () {
-    expect(inferType("hello")).toBe("string");
-  });
-  it("number", function* () {
-    expect(inferType(42)).toBe("number");
-  });
-  it("boolean", function* () {
-    expect(inferType(true)).toBe("boolean");
-  });
-  it("array", function* () {
-    expect(inferType([1, 2])).toBe("array");
-  });
-  it("object", function* () {
-    expect(inferType({ a: 1 })).toBe("object");
-  });
-  it("undefined", function* () {
-    expect(inferType(undefined)).toBe("any");
   });
 });

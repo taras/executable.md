@@ -1,9 +1,14 @@
 ---
 inputs:
-  heading:
-    type: string
-    required: true
-  clean: "\u2705 No issues found."
+  type: object
+  properties:
+    heading:
+      type: string
+    clean:
+      type: string
+      default: "\u2705 No issues found."
+  required: [heading]
+  additionalProperties: false
 ---
 
 ```ts eval

@@ -1,11 +1,20 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  whenLinesExceed: 0
-  severity: warning
-  message: "Large PR with no linked issue."
+  type: object
+  properties:
+    pr:
+      type: object
+    whenLinesExceed:
+      type: number
+      default: 0
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "Large PR with no linked issue."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval

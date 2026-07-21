@@ -40,7 +40,8 @@ import {
 import { DocumentationError } from "./errors.ts";
 import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { validateProps } from "./validate.ts";
+import { PropValidationError, validateProps } from "./validate.ts";
+import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
 import { renderSegments } from "./render.ts";
@@ -472,13 +473,7 @@ function* expandComponent(
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
-    return [
-      yield* raise({
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      }),
-    ];
+    return [yield* raise(propValidationErrorSegment(error, name))];
   }
 
   // Capture the caller's eval environment before creating the component's
@@ -682,13 +677,7 @@ function* expandFunctionComponent(
   try {
     validatedProps = validateProps(name, propsForValidation, definition.inputs);
   } catch (error) {
-    return [
-      yield* raise({
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      }),
-    ];
+    return [yield* raise(propValidationErrorSegment(error, name))];
   }
 
   const slots = partitionBySlot(children);
@@ -750,7 +739,7 @@ function* expandFunctionComponent(
   }
 }
 
-function validateBindingName(
+export function validateBindingName(
   value: Json | undefined,
 ): { ok: true; value?: string } | { ok: false; error: string } {
   if (value === undefined) {
@@ -870,6 +859,19 @@ function* resolveExpressionProps(
  * letters, digits, underscores, or hyphens.
  */
 const SLOT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+function propValidationErrorSegment(error: unknown, name: string): ErrorSegment {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof PropValidationError) {
+    return {
+      type: "error",
+      message,
+      source: name,
+      cause: parseJson({ componentName: error.componentName, errors: error.issues }),
+    };
+  }
+  return { type: "error", message, source: name };
+}
 
 /**
  * Validate a slot name. Returns an ErrorSegment if invalid, undefined if ok.

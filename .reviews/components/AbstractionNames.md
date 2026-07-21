@@ -1,11 +1,20 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  pattern: "factory|abstract|base|provider|strategy|adapter|helper|util"
-  severity: warning
-  message: "New abstraction files: {names}. Verify 3+ consumers."
+  type: object
+  properties:
+    pr:
+      type: object
+    pattern:
+      type: string
+      default: "factory|abstract|base|provider|strategy|adapter|helper|util"
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "New abstraction files: {names}. Verify 3+ consumers."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval

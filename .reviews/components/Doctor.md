@@ -1,11 +1,14 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  tsconfigPath:
-    type: string
-    default: ".reviews/tsconfig.oxlint.json"
+  type: object
+  properties:
+    pr:
+      type: object
+    tsconfigPath:
+      type: string
+      default: ".reviews/tsconfig.oxlint.json"
+  required: [pr]
+  additionalProperties: false
 ---
 
 Checking environment for Oxlint static analysis...

@@ -142,6 +142,7 @@ parameter names. The initial components are:
 - `<AssertMatch>` and `<AssertNotMatch>`
 - `<AssertGreater>` and `<AssertGreaterOrEqual>`
 - `<AssertLess>` and `<AssertLessOrEqual>`
+- `<AssertThrows>`
 
 Props map directly to the corresponding function parameters: `expr` for
 truthiness assertions, `actual` and `expected` for comparisons, and optional
@@ -170,6 +171,18 @@ optional message and relevant actual and expected values. Failure diagnostics
 include the underlying assertion detail when available. Their exact Markdown
 layout is not prescribed, and formatting arbitrary values must not change the
 assertion outcome or introduce a new failure.
+
+`<AssertThrows>` is the one assertion whose semantics are not an `@std/assert`
+export. It wraps children rather than taking `actual`/`expected`, and it
+**requires** a `message` prop: a literal string is matched as a substring of the
+raised error's message, or an expression evaluating to a `RegExp` is tested
+against it. The assertion passes when expanding the body raises an error whose
+message matches, and fails when the body raises nothing or raises a non-matching
+error. It accepts an optional literal `as` binding that captures the complete
+caught error segment — including its `cause` — into the environment for later
+assertions. Like the other assertions, it emits a pass diagnostic only in
+testing or verbose mode, and a failure aborts the document when it occurs outside
+a test (inside a `<Test>` it is contained and recorded).
 
 Additional assertion components use the same rules: their names and props map to
 an `@std/assert` export, they preserve its comparison and error semantics, and

@@ -1,11 +1,13 @@
 ---
 inputs:
-  groups:
-    type: array
-    required: true
-  label:
-    type: string
-    required: true
+  type: object
+  properties:
+    groups:
+      type: array
+    label:
+      type: string
+  required: [groups, label]
+  additionalProperties: false
 ---
 
 ```ts eval

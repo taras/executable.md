@@ -1,11 +1,13 @@
 ---
 inputs:
-  greeting:
-    type: string
-    required: true
-  subject:
-    type: string
-    required: true
+  type: object
+  properties:
+    greeting:
+      type: string
+    subject:
+      type: string
+  required: [greeting, subject]
+  additionalProperties: false
 ---
 
 The caller said: "{props.greeting}, {props.subject}!"

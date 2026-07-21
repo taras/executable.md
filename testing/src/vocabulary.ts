@@ -50,6 +50,9 @@ export function* installHandlers(
       if (invocation.name === "Test") {
         return { segments: yield* handlers.expandTest(invocation, ctx) };
       }
+      if (invocation.name === "AssertThrows") {
+        return { segments: yield* handlers.expandAssertThrows(invocation, ctx) };
+      }
       const assertion = ASSERTIONS.get(invocation.name);
       if (assertion) {
         return { segments: yield* handlers.expandAssertion(assertion, invocation, ctx) };

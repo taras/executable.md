@@ -1,6 +1,11 @@
 ---
 inputs:
-  marker: "<!-- xmd-review -->"
+  type: object
+  properties:
+    marker:
+      type: string
+      default: "<!-- xmd-review -->"
+  additionalProperties: false
 ---
 
 ```ts eval

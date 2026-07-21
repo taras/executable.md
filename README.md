@@ -38,9 +38,12 @@ ls ./src
 ---
 emoji: Hello
 inputs:
-  name:
-    type: string
-    required: true
+  type: object
+  properties:
+    name:
+      type: string
+  required: [name]
+  additionalProperties: false
 ---
 
 {meta.emoji}, {props.name}!

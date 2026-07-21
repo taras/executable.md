@@ -1,11 +1,13 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  diagnostics:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    diagnostics:
+      type: object
+  required: [pr, diagnostics]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Slop" clean="✅ Slop indicators look low.">

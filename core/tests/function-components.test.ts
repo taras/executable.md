@@ -55,13 +55,71 @@ describe("Tier FC — Function components", () => {
     }
   });
 
+  it("FC-async: rejects an async input schema at the function-component load boundary", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Bad.ts": [
+          "export const inputs = {",
+          "  $async: true,",
+          '  type: "object",',
+          "  properties: {},",
+          "  additionalProperties: false,",
+          "};",
+          'export default function*() { return "x"; }',
+        ].join("\n"),
+        "doc.md": "<Bad />",
+      });
+      const output = yield* collect(
+        yield* execute({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("async");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  it("FC-reserved: rejects a reserved slot property at the function-component load boundary", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Bad.ts": [
+          "export const inputs = {",
+          '  type: "object",',
+          '  properties: { slot: { type: "string" } },',
+          "  additionalProperties: false,",
+          "};",
+          'export default function*() { return "x"; }',
+        ].join("\n"),
+        "doc.md": "<Bad />",
+      });
+      const output = yield* collect(
+        yield* execute({
+          docPath: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("reserved");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
   it("FC2: function component with props", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
         "components/Greet.ts": [
           "export const inputs = {",
-          "  name: { type: 'string', required: true },",
+          '  type: "object",',
+          '  properties: { name: { type: "string" } },',
+          '  required: ["name"],',
+          "  additionalProperties: false,",
           "};",
           "",
           "export default function*(props) {",
@@ -118,7 +176,15 @@ describe("Tier FC — Function components", () => {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
-        "components/Dual.md": ["---", "inputs: {}", "---", "FROM-MARKDOWN"].join("\n"),
+        "components/Dual.md": [
+          "---",
+          "inputs:",
+          "  type: object",
+          "  properties: {}",
+          "  additionalProperties: false",
+          "---",
+          "FROM-MARKDOWN",
+        ].join("\n"),
         "components/Dual.ts": [
           "export default function*() {",
           '  return "FROM-TYPESCRIPT";',
@@ -172,7 +238,10 @@ describe("Tier FC — Function components", () => {
       writeFiles(tmpDir, {
         "components/Typed.ts": [
           "export const inputs = {",
-          "  count: { type: 'number', required: true },",
+          '  type: "object",',
+          '  properties: { count: { type: "number" } },',
+          '  required: ["count"],',
+          "  additionalProperties: false,",
           "};",
           "",
           "export default function*(props) {",
@@ -201,7 +270,10 @@ describe("Tier FC — Function components", () => {
       writeFiles(tmpDir, {
         "components/Req.ts": [
           "export const inputs = {",
-          "  name: { type: 'string', required: true },",
+          '  type: "object",',
+          '  properties: { name: { type: "string" } },',
+          '  required: ["name"],',
+          "  additionalProperties: false,",
           "};",
           "",
           "export default function*(props) {",
@@ -218,7 +290,7 @@ describe("Tier FC — Function components", () => {
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
       );
-      expect(output).toContain("Required prop");
+      expect(output).toContain("must have required property");
     } finally {
       cleanup(tmpDir);
     }
@@ -228,7 +300,15 @@ describe("Tier FC — Function components", () => {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
-        "components/MdComp.md": ["---", "inputs: {}", "---", "FROM-MD"].join("\n"),
+        "components/MdComp.md": [
+          "---",
+          "inputs:",
+          "  type: object",
+          "  properties: {}",
+          "  additionalProperties: false",
+          "---",
+          "FROM-MD",
+        ].join("\n"),
         "components/TsComp.ts": ["export default function*() {", '  return "FROM-TS";', "}"].join(
           "\n",
         ),

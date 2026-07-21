@@ -18,12 +18,13 @@ export type {
   ParsedInfoString,
   CodeBlockContext,
   CodeBlockResult,
-  InputDefinition,
+  InputSchema,
   ComponentDefinition,
   ImportResult,
   ResolveResult,
   SampleContext,
   Json,
+  JsonObject,
   SourcePosition,
   InvocationContext,
   InvocationHandling,
@@ -99,3 +100,7 @@ export { useTempFileCompiler } from "./src/temp-file-compiler.ts";
 
 
 export { collect } from "./src/collect.ts";
+
+export { validateBindingName } from "./src/expand.ts";
+export { compileInputSchema, validateProps, PropValidationError, InputSchemaError } from "./src/validate.ts";
+export type { NormalizedIssue } from "./src/validate.ts";

@@ -1,10 +1,17 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  severity: warning
-  message: "package.json changed without dependency justification."
+  type: object
+  properties:
+    pr:
+      type: object
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "package.json changed without dependency justification."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval

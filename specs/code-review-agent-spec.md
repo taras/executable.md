@@ -173,10 +173,15 @@ Zero dependencies beyond Deno stdlib.
 ````markdown
 ---
 inputs:
-  when:
-    type: boolean
-    required: true
-  fallback: ""
+  type: object
+  properties:
+    when:
+      type: boolean
+    fallback:
+      type: string
+      default: ""
+  required: [when]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -194,10 +199,15 @@ if (fallback) {
 ````markdown
 ---
 inputs:
-  heading:
-    type: string
-    required: true
-  clean: "✅ No issues found."
+  type: object
+  properties:
+    heading:
+      type: string
+    clean:
+      type: string
+      default: "✅ No issues found."
+  required: [heading]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -213,13 +223,17 @@ return content.trim().length > 0
 ````markdown
 ---
 inputs:
-  when:
-    type: boolean
-    required: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    when:
+      type: boolean
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [when, message]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -238,9 +252,12 @@ const icon = severity === "error" ? "🔴" : "🟡";
 ````markdown
 ---
 inputs:
-  system:
-    type: string
-    required: true
+  type: object
+  properties:
+    system:
+      type: string
+  required: [system]
+  additionalProperties: false
 ---
 
 ```ts persist eval
@@ -261,7 +278,12 @@ scope.around(Sample, function* ([context], next) {
 ````markdown
 ---
 inputs:
-  marker: "<!-- xmd-review -->"
+  type: object
+  properties:
+    marker:
+      type: string
+      default: "<!-- xmd-review -->"
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -310,9 +332,12 @@ return content;
 ````markdown
 ---
 inputs:
-  model:
-    type: string
-    required: true
+  type: object
+  properties:
+    model:
+      type: string
+  required: [model]
+  additionalProperties: false
 ---
 
 ```ts persist eval
@@ -351,10 +376,15 @@ scope.around(Sample, function* ([context], next) {
 ````markdown
 ---
 inputs:
-  model:
-    type: string
-    required: true
-  baseUrl: "http://localhost:11434"
+  type: object
+  properties:
+    model:
+      type: string
+    baseUrl:
+      type: string
+      default: "http://localhost:11434"
+  required: [model]
+  additionalProperties: false
 ---
 
 ```ts persist eval
@@ -394,22 +424,23 @@ scope.around(Sample, function* ([context], next) {
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  metric:
-    type: string
-    required: true
-  op:
-    type: string
-    required: true
-  value:
-    type: number
-    required: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    metric:
+      type: string
+    op:
+      type: string
+    value:
+      type: number
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, metric, op, value, message]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -444,18 +475,25 @@ if (ops[op](actual, value)) {
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  pattern:
-    type: string
-    required: true
-  min: 1
-  excludeTests: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    pattern:
+      type: string
+    min:
+      type: number
+      default: 1
+    excludeTests:
+      type: boolean
+      default: true
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, pattern, message]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -479,24 +517,29 @@ if (matches.length >= min) {
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  numerator:
-    type: string
-    required: true
-  denominator:
-    type: string
-    required: true
-  threshold:
-    type: number
-    required: true
-  minDenominator: 10
-  excludeTests: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    numerator:
+      type: string
+    denominator:
+      type: string
+    threshold:
+      type: number
+    minDenominator:
+      type: number
+      default: 10
+    excludeTests:
+      type: boolean
+      default: true
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, numerator, denominator, threshold, message]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -526,16 +569,19 @@ if (denCount >= minDenominator && numCount / denCount > threshold) {
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  construct:
-    type: string
-    required: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    construct:
+      type: string
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, construct, message]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -569,12 +615,21 @@ if (unused.length > 0) {
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  minLength: 50
-  severity: error
-  message: "PR description must explain what and why."
+  type: object
+  properties:
+    pr:
+      type: object
+    minLength:
+      type: number
+      default: 50
+    severity:
+      type: string
+      default: error
+    message:
+      type: string
+      default: "PR description must explain what and why."
+  required: [pr]
+  additionalProperties: false
 ---
 
 <Finding when={pr.meta.body.length < minLength}
@@ -586,12 +641,21 @@ inputs:
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  whenLinesExceed: 0
-  severity: warning
-  message: "Large PR with no linked issue."
+  type: object
+  properties:
+    pr:
+      type: object
+    whenLinesExceed:
+      type: number
+      default: 0
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "Large PR with no linked issue."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -607,12 +671,21 @@ const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(pr.meta.
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  minFiles: 5
-  severity: warning
-  message: "PR mixes config and source changes."
+  type: object
+  properties:
+    pr:
+      type: object
+    minFiles:
+      type: number
+      default: 5
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "PR mixes config and source changes."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -631,12 +704,21 @@ const triggered = hasConfig && hasSource && pr.stats.totalFiles > minFiles;
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  pattern: "factory|abstract|base|provider|strategy|adapter|helper|util"
-  severity: warning
-  message: "New abstraction files: {names}. Verify 3+ consumers."
+  type: object
+  properties:
+    pr:
+      type: object
+    pattern:
+      type: string
+      default: "factory|abstract|base|provider|strategy|adapter|helper|util"
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "New abstraction files: {names}. Verify 3+ consumers."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -658,11 +740,18 @@ const resolvedMessage = message.replace(
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  severity: warning
-  message: "package.json changed without dependency justification."
+  type: object
+  properties:
+    pr:
+      type: object
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+      default: "package.json changed without dependency justification."
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -681,9 +770,12 @@ const triggered = touchesPkg && !mentionsDeps;
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -733,9 +825,12 @@ If none are obvious: "No obvious comments found."
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Scope" clean="✅ PR scope looks good.">
@@ -784,9 +879,12 @@ inputs:
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Structural" clean="✅ No structural bloat detected.">
@@ -828,9 +926,12 @@ inputs:
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Verbosity" clean="✅ Comment quality looks reasonable.">
@@ -854,9 +955,12 @@ inputs:
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 <Show when={pr.stats.totalChanges > 20}
@@ -896,9 +1000,12 @@ Zero eval blocks.
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+  required: [pr]
+  additionalProperties: false
 ---
 
 ## PR #{pr.meta.number}: {pr.meta.title}

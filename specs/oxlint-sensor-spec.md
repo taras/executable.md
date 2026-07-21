@@ -508,12 +508,15 @@ re-run.
 ````markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  tsconfigPath:
-    type: string
-    default: ".reviews/tsconfig.oxlint.json"
+  type: object
+  properties:
+    pr:
+      type: object
+    tsconfigPath:
+      type: string
+      default: ".reviews/tsconfig.oxlint.json"
+  required: [pr]
+  additionalProperties: false
 ---
 
 ### Oxlint Compatibility Check
@@ -822,12 +825,14 @@ Per-category signal summaries embedded in existing policy documents.
 ````markdown
 ---
 inputs:
-  groups:
-    type: array
-    required: true
-  label:
-    type: string
-    required: true
+  type: object
+  properties:
+    groups:
+      type: array
+    label:
+      type: string
+  required: [groups, label]
+  additionalProperties: false
 ---
 
 ```ts eval
@@ -848,12 +853,14 @@ Deterministic summary of diagnostics with doctor status.
 ```markdown
 ---
 inputs:
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
+  type: object
+  properties:
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+  required: [diagnostics, doctor]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Static Analysis"
@@ -891,15 +898,16 @@ inputs:
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+  required: [pr, diagnostics, doctor]
+  additionalProperties: false
 ---
 
 ## PR #{pr.meta.number}: {pr.meta.title}
@@ -927,12 +935,14 @@ Both perspectives are complementary.
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  diagnostics:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    diagnostics:
+      type: object
+  required: [pr, diagnostics]
+  additionalProperties: false
 ---
 
 <ReviewSection heading="Structural"
@@ -983,15 +993,16 @@ the raw diff.
 ```markdown
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  diagnostics:
-    type: object
-    required: true
-  doctor:
-    type: object
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    diagnostics:
+      type: object
+    doctor:
+      type: object
+  required: [pr, diagnostics, doctor]
+  additionalProperties: false
 ---
 
 <Show when={pr.stats.totalChanges > 20}

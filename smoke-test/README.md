@@ -33,6 +33,8 @@ built from the source at [{meta.repo}]({meta.repo}).
 
 <Guide.Props />
 
+<Guide.TypedInputs />
+
 <Guide.Interpolation />
 
 <Guide.Captures />

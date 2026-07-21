@@ -1,12 +1,14 @@
 ---
 inputs:
-  findings:
-    type: array
-    required: true
-  dismissedReplies:
-    type: array
-    required: false
-    default: []
+  type: object
+  properties:
+    findings:
+      type: array
+    dismissedReplies:
+      type: array
+      default: []
+  required: [findings]
+  additionalProperties: false
 ---
 
 ```ts eval

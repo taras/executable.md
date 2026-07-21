@@ -1,21 +1,22 @@
 ---
 inputs:
-  pr:
-    type: object
-    required: true
-  metric:
-    type: string
-    required: true
-  op:
-    type: string
-    required: true
-  value:
-    type: number
-    required: true
-  severity: warning
-  message:
-    type: string
-    required: true
+  type: object
+  properties:
+    pr:
+      type: object
+    metric:
+      type: string
+    op:
+      type: string
+    value:
+      type: number
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, metric, op, value, message]
+  additionalProperties: false
 ---
 
 ```ts eval

@@ -1,8 +1,11 @@
 ---
 inputs:
-  dir:
-    type: string
-    default: ".reviews/.oxlint"
+  type: object
+  properties:
+    dir:
+      type: string
+      default: ".reviews/.oxlint"
+  additionalProperties: false
 ---
 
 ```bash silent exec

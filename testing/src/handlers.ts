@@ -12,7 +12,7 @@ import { timebox } from "@effectionx/timebox";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { AssertionError } from "@std/assert";
-import { Component, env, evalScope } from "@executablemd/core";
+import { Component, env, evalScope, validateBindingName } from "@executablemd/core";
 import type {
   ComponentInvocation,
   ErrorSegment,
@@ -20,15 +20,32 @@ import type {
   InvocationContext,
   Segment,
 } from "@executablemd/core";
-import { Test, boundary, inTest, record, testing } from "./test-api.ts";
+import { Test, boundary, inTest, record, testing, verbose } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
-import { AssertionDiagnostic, expandAssertion } from "./assertions.ts";
+import {
+  AssertionDiagnostic,
+  buildDiagnostic,
+  evaluateExpression,
+  expandAssertion,
+  failVisiblyThenThrow,
+  validationError,
+} from "./assertions.ts";
 import type { AssertionEntry } from "./assertions.ts";
 import { persistBoundaryOutcome, persistTestResult } from "./journal.ts";
 
 /** An ErrorSegment raised anywhere inside a test body. */
 class RaisedSegmentError extends Error {
   override name = "RaisedSegmentError";
+  segment: ErrorSegment;
+
+  constructor(segment: ErrorSegment) {
+    super(segment.message);
+    this.segment = segment;
+  }
+}
+
+class CapturedRaise extends Error {
+  override name = "CapturedRaise";
   segment: ErrorSegment;
 
   constructor(segment: ErrorSegment) {
@@ -78,6 +95,7 @@ export interface TestHandlers {
     invocation: ComponentInvocation,
     ctx: InvocationContext,
   ): Operation<Segment[]>;
+  expandAssertThrows(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
 }
 
 export function createTestHandlers(options: { timeoutMs: number }): TestHandlers {
@@ -246,7 +264,164 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     return testOutput;
   }
 
-  return { expandTesting, expandTest, expandAssertion };
+  function* expandAssertThrows(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<Segment[]> {
+    for (const propName of [
+      ...Object.keys(invocation.props),
+      ...Object.keys(invocation.expressions),
+    ]) {
+      if (propName !== "message" && propName !== "as") {
+        return [
+          validationError(
+            "AssertThrows",
+            `does not accept a "${propName}" prop (allowed: message, as).`,
+          ),
+        ];
+      }
+    }
+    if (!("message" in invocation.props) && !("message" in invocation.expressions)) {
+      return [validationError("AssertThrows", 'requires a "message" prop.')];
+    }
+    if ("as" in invocation.expressions) {
+      return [
+        validationError(
+          "AssertThrows",
+          'the "as" prop must be a string literal, not an expression.',
+        ),
+      ];
+    }
+
+    const currentEnv = yield* env;
+    const merged = {
+      ...(ctx.projectedEnv?.values ?? {}),
+      ...(currentEnv?.values ?? {}),
+    };
+
+    let matcher: string | RegExp;
+    if ("message" in invocation.expressions) {
+      let evaluated: unknown;
+      try {
+        evaluated = evaluateExpression(invocation.expressions["message"]!, merged);
+      } catch (error) {
+        return [
+          validationError(
+            "AssertThrows",
+            `failed to evaluate the "message" expression: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+        ];
+      }
+      if (typeof evaluated === "string" || evaluated instanceof RegExp) {
+        matcher = evaluated;
+      } else {
+        return [
+          validationError(
+            "AssertThrows",
+            `the "message" expression must evaluate to a string or RegExp, got ${typeof evaluated}.`,
+          ),
+        ];
+      }
+    } else {
+      const literal = invocation.props["message"];
+      if (typeof literal !== "string") {
+        return [validationError("AssertThrows", 'the "message" prop must be a string.')];
+      }
+      matcher = literal;
+    }
+
+    let binding: string | undefined;
+    if ("as" in invocation.props) {
+      if (!currentEnv) {
+        return [
+          validationError("AssertThrows", 'binding with "as" requires an eval scope in context.'),
+        ];
+      }
+      const parsed = validateBindingName(invocation.props["as"]);
+      if (!parsed.ok) {
+        return [validationError("AssertThrows", `the "as" prop ${parsed.error}`)];
+      }
+      if (parsed.value === undefined) {
+        return [validationError("AssertThrows", 'the "as" prop must be a non-empty string.')];
+      }
+      binding = parsed.value;
+    }
+
+    // Install a scope-local raise interceptor and expand the body. Inside a
+    // <Test> the enclosing interceptor is installed in an outer scope, and
+    // outer middleware runs first (see @effectionx/context-api ordering), so
+    // it throws RaisedSegmentError before this hook is reached; outside a test
+    // this hook is the only interceptor and throws CapturedRaise. Catching
+    // both makes capture behave identically inside and outside <Test>. The
+    // first raised error stops expansion, so later children never execute.
+    let captured: ErrorSegment | undefined;
+    try {
+      yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *raise([segment]) {
+            throw new CapturedRaise(segment);
+          },
+        });
+        yield* ctx.expand(invocation.children);
+      });
+    } catch (error) {
+      if (error instanceof CapturedRaise || error instanceof RaisedSegmentError) {
+        captured = error.segment;
+      } else {
+        throw error;
+      }
+    }
+
+    if (!captured) {
+      yield* failAssertThrows(matcher, undefined);
+    } else if (!matchesMessage(matcher, captured.message)) {
+      yield* failAssertThrows(matcher, captured.message);
+    }
+
+    if (binding !== undefined && currentEnv) {
+      currentEnv.values[binding] = captured;
+    }
+
+    const visible = (yield* testing) || (yield* verbose);
+    if (!visible) {
+      return [];
+    }
+    return [
+      {
+        type: "text",
+        content: buildDiagnostic("AssertThrows", "passed", describeMatcher(matcher), {}),
+      },
+    ];
+  }
+
+  return { expandTesting, expandTest, expandAssertion, expandAssertThrows };
+}
+
+function* failAssertThrows(matcher: string | RegExp, actual: string | undefined): Operation<never> {
+  const expected = describeMatcher(matcher);
+  const failure = new AssertionError(
+    actual === undefined
+      ? `AssertThrows: expected the body to raise an error matching ${expected}, but none was raised`
+      : `AssertThrows: raised error ${JSON.stringify(actual)} did not match ${expected}`,
+  );
+  yield* failVisiblyThenThrow(
+    "AssertThrows",
+    undefined,
+    { expected, actual: actual ?? "(none)" },
+    failure,
+  );
+  throw failure;
+}
+
+function matchesMessage(matcher: string | RegExp, message: string): boolean {
+  return matcher instanceof RegExp ? matcher.test(message) : message.includes(matcher);
+}
+
+function describeMatcher(matcher: string | RegExp): string {
+  return matcher instanceof RegExp ? String(matcher) : `substring ${JSON.stringify(matcher)}`;
 }
 
 function formatLocation(invocation: ComponentInvocation): string {
