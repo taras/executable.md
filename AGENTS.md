@@ -3,7 +3,7 @@
 ## Verification
 
 After making any changes to source files (`src/`) or test files (`tests/`),
-always run all three checks before committing:
+always run all four checks before committing:
 
 1. **Lint + Format**: `deno task lint` (runs `oxlint` + `oxfmt --check`) — must
    produce 0 errors. Run `pnpm fmt` to auto-fix formatting.
