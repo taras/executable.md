@@ -3,8 +3,6 @@
   "version": "0.4.1",
   "exports": "./src/cli.ts",
   "imports": {
-    "@executablemd/core": "../core/mod.ts",
-    "zod": "npm:zod@^4.3.6",
-    "@executablemd/testing": "../testing/mod.ts"
+    "zod": "npm:zod@^4.3.6"
   }
 }

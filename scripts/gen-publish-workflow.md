@@ -29,7 +29,7 @@ on:
 permissions:
   contents: read
   actions: read # the version job polls the release.yml run
-  id-token: write # granted to the reusable publish-one.yml jobs for OIDC
+  id-token: write # npm OIDC in publish-one.yml, JSR OIDC in the jsr job
 
 jobs:
   version:
@@ -112,6 +112,43 @@ One job per publishable package, dependencies before dependents. `__JOB__`,
 
 </Capture>
 
+## JSR job
+
+JSR publishing runs in a single GitHub Actions job that publishes the entire
+workspace.
+
+Deno resolves dependencies between workspace packages and records them as `jsr:`
+dependencies. Publishing is idempotent: when `deno publish` runs multiple times,
+it skips package versions already published to JSR and publishes only those
+still missing. Previously published packages do not cause the command to fail.
+
+npm stays per-package in `publish-one.yml`, and this job runs in the same
+`npm-publish` environment so both registries admit the same publishers:
+
+<Capture as="jsrTemplate" select="code[lang=yaml]">
+
+```yaml
+  jsr:
+    needs: [version]
+    runs-on: ubuntu-latest
+    # Same gate as the npm jobs: only actors permitted on this environment can
+    # publish (spec §5).
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      # deno publish filters already-published members itself, so a rerun after
+      # a partial publish completes the members that are missing (spec §7).
+      - name: Publish the workspace to JSR
+        run: deno publish
+```
+
+</Capture>
+
 ## Generate
 
 ```ts eval
@@ -178,6 +215,8 @@ const workflow = [
   guardsTemplate.replaceAll("__MANIFESTS__", manifests),
   "",
   jobs.join("\n\n"),
+  "",
+  jsrTemplate,
 ].join("\n") + "\n";
 
 yield* writeTextFile(".github/workflows/publish-packages.yml", workflow);

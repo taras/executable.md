@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   actions: read # the version job polls the release.yml run
-  id-token: write # granted to the reusable publish-one.yml jobs for OIDC
+  id-token: write # npm OIDC in publish-one.yml, JSR OIDC in the jsr job
 
 jobs:
   version:
@@ -102,3 +102,21 @@ jobs:
     with:
       package: packages/code-review-agent
       version: ${{ needs.version.outputs.value }}
+
+  jsr:
+    needs: [version]
+    runs-on: ubuntu-latest
+    # Same gate as the npm jobs: only actors permitted on this environment can
+    # publish (spec §5).
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      # deno publish filters already-published members itself, so a rerun after
+      # a partial publish completes the members that are missing (spec §7).
+      - name: Publish the workspace to JSR
+        run: deno publish

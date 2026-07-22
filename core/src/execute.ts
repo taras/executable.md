@@ -12,7 +12,7 @@
 
 import { Err, Ok, scoped, spawn, withResolvers, until } from "effection";
 import type { Operation, Result, Stream } from "effection";
-import { createApi } from "@effectionx/context-api";
+import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
   durableRun,
   createDurableOperation,
@@ -500,10 +500,10 @@ export interface ExecutionApi {
   execute(options: ExecuteOptions): Operation<DocumentExecution>;
 }
 
-export const Execution = createApi<ExecutionApi>("Execution", {
+export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution", {
   *execute(options: ExecuteOptions): Operation<DocumentExecution> {
     return yield* executeDocument(options);
   },
 });
 
-export const { execute } = Execution.operations;
+export const execute: Operations<ExecutionApi>["execute"] = Execution.operations.execute;

@@ -44,6 +44,20 @@ jobs:
       - name: Test
         run: deno task test
 
+  # The same command the release publishes with, minus --dry-run. Catches slow
+  # types and unresolvable specifiers before they reach a tag.
+  jsr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      - name: The workspace is publishable to JSR
+        run: deno task check:jsr
+
   smoke:
     runs-on: ubuntu-latest
     steps:

@@ -13,7 +13,7 @@
  * - Caller instrumentation and overrides wrap at the default `"max"`.
  */
 
-import { createApi } from "@effectionx/context-api";
+import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import type {
@@ -58,7 +58,7 @@ export interface ComponentApi {
   content(slot?: string): Operation<string>;
 }
 
-export const Component = createApi<ComponentApi>("Component", {
+export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
   // deno-lint-ignore require-yield
   *importComponent(name: string): Operation<ComponentDefinition | FunctionComponentDefinition> {
     throw new Error(
@@ -98,14 +98,15 @@ export const Component = createApi<ComponentApi>("Component", {
   },
 });
 
-export const {
-  importComponent,
-  applyModifiers,
-  raise,
-  env,
-  evalScope,
-  expandInvocation,
-  codeBlock,
-  persistent,
-  content,
-} = Component.operations;
+export const importComponent: Operations<ComponentApi>["importComponent"] =
+  Component.operations.importComponent;
+export const applyModifiers: Operations<ComponentApi>["applyModifiers"] =
+  Component.operations.applyModifiers;
+export const raise: Operations<ComponentApi>["raise"] = Component.operations.raise;
+export const env: Operations<ComponentApi>["env"] = Component.operations.env;
+export const evalScope: Operations<ComponentApi>["evalScope"] = Component.operations.evalScope;
+export const expandInvocation: Operations<ComponentApi>["expandInvocation"] =
+  Component.operations.expandInvocation;
+export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operations.codeBlock;
+export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
+export const content: Operations<ComponentApi>["content"] = Component.operations.content;

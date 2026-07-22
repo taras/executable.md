@@ -12,7 +12,7 @@
  * before any `<Sample>` component runs.
  */
 
-import { createApi } from "@effectionx/context-api";
+import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { SampleContext } from "./types.ts";
 
@@ -42,7 +42,7 @@ interface SampleApi {
  * const result = yield* Sample.operations.sample(context);
  * ```
  */
-export const Sample = createApi<SampleApi>("Sample", {
+export const Sample: Api<SampleApi> = createApi<SampleApi>("Sample", {
   // deno-lint-ignore require-yield
   *sample(_context: SampleContext): Operation<string> {
     throw new Error(

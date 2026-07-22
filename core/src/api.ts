@@ -8,7 +8,7 @@
  * Call sites use `DocumentOutput.operations.output(text)` inside `yield* ephemeral(...)`.
  */
 
-import { createApi } from "@effectionx/context-api";
+import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 export interface DocumentOutputApi {
@@ -33,6 +33,9 @@ export interface DocumentOutputApi {
  * yield* ephemeral(DocumentOutput.operations.output(text));
  * ```
  */
-export const DocumentOutput = createApi<DocumentOutputApi>("DocumentOutput", {
-  *output(_text: string): Operation<void> {},
-});
+export const DocumentOutput: Api<DocumentOutputApi> = createApi<DocumentOutputApi>(
+  "DocumentOutput",
+  {
+    *output(_text: string): Operation<void> {},
+  },
+);
