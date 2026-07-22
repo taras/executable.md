@@ -12,8 +12,7 @@ always run all four checks before committing:
    `deno test --no-check --allow-all core/tests/ durable-streams/tests/` — all
    tests must pass with 0 failures
 4. **JSR publishability**: `deno task check:jsr` — must end with
-   `Success Dry run complete`. Public API symbols need explicit type
-   annotations and no export may be a destructuring.
+   `Success Dry run complete`
 
 Do not commit if any check fails. Fix the issue first, then re-run all four.
 
