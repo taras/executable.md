@@ -109,8 +109,13 @@ A JSR failure fails the release. The job needs no idempotency guard of its own:
 `deno publish` queries the registry and skips each workspace member JSR already
 carries at that version, member by member. A rerun after a partial publish
 therefore completes exactly the members that are missing, and a rerun after a
-complete publish is a no-op. Never gate the job on one package's existence —
-whether `core` is published says nothing about the other five.
+complete publish exits 0 without republishing. Never gate the job on one
+package's existence — whether `core` is published says nothing about the other
+five.
+
+That filtering landed in Deno v2.9.0, so the `deno-version` pin must stay at or
+above it; below that, a rerun errors on the already-published members instead of
+skipping them.
 
 `deno task check:jsr` runs the same command with `--dry-run` and is a required
 CI job on every PR (§3, `ci.yml`). It enforces JSR's fast-check rules, so every
