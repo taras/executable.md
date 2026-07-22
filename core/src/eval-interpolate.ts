@@ -52,13 +52,19 @@ export function interpolateEvalBindings(
   // Supports dotted paths: {pr.meta.number} traverses bindings.pr.meta.number
   const interpolated = escaped.replace(BARE_BINDING_RE, (match, key: string) => {
     const parts = key.split(".");
-    if (!(parts[0] in bindings)) return match;
+    if (!(parts[0] in bindings)) {
+      return match;
+    }
 
     let value: unknown = bindings;
     for (let i = 0; i < parts.length; i++) {
-      if (value == null || typeof value !== "object") return match;
+      if (value == null || typeof value !== "object") {
+        return match;
+      }
       const obj = value as Record<string, unknown>;
-      if (i < parts.length - 1 && !(parts[i] in obj)) return match;
+      if (i < parts.length - 1 && !(parts[i] in obj)) {
+        return match;
+      }
       value = obj[parts[i]];
     }
 

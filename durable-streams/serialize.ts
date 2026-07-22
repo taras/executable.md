@@ -21,8 +21,12 @@ export function serializeError(error: Error): SerializedError {
 /** Deserialize a SerializedError back to an Error. */
 export function deserializeError(se: SerializedError): Error {
   const error = new Error(se.message);
-  if (se.name) error.name = se.name;
-  if (se.stack) error.stack = se.stack;
+  if (se.name) {
+    error.name = se.name;
+  }
+  if (se.stack) {
+    error.stack = se.stack;
+  }
   return error;
 }
 

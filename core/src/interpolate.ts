@@ -34,8 +34,12 @@ export function interpolate(
           : (props as Record<string, unknown>);
       const value = getNestedValue(source, keyPath);
 
-      if (value === undefined || value === null) return "";
-      if (Array.isArray(value)) return value.join(", ");
+      if (value === undefined || value === null) {
+        return "";
+      }
+      if (Array.isArray(value)) {
+        return value.join(", ");
+      }
       return String(value);
     },
   );

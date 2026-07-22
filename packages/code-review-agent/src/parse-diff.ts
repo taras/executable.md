@@ -50,10 +50,14 @@ const EXTENSION_LANGUAGE: Record<string, string> = {
 
 function inferLanguage(filePath: string): string {
   const lower = filePath.toLowerCase();
-  if (lower === "dockerfile" || lower.endsWith("/dockerfile")) return "docker";
+  if (lower === "dockerfile" || lower.endsWith("/dockerfile")) {
+    return "docker";
+  }
 
   const lastDot = filePath.lastIndexOf(".");
-  if (lastDot === -1) return "unknown";
+  if (lastDot === -1) {
+    return "unknown";
+  }
   const ext = filePath.slice(lastDot).toLowerCase();
   return EXTENSION_LANGUAGE[ext] ?? "unknown";
 }
@@ -103,10 +107,14 @@ function parseNameStatus(raw: string): Map<string, "A" | "M" | "D" | "R" | "C"> 
   const result = new Map<string, "A" | "M" | "D" | "R" | "C">();
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     const parts = trimmed.split("\t");
     const statusChar = (parts[0] ?? "")[0] as "A" | "M" | "D" | "R" | "C";
-    if (!["A", "M", "D", "R", "C"].includes(statusChar)) continue;
+    if (!["A", "M", "D", "R", "C"].includes(statusChar)) {
+      continue;
+    }
 
     if (statusChar === "R" || statusChar === "C") {
       // Rename/Copy: STATUS\tOLD\tNEW — use new path
@@ -137,11 +145,15 @@ function parseDiffContent(
 
     // Extract file path from the header: `a/path b/path`
     const headerMatch = lines[0]?.match(/a\/(.+?) b\/(.+)/);
-    if (!headerMatch) continue;
+    if (!headerMatch) {
+      continue;
+    }
     const filePath = headerMatch[2];
 
     // Skip binary files
-    if (section.includes("Binary files ")) continue;
+    if (section.includes("Binary files ")) {
+      continue;
+    }
 
     const status = statusMap.get(filePath) ?? "M";
     const hunks: DiffHunk[] = [];
@@ -162,7 +174,9 @@ function parseDiffContent(
         continue;
       }
 
-      if (!currentHunk) continue;
+      if (!currentHunk) {
+        continue;
+      }
 
       if (line.startsWith("+")) {
         currentHunk.lines.push({

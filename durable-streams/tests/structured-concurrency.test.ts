@@ -146,8 +146,12 @@ describe("structured concurrency", () => {
     // (child 2's events and root Close are dropped)
     const allEvents = goldenStream.snapshot();
     const partialEvents = allEvents.filter((e) => {
-      if (e.coroutineId === "root") return false;
-      if (e.coroutineId === "root.2") return false;
+      if (e.coroutineId === "root") {
+        return false;
+      }
+      if (e.coroutineId === "root.2") {
+        return false;
+      }
       return true;
     });
 

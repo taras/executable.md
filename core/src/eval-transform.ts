@@ -184,8 +184,12 @@ function detectMode(ast: AstNode): "generator" | "async" | "sync" {
 
   for (const node of ast.body) {
     walkTopLevel(node, (n: AstNode) => {
-      if (n.type === "YieldExpression") hasYield = true;
-      if (n.type === "AwaitExpression") hasAwait = true;
+      if (n.type === "YieldExpression") {
+        hasYield = true;
+      }
+      if (n.type === "AwaitExpression") {
+        hasAwait = true;
+      }
     });
   }
 
@@ -196,8 +200,12 @@ function detectMode(ast: AstNode): "generator" | "async" | "sync" {
     );
   }
 
-  if (hasYield) return "generator";
-  if (hasAwait) return "async";
+  if (hasYield) {
+    return "generator";
+  }
+  if (hasAwait) {
+    return "async";
+  }
   return "sync";
 }
 
@@ -206,7 +214,9 @@ function detectMode(ast: AstNode): "generator" | "async" | "sync" {
  * into nested function/class/arrow bodies.
  */
 function walkTopLevel(node: AstNode, visitor: (n: AstNode) => void): void {
-  if (!node || typeof node !== "object") return;
+  if (!node || typeof node !== "object") {
+    return;
+  }
 
   visitor(node);
 
@@ -223,7 +233,9 @@ function walkTopLevel(node: AstNode, visitor: (n: AstNode) => void): void {
   }
 
   for (const key of Object.keys(node)) {
-    if (key === "type" || key === "start" || key === "end") continue;
+    if (key === "type" || key === "start" || key === "end") {
+      continue;
+    }
     const child = node[key];
     if (Array.isArray(child)) {
       for (const item of child) {
@@ -257,7 +269,9 @@ function collectExports(ast: AstNode): string[] {
  * Extract names declared by a top-level statement node.
  */
 function extractDeclaredNames(node: AstNode): string[] {
-  if (!node) return [];
+  if (!node) {
+    return [];
+  }
 
   switch (node.type) {
     case "VariableDeclaration": {
@@ -282,7 +296,9 @@ function extractDeclaredNames(node: AstNode): string[] {
  * Recursively extract bound names from a destructuring pattern.
  */
 function extractPatternNames(pattern: AstNode): string[] {
-  if (!pattern) return [];
+  if (!pattern) {
+    return [];
+  }
 
   switch (pattern.type) {
     case "Identifier":
@@ -346,7 +362,9 @@ function collectFreeVariables(ast: AstNode, declaredNames: Set<string>): string[
  * Walk the AST collecting identifier references that are not local declarations.
  */
 function collectReferences(node: AstNode, references: Set<string>, localDecls: Set<string>): void {
-  if (!node || typeof node !== "object") return;
+  if (!node || typeof node !== "object") {
+    return;
+  }
 
   if (node.type === "Identifier") {
     if (!localDecls.has(node.name)) {
@@ -377,7 +395,9 @@ function collectReferences(node: AstNode, references: Set<string>, localDecls: S
   }
 
   for (const key of Object.keys(node)) {
-    if (key === "type" || key === "start" || key === "end") continue;
+    if (key === "type" || key === "start" || key === "end") {
+      continue;
+    }
     const child = node[key];
     if (Array.isArray(child)) {
       for (const item of child) {
@@ -395,7 +415,9 @@ function collectReferences(node: AstNode, references: Set<string>, localDecls: S
  * Check if a value is JSON-serializable.
  */
 export function isJson(value: unknown): boolean {
-  if (value === null) return true;
+  if (value === null) {
+    return true;
+  }
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return true;
   }
@@ -404,7 +426,9 @@ export function isJson(value: unknown): boolean {
   }
   if (typeof value === "object" && value !== null) {
     const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) return false;
+    if (proto !== Object.prototype && proto !== null) {
+      return false;
+    }
     return Object.values(value).every(isJson);
   }
   return false;

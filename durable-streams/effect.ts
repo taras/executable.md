@@ -199,7 +199,9 @@ export function createDurableEffect<T>(
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
       const replay = checkReplay<T>(desc, resolve, routine, ctx);
-      if (replay.path === "replayed") return replay.teardown;
+      if (replay.path === "replayed") {
+        return replay.teardown;
+      }
 
       // ── LIVE PATH ──
       let settled = false;
@@ -208,7 +210,9 @@ export function createDurableEffect<T>(
 
       /** Persist a Yield event then resume the generator. */
       function persistAndResolve(result: Result): void {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
 
         const event: Yield = {
@@ -304,7 +308,9 @@ export function createDurableOperation<T extends Json>(
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
       const replay = checkReplay<T>(desc, resolve, routine, ctx);
-      if (replay.path === "replayed") return replay.teardown;
+      if (replay.path === "replayed") {
+        return replay.teardown;
+      }
 
       // ── LIVE PATH ──
       // Run the entire execute → capture → persist → resolve sequence

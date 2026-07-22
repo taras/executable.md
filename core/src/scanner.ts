@@ -220,7 +220,9 @@ interface FenceClose {
  */
 function matchFenceOpen(text: string, pos: number): FenceOpen | null {
   // Must be at start of line
-  if (pos > 0 && text[pos - 1] !== "\n") return null;
+  if (pos > 0 && text[pos - 1] !== "\n") {
+    return null;
+  }
 
   let i = pos;
 
@@ -231,10 +233,14 @@ function matchFenceOpen(text: string, pos: number): FenceOpen | null {
     i++;
   }
 
-  if (i >= text.length) return null;
+  if (i >= text.length) {
+    return null;
+  }
 
   const fenceChar = text[i]!;
-  if (fenceChar !== "`" && fenceChar !== "~") return null;
+  if (fenceChar !== "`" && fenceChar !== "~") {
+    return null;
+  }
 
   // Count fence characters (minimum 3)
   let fenceLen = 0;
@@ -242,14 +248,18 @@ function matchFenceOpen(text: string, pos: number): FenceOpen | null {
     fenceLen++;
     i++;
   }
-  if (fenceLen < 3) return null;
+  if (fenceLen < 3) {
+    return null;
+  }
 
   // Info string goes to end of line
   const lineEnd = text.indexOf("\n", i);
   const infoString = lineEnd === -1 ? text.slice(i).trim() : text.slice(i, lineEnd).trim();
 
   // Backtick fences: info string must not contain backticks
-  if (fenceChar === "`" && infoString.includes("`")) return null;
+  if (fenceChar === "`" && infoString.includes("`")) {
+    return null;
+  }
 
   const contentStart = lineEnd === -1 ? text.length : lineEnd + 1;
 
@@ -331,17 +341,23 @@ function parseComponentTag(
 
   // Parse tag name — must start with uppercase, can contain dots
   const nameStart = pos;
-  if (pos >= text.length || !/[A-Z]/.test(text[pos]!)) return null;
+  if (pos >= text.length || !/[A-Z]/.test(text[pos]!)) {
+    return null;
+  }
 
   while (pos < text.length && /[A-Za-z0-9._]/.test(text[pos]!)) {
     pos++;
   }
   const name = text.slice(nameStart, pos);
-  if (!name) return null;
+  if (!name) {
+    return null;
+  }
 
   // Parse attributes
   const { props, expressions, end: attrEnd } = parseAttributes(text, pos);
-  if (attrEnd === -1) return null;
+  if (attrEnd === -1) {
+    return null;
+  }
   pos = attrEnd;
 
   // Skip whitespace
@@ -350,7 +366,9 @@ function parseComponentTag(
   // Self-closing tag?
   if (pos < text.length && text[pos] === "/") {
     pos++; // Skip '/'
-    if (pos >= text.length || text[pos] !== ">") return null;
+    if (pos >= text.length || text[pos] !== ">") {
+      return null;
+    }
     pos++; // Skip '>'
 
     return {
@@ -368,12 +386,16 @@ function parseComponentTag(
   }
 
   // Opening tag: must end with '>'
-  if (pos >= text.length || text[pos] !== ">") return null;
+  if (pos >= text.length || text[pos] !== ">") {
+    return null;
+  }
   pos++; // Skip '>'
 
   // Parse children until closing tag
   const { children, end: childEnd } = parseChildren(text, pos, name, index);
-  if (childEnd === -1) return null;
+  if (childEnd === -1) {
+    return null;
+  }
 
   return {
     segment: {
@@ -401,7 +423,9 @@ function parseAttributes(text: string, pos: number): ParsedAttributes {
 
   while (pos < text.length) {
     pos = skipWhitespace(text, pos);
-    if (pos >= text.length) return { props, expressions, end: -1 };
+    if (pos >= text.length) {
+      return { props, expressions, end: -1 };
+    }
 
     // End of attributes?
     if (text[pos] === "/" || text[pos] === ">") {
@@ -417,7 +441,9 @@ function parseAttributes(text: string, pos: number): ParsedAttributes {
     ) {
       // Skip spread — consume the expression
       const exprEnd = findMatchingBrace(text, pos);
-      if (exprEnd === -1) return { props, expressions, end: -1 };
+      if (exprEnd === -1) {
+        return { props, expressions, end: -1 };
+      }
       // We don't evaluate spread props — just skip them
       pos = exprEnd + 1;
       continue;
@@ -429,7 +455,9 @@ function parseAttributes(text: string, pos: number): ParsedAttributes {
       pos++;
     }
     const attrName = text.slice(attrNameStart, pos);
-    if (!attrName) return { props, expressions, end: -1 };
+    if (!attrName) {
+      return { props, expressions, end: -1 };
+    }
 
     pos = skipWhitespace(text, pos);
 
@@ -457,24 +485,32 @@ function parseAttributes(text: string, pos: number): ParsedAttributes {
     pos = skipWhitespace(text, pos);
 
     // Attribute value
-    if (pos >= text.length) return { props, expressions, end: -1 };
+    if (pos >= text.length) {
+      return { props, expressions, end: -1 };
+    }
 
     if (text[pos] === '"') {
       // String attribute: "value"
       const strEnd = findClosingQuote(text, pos + 1, '"');
-      if (strEnd === -1) return { props, expressions, end: -1 };
+      if (strEnd === -1) {
+        return { props, expressions, end: -1 };
+      }
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
     } else if (text[pos] === "'") {
       // String attribute: 'value'
       const strEnd = findClosingQuote(text, pos + 1, "'");
-      if (strEnd === -1) return { props, expressions, end: -1 };
+      if (strEnd === -1) {
+        return { props, expressions, end: -1 };
+      }
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
     } else if (text[pos] === "{") {
       // Expression attribute: {expr}
       const exprEnd = findMatchingBrace(text, pos);
-      if (exprEnd === -1) return { props, expressions, end: -1 };
+      if (exprEnd === -1) {
+        return { props, expressions, end: -1 };
+      }
       const exprText = text.slice(pos + 1, exprEnd).trim();
       const result = parseExpressionValue(exprText);
       if (result.kind === "resolved") {
@@ -506,16 +542,22 @@ function findMatchingBrace(text: string, start: number): number {
       depth++;
     } else if (ch === "}") {
       depth--;
-      if (depth === 0) return pos;
+      if (depth === 0) {
+        return pos;
+      }
     } else if (ch === '"' || ch === "'") {
       // Skip string literal
       const end = findClosingQuote(text, pos + 1, ch);
-      if (end === -1) return -1;
+      if (end === -1) {
+        return -1;
+      }
       pos = end;
     } else if (ch === "`") {
       // Skip template literal
       pos = skipTemplateLiteral(text, pos);
-      if (pos === -1) return -1;
+      if (pos === -1) {
+        return -1;
+      }
     }
 
     pos++;
@@ -542,7 +584,9 @@ function skipTemplateLiteral(text: string, start: number): number {
     } else if (ch === "$" && pos + 1 < text.length && text[pos + 1] === "{") {
       // Template expression — find matching brace
       const braceEnd = findMatchingBrace(text, pos + 1);
-      if (braceEnd === -1) return -1;
+      if (braceEnd === -1) {
+        return -1;
+      }
       pos = braceEnd + 1;
       continue;
     }
@@ -560,7 +604,9 @@ function findClosingQuote(text: string, start: number, quote: string): number {
       pos += 2;
       continue;
     }
-    if (text[pos] === quote) return pos;
+    if (text[pos] === quote) {
+      return pos;
+    }
     pos++;
   }
   return -1;
@@ -613,8 +659,12 @@ export function parseExpressionValue(expr: string): ExpressionResult {
   }
 
   // Boolean
-  if (trimmed === "true") return { kind: "resolved", value: true };
-  if (trimmed === "false") return { kind: "resolved", value: false };
+  if (trimmed === "true") {
+    return { kind: "resolved", value: true };
+  }
+  if (trimmed === "false") {
+    return { kind: "resolved", value: false };
+  }
 
   // null/undefined
   if (trimmed === "null" || trimmed === "undefined") {
@@ -726,7 +776,9 @@ function parseChildren(
  * closing sequences must have the same number of backticks.
  */
 function skipInlineCode(text: string, pos: number): number {
-  if (text[pos] !== "`") return -1;
+  if (text[pos] !== "`") {
+    return -1;
+  }
 
   // Count opening backticks
   let backtickLen = 0;
@@ -764,7 +816,9 @@ function skipWhitespace(text: string, pos: number): number {
 }
 
 function pushText(segments: Segment[], content: string): void {
-  if (content.length === 0) return;
+  if (content.length === 0) {
+    return;
+  }
 
   // Merge with previous text segment if possible
   const last = segments[segments.length - 1];

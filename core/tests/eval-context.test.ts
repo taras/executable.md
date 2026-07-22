@@ -57,14 +57,18 @@ describe("Tier T2 — VM context and compiled generator", () => {
     const env1: Record<string, unknown> = {};
     const gen1 = fn1(env1);
     let r1 = gen1.next();
-    while (!r1.done) r1 = gen1.next();
+    while (!r1.done) {
+      r1 = gen1.next();
+    }
 
     // Second execution — different code
     const fn2 = yield* compileBlock("env.x = 2;", []);
     const env2: Record<string, unknown> = {};
     const gen2 = fn2(env2);
     let r2 = gen2.next();
-    while (!r2.done) r2 = gen2.next();
+    while (!r2.done) {
+      r2 = gen2.next();
+    }
 
     expect(env1["x"]).toBe(1);
     expect(env2["x"]).toBe(2);
@@ -90,7 +94,9 @@ describe("Tier T2 — VM context and compiled generator", () => {
     const env: Record<string, unknown> = {};
     const gen = fn(env);
     let r = gen.next();
-    while (!r.done) r = gen.next();
+    while (!r.done) {
+      r = gen.next();
+    }
     expect(env["result"]).toBe(42);
   });
 });
@@ -113,12 +119,16 @@ describe("compileBlock edge cases", () => {
     const env1: Record<string, unknown> = {};
     const gen1 = fn(env1);
     let r1 = gen1.next();
-    while (!r1.done) r1 = gen1.next();
+    while (!r1.done) {
+      r1 = gen1.next();
+    }
 
     const env2: Record<string, unknown> = {};
     const gen2 = fn(env2);
     let r2 = gen2.next();
-    while (!r2.done) r2 = gen2.next();
+    while (!r2.done) {
+      r2 = gen2.next();
+    }
 
     expect(env1["count"]).toBe(1);
     expect(env2["count"]).toBe(1);

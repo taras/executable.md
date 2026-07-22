@@ -95,7 +95,9 @@ describe("Tier R — Eval module globals", () => {
     const env: Record<string, unknown> = {};
     const gen = fn(env);
     let r = gen.next();
-    while (!r.done) r = gen.next();
+    while (!r.done) {
+      r = gen.next();
+    }
     expect(env["hasWhen"]).toBe(true);
   });
 
@@ -105,7 +107,9 @@ describe("Tier R — Eval module globals", () => {
     const env: Record<string, unknown> = {};
     const gen = fn(env);
     let r = gen.next();
-    while (!r.done) r = gen.next();
+    while (!r.done) {
+      r = gen.next();
+    }
     expect(env["hasFindFreePort"]).toBe(true);
   });
 
@@ -131,7 +135,9 @@ describe("Tier R — Eval module globals", () => {
     const env: Record<string, unknown> = {};
     const gen = fn(env);
     let r = gen.next();
-    while (!r.done) r = gen.next();
+    while (!r.done) {
+      r = gen.next();
+    }
     for (const name of checks) {
       expect(env[`has_${name}`]).toBe(true);
     }

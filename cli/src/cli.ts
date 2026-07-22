@@ -101,7 +101,9 @@ const pretty = (value: unknown): string =>
 
 function formatYieldResult(event: DurableEvent & { type: "yield" }): string {
   const { result, description } = event;
-  if (result.status !== "ok" || result.value === undefined) return "";
+  if (result.status !== "ok" || result.value === undefined) {
+    return "";
+  }
 
   const v = result.value as Record<string, unknown>;
   switch (description.type) {

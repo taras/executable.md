@@ -26,7 +26,9 @@ interface TestPrimitives {
 let _primitives: TestPrimitives | undefined;
 
 async function getPrimitives(): Promise<TestPrimitives> {
-  if (_primitives) return _primitives;
+  if (_primitives) {
+    return _primitives;
+  }
 
   // deno-lint-ignore no-explicit-any
   const g = globalThis as any;

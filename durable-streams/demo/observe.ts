@@ -75,7 +75,9 @@ function useDurableStreamTail(opts: TailOptions): Stream<DurableEvent, void> {
       try {
         while (true) {
           const { done, value } = yield* call(() => reader.read());
-          if (done) break;
+          if (done) {
+            break;
+          }
           yield* channel.send(value);
         }
       } finally {

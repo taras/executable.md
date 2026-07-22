@@ -44,10 +44,18 @@ export function categorizeRule(
 
   const categories: ("structural" | "verbosity" | "typeAware" | "other")[] = [];
 
-  if (structuralSet.has(bare)) categories.push("structural");
-  if (verbositySet.has(bare)) categories.push("verbosity");
-  if (typeAwareSet.has(bare)) categories.push("typeAware");
-  if (categories.length === 0) categories.push("other");
+  if (structuralSet.has(bare)) {
+    categories.push("structural");
+  }
+  if (verbositySet.has(bare)) {
+    categories.push("verbosity");
+  }
+  if (typeAwareSet.has(bare)) {
+    categories.push("typeAware");
+  }
+  if (categories.length === 0) {
+    categories.push("other");
+  }
 
   return categories;
 }

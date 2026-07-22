@@ -41,7 +41,9 @@ export function* subscribe<T>(
     const chunks: T[] = [];
     let next = yield* subscription.next();
     while (!next.done) {
-      if (onValue) onValue(next.value);
+      if (onValue) {
+        onValue(next.value);
+      }
       chunks.push(next.value);
       next = yield* subscription.next();
     }

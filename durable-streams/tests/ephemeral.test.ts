@@ -156,7 +156,9 @@ describe("ephemeral", () => {
             // Use ephemeral to run an Operation inside a Workflow child
             const scope = yield* ephemeral(useScope());
             // Just verify we got a scope (infrastructure operation worked)
-            if (!scope) throw new Error("no scope");
+            if (!scope) {
+              throw new Error("no scope");
+            }
             return yield* durableCall("child1", () => Promise.resolve("a"));
           },
           function* () {
