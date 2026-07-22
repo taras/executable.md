@@ -112,6 +112,39 @@ One job per publishable package, dependencies before dependents. `__JOB__`,
 
 </Capture>
 
+## JSR job
+
+JSR takes the whole workspace in one `deno publish`, so one static job covers
+every member — sibling specifiers resolve by workspace membership and become
+`jsr:` dependencies. npm stays per-package in `publish-one.yml`:
+
+<Capture as="jsrTemplate" select="code[lang=yaml]">
+
+```yaml
+  jsr:
+    needs: [version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      # JSR rejects a version it already carries, so re-running a tag would fail
+      # a publish that already succeeded (spec §7).
+      - name: Publish the workspace to JSR
+        run: |
+          VERSION="${{ needs.version.outputs.value }}"
+          if curl -fsS "https://jsr.io/@executablemd/core/${VERSION}_meta.json" >/dev/null 2>&1; then
+            echo "@executablemd/*@$VERSION is already on JSR — skipping"
+          else
+            deno publish
+          fi
+```
+
+</Capture>
+
 ## Generate
 
 ```ts eval
@@ -178,6 +211,8 @@ const workflow = [
   guardsTemplate.replaceAll("__MANIFESTS__", manifests),
   "",
   jobs.join("\n\n"),
+  "",
+  jsrTemplate,
 ].join("\n") + "\n";
 
 yield* writeTextFile(".github/workflows/publish-packages.yml", workflow);

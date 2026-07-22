@@ -1,7 +1,8 @@
 name: Publish one package
 
-# Reusable: build one @executablemd workspace member with dnt and publish it
-# to npm (OIDC) and JSR (best-effort). See specs/release-process-spec.md.
+# Reusable: build one @executablemd workspace member with dnt and publish it to
+# npm (OIDC). JSR publishes the workspace as a unit from publish-packages.yml's
+# `jsr` job, not here. See specs/release-process-spec.md.
 
 on:
   workflow_call:
@@ -68,7 +69,3 @@ jobs:
           else
             npm publish --access public
           fi
-
-      - name: Publish to JSR (best-effort)
-        run: deno publish --allow-dirty || echo "JSR publish skipped/failed (secondary registry)"
-        working-directory: ${{ inputs.package }}

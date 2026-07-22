@@ -12,7 +12,7 @@
  * test. `boundary` reports each `<Testing>` element's aggregate outcome.
  */
 
-import { createApi } from "@effectionx/context-api";
+import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 /** A completed test, in discovery order. Never holds rendered markdown. */
@@ -52,7 +52,7 @@ export interface TestApi {
   boundary(outcome: BoundaryOutcome): Operation<void>;
 }
 
-export const Test = createApi<TestApi>("Test", {
+export const Test: Api<TestApi> = createApi<TestApi>("Test", {
   testing: false,
   inTest: false,
   verbose: false,
@@ -67,8 +67,13 @@ export const Test = createApi<TestApi>("Test", {
   *boundary(_outcome: BoundaryOutcome): Operation<void> {},
 });
 
-export const { testing, inTest, verbose, sessionActive, record, results, boundary } =
-  Test.operations;
+export const testing: Operations<TestApi>["testing"] = Test.operations.testing;
+export const inTest: Operations<TestApi>["inTest"] = Test.operations.inTest;
+export const verbose: Operations<TestApi>["verbose"] = Test.operations.verbose;
+export const sessionActive: Operations<TestApi>["sessionActive"] = Test.operations.sessionActive;
+export const record: Operations<TestApi>["record"] = Test.operations.record;
+export const results: Operations<TestApi>["results"] = Test.operations.results;
+export const boundary: Operations<TestApi>["boundary"] = Test.operations.boundary;
 
 /** A document execution failed its testing outcome (test failures or zero tests). */
 export class TestFailureError extends Error {

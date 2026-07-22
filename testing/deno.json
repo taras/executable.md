@@ -5,7 +5,6 @@
     ".": "./mod.ts"
   },
   "imports": {
-    "@executablemd/core": "../core/mod.ts",
     "@std/assert": "jsr:@std/assert@^1.0.17"
   }
 }

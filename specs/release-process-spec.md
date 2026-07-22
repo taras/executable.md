@@ -15,7 +15,8 @@ maintainer publishing that draft via the GitHub Releases UI, which creates a
 
 The tag starts two workflows: `release.yml` compiles the `xmd` binaries and
 attaches them to the release, and `publish-packages.yml` publishes every
-`@executablemd/*` package to npm (primary) and JSR (secondary). Binaries come
+`@executablemd/*` package to npm (primary) and JSR (secondary). npm publishes
+per package; JSR takes the whole workspace in one command. Binaries come
 first: `publish-packages.yml` publishes nothing until `release.yml` succeeds,
 so npm versions never exist without matching binaries. Both workflows build
 from the tag's commit.
@@ -42,7 +43,7 @@ sequenceDiagram
     PP->>PO: one call per package,<br/>needs-ordered (deps first)
     M-->>PO: approve npm-publish environment
     PO->>NPM: npm publish --access public (OIDC,<br/>skipped if version already published)
-    PO->>JSR: deno publish (best-effort)
+    PP->>JSR: deno publish (whole workspace,<br/>skipped if version already published)
 ```
 
 ## 2. Version lockstep
@@ -85,16 +86,35 @@ manifests (§3).
   every manifest and polls the `release.yml` run for the same commit, failing
   if the binary build fails. It then fans out one `publish-one.yml` call per
   package, ordered with `needs:` so dependencies publish before dependents
-  (leaves run in parallel).
+  (leaves run in parallel), plus one `jsr` job for the whole workspace.
 - **`publish-one.yml`** (`workflow_call`, inputs `package`/`version`): builds
-  one package with dnt (`scripts/build-npm.ts`) and publishes it. Runs in the
-  `npm-publish` environment. npm publishing is idempotent: it skips an
-  already-published version. JSR publishing is best-effort and does not fail
-  the run. dnt runs `npm install` inside the generated output dir, so
+  one package with dnt (`scripts/build-npm.ts`) and publishes it to npm. Runs in
+  the `npm-publish` environment. npm publishing is idempotent: it skips an
+  already-published version. dnt runs `npm install` inside the generated output dir, so
   `build-npm.ts` writes an `.npmrc` there mapping the `@jsr` scope to
   `https://npm.jsr.io` — a package with a `jsr:` dependency (e.g. `testing`'s
   `@std/assert`) becomes a `@jsr/*` dependency the default registry does not
   serve, so the install would otherwise 404.
+
+### JSR publishing
+
+`deno publish` runs once from the repo root and publishes every workspace member
+together. Members reference each other by bare name (`@executablemd/core`) with
+no import-map entry: Deno resolves those through workspace membership, and
+`deno publish` records them as `jsr:` dependencies. A member manifest must not
+map a sibling to a relative path — a path that leaves the package root resolves
+against the publish root and the module graph fails to build.
+
+A JSR failure fails the release. The job is idempotent the way npm's is: it
+checks `https://jsr.io/@executablemd/core/<version>_meta.json` first and skips
+when that version is already on JSR, so re-running a tag does not fail on a
+publish that already succeeded.
+
+`deno task check:jsr` runs the same command with `--dry-run` and is a required
+CI job on every PR (§3, `ci.yml`). It enforces JSR's fast-check rules, so every
+symbol in a package's public API needs an explicit type annotation and no export
+may be a destructuring. It does not exercise the publish-time module-graph
+rewrite, which only a real publish reaches.
 
 ## 4. npm authentication (OIDC, no token)
 
@@ -138,9 +158,10 @@ and the workflows carry no npm token, so bootstrap a new package by hand once:
    ```
 3. Configure its trusted publisher with the table in §4.
 4. Create the package on jsr.io under the `@executablemd` scope and link it to
-   this repository — `deno publish` fails for a package that does not exist on
-   JSR (the pipeline treats that failure as non-fatal, but the package will
-   not appear on JSR until it is created).
+   this repository, **before** the first tagged release that includes it.
+   `deno publish` fails for a package that does not exist on JSR, and the JSR
+   job publishes the workspace as a unit — so one uncreated package fails the
+   release for every package.
 
 ## 7. Recovery
 
