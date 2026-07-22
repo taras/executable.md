@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/durable-streams",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Durable, replayable event streams for executable.md.",
   "type": "module",
   "exports": "./mod.ts",

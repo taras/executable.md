@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/cli",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "exports": "./src/cli.ts",
   "imports": {
     "zod": "npm:zod@^4.3.6"
