@@ -43,7 +43,7 @@ sequenceDiagram
     PP->>PO: one call per package,<br/>needs-ordered (deps first)
     M-->>PO: approve npm-publish environment
     PO->>NPM: npm publish --access public (OIDC,<br/>skipped if version already published)
-    PP->>JSR: deno publish (whole workspace,<br/>skipped if version already published)
+    PP->>JSR: deno publish (whole workspace,<br/>already-published members skipped)
 ```
 
 ## 2. Version lockstep
@@ -105,10 +105,12 @@ no import-map entry: Deno resolves those through workspace membership, and
 map a sibling to a relative path — a path that leaves the package root resolves
 against the publish root and the module graph fails to build.
 
-A JSR failure fails the release. The job is idempotent the way npm's is: it
-checks `https://jsr.io/@executablemd/core/<version>_meta.json` first and skips
-when that version is already on JSR, so re-running a tag does not fail on a
-publish that already succeeded.
+A JSR failure fails the release. The job needs no idempotency guard of its own:
+`deno publish` queries the registry and skips each workspace member JSR already
+carries at that version, member by member. A rerun after a partial publish
+therefore completes exactly the members that are missing, and a rerun after a
+complete publish is a no-op. Never gate the job on one package's existence —
+whether `core` is published says nothing about the other five.
 
 `deno task check:jsr` runs the same command with `--dry-run` and is a required
 CI job on every PR (§3, `ci.yml`). It enforces JSR's fast-check rules, so every
@@ -167,7 +169,10 @@ and the workflows carry no npm token, so bootstrap a new package by hand once:
 
 Re-run failed jobs on the tag's own workflow run. Publishing skips an
 already-published version, so re-runs and re-tags of hand-bootstrapped
-versions succeed. No dispatch path publishes outside a tag.
+versions succeed. This holds per package on both registries: npm's guard runs
+per `publish-one.yml` call, and `deno publish` filters already-published
+workspace members individually — so a rerun after a partial publish picks up
+only what is missing. No dispatch path publishes outside a tag.
 
 ## 8. Consumer note
 

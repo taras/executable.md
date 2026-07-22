@@ -29,7 +29,7 @@ on:
 permissions:
   contents: read
   actions: read # the version job polls the release.yml run
-  id-token: write # granted to the reusable publish-one.yml jobs for OIDC
+  id-token: write # npm OIDC in publish-one.yml, JSR OIDC in the jsr job
 
 jobs:
   version:
@@ -116,7 +116,9 @@ One job per publishable package, dependencies before dependents. `__JOB__`,
 
 JSR takes the whole workspace in one `deno publish`, so one static job covers
 every member — sibling specifiers resolve by workspace membership and become
-`jsr:` dependencies. npm stays per-package in `publish-one.yml`:
+`jsr:` dependencies. `deno publish` skips each member JSR already carries at
+that version, so the job needs no idempotency guard of its own. npm stays
+per-package in `publish-one.yml`:
 
 <Capture as="jsrTemplate" select="code[lang=yaml]">
 
@@ -131,16 +133,10 @@ every member — sibling specifiers resolve by workspace membership and become
         with:
           deno-version: v2.9.1
 
-      # JSR rejects a version it already carries, so re-running a tag would fail
-      # a publish that already succeeded (spec §7).
+      # deno publish filters already-published members itself, so a rerun after
+      # a partial publish completes the members that are missing (spec §7).
       - name: Publish the workspace to JSR
-        run: |
-          VERSION="${{ needs.version.outputs.value }}"
-          if curl -fsS "https://jsr.io/@executablemd/core/${VERSION}_meta.json" >/dev/null 2>&1; then
-            echo "@executablemd/*@$VERSION is already on JSR — skipping"
-          else
-            deno publish
-          fi
+        run: deno publish
 ```
 
 </Capture>

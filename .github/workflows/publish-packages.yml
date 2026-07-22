@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   actions: read # the version job polls the release.yml run
-  id-token: write # granted to the reusable publish-one.yml jobs for OIDC
+  id-token: write # npm OIDC in publish-one.yml, JSR OIDC in the jsr job
 
 jobs:
   version:
@@ -113,13 +113,7 @@ jobs:
         with:
           deno-version: v2.9.1
 
-      # JSR rejects a version it already carries, so re-running a tag would fail
-      # a publish that already succeeded (spec §7).
+      # deno publish filters already-published members itself, so a rerun after
+      # a partial publish completes the members that are missing (spec §7).
       - name: Publish the workspace to JSR
-        run: |
-          VERSION="${{ needs.version.outputs.value }}"
-          if curl -fsS "https://jsr.io/@executablemd/core/${VERSION}_meta.json" >/dev/null 2>&1; then
-            echo "@executablemd/*@$VERSION is already on JSR — skipping"
-          else
-            deno publish
-          fi
+        run: deno publish
