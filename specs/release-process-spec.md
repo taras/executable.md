@@ -16,7 +16,7 @@ maintainer publishing that draft via the GitHub Releases UI, which creates a
 The tag starts two workflows: `release.yml` compiles the `xmd` binaries and
 attaches them to the release, and `publish-packages.yml` publishes every
 `@executablemd/*` package to npm (primary) and JSR (secondary). npm publishes
-per package; JSR takes the whole workspace in one command. Binaries come
+per package; JSR publishes all workspace packages together. Binaries come
 first: `publish-packages.yml` publishes nothing until `release.yml` succeeds,
 so npm versions never exist without matching binaries. Both workflows build
 from the tag's commit.
@@ -144,7 +144,8 @@ tokens minted outside the gated environment.
 ## 5. Protection configuration
 
 - The **`npm-publish` environment** requires reviewer approval and deploys
-  only for `v*` tags, and every npm trusted publisher is bound to it (§4).
+  only for `v*` tags, and every npm trusted publisher is bound to it (§4). The
+  `jsr` job runs in it too, so both registries admit the same publishers.
 - **Rulesets** require PRs into `main` and restrict `v*` tag creation to
   maintainers.
 
