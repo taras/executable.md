@@ -397,6 +397,30 @@ document scope; nested permission middleware can override it for a subtree.
 The provider and its processes live for the `xmd run` Effection scope. The CLI
 does not expose `--keep-alive` or an ACPX state-directory flag.
 
+## Test plan
+
+Acceptance coverage is divided by the boundary under test:
+
+- The existing CI smoke document uses deterministic `AgentProviderApi` and
+  `AgentApi` Context API middleware instead of ACPX. It exercises the public
+  Markdown flow through `<AgentProvider>`, `<Agent>`, `<Session>`, and
+  `<Prompt>`, covering contextual defaults and overrides, named-session reuse,
+  permission middleware scoping, and rendered text output. The existing live
+  and replay smoke runner verifies that replay produces the same result
+  without invoking the mock provider again.
+- Context API tests cover provider registration and scoping, cwd and timeout
+  propagation, permission modes, failure aggregation, and provider teardown
+  with deterministic mocks.
+- Durability tests cover prompt journaling and restoration of both successful
+  results and recorded failures.
+- CLI tests cover option precedence, mutually exclusive permission flags,
+  unknown-provider failures, and failure exit status.
+- ACPX adapter tests use a fake ACPX runtime to cover session, turn, event,
+  permission, and close translation without starting a real agent.
+
+Starting a real ACPX agent is an optional integration check and is not required
+in CI.
+
 ## Not included
 
 This interface does not include:
