@@ -3104,7 +3104,13 @@
       "packages/acp": {
         "dependencies": [
           "npm:acpx@0.12.0"
-        ]
+        ],
+        "packageJson": {
+          "dependencies": [
+            "npm:acpx@0.12.0",
+            "npm:effection@4.1.0-alpha.7"
+          ]
+        }
       },
       "packages/cli": {
         "dependencies": [

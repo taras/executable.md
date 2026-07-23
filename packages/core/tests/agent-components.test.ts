@@ -24,6 +24,7 @@ import { AgentPromptError } from "../src/agent/errors.ts";
 import { registerAgentProvider } from "../src/agent/provider-api.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
+import { installTestingVocabulary } from "@executablemd/testing";
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-ac-test-"));
@@ -402,6 +403,82 @@ describe("Tier AC — agent components", () => {
     expect(result.ok).toBe(true);
     expect(stub.promptCalls.length).toBe(1);
     expect(stub.promptCalls[0]).toMatchObject({ content: "inside", agent: "scoped-agent" });
+  });
+
+  it("AC14: prompts inside <Each> keep distinct durable identities across replay", function* () {
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    const stream = new InMemoryStream();
+    const doc = '<Each in={[1, 2]} let="n">\n<Prompt>iteration {n}</Prompt>\n</Each>\n';
+
+    const first = yield* runDoc(doc, stream);
+    expect(first.result.ok).toBe(true);
+    expect(stub.promptCalls.length).toBe(2);
+    expect(stub.promptCalls.map((call) => call.content)).toEqual(["iteration 1", "iteration 2"]);
+
+    const second = yield* runDoc(doc, stream);
+    expect(second.output).toBe(first.output);
+    expect(stub.promptCalls.length).toBe(2);
+  });
+
+  it("AC15: journal entries carry the full prompt record", function* () {
+    const stub = createStubProvider(() => ({
+      status: "failed",
+      stopReason: "max_tokens",
+      deltas: ["partial"],
+    }));
+    yield* installStub(stub);
+    const stream = new InMemoryStream();
+    yield* runDoc('<Prompt prompt="describe" />\n', stream);
+
+    const events = yield* stream.readAll();
+    const prompts = events.filter(
+      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+    );
+    expect(prompts.length).toBe(1);
+    const entry = prompts[0]!;
+    if (entry.type === "yield") {
+      expect(entry.description.name).toMatch(/^prompt:.*#0$/);
+      expect(entry.description.input).toBe("describe");
+      expect(entry.result.status).toBe("ok");
+      if (entry.result.status === "ok") {
+        expect(entry.result.value).toMatchObject({
+          sequence: 0,
+          agent: "stub-agent",
+          sessionKey: "stub:default",
+          status: "failed",
+          stopReason: "max_tokens",
+          text: "partial",
+        });
+      }
+    }
+  });
+
+  it("AC16: agent and testing vocabularies compose on one execution", function* () {
+    const stub = createStubProvider((content) =>
+      content.includes("bad") ? { status: "failed", stopReason: "refusal" } : {},
+    );
+    yield* installTestingVocabulary();
+    yield* installStub(stub);
+    const doc = [
+      "<Testing>",
+      '<Test name="prompt works">',
+      '  <Prompt prompt="good" />',
+      "</Test>",
+      "</Testing>",
+      "",
+      '<Prompt prompt="bad" />',
+      "",
+    ].join("\n");
+    const { result } = yield* runDoc(doc, new InMemoryStream());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(AggregateError);
+      if (result.error instanceof AggregateError) {
+        expect(result.error.message).toBe("1 agent prompt(s) failed");
+      }
+    }
+    expect(stub.promptCalls.length).toBe(2);
   });
 
   it("AC13: <AgentProvider> without any default agent fails before expanding children", function* () {

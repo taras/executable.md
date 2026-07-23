@@ -18,15 +18,19 @@ inputs:
 ---
 
 ```js persist eval
-yield* Sample.around({
-  *sample([context], next) {
-    const existing = context.system || '';
-    return yield* next({
-      ...context,
-      system: existing ? existing + '\n' + system : system,
-    });
-  },
-}, { at: 'min' });
+yield *
+  Sample.around(
+    {
+      *sample([context], next) {
+        const existing = context.system || "";
+        return yield* next({
+          ...context,
+          system: existing ? existing + "\n" + system : system,
+        });
+      },
+    },
+    { at: "min" },
+  );
 ```
 
 <Content />

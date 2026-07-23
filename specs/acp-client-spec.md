@@ -1,6 +1,6 @@
 # Executable.md ACP Client
 
-**Status:** Draft
+**Status:** Implemented
 **Protocol:** [Agent Client Protocol v1](https://agentclientprotocol.com/protocol/v1/overview)
 **Provider:** `acpx@0.12.0`
 
@@ -173,7 +173,8 @@ behavior.
 
 ### AgentApi
 
-The public agent value is a string. The session and prompt types are:
+The public agent value is a string. The session, event, and prompt types
+are:
 
 ```ts
 type Agent = string;
@@ -184,25 +185,66 @@ interface Session {
   agentSessionId?: string;
 }
 
+type AgentPromptEvent =
+  | { type: "started"; agent: Agent; session: Session }
+  | { type: "text_delta"; text: string }
+  | {
+      type: "terminal";
+      status: "completed" | "failed" | "cancelled";
+      stopReason?: string;
+      error?: Error;
+    };
+
 interface PromptOptions {
   agent?: Agent;
   session?: string | Session;
   timeout?: number;
-  throwOnError?: boolean;
 }
 
 interface AgentApi {
   agent(name?: string): Operation<Agent>;
   session(name?: string): Operation<Session>;
-  prompt(content: string, options?: PromptOptions): Operation<string>;
+  prompt(
+    content: string,
+    options?: PromptOptions,
+  ): Operation<Stream<AgentPromptEvent, string>>;
   requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
 }
 ```
 
-`prompt()` resolves the agent override, then calls `session()`, which ensures
-the session exists. A string `session` option is a session name resolved
-against the selected agent and contextual cwd. A `Session` value targets that
-already-resolved session.
+`prompt` returns `Operation<Stream<...>>` rather than a bare `Stream`: an
+Effection Stream is itself an Operation, so a Stream-typed handler result
+would be subscribed by Api dispatch and hand callers a Subscription.
+
+`yield* Agent.operations.prompt(...)` performs Context Api dispatch and
+returns a cold stream; it does not start the agent turn. Subscribing to
+the returned stream resolves the agent and session and starts the turn.
+Each subscription is an independent turn owned by the subscribing scope —
+the Agent Api does not implicitly multicast, buffer, or replay prompt
+events, and callers that need fan-out multicast one subscription
+explicitly.
+
+A subscribed turn emits exactly one `started` event — carrying the
+authoritative agent and public `Session` — once the ACPX turn has
+actually started, then zero or more `text_delta` events containing only
+output text, then exactly one `terminal` event, and closes with the
+complete concatenated text, including partial text on failure. The close
+value equals the concatenation of the emitted text deltas. A prompt
+waiting on its session's turn queue emits no events, and agent, session,
+or turn-start failures fail the subscription before `started`.
+
+The subscription resolves the agent override, then the session. A string
+`session` option is a session name resolved against the selected agent
+and contextual cwd. A `Session` value targets that already-resolved
+session; a value the active provider does not own — or whose agent does
+not match an explicit agent override — is rejected rather than silently
+recreated.
+
+`throwOnError` is not a `PromptOptions` member. It is a `<Prompt>`
+component prop: direct Agent Api consumers inspect the terminal event and
+choose their own failure policy. `<Prompt>` renders its buffered text
+only after consumption finishes — Markdown output stays buffered even
+though the Context Api itself is stream-based.
 
 The existing runtime `cwd` operation supplies the working directory. Agent
 APIs do not read the process cwd directly.
@@ -312,15 +354,22 @@ Each entry is an `AgentPromptError` containing the agent, session key, stop
 reason, and underlying cause. Errors remain in prompt execution order.
 `xmd run` exits with failure status when the aggregate is present.
 
-`throwOnError: true` throws the individual `AgentPromptError` immediately.
-Timeouts, provider errors, permission failures, and non-success stop reasons
-follow the same rule.
+The `<Prompt throwOnError>` prop throws the individual `AgentPromptError`
+immediately. Timeouts, provider errors, permission failures, and
+non-success stop reasons follow the same rule.
 
 ## Journaling and replay
 
-Each prompt is a durable operation. Its journal entry includes the prompt
-input, agent and session identity, terminal status, stop reason, text result,
-and structured error when present.
+Each prompt is one durable operation. The journal Yield splits into a
+description and a result: the description carries the durable identity
+(`type: "agent_prompt"`, a `prompt:<path>:<line>:<column>#<ordinal>` name
+whose per-location ordinal keeps `<Each>` iterations distinct, and the
+prompt input); the result record carries an explicit `sequence` (prompt
+execution order), the agent and session identity from the `started`
+event, terminal status, stop reason, the text result including partial
+text on failure, and the structured error when present. The live
+`started` event is reduced into those fields and is not separately
+journaled.
 
 With a replay-populated stream, a completed prompt returns its recorded result
 and restores its recorded failure without contacting the agent. During normal
