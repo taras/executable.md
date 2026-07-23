@@ -368,64 +368,87 @@ export function createAgentHandlers(): AgentHandlers {
  * (or replays), so replay restores the identical failure without
  * contacting the provider.
  */
+interface ConsumedTurn {
+  agent?: string;
+  sessionKey?: string;
+  agentSessionId?: string;
+  status?: PromptRecord["status"];
+  stopReason?: string;
+  failure?: SerializedPromptFailure;
+  text: string;
+}
+
 function* runPrompt(
   content: string,
   options: PromptOptions,
   sequence: number,
 ): Operation<PromptRecord> {
-  let agent = options.agent ?? "";
-  let sessionKey = typeof options.session === "object" ? options.session.sessionKey : "";
-  let agentSessionId: string | undefined;
-  let status: PromptRecord["status"] = "failed";
-  let stopReason: string | undefined;
-  let failure: SerializedPromptFailure | undefined;
-  let text = "";
-  let sawTerminal = false;
+  let consumed: ConsumedTurn = { text: "" };
 
   try {
-    const stream = yield* Agent.operations.prompt(content, options);
-    const subscription = yield* stream;
-    let next = yield* subscription.next();
-    while (!next.done) {
-      const event = next.value;
-      if (event.type === "started") {
-        agent = event.agent;
-        sessionKey = event.session.sessionKey;
-        agentSessionId = event.session.agentSessionId;
-      } else if (event.type === "terminal") {
-        sawTerminal = true;
-        status = event.status;
-        stopReason = event.stopReason;
-        if (event.error) {
-          failure = serializePromptFailure(event.error);
+    // The subscription is consumed inside its own scope: the subscribing
+    // scope owns the turn, so the provider's per-turn cleanups (turn
+    // cancellation, permission routing, session lock) run when this
+    // prompt finishes — not at document teardown.
+    consumed = yield* scoped(function* (): Operation<ConsumedTurn> {
+      const result: ConsumedTurn = { text: "" };
+      const stream = yield* Agent.operations.prompt(content, options);
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        const event = next.value;
+        if (event.type === "started") {
+          result.agent = event.agent;
+          result.sessionKey = event.session.sessionKey;
+          if (event.session.agentSessionId !== undefined) {
+            result.agentSessionId = event.session.agentSessionId;
+          }
+        } else if (event.type === "terminal") {
+          result.status = event.status;
+          if (event.stopReason !== undefined) {
+            result.stopReason = event.stopReason;
+          }
+          if (event.error) {
+            result.failure = serializePromptFailure(event.error);
+          }
         }
+        next = yield* subscription.next();
       }
-      next = yield* subscription.next();
-    }
-    text = next.value;
-    if (!sawTerminal) {
-      status = "failed";
-      failure = { message: "agent prompt stream closed without a terminal event" };
+      result.text = next.value;
+      return result;
+    });
+    if (consumed.status === undefined) {
+      consumed.failure = { message: "agent prompt stream closed without a terminal event" };
     }
   } catch (error) {
-    status = "failed";
-    failure = serializePromptFailure(error);
+    consumed.status = "failed";
+    consumed.failure = serializePromptFailure(error);
   }
 
+  const status = consumed.status ?? "failed";
+  let failure = consumed.failure;
   if (status !== "completed" && failure === undefined) {
     failure = {
-      message: stopReason
-        ? `agent prompt failed with stop reason "${stopReason}"`
+      message: consumed.stopReason
+        ? `agent prompt failed with stop reason "${consumed.stopReason}"`
         : `agent prompt ${status}`,
     };
   }
 
-  const record: PromptRecord = { sequence, agent, sessionKey, status, text };
-  if (agentSessionId !== undefined) {
-    record.agentSessionId = agentSessionId;
+  const record: PromptRecord = {
+    sequence,
+    agent: consumed.agent ?? options.agent ?? "",
+    sessionKey:
+      consumed.sessionKey ??
+      (typeof options.session === "object" ? options.session.sessionKey : ""),
+    status,
+    text: consumed.text,
+  };
+  if (consumed.agentSessionId !== undefined) {
+    record.agentSessionId = consumed.agentSessionId;
   }
-  if (stopReason !== undefined) {
-    record.stopReason = stopReason;
+  if (consumed.stopReason !== undefined) {
+    record.stopReason = consumed.stopReason;
   }
   if (failure !== undefined) {
     record.error = failure;

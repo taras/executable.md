@@ -293,14 +293,18 @@ describe("Tier AC — agent components", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(AggregateError);
-      const aggregate = result.error as AggregateError;
-      expect(aggregate.message).toBe("2 agent prompt(s) failed");
-      const [first, second] = aggregate.errors as AgentPromptError[];
-      expect(first).toBeInstanceOf(AgentPromptError);
-      expect(first!.stopReason).toBe("max_tokens");
-      expect(first!.agent).toBe("stub-agent");
-      expect(first!.sessionKey).toBe("stub:default");
-      expect(second!.stopReason).toBe("refusal");
+      if (result.error instanceof AggregateError) {
+        expect(result.error.message).toBe("2 agent prompt(s) failed");
+        const [first, second] = result.error.errors;
+        expect(first).toBeInstanceOf(AgentPromptError);
+        expect(second).toBeInstanceOf(AgentPromptError);
+        if (first instanceof AgentPromptError && second instanceof AgentPromptError) {
+          expect(first.stopReason).toBe("max_tokens");
+          expect(first.agent).toBe("stub-agent");
+          expect(first.sessionKey).toBe("stub:default");
+          expect(second.stopReason).toBe("refusal");
+        }
+      }
     }
   });
 
@@ -314,7 +318,9 @@ describe("Tier AC — agent components", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(AgentPromptError);
-      expect((result.error as AgentPromptError).stopReason).toBe("refusal");
+      if (result.error instanceof AgentPromptError) {
+        expect(result.error.stopReason).toBe("refusal");
+      }
     }
     expect(output).not.toContain("never reached");
   });
@@ -357,7 +363,9 @@ describe("Tier AC — agent components", () => {
     expect(second.result.ok).toBe(false);
     if (!second.result.ok) {
       expect(second.result.error).toBeInstanceOf(AggregateError);
-      expect((second.result.error as AggregateError).message).toBe("1 agent prompt(s) failed");
+      if (second.result.error instanceof AggregateError) {
+        expect(second.result.error.message).toBe("1 agent prompt(s) failed");
+      }
     }
   });
 

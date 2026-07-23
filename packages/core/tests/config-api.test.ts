@@ -49,7 +49,9 @@ describe("Tier CF — Config Api", () => {
       }
     });
     expect(outcome).toBeInstanceOf(Error);
-    expect((outcome as Error).message).toContain("timed out after 25ms");
+    if (outcome instanceof Error) {
+      expect(outcome.message).toContain("timed out after 25ms");
+    }
   });
 
   it("CF5: an explicit exec timeout takes precedence over the contextual value", function* () {
