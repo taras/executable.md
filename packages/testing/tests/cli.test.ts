@@ -1,7 +1,7 @@
 /**
  * CLI integration tests for `xmd test` and `xmd run` (specs/testing-spec.md).
  *
- * Shells out to `deno run --allow-all cli/src/cli.ts` with piped stdio, so
+ * Shells out to `deno run --allow-all packages/cli/src/cli.ts` with piped stdio, so
  * exit codes and report output are asserted TTY-independently.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -33,7 +33,7 @@ function cliEnv(): Record<string, string> {
 function* runCli(args: string[]): Operation<CliResult> {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
     const proc = yield* exec("deno", {
-      arguments: ["run", "--allow-all", "cli/src/cli.ts", ...args],
+      arguments: ["run", "--allow-all", "packages/cli/src/cli.ts", ...args],
       env: cliEnv(),
     });
 
@@ -70,14 +70,14 @@ function* runCli(args: string[]): Operation<CliResult> {
 
 describe("xmd CLI", () => {
   it("test exits 0 and prints the report when every test passes", function* () {
-    const result = yield* runCli(["test", "testing/tests/fixtures/passing.md"]);
+    const result = yield* runCli(["test", "packages/testing/tests/fixtures/passing.md"]);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("**AssertEquals** passed");
     expect(result.stdout).toContain("Regular content stays.");
   });
 
   it("test exits 1 and prints the failure diagnostic when a test fails", function* () {
-    const result = yield* runCli(["test", "testing/tests/fixtures/failing.md"]);
+    const result = yield* runCli(["test", "packages/testing/tests/fixtures/failing.md"]);
     expect(result.code).toBe(1);
     expect(result.stdout).toContain("**Assert** failed");
     expect(result.stdout).toContain("Test **bad** failed");
@@ -91,7 +91,7 @@ describe("xmd CLI", () => {
   });
 
   it("run skips tests entirely and exits 0", function* () {
-    const result = yield* runCli(["run", "testing/tests/fixtures/failing.md"]);
+    const result = yield* runCli(["run", "packages/testing/tests/fixtures/failing.md"]);
     expect(result.code).toBe(0);
     expect(result.stdout).not.toContain("Assert");
     expect(result.stdout).toContain("# Fixture");

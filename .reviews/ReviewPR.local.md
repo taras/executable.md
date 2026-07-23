@@ -57,9 +57,6 @@ cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/*.ts",
-    "core/src/**/*.ts",
-    "cli/src/**/*.ts",
-    "durable-streams/**/*.ts",
     "durable-effects/**/*.ts"
   ],
   "exclude": ["node_modules", "dist", ".vendor", "**/*.test.ts"]

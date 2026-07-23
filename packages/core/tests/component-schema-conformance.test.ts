@@ -6,9 +6,9 @@ import { forEach } from "@effectionx/stream-helpers";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { compileInputSchema } from "../src/validate.ts";
 
-const ROOT = new URL("../../", import.meta.url);
+const ROOT = new URL("../../../", import.meta.url);
 const COMPONENT_DIRS = [
-  "core/components",
+  "packages/core/components",
   "smoke-test",
   ".reviews/components",
   ".reviews/policies",

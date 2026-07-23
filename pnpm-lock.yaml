@@ -83,7 +83,7 @@ importers:
     devDependencies:
       '@effectionx/bdd':
         specifier: workspace:*
-        version: link:test-support
+        version: link:packages/test-support
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
@@ -103,7 +103,7 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
-  cli:
+  packages/cli:
     dependencies:
       '@effectionx/stream-helpers':
         specifier: 0.8.3
@@ -127,7 +127,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  core:
+  packages/code-review-agent: {}
+
+  packages/core:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0
@@ -196,7 +198,7 @@ importers:
         specifier: ^5
         version: 5.1.0
 
-  durable-streams:
+  packages/durable-streams:
     dependencies:
       '@durable-streams/client':
         specifier: ^0.2.2
@@ -205,9 +207,7 @@ importers:
         specifier: 4.1.0-alpha.7
         version: 4.1.0-alpha.7
 
-  packages/code-review-agent: {}
-
-  runtime:
+  packages/runtime:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0
@@ -228,13 +228,13 @@ importers:
         specifier: 4.1.0-alpha.7
         version: 4.1.0-alpha.7
 
-  test-support:
+  packages/test-support:
     dependencies:
       expect:
         specifier: ^30.0.0
         version: 30.3.0
 
-  testing:
+  packages/testing:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0

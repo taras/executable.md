@@ -11,7 +11,7 @@ journal without duplicating completed work.
 
 ## Quick Start (tmux launcher)
 
-From `durable-streams/`:
+From `packages/durable-streams/`:
 
 ```sh
 ./demo/start.sh
@@ -59,7 +59,7 @@ You should see:
 
 ## Run Without tmux
 
-Open 2 terminals from `durable-streams/`:
+Open 2 terminals from `packages/durable-streams/`:
 
 Terminal 1 (observer — server + tailer):
 

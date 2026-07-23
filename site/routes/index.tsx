@@ -229,7 +229,7 @@ export default define.page(function Home({ url }) {
             markdown.
           </p>
           <div style="max-width:760px;margin:0 auto;">
-            <CodeBlock filename="core/examples/hello-world.md">
+            <CodeBlock filename="packages/core/examples/hello-world.md">
               {HELLO_WORLD}
             </CodeBlock>
           </div>

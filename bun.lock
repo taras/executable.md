@@ -17,6 +17,7 @@
         "@effectionx/test-adapter": "0.7.4",
         "@effectionx/timebox": "0.4.3",
         "acorn": "^8.16.0",
+        "ajv": "^8.17.1",
         "effection": "4.1.0-alpha.7",
         "gray-matter": "^4.0.3",
         "magic-string": "^0.30.21",
@@ -38,9 +39,9 @@
         "typescript": "^5.0.0",
       },
     },
-    "cli": {
+    "packages/cli": {
       "name": "@executablemd/cli",
-      "version": "0.3.1",
+      "version": "0.4.2",
       "bin": {
         "xmd": "./src/cli.ts",
       },
@@ -54,9 +55,13 @@
         "zod": "^4.3.6",
       },
     },
-    "core": {
+    "packages/code-review-agent": {
+      "name": "@executablemd/code-review-agent",
+      "version": "0.4.2",
+    },
+    "packages/core": {
       "name": "@executablemd/core",
-      "version": "0.3.1",
+      "version": "0.4.2",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/converge": "0.1.4",
@@ -82,21 +87,17 @@
         "unist-util-select": "^5",
       },
     },
-    "durable-streams": {
+    "packages/durable-streams": {
       "name": "@executablemd/durable-streams",
-      "version": "0.3.1",
+      "version": "0.4.2",
       "dependencies": {
         "@durable-streams/client": "^0.2.2",
         "effection": "4.1.0-alpha.7",
       },
     },
-    "packages/code-review-agent": {
-      "name": "@executablemd/code-review-agent",
-      "version": "0.3.1",
-    },
-    "runtime": {
+    "packages/runtime": {
       "name": "@executablemd/runtime",
-      "version": "0.3.1",
+      "version": "0.4.2",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/fetch": "0.2.0",
@@ -106,16 +107,16 @@
         "effection": "4.1.0-alpha.7",
       },
     },
-    "test-support": {
+    "packages/test-support": {
       "name": "@effectionx/bdd",
       "version": "0.0.0",
       "dependencies": {
         "expect": "^30.0.0",
       },
     },
-    "testing": {
+    "packages/testing": {
       "name": "@executablemd/testing",
-      "version": "0.3.1",
+      "version": "0.4.2",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/scope-eval": "0.1.3",
@@ -136,7 +137,7 @@
 
     "@durable-streams/client": ["@durable-streams/client@0.2.2", "", { "dependencies": { "@microsoft/fetch-event-source": "2.0.1", "fastq": "1.20.1" }, "bin": { "intent": "bin/intent.js" } }, "sha512-zmr9ErxJP1ORljnog4kclWmEJGoTpGN+Mu8FJLVEgcaR9PqTeyKtadq1l1H+DhrPsfAPeG6BF/mEJs4HyI+Eig=="],
 
-    "@effectionx/bdd": ["@effectionx/bdd@workspace:test-support"],
+    "@effectionx/bdd": ["@effectionx/bdd@workspace:packages/test-support"],
 
     "@effectionx/context-api": ["@effectionx/context-api@0.6.0", "", { "dependencies": { "@effectionx/middleware": "0.1.1" }, "peerDependencies": { "effection": "^3 || ^4" } }, "sha512-t004qvlkJDMB6EhHP1lOQ97PeIn90m7cv4+wsRPnx4YBem+pJzTL+Sm1KWbKMjMeFJz4oqllUWuBJZsCi+nuTw=="],
 
@@ -214,17 +215,17 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.27.4", "", { "os": "win32", "cpu": "x64" }, "sha512-+knoa0BDoeXgkNvvV1vvbZX4+hizelrkwmGJBdT17t8FNPwG2lKemmuMZlmaNQ3ws3DKKCxpb4zRZEIp3UxFCg=="],
 
-    "@executablemd/cli": ["@executablemd/cli@workspace:cli"],
+    "@executablemd/cli": ["@executablemd/cli@workspace:packages/cli"],
 
     "@executablemd/code-review-agent": ["@executablemd/code-review-agent@workspace:packages/code-review-agent"],
 
-    "@executablemd/core": ["@executablemd/core@workspace:core"],
+    "@executablemd/core": ["@executablemd/core@workspace:packages/core"],
 
-    "@executablemd/durable-streams": ["@executablemd/durable-streams@workspace:durable-streams"],
+    "@executablemd/durable-streams": ["@executablemd/durable-streams@workspace:packages/durable-streams"],
 
-    "@executablemd/runtime": ["@executablemd/runtime@workspace:runtime"],
+    "@executablemd/runtime": ["@executablemd/runtime@workspace:packages/runtime"],
 
-    "@executablemd/testing": ["@executablemd/testing@workspace:testing"],
+    "@executablemd/testing": ["@executablemd/testing@workspace:packages/testing"],
 
     "@jest/diff-sequences": ["@jest/diff-sequences@30.3.0", "", {}, "sha512-cG51MVnLq1ecVUaQ3fr6YuuAOitHK1S4WUJHnsPFE/quQr33ADUx1FfrTCpMCRxvy0Yr9BThKpDjSlcTi91tMA=="],
 
@@ -352,6 +353,8 @@
 
     "acorn": ["acorn@8.16.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw=="],
 
+    "ajv": ["ajv@8.20.0", "", { "dependencies": { "fast-deep-equal": "^3.1.3", "fast-uri": "^3.0.1", "json-schema-traverse": "^1.0.0", "require-from-string": "^2.0.2" } }, "sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA=="],
+
     "ansi-escapes": ["ansi-escapes@7.3.0", "", { "dependencies": { "environment": "1.1.0" } }, "sha512-BvU8nYgGQBxcmMuEeUEmNTvrMVjJNSH7RgW24vXexN4Ven6qCvy4TntnvlnwnMLTVlcRQQdbRY8NKnaIoeWDNg=="],
 
     "ansi-regex": ["ansi-regex@6.2.2", "", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
@@ -422,6 +425,10 @@
 
     "extend-shallow": ["extend-shallow@2.0.1", "", { "dependencies": { "is-extendable": "0.1.1" } }, "sha512-zCnTtlxNoAiDc3gqY2aYAWFx7XWWiasuF2K8Me5WbN8otHKTUKBwjPtNpRs/rbUZm7KxWAaNj7P1a/p52GbVug=="],
 
+    "fast-deep-equal": ["fast-deep-equal@3.1.3", "", {}, "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="],
+
+    "fast-uri": ["fast-uri@3.1.4", "", {}, "sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw=="],
+
     "fastq": ["fastq@1.20.1", "", { "dependencies": { "reusify": "1.1.0" } }, "sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw=="],
 
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
@@ -463,6 +470,8 @@
     "js-tokens": ["js-tokens@4.0.0", "", {}, "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="],
 
     "js-yaml": ["js-yaml@3.14.2", "", { "dependencies": { "argparse": "1.0.10", "esprima": "4.0.1" }, "bin": { "js-yaml": "bin/js-yaml.js" } }, "sha512-PMSmkqxr106Xa156c2M265Z+FTrPl+oxd/rgOQy2tijQeK5TxQ43psO1ZCwhVOSdnn+RzkzlRz/eY4BgJBYVpg=="],
+
+    "json-schema-traverse": ["json-schema-traverse@1.0.0", "", {}, "sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug=="],
 
     "kind-of": ["kind-of@6.0.3", "", {}, "sha512-dcS1ul+9tmeD95T+x28/ehLgd9mENa3LsvDTtzm3vyBEO7RPptvAD+t44WVXaUjTBRcrpFeFlC8WCruUR456hw=="],
 
@@ -563,6 +572,8 @@
     "remend": ["remend@1.3.0", "", {}, "sha512-iIhggPkhW3hFImKtB10w0dz4EZbs28mV/dmbcYVonWEJ6UGHHpP+bFZnTh6GNWJONg5m+U56JrL+8IxZRdgWjw=="],
 
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
+
+    "require-from-string": ["require-from-string@2.0.2", "", {}, "sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw=="],
 
     "resolve-pkg-maps": ["resolve-pkg-maps@1.0.0", "", {}, "sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw=="],
 

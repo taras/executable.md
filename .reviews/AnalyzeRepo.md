@@ -17,7 +17,7 @@ cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
     "lib": ["ESNext", "DOM"],
     "types": []
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/*.ts", "core/src/**/*.ts", "cli/src/**/*.ts", "durable-streams/**/*.ts", "durable-effects/**/*.ts"],
+  "include": ["packages/*/src/**/*.ts", "packages/*/*.ts", "durable-effects/**/*.ts"],
   "exclude": ["node_modules", "dist", ".vendor", "**/*.test.ts"]
 }
 TSCONFIG
@@ -30,7 +30,7 @@ ollama show qwen3:30b-a3b >/dev/null 2>&1 || ollama pull qwen3:30b-a3b
 <Capture as="repoStats">
 
 ```bash exec
-find core/src cli/src durable-streams durable-effects packages -name '*.ts' -not -name '*.test.ts' -not -name '*.spec.ts' -not -path '*/node_modules/*' 2>/dev/null | tee /tmp/xmd-repo-files.txt | wc -l | tr -d ' '
+find durable-effects packages -name '*.ts' -not -name '*.test.ts' -not -name '*.spec.ts' -not -path '*/node_modules/*' 2>/dev/null | tee /tmp/xmd-repo-files.txt | wc -l | tr -d ' '
 ```
 
 </Capture>

@@ -344,7 +344,7 @@ export const API: {
    *
    * Default handler throws — platform-specific middleware must be
    * installed via `yield* API.Compiler.around(...)` before use.
-   * See `core/src/deno-compiler.ts` for the Deno implementation.
+   * See `packages/core/src/deno-compiler.ts` for the Deno implementation.
    */
   Compiler: createApi("runtime.compiler", {
     // deno-lint-ignore require-yield

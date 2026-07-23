@@ -58,19 +58,13 @@
     "@types/node": "^22.0.0"
   },
   "scripts": {
-    "test:node": "tsx --tsconfig tsconfig.node.json --test durable-streams/tests/*.test.ts core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/document-output-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
-    "test:bun": "bun test durable-streams/tests/ core/tests/frontmatter.test.ts core/tests/heal.test.ts core/tests/scanner.test.ts core/tests/eval-transform.test.ts core/tests/eval-interpolate.test.ts core/tests/document-output-api.test.ts core/tests/output-normalize.test.ts core/tests/output-terminal.test.ts",
+    "test:node": "tsx --tsconfig tsconfig.node.json --test packages/durable-streams/tests/*.test.ts packages/core/tests/frontmatter.test.ts packages/core/tests/heal.test.ts packages/core/tests/scanner.test.ts packages/core/tests/eval-transform.test.ts packages/core/tests/eval-interpolate.test.ts packages/core/tests/document-output-api.test.ts packages/core/tests/output-normalize.test.ts packages/core/tests/output-terminal.test.ts",
+    "test:bun": "bun test packages/durable-streams/tests/ packages/core/tests/frontmatter.test.ts packages/core/tests/heal.test.ts packages/core/tests/scanner.test.ts packages/core/tests/eval-transform.test.ts packages/core/tests/eval-interpolate.test.ts packages/core/tests/document-output-api.test.ts packages/core/tests/output-normalize.test.ts packages/core/tests/output-terminal.test.ts",
     "test:deno": "deno task test",
-    "lint": "oxlint -c .oxlintrc.json core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/ && oxfmt --check core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/",
-    "fmt": "oxfmt --write core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/"
+    "lint": "oxlint -c .oxlintrc.json packages/core/src/ packages/core/tests/ packages/cli/src/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/ && oxfmt --check packages/core/src/ packages/core/tests/ packages/cli/src/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/",
+    "fmt": "oxfmt --write packages/core/src/ packages/core/tests/ packages/cli/src/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/"
   },
   "workspaces": [
-    "core",
-    "cli",
-    "durable-streams",
-    "runtime",
-    "testing",
-    "packages/code-review-agent",
-    "test-support"
+    "packages/*"
   ]
 }

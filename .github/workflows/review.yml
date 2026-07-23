@@ -35,7 +35,7 @@ jobs:
           xmd run .reviews/ReviewPR.md \
             --component-dir .reviews/components \
             --component-dir .reviews/policies \
-            --component-dir core/components \
+            --component-dir packages/core/components \
             -j .reviews/journal.jsonl \
             --verbose
 
