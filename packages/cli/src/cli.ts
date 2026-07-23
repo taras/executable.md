@@ -25,7 +25,19 @@ import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
-import { execute, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import {
+  AgentProviders,
+  Config,
+  execute,
+  installAgentVocabulary,
+  installPermissionMode,
+  registerAgentProvider,
+  useNormalizedOutput,
+  useTerminalOutput,
+} from "@executablemd/core";
+import type { PermissionMode } from "@executablemd/core";
+import { env } from "@executablemd/runtime";
+import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
@@ -55,6 +67,32 @@ const runConfig = object({
   },
   raw: {
     description: "output raw markdown without normalization or terminal formatting",
+    ...field(z.boolean(), defaults(false)),
+  },
+  agentProvider: {
+    description: "agent provider for agent components",
+    ...field(z.string(), defaults("acpx")),
+  },
+  defaultAgent: {
+    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
+    ...field(z.string().optional()),
+  },
+  timeout: {
+    // configliere hands numeric-looking CLI values to the schema as
+    // numbers, so the field accepts both and installAgentStack validates.
+    description: "shared timeout in seconds for process, fetch, and agent operations",
+    ...field(z.union([z.string(), z.number()]).optional()),
+  },
+  approveAll: {
+    description: "approve every agent permission request",
+    ...field(z.boolean(), defaults(false)),
+  },
+  approveReads: {
+    description: "approve read and search agent permissions, ask for the rest (default)",
+    ...field(z.boolean(), defaults(false)),
+  },
+  denyAll: {
+    description: "deny every agent permission request",
     ...field(z.boolean(), defaults(false)),
   },
 });
@@ -113,6 +151,16 @@ function formatYieldResult(event: DurableEvent & { type: "yield" }): string {
       return " " + pretty(v.value ?? {});
     case "exec":
       return " " + pretty({ exitCode: v.exitCode, stdout: v.stdout, stderr: v.stderr });
+    case "agent_prompt":
+      return (
+        " " +
+        pretty({
+          agent: v.agent,
+          sessionKey: v.sessionKey,
+          status: v.status,
+          stopReason: v.stopReason,
+        })
+      );
     default:
       return " " + pretty(v);
   }
@@ -154,6 +202,65 @@ function* createJournalFile(filePath: string): Operation<void> {
   yield* until(handle.close());
 }
 
+interface AgentFlags {
+  agentProvider: string;
+  defaultAgent: string | undefined;
+  timeout: string | number | undefined;
+  approveAll: boolean;
+  approveReads: boolean;
+  denyAll: boolean;
+}
+
+/**
+ * Install the agent stack for `xmd run`: permission mode, contextual
+ * timeout, the ACPX registration, and the vocabulary with the resolved
+ * root provider. An unknown --agent-provider fails here — before any
+ * document executes.
+ */
+function* installAgentStack(flags: AgentFlags): Operation<void> {
+  const exclusive = [flags.approveAll, flags.approveReads, flags.denyAll].filter(Boolean);
+  if (exclusive.length > 1) {
+    console.error("--approve-all, --approve-reads, and --deny-all are mutually exclusive");
+    yield* exit(1);
+  }
+  const permissionMode: PermissionMode = flags.approveAll
+    ? "approve-all"
+    : flags.denyAll
+      ? "deny-all"
+      : "approve-reads";
+
+  if (flags.timeout !== undefined) {
+    const seconds =
+      typeof flags.timeout === "number" ? flags.timeout : Number.parseFloat(flags.timeout);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      console.error(`--timeout must be a positive number of seconds, got "${flags.timeout}"`);
+      yield* exit(1);
+    }
+    // Seconds to milliseconds without rounding, so small positive values
+    // never become zero.
+    const ms = seconds * 1000;
+    yield* Config.around({ timeout: () => ms }, { at: "min" });
+  }
+
+  yield* registerAgentProvider("acpx", createAcpxProvider());
+  const defaultAgent =
+    flags.defaultAgent ?? (yield* env("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
+  let factory;
+  try {
+    factory = yield* AgentProviders.operations.resolve(flags.agentProvider);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    yield* exit(1);
+    return;
+  }
+  yield* installAgentVocabulary({
+    defaultAgent,
+    permissionMode,
+    rootProvider: { factory, options: { defaultAgent, permissionMode } },
+  });
+  yield* installPermissionMode(permissionMode);
+}
+
 function* run(
   config: {
     docPath: string;
@@ -162,7 +269,7 @@ function* run(
     journal: string | undefined;
     raw: boolean;
   },
-  mode: { testing: boolean },
+  mode: { testing: boolean; agent?: AgentFlags },
 ): Operation<void> {
   const { docPath, componentDir, verbose, journal, raw } = config;
 
@@ -215,6 +322,12 @@ function* run(
     yield* useTesting({ verbose });
   } else {
     yield* installTestingVocabulary({ verbose });
+  }
+
+  // Agent flags are exclusive to `xmd run` — `xmd test` never installs
+  // the agent vocabulary or touches ACPX.
+  if (mode.agent) {
+    yield* installAgentStack(mode.agent);
   }
 
   const execution = yield* execute({
@@ -276,9 +389,21 @@ await main(function* (args) {
         break;
       }
       switch (parsed.value.name) {
-        case "run":
-          yield* run(parsed.value.config, { testing: false });
+        case "run": {
+          const config = parsed.value.config;
+          yield* run(config, {
+            testing: false,
+            agent: {
+              agentProvider: config.agentProvider,
+              defaultAgent: config.defaultAgent,
+              timeout: config.timeout,
+              approveAll: config.approveAll,
+              approveReads: config.approveReads,
+              denyAll: config.denyAll,
+            },
+          });
           break;
+        }
         case "test":
           yield* run(parsed.value.config, { testing: true });
           break;
