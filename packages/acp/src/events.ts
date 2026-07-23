@@ -45,8 +45,6 @@ export function* consumeTurn(
     };
   }
   yield* channel.send(terminal);
-  // Mark the turn complete before the subscribing scope exits so a
-  // normally finished turn is never cancelled afterward.
   markCompleted();
   yield* channel.close(text);
 }

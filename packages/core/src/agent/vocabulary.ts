@@ -164,8 +164,6 @@ function* bridgeRootProvider(
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       if (docResult === undefined) {
-        // Provider install or output forwarding failed — a document-level
-        // failure, not a teardown failure.
         docResult = Err(failure);
       } else {
         // The inner execution completed; the throw came from dismantling

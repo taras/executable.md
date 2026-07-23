@@ -102,8 +102,6 @@ function toError(value: unknown): Error {
 export function createAcpxProvider(seams?: AcpxProviderSeams): AgentProviderFactory {
   return function* (providerOptions: AgentProviderOptions): Operation<void> {
     const createRuntime = seams?.createRuntime ?? createAcpRuntime;
-    // A literal ~ path is not expanded by the runtime — resolve the fixed
-    // state directory to an absolute home path before handing it over.
     const store = seams?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
     const registry = seams?.agentRegistry ?? createAgentRegistry();
     const bridge = createPermissionBridge();

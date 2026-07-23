@@ -276,9 +276,6 @@ export function createAgentHandlers(): AgentHandlers {
     }
     const { props } = parsed;
 
-    // Wrapper form always sends the rendered children — even when they
-    // render to an empty string. The prompt prop is the self-closing
-    // fallback only. Input is never trimmed.
     let content: string;
     if (invocation.selfClosing) {
       content = asString(props.prompt) ?? "";
