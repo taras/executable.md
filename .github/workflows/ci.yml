@@ -74,7 +74,7 @@ jobs:
         run: |
           ./dist/xmd test smoke-test/README.md \
             --component-dir smoke-test \
-            --component-dir core/components \
+            --component-dir packages/core/components \
             --raw
 
   site:

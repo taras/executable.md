@@ -37,7 +37,7 @@ describe("Tier SE — Streaming emission", () => {
     const chunks: string[] = [];
 
     const execution = yield* execute({
-      docPath: "core/tests/fixtures/streaming/multi-segment.md",
+      docPath: "packages/core/tests/fixtures/streaming/multi-segment.md",
       stream: new InMemoryStream(),
     });
 
@@ -56,7 +56,7 @@ describe("Tier SE — Streaming emission", () => {
     const chunks: string[] = [];
 
     const execution = yield* execute({
-      docPath: "core/tests/fixtures/streaming/simple.md",
+      docPath: "packages/core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
     });
 
@@ -75,7 +75,7 @@ describe("Tier SE — Streaming emission", () => {
     const chunks: string[] = [];
 
     const execution = yield* execute({
-      docPath: "core/tests/fixtures/streaming/simple.md",
+      docPath: "packages/core/tests/fixtures/streaming/simple.md",
       stream: new InMemoryStream(),
     });
 

@@ -31,7 +31,7 @@ export default define.page(function Providers() {
 
       <h2>Built-in providers</h2>
       <p>
-        These ship in <code>core/components/</code>:
+        These ship in <code>packages/core/components/</code>:
       </p>
       <ul>
         <li>
@@ -60,7 +60,9 @@ export default define.page(function Providers() {
         routes each prompt to the matching model and combines the results — all
         in a single markdown file.
       </p>
-      <CodeBlock filename="core/examples/hello-world.md">{HELLO}</CodeBlock>
+      <CodeBlock filename="packages/core/examples/hello-world.md">
+        {HELLO}
+      </CodeBlock>
 
       <h2>Running provider documents</h2>
       <p>
@@ -68,7 +70,7 @@ export default define.page(function Providers() {
         search path:
       </p>
       <CodeBlock>
-        {"xmd run core/examples/hello-world.md --component-dir core/components"}
+        {"xmd run packages/core/examples/hello-world.md --component-dir packages/core/components"}
       </CodeBlock>
       <p>
         The example above also needs an <code>ANTHROPIC_API_KEY</code>{" "}

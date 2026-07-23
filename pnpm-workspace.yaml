@@ -1,8 +1,2 @@
 packages:
-  - core
-  - cli
-  - durable-streams
-  - runtime
-  - testing
-  - packages/code-review-agent
-  - test-support
+  - packages/*

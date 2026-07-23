@@ -1004,8 +1004,8 @@ import { findFreePort } from "@executablemd/runtime";
 
 These imports resolve through Deno's import map (`deno.json`).
 `@executablemd/core` re-exports executable.md-specific APIs from its root
-barrel (`core/mod.ts`); `findFreePort` comes from `@executablemd/runtime`
-(and is also re-exported by `core/mod.ts`).
+barrel (`packages/core/mod.ts`); `findFreePort` comes from `@executablemd/runtime`
+(and is also re-exported by `packages/core/mod.ts`).
 
 The exact list lives in the `STANDARD_IMPORTS` constant, which both
 compilers share (`src/deno-compiler.ts`, `src/temp-file-compiler.ts`).
@@ -1192,21 +1192,21 @@ run but are absent from the diagnostic trace.
 | `src/deno-compiler.ts` | `useDenoCompiler()` — data: URI compiler middleware for Deno; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `useContent()` — content slot access for function components |
-| `test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
+| `packages/test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/sample-api.ts` | `Sample` Api definition (§3.4) — LLM middleware surface |
-| `runtime/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` (separate `runtime` workspace package) |
+| `packages/runtime/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` (separate `runtime` workspace package) |
 | `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
-| `cli/src/cli.ts` | CLI entrypoint (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
-| `cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
+| `packages/cli/src/cli.ts` | CLI entrypoint (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
+| `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
 `@effectionx/converge`, `@effectionx/process`, `@effectionx/node`,
@@ -3215,7 +3215,7 @@ export function* useTerminalOutput(): Operation<void> {
 
 ### 9.6 Host wiring
 
-**File:** `cli/src/cli.ts` (separate `cli` workspace package)
+**File:** `packages/cli/src/cli.ts` (separate `cli` workspace package)
 
 The CLI installs output middleware (transforms only — no channel wiring
 needed), calls `execute` to get a `DocumentExecution`, consumes
@@ -3223,7 +3223,7 @@ needed), calls `execute` to get a `DocumentExecution`, consumes
 the execution directly to get the full output or catch errors.
 
 ```typescript
-// cli/src/cli.ts
+// packages/cli/src/cli.ts
 import { forEach } from "@effectionx/stream-helpers";
 import { execute, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
 
@@ -3358,7 +3358,7 @@ of middleware granularity, not an architectural issue.
 ### 9.11 File layout
 
 ```
-core/src/
+packages/core/src/
   api.ts                  Api definition, exports `output`
   collect.ts              Stream consumption helper (returns Result<string>)
   output/
@@ -3367,7 +3367,7 @@ core/src/
     terminal.ts           Terminal ANSI formatting middleware
   execute.ts         Document runner (owns channel, returns stream)
 
-cli/src/
+packages/cli/src/
   cli.ts                  CLI entrypoint with forEach stream consumption
   file-stream.ts          JSONL-backed DurableStream
 ```

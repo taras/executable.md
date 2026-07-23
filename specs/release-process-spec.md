@@ -37,7 +37,7 @@ sequenceDiagram
     M->>GH: publish the draft → tag vX.Y.Z from main
     GH->>R: push: tags v*
     GH->>PP: push: tags v*
-    R->>R: validate tag matches cli/deno.json
+    R->>R: validate tag matches packages/cli/deno.json
     R->>GH: compile xmd per target,<br/>attach binaries + checksums to the release
     PP->>PP: validate tag matches every manifest,<br/>wait for release.yml to succeed
     PP->>PO: one call per package,<br/>needs-ordered (deps first)
@@ -48,9 +48,10 @@ sequenceDiagram
 
 ## 2. Version lockstep
 
-Every package (`core`, `cli`, `durable-streams`, `runtime`, `testing`,
-`packages/code-review-agent`) declares the same version in its `deno.json` and
-`package.json`. `cli/src/cli.ts` imports `cli/deno.json` and reads `version`
+Every package (`packages/core`, `packages/cli`, `packages/durable-streams`,
+`packages/runtime`, `packages/testing`, `packages/code-review-agent`) declares
+the same version in its `deno.json` and `package.json`. `packages/cli/src/cli.ts`
+imports `packages/cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
 are the single source. The npm version derives from the tag, and both
 workflows refuse a tag the manifests do not declare, so the two cannot
@@ -71,7 +72,7 @@ manifests (§3).
   the manifests need bumping; once bumped, the banner clears and the draft's
   tag and title default to the guard-passing `v<version>`.
 - **`release.yml`** (`push: tags v*`): a preflight job validates the tag
-  against `cli/deno.json`; on mismatch it flags the just-published release on
+  against `packages/cli/deno.json`; on mismatch it flags the just-published release on
   the Releases page — caution note in the notes, a failed title, and the
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles `xmd` per target
@@ -150,7 +151,7 @@ tokens minted outside the gated environment.
 npm exposes trusted-publisher settings only on a package that already exists,
 and the workflows carry no npm token, so bootstrap a new package by hand once:
 
-1. Add its directory to `workspace` in the root `deno.json`, with a `deno.json`
+1. Add its directory (under `packages/`) to `workspace` in the root `deno.json`, with a `deno.json`
    (name under `@executablemd`) and a `package.json` declaring its dependencies
    (`workspace:*` for internal siblings). Run `deno task gen:publish-workflow`
    and commit the regenerated orchestrator.

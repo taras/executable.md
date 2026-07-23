@@ -1,11 +1,11 @@
 {
-  "workspace": ["core", "cli", "durable-streams", "runtime", "testing", "packages/code-review-agent", "site"],
+  "workspace": ["packages/core", "packages/cli", "packages/durable-streams", "packages/runtime", "packages/testing", "packages/code-review-agent", "site"],
   "nodeModulesDir": "auto",
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
-    "@effectionx/bdd/node": "./test-support/bdd.ts",
-    "@effectionx/bdd/expect": "./test-support/expect.ts",
+    "@effectionx/bdd/node": "./packages/test-support/bdd.ts",
+    "@effectionx/bdd/expect": "./packages/test-support/expect.ts",
     "@effectionx/test-adapter": "npm:@effectionx/test-adapter@0.7.4",
     "effection": "npm:effection@4.1.0-alpha.7",
     "effection/experimental": "npm:effection@4.1.0-alpha.7/experimental",
@@ -31,18 +31,18 @@
     "mdast-util-to-string": "npm:mdast-util-to-string@^4"
   },
   "tasks": {
-    "xmd": "deno run --allow-all cli/src/cli.ts",
-    "build": "deno compile --node-modules-dir=none --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd cli/src/cli.ts",
-    "gen:publish-workflow": "deno run --allow-all cli/src/cli.ts run scripts/gen-publish-workflow.md",
+    "xmd": "deno run --allow-all packages/cli/src/cli.ts",
+    "build": "deno compile --node-modules-dir=none --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd packages/cli/src/cli.ts",
+    "gen:publish-workflow": "deno run --allow-all packages/cli/src/cli.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
-    "test": "deno test --allow-all core/tests/ durable-streams/tests/ testing/tests/ packages/code-review-agent/tests/",
-    "check": "deno check core/mod.ts testing/mod.ts",
+    "test": "deno test --allow-all packages/core/tests/ packages/durable-streams/tests/ packages/testing/tests/ packages/code-review-agent/tests/",
+    "check": "deno check packages/core/mod.ts packages/testing/mod.ts",
     "check:jsr": "deno publish --dry-run --allow-dirty",
-    "lint": "npx oxlint -c .oxlintrc.json core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/ && npx oxfmt --check core/src/ core/tests/ cli/src/ durable-streams/ runtime/ testing/ test-support/ packages/code-review-agent/",
-    "review": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.jsonl",
-    "review:local": "deno run --allow-all cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.local.jsonl",
-    "analyze": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.jsonl",
-    "analyze:ci": "deno run --allow-all cli/src/cli.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.analyze.ci.jsonl",
-    "analyze:dispatch": "deno run --allow-all cli/src/cli.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir core/components -j .reviews/journal.dispatch.jsonl"
+    "lint": "npx oxlint -c .oxlintrc.json packages/core/src/ packages/core/tests/ packages/cli/src/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/ && npx oxfmt --check packages/core/src/ packages/core/tests/ packages/cli/src/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/",
+    "review": "deno run --allow-all packages/cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.jsonl",
+    "review:local": "deno run --allow-all packages/cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.local.jsonl",
+    "analyze": "deno run --allow-all packages/cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.jsonl",
+    "analyze:ci": "deno run --allow-all packages/cli/src/cli.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.ci.jsonl",
+    "analyze:dispatch": "deno run --allow-all packages/cli/src/cli.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl"
   }
 }

@@ -80,13 +80,13 @@ Prebuilt binaries for each platform are published on the [releases page](https:/
 ## Run a document
 
 ```bash
-xmd run core/examples/hello-world.md
+xmd run packages/core/examples/hello-world.md
 ```
 
 Write a diagnostic trace for one run:
 
 ```bash
-xmd run core/examples/hello-world.md --journal .xmd/events.jsonl
+xmd run packages/core/examples/hello-world.md --journal .xmd/events.jsonl
 ```
 
 Useful flags:
@@ -150,7 +150,7 @@ Highlights:
 
 ## Provider components
 
-The repo includes reusable markdown components (in `core/components/`) that demonstrate the provider pattern:
+The repo includes reusable markdown components (in `packages/core/components/`) that demonstrate the provider pattern:
 
 - `AnthropicProvider.md`
 - `OllamaProvider.md`
@@ -160,10 +160,10 @@ The repo includes reusable markdown components (in `core/components/`) that demo
 
 These components combine `eval`, `daemon`, readiness checks, and `Sample` middleware so a document can talk to a cloud or local model server without custom runtime wiring.
 
-[`core/examples/hello-world.md`](core/examples/hello-world.md) shows the pattern combining a cloud model (Claude) and a local model (Ollama). Provider docs currently need the built-in components on the search path:
+[`packages/core/examples/hello-world.md`](packages/core/examples/hello-world.md) shows the pattern combining a cloud model (Claude) and a local model (Ollama). Provider docs currently need the built-in components on the search path:
 
 ```bash
-xmd run core/examples/hello-world.md --component-dir core/components
+xmd run packages/core/examples/hello-world.md --component-dir packages/core/components
 ```
 
 ## Diagnostic journals
@@ -174,12 +174,12 @@ Each invocation requires a new path. If the path already exists, `xmd` exits wit
 
 ## Project layout
 
-- `core/src/execute.ts` - document entrypoint and durable import pipeline.
-- `core/src/scanner.ts` - boundary scanner for components and executable fences.
-- `core/src/` - component expansion, eval/exec handling, modifiers, and sampling helpers.
-- `core/components/` - reusable provider and demo components.
-- `cli/src/cli.ts` - the `xmd` command.
-- `core/examples/hello-world.md` - end-to-end example.
+- `packages/core/src/execute.ts` - document entrypoint and durable import pipeline.
+- `packages/core/src/scanner.ts` - boundary scanner for components and executable fences.
+- `packages/core/src/` - component expansion, eval/exec handling, modifiers, and sampling helpers.
+- `packages/core/components/` - reusable provider and demo components.
+- `packages/cli/src/cli.ts` - the `xmd` command.
+- `packages/core/examples/hello-world.md` - end-to-end example.
 - `specs/executable-mdx-spec.md` - design and behavior spec.
 
 ## Development
@@ -187,10 +187,10 @@ Each invocation requires a new path. If the path already exists, `xmd` exits wit
 This is a Deno-first project. Run the tool from source and the checks with `deno`:
 
 ```bash
-deno task xmd run core/examples/hello-world.md   # run a document from source
+deno task xmd run packages/core/examples/hello-world.md   # run a document from source
 deno task build                                  # compile the standalone xmd binary
 deno task lint                                   # oxlint + oxfmt
-deno check core/mod.ts                            # typecheck
+deno check packages/core/mod.ts                   # typecheck
 deno task test                                   # run the test suite
 ```
 

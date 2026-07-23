@@ -4,7 +4,7 @@
  * Exercises the full CLI pipeline as a subprocess — arg parsing,
  * stream consumption, middleware, and diagnostic journal output.
  *
- * Each test shells out to `deno run --allow-all cli/src/cli.ts`
+ * Each test shells out to `deno run --allow-all packages/cli/src/cli.ts`
  * and uses timebox to prevent hangs from blocking the test suite.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -18,7 +18,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 const CLI_CMD = "deno";
-const CLI_ARGS = ["run", "--allow-all", "cli/src/cli.ts", "run"];
+const CLI_ARGS = ["run", "--allow-all", "packages/cli/src/cli.ts", "run"];
 const TIMEOUT = 15_000;
 
 function makeTmpDir(): string {
@@ -102,7 +102,7 @@ function* readJournal(filePath: string): Operation<JournalEventView[]> {
 describe("CLI journal integration", () => {
   // CJ1: Run without journal (raw)
   it("CJ1: runs document without journal --raw", function* () {
-    const result = yield* runCli(["core/tests/fixtures/streaming/simple.md", "--raw"]);
+    const result = yield* runCli(["packages/core/tests/fixtures/streaming/simple.md", "--raw"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello world");
@@ -110,7 +110,7 @@ describe("CLI journal integration", () => {
 
   // CJ2: Run without journal (normalized)
   it("CJ2: runs document without journal (normalized)", function* () {
-    const result = yield* runCli(["core/tests/fixtures/streaming/simple.md"]);
+    const result = yield* runCli(["packages/core/tests/fixtures/streaming/simple.md"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello world");
@@ -122,7 +122,7 @@ describe("CLI journal integration", () => {
 
     try {
       const result = yield* runCli([
-        "core/tests/fixtures/streaming/simple.md",
+        "packages/core/tests/fixtures/streaming/simple.md",
         `--journal=${journalPath}`,
         "--raw",
       ]);
@@ -194,7 +194,7 @@ describe("CLI journal integration", () => {
 
     try {
       const result = yield* runCli([
-        "core/tests/fixtures/streaming/with-exec.md",
+        "packages/core/tests/fixtures/streaming/with-exec.md",
         `--journal=${journalPath}`,
       ]);
       expect(result.code).toBe(0);

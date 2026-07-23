@@ -4,7 +4,7 @@
  * Usage:
  *   deno run -A scripts/build-npm.ts <package-dir> [version]
  *
- * <package-dir> is a workspace member directory (e.g. "core" or
+ * <package-dir> is a workspace member directory (e.g. "packages/core" or
  * "packages/code-review-agent"). [version] defaults to 0.0.0-dev. Output lands
  * in <package-dir>/npm.
  *
@@ -177,7 +177,7 @@ await main(function* (args) {
     isolatedImports[name] = `npm:${name}@^${siblingVer}`;
     isolatedImports[`${name}/`] = `npm:${name}@^${siblingVer}/`;
   }
-  // Preserve the manifest fields alongside the rewritten imports: cli/src/cli.ts
+  // Preserve the manifest fields alongside the rewritten imports: packages/cli/src/cli.ts
   // imports its own deno.json for `version`, so replacing the copy with a bare
   // import map makes that property vanish from the JSON module's type.
   yield* writeTextFile(

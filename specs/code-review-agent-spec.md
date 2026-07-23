@@ -64,7 +64,7 @@ All executable.md core changes and the full agent implementation are complete:
 - **Fixed broken providers** — `OllamaProvider`, `LlamafileProvider`,
   `AnthropicProvider` updated to use direct `fetch()` calls
 - **Component resolution** — review components resolved via
-  `--component-dir .reviews/components --component-dir core/components`
+  `--component-dir .reviews/components --component-dir packages/core/components`
 - **AST-based user import extraction** (DEC-93) — eval blocks can use
   standard `import` declarations; extracted via acorn's
   `allowImportExportEverywhere` and hoisted to module level

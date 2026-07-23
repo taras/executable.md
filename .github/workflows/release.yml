@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   # Refuse a tag the manifests do not declare (spec §2) — the binary's
-  # --version comes from cli/deno.json. On failure, the mistake is made
+  # --version comes from packages/cli/deno.json. On failure, the mistake is made
   # visible on the release itself, not just in this log.
   preflight:
     runs-on: ubuntu-latest
@@ -19,9 +19,9 @@ jobs:
       - name: Tag matches the manifest version
         run: |
           TAG="${{ github.ref_name }}"
-          declared="$(jq -r .version cli/deno.json)"
+          declared="$(jq -r .version packages/cli/deno.json)"
           if [ "v$declared" != "$TAG" ]; then
-            echo "::error::cli/deno.json declares $declared but the tag is $TAG — bump the manifests first"
+            echo "::error::packages/cli/deno.json declares $declared but the tag is $TAG — bump the manifests first"
             exit 1
           fi
 
@@ -79,7 +79,7 @@ jobs:
             --include packages/code-review-agent \
             --target ${{ matrix.target }} \
             --output dist/${{ matrix.artifact }} \
-            cli/src/cli.ts
+            packages/cli/src/cli.ts
 
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

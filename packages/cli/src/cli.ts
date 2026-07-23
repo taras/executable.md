@@ -6,9 +6,9 @@
  *   xmd <document.md> [options]        (run is the default command)
  *
  * Examples:
- *   xmd run core/examples/hello-world.md
- *   xmd core/examples/hello-world.md --verbose
- *   xmd run core/examples/hello-world.md --journal events.jsonl
+ *   xmd run packages/core/examples/hello-world.md
+ *   xmd packages/core/examples/hello-world.md --verbose
+ *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
  */
 
 import { main, exit, spawn, each, createSignal, until, type Operation } from "effection";

@@ -45,7 +45,7 @@ jobs:
           xmd run .reviews/AnalyzeRepoCI.md \
             --component-dir .reviews/components \
             --component-dir .reviews/policies \
-            --component-dir core/components \
+            --component-dir packages/core/components \
             -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
 
       # xmd embeds a failed EnsureOxlint as a comment and still exits 0, so

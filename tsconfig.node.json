@@ -12,23 +12,23 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@executablemd/core": ["./core/mod.ts"],
-      "@executablemd/runtime": ["./runtime/mod.ts"],
-      "@executablemd/runtime/test": ["./runtime/test/mod.ts"],
-      "@executablemd/durable-streams": ["./durable-streams/mod.ts"],
+      "@executablemd/core": ["./packages/core/mod.ts"],
+      "@executablemd/runtime": ["./packages/runtime/mod.ts"],
+      "@executablemd/runtime/test": ["./packages/runtime/test/mod.ts"],
+      "@executablemd/durable-streams": ["./packages/durable-streams/mod.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
-      "@effectionx/bdd/node": ["./test-support/bdd.ts"],
-      "@effectionx/bdd/expect": ["./test-support/expect.ts"]
+      "@effectionx/bdd/node": ["./packages/test-support/bdd.ts"],
+      "@effectionx/bdd/expect": ["./packages/test-support/expect.ts"]
     }
   },
   "include": [
-    "core/**/*.ts",
-    "durable-streams/**/*.ts",
-    "runtime/**/*.ts",
-    "packages/**/*.ts",
-    "test-support/**/*.ts"
+    "packages/core/**/*.ts",
+    "packages/durable-streams/**/*.ts",
+    "packages/runtime/**/*.ts",
+    "packages/code-review-agent/**/*.ts",
+    "packages/test-support/**/*.ts"
   ],
   "exclude": [
-    "durable-streams/demo/**"
+    "packages/durable-streams/demo/**"
   ]
 }
