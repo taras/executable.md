@@ -53,7 +53,7 @@ Rules:
 
 Example of a good item:
 
-### 1. durable-streams/operations.ts
+### 1. packages/durable-streams/operations.ts
 - **Why**: 4 distinct rules fire here (type assertions, empty functions, unused vars, floating promises), indicating mechanical scaffolding that was not cleaned up.
 - **Action**: Remove unnecessary type assertions first, then audit empty function stubs for dead code.
 - **Scope**: mechanical
