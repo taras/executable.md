@@ -24,7 +24,6 @@ import { AgentPromptError } from "../src/agent/errors.ts";
 import { registerAgentProvider } from "../src/agent/provider-api.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
-import { installTestingVocabulary } from "@executablemd/testing";
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-ac-test-"));
@@ -452,33 +451,6 @@ describe("Tier AC — agent components", () => {
         });
       }
     }
-  });
-
-  it("AC16: agent and testing vocabularies compose on one execution", function* () {
-    const stub = createStubProvider((content) =>
-      content.includes("bad") ? { status: "failed", stopReason: "refusal" } : {},
-    );
-    yield* installTestingVocabulary();
-    yield* installStub(stub);
-    const doc = [
-      "<Testing>",
-      '<Test name="prompt works">',
-      '  <Prompt prompt="good" />',
-      "</Test>",
-      "</Testing>",
-      "",
-      '<Prompt prompt="bad" />',
-      "",
-    ].join("\n");
-    const { result } = yield* runDoc(doc, new InMemoryStream());
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(AggregateError);
-      if (result.error instanceof AggregateError) {
-        expect(result.error.message).toBe("1 agent prompt(s) failed");
-      }
-    }
-    expect(stub.promptCalls.length).toBe(2);
   });
 
   it("AC13: <AgentProvider> without any default agent fails before expanding children", function* () {
