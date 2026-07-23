@@ -72,6 +72,35 @@ export { compileBlock } from "./src/eval-context.ts";
 export { useContent } from "./src/content-context.ts";
 export { Sample } from "./src/sample-api.ts";
 
+export { Agent } from "./src/agent/agent-api.ts";
+export type {
+  AgentApi,
+  AgentPromptEvent,
+  PermissionMode,
+  PermissionOption,
+  PermissionOutcome,
+  PermissionRequest,
+  PromptOptions,
+  Session,
+} from "./src/agent/agent-api.ts";
+export { AgentPromptError } from "./src/agent/errors.ts";
+export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
+export type {
+  AgentProviderApi,
+  AgentProviderFactory,
+  AgentProviderOptions,
+} from "./src/agent/provider-api.ts";
+export { installAgentVocabulary } from "./src/agent/vocabulary.ts";
+export type { AgentVocabularyOptions } from "./src/agent/vocabulary.ts";
+export {
+  installApproveAll,
+  installAskPermission,
+  installApproveReads,
+  installPermissionMode,
+} from "./src/agent/permission.ts";
+export { Config, timeout } from "@executablemd/runtime";
+export type { ConfigApi } from "@executablemd/runtime";
+
 export { evalFactory } from "./src/eval-handler.ts";
 export { persistFactory } from "./src/modifiers/persist.ts";
 export { timeoutFactory, parseDuration } from "./src/modifiers/timeout.ts";
