@@ -1,200 +1,409 @@
-# Executable.md ACP Client Spec
+# Executable.md ACP Client
 
-ACP Specification: https://agentclientprotocol.com/protocol/v1/overview
+**Status:** Draft
+**Protocol:** [Agent Client Protocol v1](https://agentclientprotocol.com/protocol/v1/overview)
+**Provider:** `acpx@0.12.0`
 
-## Motivation
+## Overview
 
-Executable.md needs a reliable and consistent mechanism for interacting with coding agents like Claude Code and Codex.
-This mechanism should work with Markdown syntax.
+Executable.md uses the Agent Client Protocol to run stateful coding-agent
+sessions from Markdown. The public model has four parts:
 
-## Approach
+- `<AgentProvider>` selects and configures an agent provider.
+- `<Agent>` selects an agent and verifies that it is available.
+- `<Session>` ensures a persistent session exists and scopes it to its body.
+- `<Prompt>` sends text to the current agent session and renders the agent's
+  text response.
 
-Executable Markdown has two primary layers:
+The CLI installs ACPX as the root provider. Components and Context API
+middleware can override that configuration for a nested scope.
 
-1. Markdown Syntax
-2. Effection Runtime
+`<Sample>` and `SampleApi` remain unchanged. Agent prompts are stateful and use
+the separate `AgentApi`.
 
-The syntax is a convenient way to compose the underlying runtime primitives.
+## Markdown interface
 
-We should approach designing this functionality with these two layers in mind.
+The smallest prompt uses the root provider, default agent, current working
+directory, and default session:
 
-To ground the design in user experience, we'll start with the Markdown syntax, then map that to the Effection Runtime.
-
-The core of the user experience are `<Agent />`, `<Session* />` and `<Prompt />` components.
-
-### Agent Component
-
-Agent is responsible for starting the agent subprocess and initializing a connection.
-
-Starts claude-code agent
 ```md
-<Agent name="claude-code" />
+<Prompt>Describe this repository.</Prompt>
 ```
 
-Invoking the agent multiple time does not cause multiple instances of an agent to be started,
-it's useful for providing context for operations invoked within the content body of the agent component.
+Agent and session scopes compose:
 
 ```md
 <Agent name="codex">
-  <Session as="codex-session">
-    <Prompt>
-      Hello World
-    </Prompt>
+  <Session name="review">
+    <Prompt>Review the current changes.</Prompt>
+    <Prompt>Summarize the highest-risk finding.</Prompt>
   </Session>
 </Agent>
 ```
 
-### Session Component
-
-The `<Session />` component ensures that a session exists and causes the prompt to be sent to that session.
-
-### Prompt component
-
-The prompt component takes a prompt and sends it to an agent.
+Direct prompt props override the ambient agent or session for that prompt:
 
 ```md
-<Agent name="codex">
-  <Prompt>
-    Say hello world!
-  </Prompt>
-</Agent>
-```
-
-### Provider component
-
-The provider component is how the user controls what the agent components do at runtime. 
-
-The default provides is `ACPX`.
-
-```md
-<AcpxProvider>
-  <Agent name="codex">
-    <Prompt>
-      Hello world
-    </Prompt>
-  </Agent>
-</ApcxProvider>
-```
-
-## Detailed Design
-
-Between the Markdown Syntax and the Effection runtime, there is a Context API.
-The context api is a middleware layer that maps what happens when a component is
-expanded.
-
-```ts
-interface AgentApi {
-  agent(name?: string): Operation<Agent> // current agent (TODO: figure out what Agent type should be)
-  session(name?: string): Operation<Session> // ensure a session exists
-  prompt(prompt: string, options?: { agent?: Agent; session?: Session }): Operation<string> // send a prompt to the current session of the current agent
-}
-```
-
-Each component maps to a property in the AgentApi.
-
-* `<Agent />` -> `AgentApi.agent`
-* `<Session />` -> `AgentApi.session`
-* `<Prompt />` -> `ApentApi.prompt`
-
-When a component is expanded, it applies a middleware to the context API.
-
-```md
-<Agent name="codex">
-  ...
-</Agent>
-```
-
-Adds agent middleware that applies the passed in agent value to the context.
-
-```ts
-yield* AgentApi.around({
-  *agent([name: string], next) {
-    if (!name) {
-      return yield* next(); // return default agent
-    } else if (yield* agentExists(name)) {
-      return name;
-    } else {
-      throw new Error(`${name} is not available in this environment`);
-    }
-  }
-});
-```
-
-Session adds a middleware that calls ensures a session exists
-
-```md
-<Session name="implementor" />
-```
-
-This intern adds session middleware
-
-```ts
-import { agent } from '@executablemd/acp'
-
-yield* AgentApi.around({
-  *session([name: string, next]) {
-    const agent = yield* agent(); // we want to get the current agent
-    if (!name) {
-      return yield* next();
-    } else if (yield* sessionExists(agent, name)) {
-      return name; //
-    } else {
-      yield* createSession(agent, name);
-      return name;
-    }
-  }
-})
-```
-
-Prompt uses both to send to a specific agent and session
-
-```md
-<Prompt>
-  Hello World
+<Prompt agent="codex" session="review">
+  Review the current changes.
 </Prompt>
 ```
 
-This translates to 
+### AgentProvider
 
-```ts
-import { agent, session } from '@executablemd/acp'
-
-yield* AgentApi.around({
-  prompt([prompt, opts]) {
-    const agent = yield* agent(opts.agent);
-    const session = yield* session(opts.session);
-    return yield* next(prompt, { agent, session });
-  }
-})
-```
-
-The ACPX Provider provides the implemention for AgentApi.
+`<AgentProvider>` resolves a registered provider by name and installs it as an
+Effection resource for its body:
 
 ```md
-<AcpxProvider>
-  {...}
-</AcpxProvider>
+<AgentProvider name="acpx" defaultAgent="codex" timeout="2m">
+  <Prompt>Describe this repository.</Prompt>
+</AgentProvider>
 ```
 
-Which inturn improvides the implementation
+Nested providers override root configuration without affecting siblings.
+`defaultAgent` and `timeout` override inherited values for the component's
+body; omitted values retain the outer configuration.
+Provider teardown cancels active turns, closes owned processes and
+connections, and retains persisted session state.
+
+### Agent
+
+`<Agent name="codex">` installs `codex` as the current agent for its body.
+The self-closing form performs the same availability check without producing
+output. When `name` is omitted, the component selects the inherited or default
+agent.
+
+```md
+<Agent name="codex" />
+```
+
+Availability uses the selected provider's own resolution and probe behavior.
+For ACPX, validation resolves the agent command, starts it, completes ACP
+initialization, and closes the probe process. A successful probe does not
+guarantee that a warm process remains available. The provider caches successful
+validation for its scope so repeated references do not repeat the probe.
+
+### Session
+
+`<Session>` calls `session()`, which calls the provider's `ensureSession()`.
+The wrapper form also makes the resulting session current for its body:
+
+```md
+<Session name="implementation">
+  <Prompt>Implement the accepted plan.</Prompt>
+</Session>
+```
+
+The self-closing form eagerly ensures the session exists and produces no
+output:
+
+```md
+<Session name="implementation" />
+```
+
+An omitted name selects the default session. `name` identifies the session;
+the engine-wide `as` prop continues to capture rendered output and has no
+session semantics.
+
+Session lookup is scoped by agent command, working directory, and optional
+name. It follows ACPX's cwd behavior: inside a Git repository, lookup walks
+from the current directory to the repository root; outside a repository, only
+the exact current directory is considered. Different documents running in the
+same scope therefore share the same default session.
+
+The provider derives a stable, Executable.md-owned `sessionKey` from that
+identity. Named sessions add the name to the identity. The exact key encoding
+is an implementation detail, but it must avoid collisions with sessions owned
+by other ACPX consumers.
+
+Prompts submitted concurrently to one session run in submission order.
+Different sessions may run concurrently.
+
+### Prompt
+
+`<Prompt>` renders its children and sends the resulting text to `prompt()`.
+Rendered children take precedence over the `prompt` prop. Input is not
+trimmed.
+
+```md
+<Prompt prompt="Describe this repository." />
+```
+
+The component accepts:
+
+- `prompt`: fallback text for the self-closing form
+- `agent`: agent override for this prompt
+- `session`: named-session override for this prompt
+- `timeout`: duration such as `500ms`, `30s`, or `2m`
+- `throwOnError`: fail immediately instead of collecting the failure
+
+The default output is the concatenation of ACPX `text_delta` events whose
+stream is `output`. Thought, status, tool, usage, and raw protocol events do
+not render. Output is buffered and becomes visible when the turn finishes.
+Raw event streaming is not part of this interface.
+
+## Context APIs
+
+### ConfigApi
+
+`ConfigApi` supplies a shared timeout in milliseconds:
 
 ```ts
-// instatiate acpx runtime
-const runtime = createAcpxRuntime(...);
-
-yield* AgentApi.around({
-  agent([name]) {
-    // not sure how to handle default agent
-    return agent;
-  },
-  *session([name]) {
-    const agent = yield* agent();
-    // TBD
-    return *until(runtime.ensureSession());
-  },
-  *prompt([prompt, options]) {
-    // TBD
-    return *until(runtime.prompt(prompt, { agent, session }))
-  }
-}, { at: "min" }) // at min to provide the default implemenation
+interface ConfigApi {
+  timeout: number;
+}
 ```
+
+The exported `timeout` value is an `Operation<number>`:
+
+```ts
+const timeoutMs = yield* timeout;
+```
+
+Its base value is `120_000`. It is always a positive, finite duration; it is
+never `undefined`. Process, Fetch, and Agent operations use the contextual
+value when the call does not provide an explicit timeout:
+
+```text
+explicit operation timeout → contextual timeout
+```
+
+Existing call sites that provide an operation-specific timeout retain that
+behavior.
+
+### AgentApi
+
+The public agent value is a string. The session and prompt types are:
+
+```ts
+type Agent = string;
+
+interface Session {
+  sessionKey: string;
+  cwd: string;
+  agentSessionId?: string;
+}
+
+interface PromptOptions {
+  agent?: Agent;
+  session?: string | Session;
+  timeout?: number;
+  throwOnError?: boolean;
+}
+
+interface AgentApi {
+  agent(name?: string): Operation<Agent>;
+  session(name?: string): Operation<Session>;
+  prompt(content: string, options?: PromptOptions): Operation<string>;
+  requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
+}
+```
+
+`prompt()` resolves the agent override, then calls `session()`, which ensures
+the session exists. A string `session` option is a session name resolved
+against the selected agent and contextual cwd. A `Session` value targets that
+already-resolved session.
+
+The existing runtime `cwd` operation supplies the working directory. Agent
+APIs do not read the process cwd directly.
+
+The ACPX handle remains private to the provider. The provider maps the public
+`Session` to the full ACPX handle needed for turns and cleanup.
+
+### AgentProviderApi
+
+`AgentProviderApi` resolves provider factories by string name. Registration is
+scope-local Context API middleware: nested registrations override an outer
+registration without changing siblings or process-global state.
+
+```ts
+type PermissionMode = "approve-all" | "approve-reads" | "deny-all";
+
+interface AgentProviderOptions {
+  defaultAgent: string;
+  permissionMode: PermissionMode;
+}
+
+type AgentProviderFactory = (options: AgentProviderOptions) => Operation<void>;
+
+interface AgentProviderApi {
+  resolve(name: string): Operation<AgentProviderFactory>;
+}
+```
+
+`registerAgentProvider(name, factory)` installs resolution middleware in the
+current scope. The CLI registers `acpx` before resolving the root provider.
+An unknown root provider fails before document execution begins. An unknown
+nested provider fails when its component expands.
+
+Provider factories install their `AgentApi` implementation and own all
+resources they start. The generic `<AgentProvider>` component resolves the
+factory and applies it to its body.
+
+## Permissions
+
+Permission middleware uses a stable Executable.md shape rather than exposing
+ACP SDK objects:
+
+```ts
+interface PermissionRequest {
+  session: Session;
+  toolCall: {
+    toolCallId: string;
+    title?: string;
+    kind?: string;
+    rawInput?: unknown;
+  };
+  options: readonly PermissionOption[];
+}
+
+interface PermissionOption {
+  optionId: string;
+  name: string;
+  kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
+}
+
+type PermissionOutcome =
+  | { outcome: "selected"; optionId: string }
+  | { outcome: "cancelled" };
+```
+
+The base `requestPermission()` implementation denies the request. It selects
+`reject_once`, then `reject_always`; when neither is available, it returns
+`cancelled`.
+
+The ACPX permission callback re-enters the active prompt's Effection scope,
+calls `requestPermission()`, and translates the result back to ACP. The root
+permission mode also configures ACPX's direct client filesystem and terminal
+checks.
+
+Eval blocks can install scoped `requestPermission` middleware for custom
+policies. Two components provide common policies without JavaScript:
+
+- `<ApproveAll>` selects `allow_once`, then `allow_always`.
+- `<AskPermission>` asks for every request and denies when no interactive TTY
+  is available.
+
+The CLI's `approve-reads` policy automatically approves `read` and `search`
+tool kinds. Other requests are interactive and are denied without a TTY.
+
+## Prompt completion and failure
+
+ACP defines five stop reasons. Only `end_turn` is successful. `max_tokens`,
+`max_turn_requests`, `refusal`, and `cancelled` are failures.
+
+By default, a failed prompt returns the output collected before failure, or
+`""` when there is none. The failure is still recorded against the document
+execution. This lets later content run without treating the document as
+successful.
+
+After output closes, an otherwise successful `DocumentExecution` completes as:
+
+```ts
+Err(
+  new AggregateError(
+    promptErrors,
+    `${promptErrors.length} agent prompt(s) failed`,
+  ),
+);
+```
+
+Each entry is an `AgentPromptError` containing the agent, session key, stop
+reason, and underlying cause. Errors remain in prompt execution order.
+`xmd run` exits with failure status when the aggregate is present.
+
+`throwOnError: true` throws the individual `AgentPromptError` immediately.
+Timeouts, provider errors, permission failures, and non-success stop reasons
+follow the same rule.
+
+## Journaling and replay
+
+Each prompt is a durable operation. Its journal entry includes the prompt
+input, agent and session identity, terminal status, stop reason, text result,
+and structured error when present.
+
+With a replay-populated stream, a completed prompt returns its recorded result
+and restores its recorded failure without contacting the agent. During normal
+CLI execution, `--journal` creates a new stream, so prompts execute live and
+the journal serves as an observability trace.
+
+Agent output is not emitted incrementally, which keeps the durable result
+atomic and matches the current `<Sample>` output behavior.
+
+## ACPX provider
+
+The ACPX provider depends on exactly `acpx@0.12.0` and imports its public
+`acpx/runtime` entrypoint. The version is pinned because ACPX marks its runtime
+API as unstable.
+
+The provider:
+
+1. creates the ACPX runtime with `createAcpRuntime()`;
+2. uses ACPX's agent registry and fixed `~/.acpx` state directory;
+3. passes the contextual cwd and timeout to session and turn operations;
+4. calls `ensureSession()` in persistent mode;
+5. calls `startTurn()` and consumes its event stream and terminal result
+   separately;
+6. adapts ACPX promises with `until` and consumes its async event iterables
+   through Effection operations;
+7. cancels active turns and calls ACPX `close()` during teardown.
+
+ACPX `close()` soft-closes its record while retaining persistent state. A
+later `ensureSession()` with the same stable key reopens the record and
+resumes the saved ACP session when supported. No keep-alive or state-directory
+option is exposed.
+
+Provider availability validation uses ACPX's registry, process launch,
+initialization, and errors. Executable.md does not maintain a second list of
+available agents.
+
+## CLI
+
+`xmd run` accepts:
+
+```text
+--agent-provider <name>
+--default-agent <name>
+--timeout <seconds>
+--approve-all
+--approve-reads
+--deny-all
+```
+
+`--agent-provider` defaults to `acpx`.
+
+Default-agent precedence, from lowest to highest, is:
+
+```text
+ACPX DEFAULT_AGENT_NAME
+→ DEFAULT_AGENT_NAME environment variable
+→ --default-agent
+→ scoped AgentProvider override
+→ explicit AgentApi, Agent, or Prompt override
+```
+
+The ACPX default is `codex`. ACPX global and project `defaultAgent`
+configuration does not participate in this precedence.
+
+`--timeout` accepts a positive decimal number of seconds, matching ACPX's CLI,
+and converts it to milliseconds once. When omitted, the root `ConfigApi`
+timeout is 120 seconds. Markdown duration props use the existing Executable.md
+duration syntax.
+
+The three permission flags are mutually exclusive. `--approve-reads` is the
+default. Root CLI policy overrides the base deny implementation for the
+document scope; nested permission middleware can override it for a subtree.
+
+The provider and its processes live for the `xmd run` Effection scope. The CLI
+does not expose `--keep-alive` or an ACPX state-directory flag.
+
+## Not included
+
+This interface does not include:
+
+- raw ACP event streams
+- non-text prompt attachments
+- session mode or config-option controls
+- explicit session closing or deletion
+- additional ACPX runtime configuration
+- replacement or removal of `SampleApi`
