@@ -11,6 +11,7 @@
     "@effectionx/stream-helpers": "0.8.3",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/test-agent": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "configliere": "^0.2.3",
     "effection": "4.1.0-alpha.7",
