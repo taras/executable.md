@@ -36,6 +36,9 @@ export type {
 } from "./src/protocol.ts";
 export { useTestAgentController } from "./src/controller.ts";
 export type { InstanceFailure, ScenarioInstance, TestAgentController } from "./src/controller.ts";
+export { runTestAgentWorker } from "./src/worker/run.ts";
 export { installWhenPromptVocabulary } from "./src/worker/when-prompt.ts";
+export { installWorkerProfile } from "./src/worker/profile.ts";
+export type { WorkerFilesystem } from "./src/worker/profile.ts";
 export { collectTurn, createTurnBridge } from "./src/worker/bridge.ts";
 export type { BridgeEvent, PromptOffer, TurnBridge } from "./src/worker/bridge.ts";

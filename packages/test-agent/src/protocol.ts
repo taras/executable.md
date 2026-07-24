@@ -44,6 +44,7 @@ export type ControllerMessage =
       journal: WireDurableEvent[];
     }
   | { t: "ack"; seq: number }
+  | { t: "recorded" }
   | { t: "read"; path: string; source?: string; missing: boolean }
   | { t: "stat"; path: string; exists: boolean; isFile: boolean }
   | { t: "error"; message: string };
@@ -106,6 +107,7 @@ const configMessage: z.ZodType<ControllerMessage> = z.discriminatedUnion("mode",
 const controllerMessage: z.ZodType<ControllerMessage> = z.union([
   configMessage,
   z.object({ t: z.literal("ack"), seq: z.number().int().nonnegative() }),
+  z.object({ t: z.literal("recorded") }),
   z.object({
     t: z.literal("read"),
     path: z.string(),

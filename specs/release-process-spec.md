@@ -49,7 +49,8 @@ sequenceDiagram
 ## 2. Version lockstep
 
 Every package (`packages/core`, `packages/cli`, `packages/durable-streams`,
-`packages/runtime`, `packages/testing`, `packages/code-review-agent`) declares
+`packages/runtime`, `packages/testing`, `packages/code-review-agent`,
+`packages/test-agent`) declares
 the same version in its `deno.json` and `package.json`. `packages/cli/src/cli.ts`
 imports `packages/cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
@@ -112,7 +113,7 @@ already carries at that version, member by member. A rerun after a partial publi
 therefore completes exactly the members that are missing, and a rerun after a
 complete publish exits 0 without republishing. Never gate the job on one
 package's existence — whether `core` is published says nothing about the other
-five.
+six.
 
 `deno task check:jsr` runs the same command with `--dry-run` and is a required
 CI job on every PR (§3, `ci.yml`). It enforces JSR's fast-check rules, so every
@@ -179,7 +180,8 @@ only what is missing. No dispatch path publishes outside a tag.
 
 ## 8. Consumer note
 
-`@executablemd/core`, `@executablemd/runtime`, `@executablemd/testing`, and
-`@executablemd/cli` depend on effection's 4.x prerelease, which npm's peer
+`@executablemd/core`, `@executablemd/runtime`, `@executablemd/testing`,
+`@executablemd/cli`, and `@executablemd/test-agent` depend on effection's 4.x
+prerelease, which npm's peer
 resolver rejects against `@effectionx/*` (`^3 || ^4`). Installing them
 requires `--legacy-peer-deps` until effection 4 is stable.
