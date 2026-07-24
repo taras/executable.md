@@ -26,7 +26,7 @@ test document
 `<TestAgent>` installs the controlled ACPX provider for its body and owns the
 controller that serves behavior documents to agent subprocesses:
 
-```text
+```md
 <TestAgent>
   <TestAgent.Scenario
     agent="test"
@@ -176,7 +176,7 @@ The controller owns:
 
 The public worker command is:
 
-```text
+```shell
 xmd test-agent --connect <opaque-controller-route>
 ```
 
