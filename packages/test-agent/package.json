@@ -1,0 +1,14 @@
+{
+  "name": "@executablemd/test-agent",
+  "version": "0.4.2",
+  "description": "Build reliable ACP integration tests with deterministic, document-driven agent behavior.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "dependencies": {
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "effection": "4.1.0-alpha.7"
+  }
+}
