@@ -112,6 +112,7 @@ export function* useAcpxProviderState(
   const store = seams?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
   const registry = seams?.agentRegistry ?? createAgentRegistry();
   const bridge = createPermissionBridge();
+  const stateScope = yield* useScope();
   const turns = yield* useSerialQueues();
 
   let runtime: ProbeCapableRuntime | undefined;
@@ -138,7 +139,10 @@ export function* useAcpxProviderState(
       const base = yield* runtimeOptions();
       runtime = createRuntime({
         ...base,
-        onPermissionRequest: (request, ctx) => bridge.onPermissionRequest(request, ctx),
+        // The ONLY Promise adaptation: ACPX's callback boundary. The
+        // bridge itself is operation-based.
+        onPermissionRequest: (request, ctx) =>
+          Promise.resolve(stateScope.run(() => bridge.decision(request, ctx.signal))),
       });
     }
     return runtime;
@@ -226,9 +230,17 @@ export function* useAcpxProviderState(
         yield* turns.slot(entry.session.sessionKey);
 
         const scope = yield* useScope();
-        const backendSessionId = entry.handle.backendSessionId;
-        if (backendSessionId !== undefined) {
-          const unregister = bridge.register(backendSessionId, scope, entry.session);
+        // A previous turn's reconnect can replace the ACP session id
+        // (acpx persists the new id only at turn completion), so the
+        // registration refreshes from the persisted record. An id
+        // minted DURING this turn is unobservable until the turn
+        // completes; requests carrying it fail closed with cancel.
+        const record = yield* until(
+          store.load(entry.handle.acpxRecordId ?? entry.session.sessionKey),
+        );
+        const activeSessionId = record?.acpSessionId ?? entry.handle.backendSessionId;
+        if (activeSessionId !== undefined) {
+          const unregister = bridge.register(activeSessionId, scope, entry.session);
           yield* ensure(() => {
             unregister();
           });

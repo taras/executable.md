@@ -10,7 +10,8 @@
  * never `undefined` and never another active scope.
  */
 
-import type { Scope } from "effection";
+import { once, race } from "effection";
+import type { Operation, Scope } from "effection";
 import { Agent } from "@executablemd/core";
 import type { PermissionOption, PermissionRequest, Session } from "@executablemd/core";
 import type { AcpPermissionDecision, AcpPermissionRequest } from "acpx/runtime";
@@ -25,10 +26,13 @@ interface RegisteredTurn {
 export interface PermissionBridge {
   /** Register the active turn's scope. Returns the unregister cleanup. */
   register(backendSessionId: string, scope: Scope, session: Session): () => void;
-  onPermissionRequest(
-    request: AcpPermissionRequest,
-    ctx: { signal: AbortSignal },
-  ): Promise<AcpPermissionDecision | undefined>;
+  /**
+   * Decide one permission request. Never undefined — missing or
+   * torn-down registrations, policy errors, aborts, and unknown
+   * selected option ids all resolve `{ outcome: "cancel" }`, so ACPX
+   * can never fall back to its own mode resolver.
+   */
+  decision(request: AcpPermissionRequest, signal: AbortSignal): Operation<AcpPermissionDecision>;
 }
 
 export function createPermissionBridge(): PermissionBridge {
@@ -43,20 +47,37 @@ export function createPermissionBridge(): PermissionBridge {
         }
       };
     },
-    onPermissionRequest(request) {
+    *decision(request, signal) {
       const registered = turns.get(request.sessionId);
-      if (!registered) {
-        return Promise.resolve(CANCEL);
+      if (!registered || signal.aborted) {
+        return CANCEL;
       }
-      const task = registered.scope.run(function* () {
-        const permissionRequest = toPermissionRequest(request, registered.session);
-        const outcome = yield* Agent.operations.requestPermission(permissionRequest);
-        return toDecision(outcome, permissionRequest.options);
-      });
-      return Promise.resolve(task).then(
-        (decision) => decision,
-        () => CANCEL,
-      );
+      try {
+        // Policy errors are contained INSIDE the task: an unhandled
+        // task failure would propagate into the prompt scope itself.
+        // Halts are unaffected — try/catch does not intercept them.
+        const task = registered.scope.run(function* (): Operation<AcpPermissionDecision> {
+          try {
+            const permissionRequest = toPermissionRequest(request, registered.session);
+            const outcome = yield* Agent.operations.requestPermission(permissionRequest);
+            return toDecision(outcome, permissionRequest.options);
+          } catch {
+            return CANCEL;
+          }
+        });
+        return yield* race([
+          task,
+          (function* (): Operation<AcpPermissionDecision> {
+            yield* once(signal, "abort");
+            yield* task.halt();
+            return CANCEL;
+          })(),
+        ]);
+      } catch {
+        // Torn-down prompt scopes cancel — never fall through to
+        // another policy or ACPX's mode resolver.
+        return CANCEL;
+      }
     },
   };
 }

@@ -6,14 +6,15 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { scoped, sleep, spawn } from "effection";
+import { scoped, sleep, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { Agent, Config } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
 import { createAcpxProvider, useAcpxProviderState } from "../src/provider.ts";
 import type { AcpxProviderState } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
-import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
+import { createFakeRuntime, makeRecord, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
+import type { AcpPermissionRequest } from "acpx/runtime";
 import type { FakeRuntimeHarness } from "./helpers.ts";
 
 const CWD = "/work";
@@ -133,6 +134,70 @@ describe("Tier AP — ACPX provider", () => {
       yield* second;
       yield* elsewhere;
       expect(harness.turns.length).toBe(3);
+    });
+  });
+
+  it("AP12: permission routing registers the record's persisted session id, not stale handle state", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const store = makeStore();
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: store,
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+
+      // Simulate a prior turn's reconnect: the persisted record now
+      // carries a replaced ACP session id that the handle predates.
+      const sessionKey = deriveSessionKey("codex-cmd", CWD);
+      const record = makeRecord("codex-cmd", CWD);
+      record.acpxRecordId = `record:${sessionKey}`;
+      record.acpSessionId = "replaced-id";
+      store.records.set(record.acpxRecordId, record);
+
+      const turn = yield* spawn(() => collectPrompt("during"));
+      yield* sleep(20);
+      const options = harness.createdOptions.find((created) => created.onPermissionRequest);
+      expect(options).toBeDefined();
+      const request: AcpPermissionRequest = {
+        sessionId: "replaced-id",
+        inferredKind: undefined,
+        raw: {
+          sessionId: "replaced-id",
+          toolCall: { toolCallId: "call-1" },
+          options: [{ optionId: "opt-reject", name: "Reject", kind: "reject_once" }],
+        },
+      };
+      const signal = new AbortController().signal;
+      const routed = yield* until(
+        Promise.resolve(options!.onPermissionRequest!(request, { signal })),
+      );
+      // Routed to the active prompt scope: the base policy denies.
+      expect(routed).toEqual({ outcome: "reject_once" });
+
+      const stale = yield* until(
+        Promise.resolve(
+          options!.onPermissionRequest!(
+            {
+              ...request,
+              sessionId: `backend:${sessionKey}`,
+              raw: { ...request.raw, sessionId: `backend:${sessionKey}` },
+            },
+            { signal },
+          ),
+        ),
+      );
+      // The handle's pre-replacement id no longer routes.
+      expect(stale).toEqual({ outcome: "cancel" });
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "ok", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* turn;
     });
   });
 
