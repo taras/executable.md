@@ -30,6 +30,14 @@ export interface PromptRecord {
   stopReason?: string;
   text: string;
   error?: SerializedPromptFailure;
+  /**
+   * True only for failed prompts thrown through `throwOnError`. Replay
+   * uses the stored marker: a partial replay re-throws, and a full
+   * replay omits the failure from aggregate restoration because the
+   * throw was already handled where it happened (e.g. by a failing
+   * test). Missing in older records — parsed as absent, never inferred.
+   */
+  raised?: boolean;
 }
 
 export function* persistPrompt(
@@ -70,7 +78,7 @@ export function* readCompletedPrompts(
     }
     if (event.description.type === AGENT_PROMPT) {
       const parsed = parsePromptRecord(event.result.value);
-      if (parsed) {
+      if (parsed && parsed.raised !== true) {
         records.push(parsed);
       }
     }
@@ -124,6 +132,9 @@ function serializePromptRecord(record: PromptRecord): Json {
   if (record.error !== undefined) {
     payload.error = record.error;
   }
+  if (record.raised === true) {
+    payload.raised = true;
+  }
   return payload;
 }
 
@@ -131,7 +142,7 @@ function parsePromptRecord(value: unknown): PromptRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const { sequence, agent, sessionKey, agentSessionId, status, stopReason, text, error } =
+  const { sequence, agent, sessionKey, agentSessionId, status, stopReason, text, error, raised } =
     value as Record<string, unknown>;
   if (typeof sequence !== "number" || typeof agent !== "string") {
     return undefined;
@@ -155,6 +166,9 @@ function parsePromptRecord(value: unknown): PromptRecord | undefined {
       return undefined;
     }
     record.error = parsed;
+  }
+  if (raised === true && record.status !== "completed") {
+    record.raised = true;
   }
   return record;
 }

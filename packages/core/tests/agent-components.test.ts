@@ -21,6 +21,7 @@ import type {
   Session,
 } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
+import { readCompletedPrompts } from "../src/agent/journal.ts";
 import { registerAgentProvider } from "../src/agent/provider-api.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
@@ -450,6 +451,93 @@ describe("Tier AC — agent components", () => {
           text: "partial",
         });
       }
+    }
+  });
+
+  it("AC17: throwOnError failures journal a raised marker; plain failures do not", function* () {
+    const stub = createStubProvider((content) =>
+      content.includes("boom") ? { status: "failed", stopReason: "refusal" } : {},
+    );
+    yield* installStub(stub);
+    const stream = new InMemoryStream();
+    yield* runDoc('<Prompt prompt="plain-boom" />\n', stream);
+
+    const events = yield* stream.readAll();
+    const plain = events.find(
+      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+    );
+    if (plain && plain.type === "yield" && plain.result.status === "ok") {
+      const value = plain.result.value;
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        expect(value.raised).toBe(undefined);
+      }
+    }
+
+    const thrown = new InMemoryStream();
+    yield* runDoc('<Prompt prompt="boom" throwOnError />\n', thrown);
+    const thrownEvents = yield* thrown.readAll();
+    const raisedEntry = thrownEvents.find(
+      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+    );
+    expect(raisedEntry).toBeDefined();
+    if (raisedEntry && raisedEntry.type === "yield" && raisedEntry.result.status === "ok") {
+      const value = raisedEntry.result.value;
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        expect(value.raised).toBe(true);
+      }
+    }
+  });
+
+  it("AC18: full replay omits raised failures from aggregate restoration", function* () {
+    const stream = new InMemoryStream();
+    yield* stream.append({
+      type: "yield",
+      coroutineId: "root.0",
+      description: { type: "agent_prompt", name: "prompt:doc.md:1:1#0", input: "a" },
+      result: {
+        status: "ok",
+        value: {
+          sequence: 0,
+          agent: "a1",
+          sessionKey: "s1",
+          status: "failed",
+          stopReason: "refusal",
+          text: "",
+          error: { message: "nope" },
+          raised: true,
+        },
+      },
+    });
+    yield* stream.append({
+      type: "yield",
+      coroutineId: "root.1",
+      description: { type: "agent_prompt", name: "prompt:doc.md:2:1#0", input: "b" },
+      result: {
+        status: "ok",
+        value: {
+          sequence: 1,
+          agent: "a1",
+          sessionKey: "s1",
+          status: "failed",
+          text: "",
+          error: { message: "kept" },
+        },
+      },
+    });
+    yield* stream.append({
+      type: "close",
+      coroutineId: "root",
+      result: { status: "ok", value: "" },
+    });
+
+    const records = yield* readCompletedPrompts(stream);
+    expect(records).toBeDefined();
+    if (records) {
+      // The raised record is omitted; the older record without the
+      // marker parses as not raised and is restored.
+      expect(records.length).toBe(1);
+      expect(records[0]!.error?.message).toBe("kept");
+      expect(records[0]!.raised).toBe(undefined);
     }
   });
 

@@ -371,6 +371,14 @@ text on failure, and the structured error when present. The live
 `started` event is reduced into those fields and is not separately
 journaled.
 
+A failed prompt thrown through the `<Prompt throwOnError>` prop also
+records `raised: true`. Replay decides from the stored marker, not the
+live prop: a partial replay re-throws the recorded failure, and a full
+replay omits raised failures from aggregate restoration because the
+throw was already handled where it happened — for example by a failing
+test. A record without the marker parses as not raised, and successful
+records are never raised.
+
 With a replay-populated stream, a completed prompt returns its recorded result
 and restores its recorded failure without contacting the agent. During normal
 CLI execution, `--journal` creates a new stream, so prompts execute live and

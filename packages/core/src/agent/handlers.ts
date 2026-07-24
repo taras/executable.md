@@ -301,14 +301,17 @@ export function createAgentHandlers(): AgentHandlers {
     const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
     const sequence = yield* AgentInternal.operations.nextPromptSequence();
 
+    const raise = props.throwOnError === true;
     const record = yield* persistPrompt(
       { name: `prompt:${location}#${ordinal}`, input: content },
-      () => runPrompt(content, options, sequence),
+      () => runPrompt(content, options, sequence, raise),
     );
 
     const failure = promptFailureFromRecord(record);
     if (failure) {
-      if (props.throwOnError === true) {
+      // Replay decides from the stored marker, not the live prop, so a
+      // partial replay reproduces the original throw exactly.
+      if (record.raised === true) {
         throw failure;
       }
       yield* AgentInternal.operations.recordPromptFailure(failure, record.sequence);
@@ -379,6 +382,7 @@ function* runPrompt(
   content: string,
   options: PromptOptions,
   sequence: number,
+  raise: boolean,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
 
@@ -449,6 +453,9 @@ function* runPrompt(
   }
   if (failure !== undefined) {
     record.error = failure;
+  }
+  if (raise && status !== "completed") {
+    record.raised = true;
   }
   return record;
 }
