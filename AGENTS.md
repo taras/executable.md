@@ -44,6 +44,25 @@ Do not commit if any check fails. Fix the issue first, then re-run all four.
 11. Prefer expanding Executable.md capabilities over using JavaScript; Do not
     use JavaScript in MD without verifying with the user or planner agent.
 
+## Writing Guide
+
+1. Write for the reader's understanding, not as a transcript of the reasoning
+   that produced the design. Preserve conclusions, contracts, and consequential
+   constraints. Include rationale only when a surprising decision would
+   otherwise be easy to undo.
+2. Organize documents in comprehension order. Lead from purpose and the
+   smallest concrete example to observable behavior, concepts and invariants,
+   architecture, failures, and reference details.
+3. Give the document a learning arc. Each section should build on what the
+   reader already understands and prepare them for what follows. Introduce a
+   concept when the reader needs it, not when the author discovered it.
+4. Prefer motivation before machinery, concrete before abstract, common paths
+   before exceptions, contracts before implementation, and consequences before
+   details.
+5. Revise for flow and hierarchy. Remove repeated explanations, discarded
+   alternatives, defensive qualifications, and exhaustive detail that does not
+   help a reader understand or use the design.
+
 ## PR Process
 
 1. Use .github/pull_request_template.md
