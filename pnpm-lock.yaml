@@ -129,6 +129,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/test-agent':
+        specifier: workspace:*
+        version: link:../test-agent
       '@executablemd/testing':
         specifier: workspace:*
         version: link:../testing

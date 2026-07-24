@@ -39,6 +39,7 @@ import type { PermissionMode } from "@executablemd/core";
 import { env } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
+import { runTestAgentWorker } from "@executablemd/test-agent";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
@@ -122,10 +123,20 @@ const testConfig = object({
   },
 });
 
+const testAgentConfig = object({
+  connect: {
+    description: "opaque controller route (controller-launched workers only)",
+    ...field(z.string()),
+  },
+});
+
 const xmd = program({
   name: "xmd",
   version: denoJson.version,
-  config: commands({ run: runConfig, test: testConfig }, { default: "run" }),
+  config: commands(
+    { run: runConfig, test: testConfig, "test-agent": testAgentConfig },
+    { default: "run" },
+  ),
 });
 
 const pretty = (value: unknown): string =>
@@ -406,6 +417,9 @@ await main(function* (args) {
         }
         case "test":
           yield* run(parsed.value.config, { testing: true });
+          break;
+        case "test-agent":
+          yield* runTestAgentWorker({ connect: parsed.value.config.connect });
           break;
       }
     }
