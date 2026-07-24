@@ -1,0 +1,14 @@
+{
+  "name": "@executablemd/test-agent",
+  "version": "0.4.2",
+  "description": "Deterministic ACP test agent for executable.md documents: <TestAgent>, <WhenPrompt> behavior documents, and the xmd test-agent worker.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "dependencies": {
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "effection": "4.1.0-alpha.7"
+  }
+}

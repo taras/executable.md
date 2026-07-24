@@ -3046,6 +3046,13 @@
           ]
         }
       },
+      "packages/test-agent": {
+        "packageJson": {
+          "dependencies": [
+            "npm:effection@4.1.0-alpha.7"
+          ]
+        }
+      },
       "packages/test-support": {
         "packageJson": {
           "dependencies": [

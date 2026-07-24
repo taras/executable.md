@@ -228,6 +228,18 @@ importers:
         specifier: 4.1.0-alpha.7
         version: 4.1.0-alpha.7
 
+  packages/test-agent:
+    dependencies:
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      effection:
+        specifier: 4.1.0-alpha.7
+        version: 4.1.0-alpha.7
+
   packages/test-support:
     dependencies:
       expect:
