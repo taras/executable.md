@@ -31,6 +31,21 @@ function extractText(prompt: Array<{ type: string; text?: string }>): string {
 
 export function* serveAcp(worker: WorkerAgent): Operation<void> {
   const scope = yield* useScope();
+
+  // scope.run propagates a failed task into the whole worker scope, so
+  // handler errors are transported through the promise instead — the
+  // SDK turns the rejection into the JSON-RPC error for that request.
+  function contain<T>(op: () => Operation<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      scope.run(function* () {
+        try {
+          resolve(yield* op());
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    });
+  }
   const input = new WritableStream<Uint8Array>({
     write(chunk) {
       process.stdout.write(chunk);
@@ -59,41 +74,35 @@ export function* serveAcp(worker: WorkerAgent): Operation<void> {
       }),
     )
     .onRequest("session/new", () =>
-      Promise.resolve(
-        scope.run(function* () {
-          yield* worker.ready();
-          return { sessionId: randomUUID() };
-        }),
-      ),
+      contain(function* () {
+        yield* worker.ready();
+        return { sessionId: randomUUID() };
+      }),
     )
     .onRequest("session/load", () =>
-      Promise.resolve(
-        scope.run(function* () {
-          yield* worker.ready();
-          return {};
-        }),
-      ),
+      contain(function* () {
+        yield* worker.ready();
+        return {};
+      }),
     )
     .onRequest("session/prompt", (ctx) =>
-      Promise.resolve(
-        scope.run(function* (): Operation<PromptResponse> {
-          const text = extractText(ctx.params.prompt);
-          const result = yield* worker.runTurn(text);
-          if (result.cancelled) {
-            return { stopReason: "cancelled" };
-          }
-          yield* until(
-            ctx.client.notify(acp.methods.client.session.update, {
-              sessionId: ctx.params.sessionId,
-              update: {
-                sessionUpdate: "agent_message_chunk",
-                content: { type: "text", text: result.text },
-              },
-            }),
-          );
-          return { stopReason: "end_turn" };
-        }),
-      ),
+      contain(function* (): Operation<PromptResponse> {
+        const text = extractText(ctx.params.prompt);
+        const result = yield* worker.runTurn(text);
+        if (result.cancelled) {
+          return { stopReason: "cancelled" };
+        }
+        yield* until(
+          ctx.client.notify(acp.methods.client.session.update, {
+            sessionId: ctx.params.sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: result.text },
+            },
+          }),
+        );
+        return { stopReason: "end_turn" };
+      }),
     )
     .onNotification("session/cancel", () => {
       worker.cancel();

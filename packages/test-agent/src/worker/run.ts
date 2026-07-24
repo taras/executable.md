@@ -11,6 +11,7 @@
 import { createSignal, each, ensure, race, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { connect } from "node:net";
+import { RequestError } from "@agentclientprotocol/sdk";
 import { DocumentOutput, execute } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -122,7 +123,9 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
     yield* stream.append(event);
   }
   const pending: DurableEvent[] = [];
-  let forwarded = 0;
+  // The controller's journal already holds the hydrated prefix; new
+  // events continue its sequence.
+  let forwarded = config.journal.length;
   stream.onAppend = (event: DurableEvent) => {
     pending.push(event);
   };
@@ -192,7 +195,11 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
         readiness.reject(new Error(initial.error ?? "behavior document failed"));
         return;
       }
-      if (initial.text.trim().length > 0) {
+      // Rehydrated workers replay completed stages, so their re-rendered
+      // output reaches the init collector; the fresh run already
+      // validated the pre-matcher region.
+      const rehydrated = config.journal.length > 0;
+      if (!rehydrated && initial.text.trim().length > 0) {
         const message =
           "behavior documents must not render non-whitespace output before the first <WhenPrompt>";
         client.send({ t: "turn-failure", kind: "config", actual: initial.text });
@@ -213,7 +220,10 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
       *runTurn(text): Operation<TurnResult> {
         if (exhausted) {
           client.send({ t: "turn-failure", kind: "exhausted", actual: text });
-          throw new Error(`scenario exhausted: no stage remains for prompt: ${text}`);
+          throw new RequestError(
+            -32603,
+            `scenario exhausted: no stage remains for prompt: ${text}`,
+          );
         }
         const cancellation = withResolvers<TurnResult>();
         cancelRequested = () => cancellation.resolve({ cancelled: true });
@@ -232,7 +242,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
                   failure.expected = match.expected;
                 }
                 client.send(failure);
-                throw new Error(match.message);
+                throw new RequestError(-32603, match.message);
               }
               const collected = yield* collectTurn(turnEvents);
               if (collected.end === "failed") {
@@ -240,7 +250,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
                   t: "fatal",
                   message: collected.error ?? "behavior document failed",
                 });
-                throw new Error(collected.error ?? "behavior document failed");
+                throw new RequestError(-32603, collected.error ?? "behavior document failed");
               }
               if (collected.end === "eof") {
                 exhausted = true;

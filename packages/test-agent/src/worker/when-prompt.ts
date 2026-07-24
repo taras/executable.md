@@ -147,13 +147,17 @@ export function* installWhenPromptVocabulary(bridge: TurnBridge): Operation<void
     const ordinal = ordinals.get(location) ?? 0;
     ordinals.set(location, ordinal + 1);
 
-    // Reaching this matcher completes the previous stage: the bridge
-    // signal follows all of that stage's output through one ordered
-    // channel, so the collector never loses the final chunk.
-    yield* bridge.events.send({ kind: "suspended", stage: source });
-
+    // The suspension signal lives inside the durable closure, so ONLY a
+    // live matcher emits it: replayed stages resolve from the journal
+    // and their re-rendered output never reaches a turn collector. For
+    // a live matcher the signal completes the previous stage — it
+    // follows all of that stage's output through one ordered channel,
+    // so the collector never loses the final chunk.
     const record = yield* persistStage({ name: `when:${location}#${ordinal}`, input: source }, () =>
-      scoped(() => awaitMatch(bridge, parsed.template, currentEnv.values)),
+      scoped(function* () {
+        yield* bridge.events.send({ kind: "suspended", stage: source });
+        return yield* awaitMatch(bridge, parsed.template, currentEnv.values);
+      }),
     );
 
     if (bindingName !== undefined) {
