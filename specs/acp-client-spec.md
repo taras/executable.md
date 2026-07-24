@@ -319,26 +319,25 @@ calls `requestPermission()`, and translates the result back to ACP. The root
 permission mode also configures ACPX's direct client filesystem and terminal
 checks.
 
-Routing is keyed by the authoritative ACP session id — the `acpSessionId`
-read from the persisted session record at turn start, which is the id ACPX
-puts on the wire for the prompting turn (and the id its permission requests
-carry). The provider registers the active prompt scope under that id and
-also refreshes the public `Session` metadata (including `agentSessionId`)
-from the same record. A missing or torn-down scope, a policy error, an
-abort, or an unknown selected option id all resolve to ACP cancellation;
-the callback never returns `undefined` (which would let ACPX fall back to
-its mode resolver) and never routes to a different scope. ACPX's
-`AbortSignal` is honored — an already-aborted request cancels immediately,
-and an abort during a pending policy halts it and cancels.
+Routing is keyed by the ACP session id — the `acpSessionId` ACPX puts on
+the wire for the prompting turn, which its permission requests carry. Each
+active turn's registration holds an operation that reloads its session
+record by `acpxRecordId`. The id map is a cache: before routing, the
+bridge refreshes and verifies a direct candidate; on a miss it refreshes
+every active registration and routes only when exactly one matches the
+request id. This tracks ACPX's reconnect fallback, which updates
+`record.acpSessionId` and checkpoints the record before running the
+prompt, so a session id that changes mid-turn still routes to the same
+prompt scope. Each refresh also updates the public `Session.agentSessionId`
+from the record.
 
-On a reconnecting turn ACPX can replace the ACP session id mid-turn and
-persists the new id only at turn completion. The routing table can move a
-live registration to a new id, but ACPX 0.12 exposes the resolved id on
-neither the public turn nor its event stream, so a permission request that
-arrives mid-turn under the new id fails closed with cancel (a sole-active
-fallback is deliberately not used — it would misroute under concurrent
-sessions). Fully routing that case requires ACPX to expose the turn's
-resolved ACP session id.
+The callback never returns `undefined` (which would let ACPX fall back to
+its mode resolver) and never routes to a different scope. It resolves to
+ACP cancellation on a store error during refresh, zero or multiple
+matching registrations, a stale or torn-down prompt scope, a policy error,
+an unknown selected option id, or an abort. ACPX's `AbortSignal` is honored
+— an already-aborted request cancels immediately, and an abort during a
+pending policy halts it and cancels.
 
 Eval blocks can install scoped `requestPermission` middleware for custom
 policies. Two components provide common policies without JavaScript:

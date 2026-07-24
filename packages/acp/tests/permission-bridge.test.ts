@@ -75,6 +75,14 @@ function makeAcpRequest(sessionId: string): AcpPermissionRequest {
 
 const signal = new AbortController().signal;
 
+/** A refresh that keeps the registration's ACP session id unchanged. */
+function keep(id: string): () => Operation<{ acpSessionId: string }> {
+  // deno-lint-ignore require-yield
+  return function* () {
+    return { acpSessionId: id };
+  };
+}
+
 describe("Tier PB — permission bridge", () => {
   it("PB1: requests re-enter the registered scope where scoped middleware answers", function* () {
     const bridge = createPermissionBridge();
@@ -89,7 +97,12 @@ describe("Tier PB — permission bridge", () => {
       },
       { at: "min" },
     );
-    const registration = bridge.register("backend-1", yield* useScope(), SESSION);
+    const registration = bridge.register(
+      "backend-1",
+      yield* useScope(),
+      SESSION,
+      keep("backend-1"),
+    );
     try {
       const result = yield* bridge.decision(makeAcpRequest("backend-1"), signal);
       expect(seen).toEqual(["edit"]);
@@ -108,8 +121,8 @@ describe("Tier PB — permission bridge", () => {
       const releaseB = { pending: true };
       const scopeA = yield* startPolicyScope("opt-allow", releaseA);
       const scopeB = yield* startPolicyScope("opt-reject", releaseB);
-      bridge.register("backend-a", scopeA, SESSION);
-      bridge.register("backend-b", scopeB, SESSION);
+      bridge.register("backend-a", scopeA, SESSION, keep("backend-a"));
+      bridge.register("backend-b", scopeB, SESSION, keep("backend-b"));
 
       const results: Record<string, unknown> = {};
       const a = yield* spawn(function* () {
@@ -139,7 +152,12 @@ describe("Tier PB — permission bridge", () => {
     // unregisters as it exits, so a request after teardown finds no
     // registration and cancels.
     yield* scoped(function* () {
-      const registration = bridge.register("backend-dead", yield* useScope(), SESSION);
+      const registration = bridge.register(
+        "backend-dead",
+        yield* useScope(),
+        SESSION,
+        keep("backend-dead"),
+      );
       yield* ensure(() => {
         registration.unregister();
       });
@@ -160,40 +178,38 @@ describe("Tier PB — permission bridge", () => {
       },
       { at: "min" },
     );
-    bridge.register("backend-4", yield* useScope(), SESSION);
+    bridge.register("backend-4", yield* useScope(), SESSION, keep("backend-4"));
     expect(yield* bridge.decision(makeAcpRequest("backend-4"), signal)).toEqual({
       outcome: "cancel",
     });
   });
 
-  it("PB8: a mid-turn id replacement re-routes new-id requests to the same scope", function* () {
+  it("PB10: a policy that synchronously aborts then suspends cancels without hanging", function* () {
     const bridge = createPermissionBridge();
-    const seen: string[] = [];
-    yield* Agent.around(
-      {
-        // deno-lint-ignore require-yield
-        *requestPermission() {
-          seen.push("policy");
-          return { outcome: "selected", optionId: "opt-allow" };
+    yield* scoped(function* () {
+      const controller = new AbortController();
+      let halted = false;
+      yield* Agent.around(
+        {
+          *requestPermission() {
+            // Abort synchronously, before suspending — the abort listener
+            // must already be attached or this would be lost.
+            controller.abort();
+            try {
+              yield* suspend();
+            } finally {
+              halted = true;
+            }
+            return { outcome: "cancelled" };
+          },
         },
-      },
-      { at: "min" },
-    );
-    const registration = bridge.register("old-id", yield* useScope(), SESSION);
-
-    // acpx replaced the turn's ACP session id mid-turn; the provider
-    // would drive this from acpx's (future) resolved-id signal.
-    registration.rekey("new-id");
-
-    // The new id routes to the same scope; the stale old id no longer
-    // resolves and fails closed.
-    expect(yield* bridge.decision(makeAcpRequest("new-id"), signal)).toEqual({
-      outcome: "allow_once",
+        { at: "min" },
+      );
+      bridge.register("backend-10", yield* useScope(), SESSION, keep("backend-10"));
+      const decision = yield* bridge.decision(makeAcpRequest("backend-10"), controller.signal);
+      expect(decision).toEqual({ outcome: "cancel" });
+      expect(halted).toBe(true);
     });
-    expect(yield* bridge.decision(makeAcpRequest("old-id"), signal)).toEqual({
-      outcome: "cancel",
-    });
-    expect(seen).toEqual(["policy"]);
   });
 
   it("PB9: the scope halting while a policy is pending resolves to cancel", function* () {
@@ -215,7 +231,7 @@ describe("Tier PB — permission bridge", () => {
         yield* suspend();
       });
       const scope = yield* ready.operation;
-      bridge.register("backend-9", scope, SESSION);
+      bridge.register("backend-9", scope, SESSION, keep("backend-9"));
 
       let decision: unknown;
       const task = yield* spawn(function* () {
@@ -249,7 +265,7 @@ describe("Tier PB — permission bridge", () => {
         },
         { at: "min" },
       );
-      bridge.register("backend-5", yield* useScope(), SESSION);
+      bridge.register("backend-5", yield* useScope(), SESSION, keep("backend-5"));
 
       const aborted = new AbortController();
       aborted.abort();
@@ -290,7 +306,7 @@ describe("Tier PB — permission bridge", () => {
         },
         { at: "min" },
       );
-      bridge.register("backend-6", yield* useScope(), SESSION);
+      bridge.register("backend-6", yield* useScope(), SESSION, keep("backend-6"));
       const result = yield* bridge.decision(makeAcpRequest("backend-6"), signal);
       expect(fellThrough).toBe(false);
       return result;
@@ -304,7 +320,7 @@ describe("Tier PB — permission bridge", () => {
     expect(Object.keys(bridge).sort()).toEqual(["decision", "register"]);
 
     yield* scoped(function* () {
-      bridge.register("backend-7", yield* useScope(), SESSION);
+      bridge.register("backend-7", yield* useScope(), SESSION, keep("backend-7"));
       const scope = yield* useScope();
       // Mirror provider.ts's onPermissionRequest assignment exactly.
       const callback = (request: AcpPermissionRequest, ctx: { signal: AbortSignal }) =>

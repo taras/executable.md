@@ -286,6 +286,85 @@ describe("Tier AP — ACPX provider", () => {
     });
   });
 
+  it("AP17: a reconnect that changes the record's session id (A→B) still routes to the scope", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const store = makeStore();
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: store,
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+
+      const sessionKey = deriveSessionKey("codex-cmd", CWD);
+      const record = makeRecord("codex-cmd", CWD);
+      record.acpxRecordId = `record:${sessionKey}`;
+      record.acpSessionId = "id-A";
+      record.agentSessionId = "agent-A";
+      store.records.set(record.acpxRecordId, record);
+
+      const prompt = yield* spawn(() =>
+        scoped(function* () {
+          yield* Agent.around(
+            {
+              // deno-lint-ignore require-yield
+              *requestPermission([request]) {
+                return { outcome: "selected", optionId: request.options[0]!.optionId };
+              },
+            },
+            { at: "min" },
+          );
+          const stream = yield* Agent.operations.prompt("go");
+          const subscription = yield* stream;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            next = yield* subscription.next();
+          }
+        }),
+      );
+      yield* sleep(20);
+
+      // ACPX reconnected mid-turn and checkpointed the record with a new
+      // ACP session id (and agent session id).
+      record.acpSessionId = "id-B";
+      record.agentSessionId = "agent-B";
+
+      const options = harness.createdOptions.find((created) => created.onPermissionRequest);
+      const request = (sessionId: string): AcpPermissionRequest => ({
+        sessionId,
+        inferredKind: undefined,
+        raw: {
+          sessionId,
+          toolCall: { toolCallId: "call-1" },
+          options: [{ optionId: "opt-allow", name: "Allow", kind: "allow_once" }],
+        },
+      });
+      const abort = new AbortController().signal;
+
+      // The new id B refreshes the registration and reaches the scoped
+      // policy.
+      const routedB = yield* until(
+        Promise.resolve(options!.onPermissionRequest!(request("id-B"), { signal: abort })),
+      );
+      expect(routedB).toEqual({ outcome: "allow_once" });
+
+      // The stale id A no longer routes.
+      const staleA = yield* until(
+        Promise.resolve(options!.onPermissionRequest!(request("id-A"), { signal: abort })),
+      );
+      expect(staleA).toEqual({ outcome: "cancel" });
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "ok", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* prompt;
+    });
+  });
+
   it("AP14: prompts from different cwds that resolve to the same session serialize", function* () {
     const harness = createFakeRuntime();
     harness.script({ manual: true });

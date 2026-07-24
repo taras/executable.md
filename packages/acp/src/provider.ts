@@ -284,26 +284,29 @@ export function* useAcpxProviderState(
           const entry = yield* ensureFromPrepared(agentName, prepared);
 
           const scope = yield* useScope();
-          // A previous turn's reconnect can replace the ACP session id
-          // and the agent session id (acpx persists both only at turn
-          // completion), so both the routing key and the public Session
-          // metadata refresh from the authoritative persisted record.
-          const record = yield* until(
-            store.load(entry.handle.acpxRecordId ?? entry.session.sessionKey),
-          );
-          if (record?.agentSessionId !== undefined) {
-            entry.session.agentSessionId = record.agentSessionId;
+          const recordKey = entry.handle.acpxRecordId ?? entry.session.sessionKey;
+          // Route by the record's ACP session id, refreshed on demand so
+          // a reconnect that updates the record mid-turn (ACPX
+          // checkpoints it before the prompt runs) still routes to this
+          // scope's policy.
+          const refresh = () =>
+            (function* () {
+              const record = yield* until(store.load(recordKey));
+              if (!record) {
+                return undefined;
+              }
+              return { acpSessionId: record.acpSessionId, agentSessionId: record.agentSessionId };
+            })();
+          const initial = yield* refresh();
+          if (initial?.agentSessionId !== undefined) {
+            entry.session.agentSessionId = initial.agentSessionId;
           }
-          const activeSessionId = record?.acpSessionId ?? entry.handle.backendSessionId;
+          const activeSessionId = initial?.acpSessionId ?? entry.handle.backendSessionId;
           if (activeSessionId !== undefined) {
-            const registration = bridge.register(activeSessionId, scope, entry.session);
+            const registration = bridge.register(activeSessionId, scope, entry.session, refresh);
             yield* ensure(() => {
               registration.unregister();
             });
-            // An id minted DURING this turn (reconnect mid-turn) is
-            // unobservable in acpx 0.12 — see permission-bridge.ts. Once
-            // acpx exposes the turn's resolved session id, drive
-            // `registration.rekey(newId)` from that signal here.
           }
 
           const timeoutMs = options?.timeout ?? (yield* contextualTimeout);

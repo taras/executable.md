@@ -1,40 +1,31 @@
 /**
  * Permission bridge (specs/acp-client-spec.md §Permissions).
  *
- * ## Authoritative routing source
+ * ## Routing
  *
  * ACPX delivers a permission request to `onPermissionRequest` keyed by
- * `params.sessionId`, which is the ACP session id ACPX uses on the wire
- * for the prompting turn — its `acpSessionId` (surfaced as the handle's
- * `backendSessionId`). The provider registers each active turn's scope
- * under the id from the AUTHORITATIVE persisted session record at turn
- * start, so scoped `requestPermission` middleware (`<ApproveAll>`, eval
- * blocks, CLI policy) is visible when the matching request arrives.
- * Missing/torn-down registrations, policy errors, aborts, and unknown
- * selected option ids all resolve `{ outcome: "cancel" }` — never
- * `undefined` (which would let ACPX fall back to its mode resolver) and
- * never another active scope.
+ * `params.sessionId` — the ACP session id (`acpSessionId`) of the
+ * prompting turn. Each active turn registers its subscribing scope, an
+ * initial id, and a `refresh` operation that reloads its ACPX record by
+ * `acpxRecordId`. The id map is a cache: before routing, the bridge
+ * refreshes and verifies a direct candidate; on a miss it refreshes all
+ * active registrations and routes only when exactly one matches the
+ * request id. This tracks ACPX's reconnect fallback, which updates
+ * `record.acpSessionId` and checkpoints the record before running the
+ * prompt. The public `Session.agentSessionId` is updated from the
+ * refreshed record.
  *
- * ## Mid-turn id replacement
+ * ## Fail closed
  *
- * On a reconnecting turn ACPX can replace the ACP session id
- * (`connectAndLoadSession` → `onSessionIdResolved`) and persists the new
- * id only when the turn completes. A permission request during that turn
- * carries the NEW id. The bridge can route it — `register` returns a
- * `rekey` that moves the live registration to the new id — but ACPX 0.12
- * exposes the resolved id on neither the public `AcpRuntimeTurn` nor its
- * event stream, so the provider has nothing to drive `rekey` with. Until
- * ACPX adds turn-level session-id visibility (see below), such a request
- * fails closed with cancel; a sole-active fallback is deliberately NOT
- * used, as it would misroute under concurrent sessions.
- *
- * REQUIRED ACPX API CHANGE: expose the turn's resolved ACP session id —
- * e.g. `AcpRuntimeTurn.sessionId`, an `onSessionIdResolved` callback on
- * `AcpRuntimeTurnInput`, or a structured `session_id` event — so the
- * provider can call `rekey` when the id changes mid-turn.
+ * The decision resolves `{ outcome: "cancel" }` — never `undefined`
+ * (which would let ACPX fall back to its mode resolver) and never
+ * another scope — on: store errors during refresh, zero or multiple
+ * matching registrations, a stale or torn-down prompt scope, a policy
+ * error, an unknown selected option id, and an abort (before or during
+ * evaluation).
  */
 
-import { once, race } from "effection";
+import { on, race } from "effection";
 import type { Operation, Scope } from "effection";
 import { Agent } from "@executablemd/core";
 import type { PermissionOption, PermissionRequest, Session } from "@executablemd/core";
@@ -42,64 +33,134 @@ import type { AcpPermissionDecision, AcpPermissionRequest } from "acpx/runtime";
 
 const CANCEL: AcpPermissionDecision = { outcome: "cancel" };
 
+/** Reloads a registration's record; undefined when the record is gone. */
+export type RefreshRecord = () => Operation<
+  { acpSessionId?: string; agentSessionId?: string } | undefined
+>;
+
 interface RegisteredTurn {
   scope: Scope;
   session: Session;
+  refresh: RefreshRecord;
+  currentId: string;
+  active: boolean;
 }
 
 export interface Registration {
-  /** Remove this registration (only if it still owns its current id). */
+  /** Remove this registration; an in-flight refresh cannot reinsert it. */
   unregister(): void;
-  /**
-   * Move this live registration to `newSessionId` — the hook a future
-   * ACPX turn-level session-id signal would drive on mid-turn
-   * replacement.
-   */
-  rekey(newSessionId: string): void;
 }
 
 export interface PermissionBridge {
   /** Register the active turn's scope under its ACP session id. */
-  register(backendSessionId: string, scope: Scope, session: Session): Registration;
+  register(
+    acpSessionId: string,
+    scope: Scope,
+    session: Session,
+    refresh: RefreshRecord,
+  ): Registration;
   /**
-   * Decide one permission request. Never undefined — missing or
-   * torn-down registrations, policy errors, aborts, and unknown
-   * selected option ids all resolve `{ outcome: "cancel" }`, so ACPX
-   * can never fall back to its own mode resolver.
+   * Decide one permission request. Never undefined — every failure mode
+   * (see the module doc) resolves `{ outcome: "cancel" }`, so ACPX can
+   * never fall back to its own mode resolver.
    */
   decision(request: AcpPermissionRequest, signal: AbortSignal): Operation<AcpPermissionDecision>;
 }
 
 export function createPermissionBridge(): PermissionBridge {
   const turns = new Map<string, RegisteredTurn>();
+
+  function rekey(entry: RegisteredTurn, newId: string): void {
+    // An async refresh must not resurrect an unregistered entry.
+    if (!entry.active || newId === entry.currentId) {
+      return;
+    }
+    if (turns.get(entry.currentId) === entry) {
+      turns.delete(entry.currentId);
+    }
+    entry.currentId = newId;
+    turns.set(newId, entry);
+  }
+
+  // Reload one registration's record, apply the current agent session id
+  // to the public Session, rekey on a changed ACP session id, and return
+  // that ACP session id. `undefined` means "does not currently match"
+  // (missing record) — a thrown store error propagates to fail closed.
+  function* refreshEntry(entry: RegisteredTurn): Operation<string | undefined> {
+    const record = yield* entry.refresh();
+    if (!record) {
+      return undefined;
+    }
+    if (typeof record.agentSessionId === "string") {
+      entry.session.agentSessionId = record.agentSessionId;
+    }
+    if (typeof record.acpSessionId === "string") {
+      rekey(entry, record.acpSessionId);
+      return record.acpSessionId;
+    }
+    return entry.currentId;
+  }
+
+  function* resolveTarget(sessionId: string): Operation<RegisteredTurn | undefined> {
+    const direct = turns.get(sessionId);
+    if (direct && direct.active) {
+      const refreshed = yield* refreshEntry(direct);
+      if (refreshed === sessionId) {
+        return direct;
+      }
+    }
+    // Cache miss: refresh every active registration and route only when
+    // exactly one now matches the request id.
+    const matches: RegisteredTurn[] = [];
+    for (const entry of new Set(turns.values())) {
+      if (!entry.active) {
+        continue;
+      }
+      const refreshed = yield* refreshEntry(entry);
+      if (refreshed === sessionId) {
+        matches.push(entry);
+      }
+    }
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
   return {
-    register(backendSessionId, scope, session) {
-      const registered: RegisteredTurn = { scope, session };
-      let currentId = backendSessionId;
-      turns.set(currentId, registered);
+    register(acpSessionId, scope, session, refresh) {
+      const entry: RegisteredTurn = {
+        scope,
+        session,
+        refresh,
+        currentId: acpSessionId,
+        active: true,
+      };
+      turns.set(acpSessionId, entry);
       return {
         unregister() {
-          if (turns.get(currentId) === registered) {
-            turns.delete(currentId);
+          entry.active = false;
+          if (turns.get(entry.currentId) === entry) {
+            turns.delete(entry.currentId);
           }
-        },
-        rekey(newSessionId) {
-          if (newSessionId === currentId) {
-            return;
-          }
-          if (turns.get(currentId) === registered) {
-            turns.delete(currentId);
-          }
-          currentId = newSessionId;
-          turns.set(currentId, registered);
         },
       };
     },
     *decision(request, signal) {
-      const registered = turns.get(request.sessionId);
-      if (!registered || signal.aborted) {
+      // Subscribe to abort BEFORE any policy work and recheck, so a
+      // synchronous abort during evaluation is never lost.
+      const aborts = yield* on(signal, "abort");
+      if (signal.aborted) {
         return CANCEL;
       }
+      let target: RegisteredTurn | undefined;
+      try {
+        target = yield* resolveTarget(request.sessionId);
+      } catch {
+        // Store errors during refresh fail closed.
+        return CANCEL;
+      }
+      if (!target) {
+        return CANCEL;
+      }
+      const registered = target;
       try {
         // Policy errors are contained INSIDE the task: an unhandled
         // task failure would propagate into the prompt scope itself.
@@ -116,7 +177,7 @@ export function createPermissionBridge(): PermissionBridge {
         return yield* race([
           task,
           (function* (): Operation<AcpPermissionDecision> {
-            yield* once(signal, "abort");
+            yield* aborts.next();
             yield* task.halt();
             return CANCEL;
           })(),
