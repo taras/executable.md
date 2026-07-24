@@ -7,10 +7,11 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { createSignal, each, ensure, scoped, spawn, until, withResolvers } from "effection";
+import { createSignal, each, ensure, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
@@ -39,6 +40,7 @@ interface RpcReply {
 
 interface AcpClientHandle {
   request(method: string, params: Record<string, unknown>): Operation<RpcReply>;
+  notify(method: string, params: Record<string, unknown>): void;
   notifications: Array<Record<string, unknown>>;
 }
 
@@ -99,6 +101,9 @@ function* useWorker(route: string): Operation<AcpClientHandle> {
   let nextId = 1;
   return {
     notifications,
+    notify(method, params) {
+      proc.stdin.send(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+    },
     *request(method, params) {
       const id = nextId++;
       const reply = withResolvers<RpcReply>();
@@ -139,9 +144,10 @@ function chunkText(notifications: Array<Record<string, unknown>>): string {
 
 describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("TW1: initialize, session/new, matched turns, mismatch, restart + session/load", function* () {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xmd-tw-"));
+    const dir = path.join(os.tmpdir(), `xmd-tw-${randomUUID()}`);
+    yield* ensureDir(dir);
     try {
-      fs.writeFileSync(path.join(dir, "review.md"), BEHAVIOR);
+      yield* writeTextFile(path.join(dir, "review.md"), BEHAVIOR);
       yield* scoped(function* () {
         const controller = yield* useTestAgentController();
         const instance = controller.registerInstance({
@@ -219,7 +225,112 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         });
       });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      yield* rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("TW3: cancellation is transactional — nothing commits and the stage re-matches", function* () {
+    const behavior = [
+      '<WhenPrompt template="go" />',
+      "",
+      "```js eval",
+      "yield* sleep(400);",
+      'return "";',
+      "```",
+      "",
+      "slow reply",
+      "",
+      '<WhenPrompt template="next" />',
+      "",
+      "done",
+      "",
+    ].join("\n");
+    const dir = path.join(os.tmpdir(), `xmd-tw3-${randomUUID()}`);
+    yield* ensureDir(dir);
+    try {
+      yield* writeTextFile(path.join(dir, "slow.md"), behavior);
+      yield* scoped(function* () {
+        const controller = yield* useTestAgentController();
+        const instance = controller.registerInstance({
+          doc: { path: "slow.md", source: behavior },
+          scenarioDir: dir,
+        });
+        const worker = yield* useWorker(instance.route);
+        yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+        const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+        const sessionId = created.result?.sessionId;
+        const baseline = controller.instance(instance.id)!.journal.length;
+
+        const pending = yield* spawn(() =>
+          worker.request("session/prompt", {
+            sessionId,
+            prompt: [{ type: "text", text: "go" }],
+          }),
+        );
+        yield* sleep(120);
+        worker.notify("session/cancel", { sessionId });
+        const cancelled = yield* pending;
+        expect(cancelled.result).toMatchObject({ stopReason: "cancelled" });
+        // Nothing committed: the controller journal is exactly where it
+        // was before the cancelled turn.
+        expect(controller.instance(instance.id)!.journal.length).toBe(baseline);
+
+        // The rebuilt runtime re-enters stage 1 deterministically.
+        const retried = yield* worker.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "go" }],
+        });
+        expect(retried.result).toMatchObject({ stopReason: "end_turn" });
+        expect(chunkText(worker.notifications)).toContain("slow reply");
+        expect(controller.instance(instance.id)!.journal.length).toBeGreaterThan(baseline);
+
+        const second = yield* worker.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "next" }],
+        });
+        expect(second.result).toMatchObject({ stopReason: "end_turn" });
+        expect(chunkText(worker.notifications)).toContain("done");
+      });
+    } finally {
+      yield* rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("TW4: losing the controller fails turns through ACP instead of hanging", function* () {
+    const dir = path.join(os.tmpdir(), `xmd-tw4-${randomUUID()}`);
+    yield* ensureDir(dir);
+    try {
+      yield* writeTextFile(path.join(dir, "hi.md"), '<WhenPrompt template="hi" />\n\nhello\n');
+      const started = withResolvers<string>();
+      const stop = withResolvers<void>();
+      yield* spawn(() =>
+        scoped(function* () {
+          const controller = yield* useTestAgentController();
+          const instance = controller.registerInstance({
+            doc: { path: "hi.md", source: '<WhenPrompt template="hi" />\n\nhello\n' },
+            scenarioDir: dir,
+          });
+          started.resolve(instance.route);
+          yield* stop.operation;
+        }),
+      );
+      const route = yield* started.operation;
+      const worker = yield* useWorker(route);
+      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+      const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+      const sessionId = created.result?.sessionId;
+
+      stop.resolve();
+      yield* sleep(50);
+
+      const reply = yield* worker.request("session/prompt", {
+        sessionId,
+        prompt: [{ type: "text", text: "hi" }],
+      });
+      expect(reply.result).toBe(undefined);
+      expect(reply.error).toBeDefined();
+    } finally {
+      yield* rm(dir, { recursive: true, force: true });
     }
   });
 

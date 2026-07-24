@@ -49,6 +49,8 @@ export interface TestAgentController {
     scenarioDir: string;
   }): ScenarioInstance;
   instance(id: string): ScenarioInstance | undefined;
+  /** Drop an instance and discard its private behavior journal. */
+  unregisterInstance(id: string): void;
 }
 
 function send(socket: Socket, message: ControllerMessage): void {
@@ -244,6 +246,13 @@ export function useTestAgentController(): Operation<TestAgentController> {
       },
       instance(id) {
         return instances.get(id);
+      },
+      unregisterInstance(id) {
+        const existing = instances.get(id);
+        if (existing) {
+          existing.journal.length = 0;
+          instances.delete(id);
+        }
       },
     });
   });

@@ -5,14 +5,16 @@
 
 ## Purpose
 
-The ACP test agent gives document tests a deterministic agent without bypassing
-the production ACPX integration. ACPX starts the agent as a normal ACP
-subprocess, while an Executable.md behavior document defines how that agent
-responds.
+The ACP Test Agent is a simulated test agent used for black box testing of
+Executable.md agent integration. ACPX provider starts the test agent instead
+of coding agents like Claude Code and Codex to simulate prompt responses
+provided by these agents.
 
-The test harness owns the behavior document and its state. The subprocess is
-stateless: when ACPX starts or restarts it, the harness supplies the document
-and its journal so execution resumes at the active prompt stage.
+The test harness provides a markdown document that describes the behaviour of
+the agent and its state. The subprocess itself is stateless, it accepts the
+markdown document and a journal of the markdown agent state. This journal is
+used to forward the markdown document to the state where the last execution
+was stopped. The execution resumes from the last entry in the journal.
 
 This arrangement tests the complete boundary:
 

@@ -7,9 +7,10 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { createSignal, each, ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { connect } from "node:net";
 import type { Socket } from "node:net";
-import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import { useTestAgentController } from "../src/controller.ts";
@@ -111,11 +112,11 @@ describe("Tier TC — controller", () => {
   });
 
   it("TC2: scenario attach serves config, ordered journal acks, reads, and stats", function* () {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xmd-tc-"));
+    const dir = path.join(os.tmpdir(), `xmd-tc-${randomUUID()}`);
+    yield* ensureDir(path.join(dir, "components"));
     try {
-      fs.mkdirSync(path.join(dir, "components"));
-      fs.writeFileSync(path.join(dir, "components", "Helper.md"), "helper body\n");
-      fs.writeFileSync(path.join(dir, "secret.ts"), "export {}\n");
+      yield* writeTextFile(path.join(dir, "components", "Helper.md"), "helper body\n");
+      yield* writeTextFile(path.join(dir, "secret.ts"), "export {}\n");
       yield* scoped(function* () {
         const controller = yield* useTestAgentController();
         const instance = controller.registerInstance({
@@ -184,8 +185,40 @@ describe("Tier TC — controller", () => {
         });
       });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      yield* rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("TC5: unregistering an instance discards its journal and rejects new workers", function* () {
+    yield* scoped(function* () {
+      const controller = yield* useTestAgentController();
+      const instance = controller.registerInstance({
+        doc: { path: "hi.md", source: '<WhenPrompt template="hi" />' },
+        scenarioDir: os.tmpdir(),
+      });
+      const parsed = parseRoute(instance.route);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) {
+        return;
+      }
+      const client = yield* useClient(instance.route);
+      client.send({ t: "attach", token: parsed.message.token, instance: instance.id });
+      expect((yield* client.next()).t).toBe("config");
+      client.send({
+        t: "journal",
+        seq: 0,
+        event: { type: "close", coroutineId: "root", result: { status: "ok" } },
+      });
+      expect((yield* client.next()).t).toBe("ack");
+      expect(controller.instance(instance.id)?.journal.length).toBe(1);
+
+      controller.unregisterInstance(instance.id);
+      expect(controller.instance(instance.id)).toBe(undefined);
+
+      const late = yield* useClient(instance.route);
+      late.send({ t: "attach", token: parsed.message.token, instance: instance.id });
+      expect((yield* late.next()).t).toBe("error");
+    });
   });
 
   it("TC3: malformed lines and unknown instances are rejected", function* () {
