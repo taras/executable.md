@@ -251,6 +251,9 @@ importers:
       '@effectionx/context-api':
         specifier: 0.6.0
         version: 0.6.0(effection@4.1.0-alpha.7)
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0-alpha.7)
       '@effectionx/scope-eval':
         specifier: 0.1.3
         version: 0.1.3(effection@4.1.0-alpha.7)
@@ -272,6 +275,9 @@ importers:
       acorn:
         specifier: ^8.16.0
         version: 8.16.0
+      acpx:
+        specifier: 0.12.0
+        version: 0.12.0
       effection:
         specifier: 4.1.0-alpha.7
         version: 4.1.0-alpha.7

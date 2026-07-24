@@ -28,3 +28,7 @@ export type {
   WireDurableEvent,
   WorkerMessage,
 } from "./src/protocol.ts";
+export { useTestAgentController } from "./src/controller.ts";
+export type { InstanceFailure, ScenarioInstance, TestAgentController } from "./src/controller.ts";
+export { createMemorySessionStore, useTestAgentAcpx } from "./src/state.ts";
+export type { TestAgentAcpx, TestAgentAcpxOptions } from "./src/state.ts";
