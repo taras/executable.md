@@ -7,10 +7,12 @@
     ".": "./mod.ts"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.3.0",
     "@effectionx/node": "0.2.4",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "acorn": "^8.16.0",
     "effection": "4.1.0-alpha.7",
     "zod": "^4.3.6"
   }
