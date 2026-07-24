@@ -1,5 +1,5 @@
 {
-  "workspace": ["packages/core", "packages/cli", "packages/acp", "packages/durable-streams", "packages/runtime", "packages/testing", "packages/code-review-agent", "site"],
+  "workspace": ["packages/core", "packages/cli", "packages/acp", "packages/test-agent", "packages/durable-streams", "packages/runtime", "packages/testing", "packages/code-review-agent", "site"],
   "nodeModulesDir": "auto",
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",
@@ -35,10 +35,10 @@
     "build": "deno compile --node-modules-dir=none --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd packages/cli/src/cli.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/cli.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
-    "test": "deno test --allow-all packages/core/tests/ packages/durable-streams/tests/ packages/testing/tests/ packages/code-review-agent/tests/ packages/acp/tests/",
-    "check": "deno check packages/core/mod.ts packages/testing/mod.ts packages/acp/mod.ts",
+    "test": "deno test --allow-all packages/core/tests/ packages/durable-streams/tests/ packages/testing/tests/ packages/code-review-agent/tests/ packages/acp/tests/ packages/test-agent/tests/",
+    "check": "deno check packages/core/mod.ts packages/testing/mod.ts packages/acp/mod.ts packages/test-agent/mod.ts",
     "check:jsr": "deno publish --dry-run --allow-dirty",
-    "lint": "npx oxlint -c .oxlintrc.json packages/core/src/ packages/core/tests/ packages/cli/src/ packages/acp/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/ && npx oxfmt --check packages/core/src/ packages/core/tests/ packages/cli/src/ packages/acp/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/",
+    "lint": "npx oxlint -c .oxlintrc.json packages/core/src/ packages/core/tests/ packages/cli/src/ packages/acp/ packages/test-agent/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/ && npx oxfmt --check packages/core/src/ packages/core/tests/ packages/cli/src/ packages/acp/ packages/test-agent/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/",
     "review": "deno run --allow-all packages/cli/src/cli.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.jsonl",
     "review:local": "deno run --allow-all packages/cli/src/cli.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all packages/cli/src/cli.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.jsonl",
