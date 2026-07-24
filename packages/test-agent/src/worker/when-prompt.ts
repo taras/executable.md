@@ -28,7 +28,10 @@ function parseStageRecord(value: unknown): StageRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const { prompt, captures } = value as Record<string, unknown>;
+  if (!("prompt" in value) || !("captures" in value)) {
+    return undefined;
+  }
+  const { prompt, captures } = value;
   if (typeof prompt !== "string") {
     return undefined;
   }

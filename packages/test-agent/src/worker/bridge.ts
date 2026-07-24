@@ -32,6 +32,13 @@ export function createTurnBridge(): TurnBridge {
   const offers: PromptOffer[] = [];
   const waiters: Array<(offer: PromptOffer) => void> = [];
 
+  function drop<T>(queue: T[], entry: T): void {
+    const index = queue.indexOf(entry);
+    if (index !== -1) {
+      queue.splice(index, 1);
+    }
+  }
+
   return {
     events,
     *offer(text) {
@@ -43,7 +50,13 @@ export function createTurnBridge(): TurnBridge {
       } else {
         offers.push(offer);
       }
-      return yield* outcome.operation;
+      try {
+        return yield* outcome.operation;
+      } finally {
+        // A halted offer must not linger in the queue for a later
+        // nextOffer() to deliver as if it were live.
+        drop(offers, offer);
+      }
     },
     *nextOffer() {
       const queued = offers.shift();
@@ -52,7 +65,13 @@ export function createTurnBridge(): TurnBridge {
       }
       const arrival = withResolvers<PromptOffer>();
       waiters.push(arrival.resolve);
-      return yield* arrival.operation;
+      try {
+        return yield* arrival.operation;
+      } finally {
+        // A halted waiter must not be handed a later offer, which would
+        // deliver the prompt to a dead operation and hang the offerer.
+        drop(waiters, arrival.resolve);
+      }
     },
   };
 }
