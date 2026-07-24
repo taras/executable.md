@@ -26,7 +26,7 @@ const STANDARD_IMPORTS = [
   'import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";',
   'import { when } from "@effectionx/converge";',
   'import { fetch } from "@effectionx/fetch";',
-  'import { useContent, Sample } from "@executablemd/core";',
+  'import { useContent, Sample, Agent, Config } from "@executablemd/core";',
   'import { findFreePort } from "@executablemd/runtime";',
 ];
 

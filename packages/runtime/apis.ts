@@ -65,6 +65,7 @@ import { readTextFile as fsReadTextFile, stat as fsStat, globToRegExp, walk } fr
 import { exec as processExec } from "@effectionx/process";
 import { each, race, sleep } from "effection";
 import type { Operation } from "effection";
+import { timeout as contextualTimeout } from "./config.ts";
 
 /**
  * Result of a `stat` call.
@@ -194,9 +195,10 @@ export const API: {
         throw new Error("exec: command array must not be empty");
       }
 
+      const effectiveTimeout = timeout ?? (yield* contextualTimeout);
       const result = yield* withTimeout(
         `exec(${cmd})`,
-        timeout,
+        effectiveTimeout,
         processExec(cmd, {
           arguments: args,
           cwd,
@@ -292,7 +294,7 @@ export const API: {
         timeout?: number;
       },
     ): Operation<RuntimeFetchResponse> {
-      const timeout = init?.timeout;
+      const timeout = init?.timeout ?? (yield* contextualTimeout);
       const response = yield* withTimeout(
         `fetch(${input})`,
         timeout,
