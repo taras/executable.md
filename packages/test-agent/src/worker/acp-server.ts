@@ -143,7 +143,7 @@ export function useProcessStdio(): Operation<AcpByteStreams> {
       },
     });
 
-    const onData = (chunk: Buffer) => controller?.enqueue(new Uint8Array(chunk));
+    const onData = (chunk: Uint8Array) => controller?.enqueue(new Uint8Array(chunk));
     const closeInput = () => {
       try {
         controller?.close();
