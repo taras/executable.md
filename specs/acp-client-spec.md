@@ -21,7 +21,7 @@ middleware can override that configuration for a nested scope.
 `<Sample>` and `SampleApi` remain unchanged. Agent prompts are stateful and use
 the separate `AgentApi`.
 
-## Markdown interface
+## Components
 
 The smallest prompt uses the root provider, default agent, current working
 directory, and default session:
@@ -212,12 +212,12 @@ interface AgentApi {
 }
 ```
 
-`prompt` returns `Operation<Stream<...>>` rather than a bare `Stream`: an
-Effection Stream is itself an Operation, so a Stream-typed handler result
-would be subscribed by Api dispatch and hand callers a Subscription.
+`prompt` yields a cold `Operation<Stream<...>>`. The extra `Operation`
+layer keeps the stream cold through Context Api dispatch; a bare `Stream`
+is itself an Operation and dispatch would subscribe it eagerly.
 
 `yield* Agent.operations.prompt(...)` performs Context Api dispatch and
-returns a cold stream; it does not start the agent turn. Subscribing to
+returns the cold stream; it does not start the agent turn. Subscribing to
 the returned stream resolves the agent and session and starts the turn.
 Each subscription is an independent turn owned by the subscribing scope —
 the Agent Api does not implicitly multicast, buffer, or replay prompt
@@ -234,20 +234,19 @@ waiting on its session's turn queue emits no events, and agent, session,
 or turn-start failures fail the subscription before `started`.
 
 The subscription resolves the agent override, then the session. A string
-`session` option is a session name resolved against the selected agent
-and contextual cwd. A `Session` value targets that already-resolved
-session; a value the active provider does not own — or whose agent does
-not match an explicit agent override — is rejected rather than silently
+`session` option is a session name resolved against the selected agent and
+the contextual cwd, which the runtime `cwd` operation supplies; Agent Apis
+do not read the process cwd directly. A `Session` value targets that
+already-resolved session; a value the active provider does not own — or
+whose agent does not match an explicit agent override — is rejected, not
 recreated.
 
-`throwOnError` is not a `PromptOptions` member. It is a `<Prompt>`
-component prop: direct Agent Api consumers inspect the terminal event and
-choose their own failure policy. `<Prompt>` renders its buffered text
-only after consumption finishes — Markdown output stays buffered even
-though the Context Api itself is stream-based.
-
-The existing runtime `cwd` operation supplies the working directory. Agent
-APIs do not read the process cwd directly.
+Failure policy belongs to the caller. Direct Agent Api consumers inspect
+the terminal event and react as they choose; the `<Prompt>` component's
+`throwOnError` prop is the Markdown-level policy that turns a failure into
+an immediate throw. `<Prompt>` renders its buffered text only after
+consumption finishes — Markdown output stays buffered even though the
+Context Api itself is stream-based.
 
 The ACPX handle remains private to the provider. The provider maps the public
 `Session` to the full ACPX handle needed for turns and cleanup.
@@ -319,25 +318,23 @@ calls `requestPermission()`, and translates the result back to ACP. The root
 permission mode also configures ACPX's direct client filesystem and terminal
 checks.
 
-Routing is keyed by the ACP session id — the `acpSessionId` ACPX puts on
-the wire for the prompting turn, which its permission requests carry. Each
-active turn's registration holds an operation that reloads its session
-record by `acpxRecordId`. The id map is a cache: before routing, the
-bridge refreshes and verifies a direct candidate; on a miss it refreshes
-every active registration and routes only when exactly one matches the
-request id. This tracks ACPX's reconnect fallback, which updates
-`record.acpSessionId` and checkpoints the record before running the
-prompt, so a session id that changes mid-turn still routes to the same
-prompt scope. Each refresh also updates the public `Session.agentSessionId`
-from the record.
+A permission request routes to the prompt scope that issued its turn,
+identified by the turn's ACP session id, and keeps routing to that scope
+even when ACPX assigns a new session id after a mid-turn reconnect. Each
+route updates the public `Session.agentSessionId`.
 
-The callback never returns `undefined` (which would let ACPX fall back to
-its mode resolver) and never routes to a different scope. It resolves to
-ACP cancellation on a store error during refresh, zero or multiple
-matching registrations, a stale or torn-down prompt scope, a policy error,
-an unknown selected option id, or an abort. ACPX's `AbortSignal` is honored
-— an already-aborted request cancels immediately, and an abort during a
-pending policy halts it and cancels.
+The callback always decides; it never returns `undefined` and never routes
+to another scope. Any of the following resolves to ACP cancellation:
+
+- the session store cannot be read while resolving the route;
+- no registration, or more than one, matches the request session id;
+- the prompt scope is stale or already torn down;
+- the routed policy errors, or selects an unknown option id;
+- the request is aborted — an already-aborted request cancels at once, and
+  an abort during a pending policy halts it and cancels.
+
+Returning `undefined` would let ACPX fall back to its own mode resolver, so
+the callback resolves cancellation instead.
 
 Eval blocks can install scoped `requestPermission` middleware for custom
 policies. Two components provide common policies without JavaScript:
@@ -429,6 +426,14 @@ ACPX `close()` soft-closes its record while retaining persistent state. A
 later `ensureSession()` with the same stable key reopens the record and
 resumes the saved ACP session when supported. No keep-alive or state-directory
 option is exposed.
+
+On a reconnect ACPX resumes the saved ACP session and checkpoints the
+record — writing the resumed `acpSessionId` — before running the prompt.
+Permission routing (§Permissions) relies on this: each active turn's
+registration reloads its record by `acpxRecordId`, and the provider keeps
+a session-id cache that it refreshes and verifies against the request
+before routing, so a session id that changes mid-turn still reaches the
+originating prompt scope.
 
 Provider availability validation uses ACPX's registry, process launch,
 initialization, and errors. Executable.md does not maintain a second list of

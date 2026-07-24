@@ -5,18 +5,13 @@
 
 ## Purpose
 
-The ACP Test Agent is a simulated test agent used for black box testing of
-Executable.md agent integration. ACPX provider starts the test agent instead
-of coding agents like Claude Code and Codex to simulate prompt responses
-provided by these agents.
+The ACP Test Agent is a deterministic stand-in for a real coding agent. In
+place of Claude Code or Codex, the ACPX provider starts it so Executable.md's
+agent integration can be black-box tested against scripted, repeatable
+responses instead of a probabilistic model.
 
-The test harness provides a markdown document that describes the behaviour of
-the agent and its state. The subprocess itself is stateless, it accepts the
-markdown document and a journal of the markdown agent state. This journal is
-used to forward the markdown document to the state where the last execution
-was stopped. The execution resumes from the last entry in the journal.
-
-This arrangement tests the complete boundary:
+A test supplies a Markdown *behavior document* that describes how the agent
+responds. Exercising it drives the complete boundary:
 
 ```text
 test document
@@ -25,8 +20,6 @@ test document
     -> xmd test-agent
     -> behavior document
 ```
-
-It does not start a probabilistic coding agent.
 
 ## TestAgent
 
@@ -83,24 +76,6 @@ mapping does not fail the test-agent scope.
 The test runtime does not inject agent, session, cwd, or harness metadata into
 the behavior document. The document sees its own frontmatter and bindings,
 including values captured by prompt matchers.
-
-## Scenario instances
-
-A scenario declaration is a blueprint, not a singleton runtime. Each resolved
-ACP session receives an isolated behavior-document instance and journal.
-
-Within one test, `(agent, logical session, cwd)` identifies one resumable
-instance. Repeated prompts to that session advance the same document. Different
-sessions and working directories have independent state.
-
-Each `<Test>` receives fresh ACPX state, document instances, and journals even
-when it uses the same scenario declaration and keys as another test. When
-`<TestAgent>` is used without an enclosing `<Test>`, its own scope is the
-isolation boundary.
-
-A scenario instance may remain suspended at a prompt matcher when its scope
-ends. Structured teardown halts and awaits the instance; it does not require the
-document to reach EOF and does not report unconsumed stages.
 
 ## Behavior documents
 
@@ -169,6 +144,24 @@ constrain the prompt with those values:
 binding is a configuration error and never becomes an implicit capture. Repeated
 uses of one capture name must match the same text. Adjacent capture holes
 without literal text between them are rejected as ambiguous.
+
+## Scenario instances
+
+A scenario declaration is a blueprint, not a singleton runtime. Each resolved
+ACP session receives an isolated behavior-document instance and journal.
+
+Within one test, `(agent, logical session, cwd)` identifies one resumable
+instance. Repeated prompts to that session advance the same document. Different
+sessions and working directories have independent state.
+
+Each `<Test>` receives fresh ACPX state, document instances, and journals even
+when it uses the same scenario declaration and keys as another test. When
+`<TestAgent>` is used without an enclosing `<Test>`, its own scope is the
+isolation boundary.
+
+A scenario instance may remain suspended at a prompt matcher when its scope
+ends. Structured teardown halts and awaits the instance; it does not require the
+document to reach EOF and does not report unconsumed stages.
 
 ## Controller and worker
 
