@@ -279,11 +279,16 @@ export function useTestAgentController(): Operation<TestAgentController> {
           if (message.expected !== undefined) {
             failure.expected = message.expected;
           }
+          // Record before acknowledging: the worker awaits this ack before
+          // surfacing the ACP error, so the diagnostic is already observable
+          // once that error is seen.
           attached.failure = failure;
+          send(connection, { t: "recorded" });
           return;
         }
         case "fatal": {
           attached.fatal = message.message;
+          send(connection, { t: "recorded" });
           return;
         }
         case "attach": {

@@ -132,6 +132,7 @@ describe("Tier TC — controller", () => {
         expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
 
         client.send({ t: "turn-failure", kind: "mismatch", expected: "hi", actual: "bye" });
+        expect((yield* client.next()).t).toBe("recorded");
         client.send({
           t: "journal",
           seq: 5,
@@ -235,10 +236,9 @@ describe("Tier TC — controller", () => {
       });
       expect((yield* clientA.next()).t).toBe("ack");
       clientB.send({ t: "turn-failure", kind: "mismatch", expected: "b", actual: "x" });
-      // turn-failure has no reply; a stat round-trip is the barrier that
-      // proves the failure was recorded before these assertions run.
-      clientB.send({ t: "stat", path: "b.md" });
-      expect((yield* clientB.next()).t).toBe("stat");
+      // The recorded ack is the barrier: the controller records the failure
+      // before acknowledging it, so the assertions below never race.
+      expect((yield* clientB.next()).t).toBe("recorded");
 
       // A prompt B failure never touches instance A's journal or failure.
       expect(controller.instance(a.id)?.journal.length).toBe(1);
