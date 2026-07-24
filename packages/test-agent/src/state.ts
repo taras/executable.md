@@ -2,25 +2,24 @@
  * Per-boundary ACPX state for `<TestAgent>` (specs/test-agent-spec.md
  * §Scenario instances): the production provider state composed with an
  * in-memory session store and a dynamic registry whose resolve() embeds
- * the pending instance route into the worker command. The route slot is
- * guarded by a FIFO mutex held only across session resolution and turn
- * start — never across turn consumption — so different sessions stay
- * concurrent while every registry lookup sees the right route.
+ * the pending instance route into the worker command. Routing flows
+ * through the provider's `sessionRouting` seam: the global route slot is
+ * held only across the provider's registry-dependent work (preparation
+ * and ensure/session validation + turn start), released while the
+ * provider waits on the per-session queue and during turn consumption.
  */
 
 import type { Operation } from "effection";
 import { useAcpxProviderState, useSerialQueues } from "@executablemd/acp";
-import type { AcpxProviderSeams, AcpxProviderState } from "@executablemd/acp";
+import type {
+  AcpxProviderSeams,
+  AcpxProviderState,
+  SessionRoutingContext,
+} from "@executablemd/acp";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
 export interface TestAgentAcpx {
   state: AcpxProviderState;
-  /**
-   * Serialize an operation under the route mutex with the registry
-   * routed to `route`. The slot clears and the mutex releases when the
-   * operation returns.
-   */
-  withRoute<T>(route: string, op: () => Operation<T>): Operation<T>;
 }
 
 export function createMemorySessionStore(): AcpSessionStore {
@@ -41,6 +40,8 @@ export interface TestAgentAcpxOptions {
   agents: string[];
   workerCommand: string[];
   probeRoute: string;
+  /** Map a routing context to the instance route pinned for its work. */
+  routeFor(context: SessionRoutingContext): string;
   seams?: AcpxProviderSeams;
 }
 
@@ -66,23 +67,21 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
     {
       sessionStore: createMemorySessionStore(),
       agentRegistry: registry,
+      // withSlot bounds the route mutex to the seam's op without a scope
+      // of its own — op's acquisitions (turn resources) belong to the
+      // provider's subscriber scope and outlive the critical section.
+      sessionRouting: (context, op) =>
+        routeQueue.withSlot("route", function* () {
+          pendingRoute = options.routeFor(context);
+          try {
+            return yield* op();
+          } finally {
+            pendingRoute = undefined;
+          }
+        }),
       ...(options.seams?.createRuntime ? { createRuntime: options.seams.createRuntime } : {}),
     },
   );
 
-  function* withRoute<T>(route: string, op: () => Operation<T>): Operation<T> {
-    // withSlot bounds the mutex to the operation without wrapping op
-    // in a scope of its own — op's acquisitions (turn resources) must
-    // belong to the caller and outlive the critical section.
-    return yield* routeQueue.withSlot("route", function* () {
-      pendingRoute = route;
-      try {
-        return yield* op();
-      } finally {
-        pendingRoute = undefined;
-      }
-    });
-  }
-
-  return { state, withRoute };
+  return { state };
 }

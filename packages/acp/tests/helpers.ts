@@ -221,3 +221,24 @@ export function* useFlatWorld(cwdPath: string): Operation<void> {
     },
   });
 }
+
+/**
+ * A world with a mutable contextual cwd and a Git root at `gitRoot`, so
+ * the session-placement walk reaches a common ancestor — different
+ * caller cwds under the root resolve to the same nearest session.
+ */
+export function* useGitWorld(cwdRef: { value: string }, gitRoot: string): Operation<void> {
+  yield* API.Env.around({
+    // deno-lint-ignore require-yield
+    *cwd() {
+      return cwdRef.value;
+    },
+  });
+  yield* API.Fs.around({
+    // deno-lint-ignore require-yield
+    *stat([path]) {
+      const isGit = path === `${gitRoot}/.git`;
+      return { exists: isGit, isFile: false, isDirectory: isGit };
+    },
+  });
+}

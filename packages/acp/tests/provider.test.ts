@@ -11,9 +11,17 @@ import type { Operation } from "effection";
 import { Agent, Config } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
 import { createAcpxProvider, useAcpxProviderState } from "../src/provider.ts";
+import { useSerialQueues } from "../src/serial-queue.ts";
 import type { AcpxProviderState } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
-import { createFakeRuntime, makeRecord, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
+import {
+  createFakeRuntime,
+  makeRecord,
+  makeRegistry,
+  makeStore,
+  useFlatWorld,
+  useGitWorld,
+} from "./helpers.ts";
 import type { AcpPermissionRequest } from "acpx/runtime";
 import type { FakeRuntimeHarness } from "./helpers.ts";
 
@@ -275,6 +283,133 @@ describe("Tier AP — ACPX provider", () => {
         stopReason: "end_turn",
       });
       yield* promptTask;
+    });
+  });
+
+  it("AP14: prompts from different cwds that resolve to the same session serialize", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const store = makeStore();
+    const cwdRef = { value: "/repo" };
+    yield* scoped(function* () {
+      yield* useGitWorld(cwdRef, "/repo");
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: store,
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+
+      // Pre-seed the repo-root session so the walk from a subdir reuses it.
+      const rootKey = deriveSessionKey("codex-cmd", "/repo");
+      const rootRecord = makeRecord("codex-cmd", "/repo");
+      rootRecord.acpxRecordId = `record:${rootKey}`;
+      store.records.set(rootKey, rootRecord);
+
+      // Prompt A from the repo root.
+      const a = yield* spawn(() => collectPrompt("from-root"));
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(1);
+
+      // Prompt B from a subdir — resolves (nearest existing) to the same
+      // root session key, so it SERIALIZES behind A.
+      cwdRef.value = "/repo/sub";
+      const b = yield* spawn(() => collectPrompt("from-subdir"));
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(1);
+      expect(harness.ensureCalls.every((call) => call.sessionKey === rootKey)).toBe(true);
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "one", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* a;
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(2);
+      harness.turns[1]!.finish([{ type: "text_delta", text: "two", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* b;
+    });
+  });
+
+  it("AP15: A2 waits for A1 without holding the global route slot, so B1 starts", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      const routeQueue = yield* useSerialQueues();
+      // A single global route queue models test-agent's route slot; if
+      // it were held while a prompt waited on the session queue, B1
+      // could not enter its own routed section.
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        sessionRouting: (_context, op) => routeQueue.withSlot("route", op),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+
+      const a1 = yield* spawn(() => collectPrompt("a1"));
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(1);
+
+      // A2 — same default session — queues on the session slot.
+      const a2 = yield* spawn(() => collectPrompt("a2"));
+      // B1 — different session — must start immediately, proving A2 is
+      // NOT holding the global route slot while it waits.
+      const b1 = yield* spawn(() => collectPrompt("b1", { session: "other" }));
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(2);
+      expect(harness.turns[1]!.input.text).toBe("b1");
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "x", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* a1;
+      yield* sleep(10);
+      // A2 now admitted.
+      expect(harness.turns.some((turn) => turn.input.text === "a2")).toBe(true);
+      for (const turn of harness.turns) {
+        if (!turn.cancelled) {
+          turn.finish([], { status: "completed", stopReason: "end_turn" });
+        }
+      }
+      yield* a2;
+      yield* b1;
+    });
+  });
+
+  it("AP16: an explicit session() waits on the same session queue as an active turn", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const order: string[] = [];
+
+      const turn = yield* spawn(() => collectPrompt("turn"));
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(1);
+
+      const sessionCall = yield* spawn(function* () {
+        yield* Agent.operations.session();
+        order.push("session-resolved");
+      });
+      yield* sleep(10);
+      // session() is blocked behind the active turn's session slot.
+      expect(order).toEqual([]);
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "done", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* turn;
+      yield* sessionCall;
+      // …and returns once the turn releases the slot (not held for the
+      // surrounding scope).
+      expect(order).toEqual(["session-resolved"]);
     });
   });
 

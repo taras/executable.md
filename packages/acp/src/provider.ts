@@ -19,11 +19,11 @@
  * provider scope.
  */
 
-import { createChannel, ensure, spawn, until, useScope, withResolvers } from "effection";
+import { createChannel, ensure, spawn, until, useScope } from "effection";
 import type { Operation, Stream } from "effection";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Agent, timeout as contextualTimeout } from "@executablemd/core";
 import type {
   AgentPromptEvent,
@@ -53,10 +53,26 @@ export interface ProbeCapableRuntime extends AcpRuntime {
   doctor(): Promise<AcpRuntimeDoctorReport>;
 }
 
+/** Context for the session-routing seam: the registry-dependent inputs. */
+export interface SessionRoutingContext {
+  agentName: string;
+  session: string | Session | undefined;
+  /** Normalized contextual cwd. */
+  cwd: string;
+}
+
 export interface AcpxProviderSeams {
   createRuntime?: (options: AcpRuntimeOptions) => ProbeCapableRuntime;
   sessionStore?: AcpSessionStore;
   agentRegistry?: AcpAgentRegistry;
+  /**
+   * Wraps registry-dependent work — session preparation AND
+   * ensure/session validation + turn start — so an embedder can pin its
+   * route for that critical section. `op` runs in the CALLER's scope
+   * (no `scoped()`), so returned prompt resources belong to the
+   * subscriber. The default invokes `op` directly.
+   */
+  sessionRouting?: <T>(context: SessionRoutingContext, op: () => Operation<T>) => Operation<T>;
 }
 
 interface ManagedSession {
@@ -65,6 +81,16 @@ interface ManagedSession {
   cwd: string;
   session: Session;
 }
+
+/** Read-only session resolution; the placement linearization point. */
+type Prepared =
+  | { kind: "existing"; sessionKey: string; entry: ManagedSession }
+  | {
+      kind: "placement";
+      sessionKey: string;
+      agentCommand: string;
+      placement: { sessionKey: string; cwd: string };
+    };
 
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
@@ -111,6 +137,8 @@ export function* useAcpxProviderState(
   const createRuntime = seams?.createRuntime ?? createAcpRuntime;
   const store = seams?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
   const registry = seams?.agentRegistry ?? createAgentRegistry();
+  const sessionRouting =
+    seams?.sessionRouting ?? (<T>(_c: SessionRoutingContext, op: () => Operation<T>) => op());
   const bridge = createPermissionBridge();
   const stateScope = yield* useScope();
   const turns = yield* useSerialQueues();
@@ -164,40 +192,15 @@ export function* useAcpxProviderState(
     return selected;
   }
 
-  function* ensureManagedSession(
-    agentName: string,
-    name: string | undefined,
-  ): Operation<ManagedSession> {
-    const agentCommand = registry.resolve(agentName);
-    const callerCwd = yield* cwd();
-    const placement = yield* resolveSessionPlacement(store, agentCommand, callerCwd, name);
-    const acp = yield* getRuntime();
-    const handle = yield* until(
-      acp.ensureSession({
-        sessionKey: placement.sessionKey,
-        agent: agentName,
-        mode: "persistent",
-        cwd: placement.cwd,
-      }),
-    );
-    const session: Session = { sessionKey: placement.sessionKey, cwd: placement.cwd };
-    if (handle.agentSessionId !== undefined) {
-      session.agentSessionId = handle.agentSessionId;
-    }
-    const entry: ManagedSession = {
-      handle,
-      agentCommand,
-      cwd: placement.cwd,
-      session,
-    };
-    managed.set(placement.sessionKey, entry);
-    return entry;
-  }
-
-  function* resolveManagedSession(
+  // Read-only session resolution. For a Session value it validates the
+  // existing managed entry; otherwise it derives the placement (the
+  // nearest-existing session), so the RESOLVED sessionKey — not the
+  // caller cwd — becomes the session-queue key.
+  function* prepare(
     agentName: string,
     option: string | Session | undefined,
-  ): Operation<ManagedSession> {
+    callerCwd: string,
+  ): Operation<Prepared> {
     if (typeof option === "object") {
       const entry = managed.get(option.sessionKey);
       if (!entry) {
@@ -213,9 +216,42 @@ export function* useAcpxProviderState(
             `"${option.sessionKey}" (${entry.agentCommand})`,
         );
       }
-      return entry;
+      return { kind: "existing", sessionKey: option.sessionKey, entry };
     }
-    return yield* ensureManagedSession(agentName, option);
+    const agentCommand = registry.resolve(agentName);
+    const placement = yield* resolveSessionPlacement(store, agentCommand, callerCwd, option);
+    return { kind: "placement", sessionKey: placement.sessionKey, agentCommand, placement };
+  }
+
+  // Mutating; reuses the prepared placement — no repeated cwd lookup.
+  function* ensureFromPrepared(agentName: string, prepared: Prepared): Operation<ManagedSession> {
+    if (prepared.kind === "existing") {
+      return prepared.entry;
+    }
+    const acp = yield* getRuntime();
+    const handle = yield* until(
+      acp.ensureSession({
+        sessionKey: prepared.placement.sessionKey,
+        agent: agentName,
+        mode: "persistent",
+        cwd: prepared.placement.cwd,
+      }),
+    );
+    const session: Session = {
+      sessionKey: prepared.placement.sessionKey,
+      cwd: prepared.placement.cwd,
+    };
+    if (handle.agentSessionId !== undefined) {
+      session.agentSessionId = handle.agentSessionId;
+    }
+    const entry: ManagedSession = {
+      handle,
+      agentCommand: prepared.agentCommand,
+      cwd: prepared.placement.cwd,
+      session,
+    };
+    managed.set(prepared.sessionKey, entry);
+    return entry;
   }
 
   function promptStream(
@@ -225,63 +261,82 @@ export function* useAcpxProviderState(
     return {
       *[Symbol.iterator]() {
         const agentName = yield* Agent.operations.agent(options?.agent);
-        const entry = yield* resolveManagedSession(agentName, options?.session);
+        const callerCwd = resolve(yield* cwd());
+        const context: SessionRoutingContext = {
+          agentName,
+          session: options?.session,
+          cwd: callerCwd,
+        };
 
-        yield* turns.slot(entry.session.sessionKey);
-
-        const scope = yield* useScope();
-        // A previous turn's reconnect can replace the ACP session id and
-        // the agent session id (acpx persists both only at turn
-        // completion), so both the routing key and the public Session
-        // metadata refresh from the authoritative persisted record here.
-        const record = yield* until(
-          store.load(entry.handle.acpxRecordId ?? entry.session.sessionKey),
+        // 1. Preparation under the route seam → resolved sessionKey.
+        const prepared = yield* sessionRouting(context, () =>
+          prepare(agentName, options?.session, callerCwd),
         );
-        if (record?.agentSessionId !== undefined) {
-          entry.session.agentSessionId = record.agentSessionId;
-        }
-        const activeSessionId = record?.acpSessionId ?? entry.handle.backendSessionId;
-        if (activeSessionId !== undefined) {
-          const registration = bridge.register(activeSessionId, scope, entry.session);
-          yield* ensure(() => {
-            registration.unregister();
-          });
-          // An id minted DURING this turn (reconnect mid-turn) is
-          // unobservable in acpx 0.12 — see permission-bridge.ts. Once
-          // acpx exposes the turn's resolved session id, drive
-          // `registration.rekey(newId)` from that signal here.
-        }
 
-        const timeoutMs = options?.timeout ?? (yield* contextualTimeout);
-        const acp = yield* getRuntime();
-        const turn = acp.startTurn({
-          handle: entry.handle,
-          text: content,
-          mode: "prompt",
-          requestId: randomUUID(),
-          timeoutMs,
-        });
-        activeTurns.add(turn);
-        let completed = false;
-        yield* ensure(function* () {
-          activeTurns.delete(turn);
-          if (!completed) {
-            try {
-              yield* until(turn.cancel());
-            } catch (error) {
-              cleanupErrors.push(toError(error));
-            }
+        // 2. Route slot released; admit on the RESOLVED session queue —
+        //    held for the subscriber scope's lifetime (through
+        //    consumption and cleanup).
+        yield* turns.slot(prepared.sessionKey);
+
+        // 3. Routed ensure/session validation + turn start under a short
+        //    route seam again.
+        return yield* sessionRouting(context, function* () {
+          const entry = yield* ensureFromPrepared(agentName, prepared);
+
+          const scope = yield* useScope();
+          // A previous turn's reconnect can replace the ACP session id
+          // and the agent session id (acpx persists both only at turn
+          // completion), so both the routing key and the public Session
+          // metadata refresh from the authoritative persisted record.
+          const record = yield* until(
+            store.load(entry.handle.acpxRecordId ?? entry.session.sessionKey),
+          );
+          if (record?.agentSessionId !== undefined) {
+            entry.session.agentSessionId = record.agentSessionId;
           }
-        });
+          const activeSessionId = record?.acpSessionId ?? entry.handle.backendSessionId;
+          if (activeSessionId !== undefined) {
+            const registration = bridge.register(activeSessionId, scope, entry.session);
+            yield* ensure(() => {
+              registration.unregister();
+            });
+            // An id minted DURING this turn (reconnect mid-turn) is
+            // unobservable in acpx 0.12 — see permission-bridge.ts. Once
+            // acpx exposes the turn's resolved session id, drive
+            // `registration.rekey(newId)` from that signal here.
+          }
 
-        const channel = createChannel<AgentPromptEvent, string>();
-        const subscription = yield* channel;
-        yield* spawn(() =>
-          consumeTurn(turn, { agent: agentName, session: entry.session }, channel, () => {
-            completed = true;
-          }),
-        );
-        return subscription;
+          const timeoutMs = options?.timeout ?? (yield* contextualTimeout);
+          const acp = yield* getRuntime();
+          const turn = acp.startTurn({
+            handle: entry.handle,
+            text: content,
+            mode: "prompt",
+            requestId: randomUUID(),
+            timeoutMs,
+          });
+          activeTurns.add(turn);
+          let completed = false;
+          yield* ensure(function* () {
+            activeTurns.delete(turn);
+            if (!completed) {
+              try {
+                yield* until(turn.cancel());
+              } catch (error) {
+                cleanupErrors.push(toError(error));
+              }
+            }
+          });
+
+          const channel = createChannel<AgentPromptEvent, string>();
+          const subscription = yield* channel;
+          yield* spawn(() =>
+            consumeTurn(turn, { agent: agentName, session: entry.session }, channel, () => {
+              completed = true;
+            }),
+          );
+          return subscription;
+        });
       },
     };
   }
@@ -324,8 +379,18 @@ export function* useAcpxProviderState(
     },
     *session(option) {
       const agentName = yield* Agent.operations.agent();
-      const entry = yield* resolveManagedSession(agentName, option);
-      return entry.session;
+      const callerCwd = resolve(yield* cwd());
+      const context: SessionRoutingContext = { agentName, session: option, cwd: callerCwd };
+      const prepared = yield* sessionRouting(context, () => prepare(agentName, option, callerCwd));
+      // Same session queue as prompts, but BOUNDED: session() waits
+      // behind an active turn for this session, then releases the slot
+      // when it returns — never retained for the surrounding eval scope.
+      return yield* turns.withSlot(prepared.sessionKey, () =>
+        sessionRouting(context, function* () {
+          const entry = yield* ensureFromPrepared(agentName, prepared);
+          return entry.session;
+        }),
+      );
     },
     promptStream,
   };

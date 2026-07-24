@@ -16,17 +16,12 @@
  */
 
 import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "effection";
-import type { Operation, Stream } from "effection";
+import type { Operation } from "effection";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { Agent, Component, evalScope } from "@executablemd/core";
-import type {
-  AgentPromptEvent,
-  ComponentInvocation,
-  InvocationContext,
-  PromptOptions,
-  Segment,
-} from "@executablemd/core";
+import type { ComponentInvocation, InvocationContext, Segment } from "@executablemd/core";
+import type { SessionRoutingContext } from "@executablemd/acp";
 import { cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { useTestAgentController } from "./controller.ts";
@@ -51,6 +46,12 @@ interface BoundaryState {
   acpx: TestAgentAcpx;
   instances: Map<string, ScenarioInstance>;
   bySessionKey: Map<string, ScenarioInstance>;
+  resolveInstanceSync(
+    instances: Map<string, ScenarioInstance>,
+    agentName: string,
+    sessionName: string | undefined,
+    dir: string,
+  ): ScenarioInstance;
 }
 
 interface TestAgentSession {
@@ -96,14 +97,66 @@ export function* installTestAgentVocabulary(options: TestAgentVocabularyOptions)
       const scenarios = new Map<string, Scenario>();
       const boundaries = new Map<EvalScope | "test-agent-scope", BoundaryState>();
 
+      // Sync scenario→instance resolution keyed by (agent, session,
+      // cwd). The cwd is supplied by the caller (the seam context)
+      // rather than read again from the runtime.
+      function resolveInstanceSync(
+        instances: Map<string, ScenarioInstance>,
+        agentName: string,
+        sessionName: string | undefined,
+        dir: string,
+      ): ScenarioInstance {
+        const key = scenarioKey(agentName, sessionName ?? "");
+        const scenario = scenarios.get(key);
+        if (!scenario) {
+          throw new Error(
+            `no <TestAgent.Scenario> maps agent "${agentName}" and session ` +
+              `"${sessionName ?? "(default)"}"`,
+          );
+        }
+        if (scenario.duplicate) {
+          throw new Error(
+            `duplicate <TestAgent.Scenario> mappings for agent "${agentName}" and session ` +
+              `"${sessionName ?? "(default)"}"`,
+          );
+        }
+        const instanceKey = JSON.stringify([key, dir]);
+        const existing = instances.get(instanceKey);
+        if (existing) {
+          return existing;
+        }
+        const instance = controller.registerInstance({
+          doc: scenario.doc,
+          scenarioDir: scenario.scenarioDir,
+        });
+        instances.set(instanceKey, instance);
+        return instance;
+      }
+
       function* provisionState(): Operation<BoundaryState> {
+        // The maps exist before useTestAgentAcpx so the route resolver
+        // can close over them.
+        const instances = new Map<string, ScenarioInstance>();
+        const bySessionKey = new Map<string, ScenarioInstance>();
+        const routeFor = (context: SessionRoutingContext): string => {
+          if (typeof context.session === "object") {
+            const instance = bySessionKey.get(context.session.sessionKey);
+            if (!instance) {
+              throw new Error(`unknown or stale agent session "${context.session.sessionKey}"`);
+            }
+            return instance.route;
+          }
+          return resolveInstanceSync(instances, context.agentName, context.session, context.cwd)
+            .route;
+        };
         const acpx = yield* useTestAgentAcpx({
           defaultAgent,
           agents: [defaultAgent],
           workerCommand: options.workerCommand,
           probeRoute: controller.probeRoute,
+          routeFor,
         });
-        return { acpx, instances: new Map(), bySessionKey: new Map() };
+        return { acpx, instances, bySessionKey, resolveInstanceSync };
       }
 
       // The <TestAgent> scope itself is the fallback isolation boundary.
@@ -153,71 +206,6 @@ export function* installTestAgentVocabulary(options: TestAgentVocabularyOptions)
       const session: TestAgentSession = { defaultAgent, controller, scenarios, boundary };
       yield* TestAgentCtx.set(session);
 
-      function* resolveInstance(
-        state: BoundaryState,
-        agentName: string,
-        sessionName: string | undefined,
-      ): Operation<ScenarioInstance> {
-        const key = scenarioKey(agentName, sessionName ?? "");
-        const scenario = scenarios.get(key);
-        if (!scenario) {
-          throw new Error(
-            `no <TestAgent.Scenario> maps agent "${agentName}" and session ` +
-              `"${sessionName ?? "(default)"}"`,
-          );
-        }
-        if (scenario.duplicate) {
-          throw new Error(
-            `duplicate <TestAgent.Scenario> mappings for agent "${agentName}" and session ` +
-              `"${sessionName ?? "(default)"}"`,
-          );
-        }
-        const dir = resolve(yield* contextualCwd());
-        const instanceKey = JSON.stringify([key, dir]);
-        const existing = state.instances.get(instanceKey);
-        if (existing) {
-          return existing;
-        }
-        const instance = session.controller.registerInstance({
-          doc: scenario.doc,
-          scenarioDir: scenario.scenarioDir,
-        });
-        state.instances.set(instanceKey, instance);
-        return instance;
-      }
-
-      function promptStream(
-        content: string,
-        promptOptions: PromptOptions | undefined,
-      ): Stream<AgentPromptEvent, string> {
-        return {
-          *[Symbol.iterator]() {
-            const state = yield* boundary();
-            const agentName = yield* Agent.operations.agent(promptOptions?.agent);
-            let route: string;
-            if (typeof promptOptions?.session === "object") {
-              const instance = state.bySessionKey.get(promptOptions.session.sessionKey);
-              if (!instance) {
-                throw new Error(
-                  `unknown or stale agent session "${promptOptions.session.sessionKey}"`,
-                );
-              }
-              route = instance.route;
-            } else {
-              const instance = yield* resolveInstance(state, agentName, promptOptions?.session);
-              route = instance.route;
-            }
-            // The mutex is held only across session resolution and turn
-            // start — the inner subscription returns once the turn has
-            // started, before any events are consumed.
-            return yield* state.acpx.withRoute(route, function* () {
-              const stream = state.acpx.state.promptStream(content, promptOptions);
-              return yield* stream;
-            });
-          },
-        };
-      }
-
       yield* Agent.around(
         {
           *agent([name], _next) {
@@ -227,16 +215,25 @@ export function* installTestAgentVocabulary(options: TestAgentVocabularyOptions)
           *session([name], _next) {
             const state = yield* boundary();
             const agentName = yield* Agent.operations.agent();
-            const instance = yield* resolveInstance(state, agentName, name);
-            const resolved = yield* state.acpx.withRoute(instance.route, () =>
-              state.acpx.state.session(name),
-            );
+            const dir = resolve(yield* contextualCwd());
+            const instance = state.resolveInstanceSync(state.instances, agentName, name, dir);
+            // The provider's session() drives the route seam itself;
+            // it maps this same context back to the instance route.
+            const resolved = yield* state.acpx.state.session(name);
             state.bySessionKey.set(resolved.sessionKey, instance);
             return resolved;
           },
           // deno-lint-ignore require-yield
           *prompt([content, promptOptions], _next) {
-            return promptStream(content, promptOptions);
+            // All routing flows through the provider's sessionRouting
+            // seam; the boundary only selects the right acpx state.
+            return {
+              *[Symbol.iterator]() {
+                const state = yield* boundary();
+                const stream = state.acpx.state.promptStream(content, promptOptions);
+                return yield* stream;
+              },
+            };
           },
         },
         { at: "min" },

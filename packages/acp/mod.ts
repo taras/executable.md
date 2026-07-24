@@ -11,5 +11,10 @@
 export { createAcpxProvider, useAcpxProviderState } from "./src/provider.ts";
 export { useSerialQueues } from "./src/serial-queue.ts";
 export type { SerialQueues } from "./src/serial-queue.ts";
-export type { AcpxProviderSeams, AcpxProviderState, ProbeCapableRuntime } from "./src/provider.ts";
+export type {
+  AcpxProviderSeams,
+  AcpxProviderState,
+  ProbeCapableRuntime,
+  SessionRoutingContext,
+} from "./src/provider.ts";
 export { DEFAULT_AGENT_NAME } from "acpx/runtime";
