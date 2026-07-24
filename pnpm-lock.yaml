@@ -230,15 +230,24 @@ importers:
 
   packages/test-agent:
     dependencies:
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0-alpha.7)
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       effection:
         specifier: 4.1.0-alpha.7
         version: 4.1.0-alpha.7
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   packages/test-support:
     dependencies:

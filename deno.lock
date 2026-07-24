@@ -3047,9 +3047,15 @@
         }
       },
       "packages/test-agent": {
+        "dependencies": [
+          "npm:@effectionx/node@0.2.4",
+          "npm:zod@^4.3.6"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:effection@4.1.0-alpha.7"
+            "npm:@effectionx/node@0.2.4",
+            "npm:effection@4.1.0-alpha.7",
+            "npm:zod@^4.3.6"
           ]
         }
       },

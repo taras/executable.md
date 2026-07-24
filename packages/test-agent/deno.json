@@ -3,5 +3,9 @@
   "version": "0.4.2",
   "exports": {
     ".": "./mod.ts"
+  },
+  "imports": {
+    "@effectionx/node": "npm:@effectionx/node@0.2.4",
+    "zod": "npm:zod@^4.3.6"
   }
 }

@@ -7,8 +7,11 @@
     ".": "./mod.ts"
   },
   "dependencies": {
+    "@effectionx/node": "0.2.4",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
-    "effection": "4.1.0-alpha.7"
+    "@executablemd/runtime": "workspace:*",
+    "effection": "4.1.0-alpha.7",
+    "zod": "^4.3.6"
   }
 }
