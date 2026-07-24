@@ -49,10 +49,13 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
   let pendingRoute: string | undefined;
   let tail: Operation<void> | undefined;
 
+  // ACPX tokenizes the command on whitespace with quote support, so
+  // command segments containing spaces (e.g. a binary path) are quoted.
+  const quote = (segment: string) => (/\s/.test(segment) ? `"${segment}"` : segment);
   const registry: AcpAgentRegistry = {
     resolve() {
       const route = pendingRoute ?? options.probeRoute;
-      return [...options.workerCommand, "--connect", route].join(" ");
+      return [...options.workerCommand.map(quote), "--connect", route].join(" ");
     },
     list() {
       return options.agents;

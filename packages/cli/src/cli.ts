@@ -39,7 +39,7 @@ import type { PermissionMode } from "@executablemd/core";
 import { env } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
-import { runTestAgentWorker } from "@executablemd/test-agent";
+import { installTestAgentVocabulary, runTestAgentWorker } from "@executablemd/test-agent";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
@@ -213,6 +213,19 @@ function* createJournalFile(filePath: string): Operation<void> {
   yield* until(handle.close());
 }
 
+/**
+ * The command that relaunches this xmd as a test-agent worker: the
+ * compiled binary invokes itself; dev mode reconstructs `deno run`.
+ */
+function resolveWorkerCommand(): string[] {
+  const execPath = Deno.execPath();
+  const name = execPath.split("/").pop() ?? execPath;
+  if (name === "deno" || name === "deno.exe") {
+    return [execPath, "run", "--allow-all", new URL(import.meta.url).pathname, "test-agent"];
+  }
+  return [execPath, "test-agent"];
+}
+
 interface AgentFlags {
   agentProvider: string;
   defaultAgent: string | undefined;
@@ -328,9 +341,13 @@ function* run(
   // Compose testing around the single core execution entrypoint: both
   // commands register the vocabulary (assertions work in regular documents,
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
-  // additionally activates root testing through a useTesting() session.
+  // additionally activates root testing through a useTesting() session and
+  // the deterministic test-agent stack — TestAgent installs before the
+  // agent vocabulary so its <Prompt> interceptor runs first.
   if (mode.testing) {
     yield* useTesting({ verbose });
+    yield* installTestAgentVocabulary({ workerCommand: resolveWorkerCommand() });
+    yield* installAgentVocabulary();
   } else {
     yield* installTestingVocabulary({ verbose });
   }

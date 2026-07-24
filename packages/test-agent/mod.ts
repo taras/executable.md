@@ -38,3 +38,5 @@ export { installWorkerProfile } from "./src/worker/profile.ts";
 export type { WorkerFilesystem } from "./src/worker/profile.ts";
 export { collectTurn, createTurnBridge } from "./src/worker/bridge.ts";
 export type { BridgeEvent, PromptOffer, TurnBridge } from "./src/worker/bridge.ts";
+export { installTestAgentVocabulary } from "./src/vocabulary.ts";
+export type { TestAgentVocabularyOptions } from "./src/vocabulary.ts";
