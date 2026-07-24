@@ -1,13 +1,37 @@
 /**
  * Permission bridge (specs/acp-client-spec.md §Permissions).
  *
- * Each active turn registers its subscribing Effection scope under the
- * handle's `backendSessionId` — the ACP session ID that permission
- * requests carry. A request re-enters exactly that scope, so scoped
- * `requestPermission` middleware (`<ApproveAll>`, eval blocks, CLI
- * policy) is visible. A missing or torn-down scope, an unknown session
- * ID, or an unknown selected option ID all produce an ACP cancellation —
- * never `undefined` and never another active scope.
+ * ## Authoritative routing source
+ *
+ * ACPX delivers a permission request to `onPermissionRequest` keyed by
+ * `params.sessionId`, which is the ACP session id ACPX uses on the wire
+ * for the prompting turn — its `acpSessionId` (surfaced as the handle's
+ * `backendSessionId`). The provider registers each active turn's scope
+ * under the id from the AUTHORITATIVE persisted session record at turn
+ * start, so scoped `requestPermission` middleware (`<ApproveAll>`, eval
+ * blocks, CLI policy) is visible when the matching request arrives.
+ * Missing/torn-down registrations, policy errors, aborts, and unknown
+ * selected option ids all resolve `{ outcome: "cancel" }` — never
+ * `undefined` (which would let ACPX fall back to its mode resolver) and
+ * never another active scope.
+ *
+ * ## Mid-turn id replacement
+ *
+ * On a reconnecting turn ACPX can replace the ACP session id
+ * (`connectAndLoadSession` → `onSessionIdResolved`) and persists the new
+ * id only when the turn completes. A permission request during that turn
+ * carries the NEW id. The bridge can route it — `register` returns a
+ * `rekey` that moves the live registration to the new id — but ACPX 0.12
+ * exposes the resolved id on neither the public `AcpRuntimeTurn` nor its
+ * event stream, so the provider has nothing to drive `rekey` with. Until
+ * ACPX adds turn-level session-id visibility (see below), such a request
+ * fails closed with cancel; a sole-active fallback is deliberately NOT
+ * used, as it would misroute under concurrent sessions.
+ *
+ * REQUIRED ACPX API CHANGE: expose the turn's resolved ACP session id —
+ * e.g. `AcpRuntimeTurn.sessionId`, an `onSessionIdResolved` callback on
+ * `AcpRuntimeTurnInput`, or a structured `session_id` event — so the
+ * provider can call `rekey` when the id changes mid-turn.
  */
 
 import { once, race } from "effection";
@@ -23,9 +47,20 @@ interface RegisteredTurn {
   session: Session;
 }
 
+export interface Registration {
+  /** Remove this registration (only if it still owns its current id). */
+  unregister(): void;
+  /**
+   * Move this live registration to `newSessionId` — the hook a future
+   * ACPX turn-level session-id signal would drive on mid-turn
+   * replacement.
+   */
+  rekey(newSessionId: string): void;
+}
+
 export interface PermissionBridge {
-  /** Register the active turn's scope. Returns the unregister cleanup. */
-  register(backendSessionId: string, scope: Scope, session: Session): () => void;
+  /** Register the active turn's scope under its ACP session id. */
+  register(backendSessionId: string, scope: Scope, session: Session): Registration;
   /**
    * Decide one permission request. Never undefined — missing or
    * torn-down registrations, policy errors, aborts, and unknown
@@ -40,11 +75,24 @@ export function createPermissionBridge(): PermissionBridge {
   return {
     register(backendSessionId, scope, session) {
       const registered: RegisteredTurn = { scope, session };
-      turns.set(backendSessionId, registered);
-      return () => {
-        if (turns.get(backendSessionId) === registered) {
-          turns.delete(backendSessionId);
-        }
+      let currentId = backendSessionId;
+      turns.set(currentId, registered);
+      return {
+        unregister() {
+          if (turns.get(currentId) === registered) {
+            turns.delete(currentId);
+          }
+        },
+        rekey(newSessionId) {
+          if (newSessionId === currentId) {
+            return;
+          }
+          if (turns.get(currentId) === registered) {
+            turns.delete(currentId);
+          }
+          currentId = newSessionId;
+          turns.set(currentId, registered);
+        },
       };
     },
     *decision(request, signal) {

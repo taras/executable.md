@@ -6,7 +6,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { scoped, sleep, spawn, until } from "effection";
+import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent, Config } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
@@ -198,6 +198,83 @@ describe("Tier AP — ACPX provider", () => {
         stopReason: "end_turn",
       });
       yield* turn;
+    });
+  });
+
+  it("AP13: a routed request reaches the scoped prompt policy; agentSessionId refreshes from the record", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const store = makeStore();
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: store,
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+
+      // The persisted record carries the authoritative ids after a
+      // prior reconnect replaced both.
+      const sessionKey = deriveSessionKey("codex-cmd", CWD);
+      const record = makeRecord("codex-cmd", CWD);
+      record.acpxRecordId = `record:${sessionKey}`;
+      record.acpSessionId = "sid-2";
+      record.agentSessionId = "agent-2";
+      store.records.set(record.acpxRecordId, record);
+
+      const started = withResolvers<Session>();
+      const promptTask = yield* spawn(() =>
+        scoped(function* () {
+          // A scoped prompt policy (as <ApproveAll> installs).
+          yield* Agent.around(
+            {
+              // deno-lint-ignore require-yield
+              *requestPermission([request]) {
+                return { outcome: "selected", optionId: request.options[0]!.optionId };
+              },
+            },
+            { at: "min" },
+          );
+          const stream = yield* Agent.operations.prompt("go");
+          const subscription = yield* stream;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            if (next.value.type === "started") {
+              started.resolve(next.value.session);
+            }
+            next = yield* subscription.next();
+          }
+        }),
+      );
+
+      const session = yield* started.operation;
+      // Point 4: the public Session metadata refreshed from the record.
+      expect(session.agentSessionId).toBe("agent-2");
+
+      const options = harness.createdOptions.find((created) => created.onPermissionRequest);
+      const request: AcpPermissionRequest = {
+        sessionId: "sid-2",
+        inferredKind: undefined,
+        raw: {
+          sessionId: "sid-2",
+          toolCall: { toolCallId: "call-1" },
+          options: [{ optionId: "opt-allow", name: "Allow", kind: "allow_once" }],
+        },
+      };
+      const routed = yield* until(
+        Promise.resolve(
+          options!.onPermissionRequest!(request, { signal: new AbortController().signal }),
+        ),
+      );
+      // The scoped policy — not ACPX's mode resolver — decided.
+      expect(routed).toEqual({ outcome: "allow_once" });
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "ok", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* promptTask;
     });
   });
 

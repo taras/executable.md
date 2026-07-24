@@ -7,11 +7,54 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { ensure, scoped, sleep, until, useScope } from "effection";
+import {
+  createScope,
+  ensure,
+  scoped,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
+import type { Operation, Scope } from "effection";
 import { Agent } from "@executablemd/core";
 import type { Session } from "@executablemd/core";
 import type { AcpPermissionRequest } from "acpx/runtime";
 import { createPermissionBridge } from "../src/permission-bridge.ts";
+
+interface Release {
+  pending: boolean;
+}
+
+/**
+ * A long-lived scope whose `requestPermission` policy blocks until
+ * `release.pending` clears, so two policies can be genuinely in-flight
+ * at once. The published scope is the frame the middleware was
+ * installed on, so the bridge's `scope.run(policy)` child inherits it.
+ */
+function* startPolicyScope(optionId: string, release: Release): Operation<Scope> {
+  const [outer, destroy] = createScope();
+  yield* ensure(() => until(destroy()));
+  const ready = withResolvers<Scope>();
+  outer.run(function* () {
+    yield* Agent.around(
+      {
+        *requestPermission() {
+          while (release.pending) {
+            yield* sleep(1);
+          }
+          return { outcome: "selected", optionId };
+        },
+      },
+      { at: "min" },
+    );
+    ready.resolve(yield* useScope());
+    yield* suspend();
+  });
+  return yield* ready.operation;
+}
 
 const SESSION: Session = { sessionKey: "xmd:v1:codex:abc:default", cwd: "/work" };
 
@@ -35,65 +78,54 @@ const signal = new AbortController().signal;
 describe("Tier PB — permission bridge", () => {
   it("PB1: requests re-enter the registered scope where scoped middleware answers", function* () {
     const bridge = createPermissionBridge();
-    const decision = yield* scoped(function* () {
-      const seen: string[] = [];
-      yield* Agent.around(
-        {
-          // deno-lint-ignore require-yield
-          *requestPermission([request]) {
-            seen.push(request.toolCall.kind ?? "none");
-            return { outcome: "selected", optionId: "opt-allow" };
-          },
+    const seen: string[] = [];
+    yield* Agent.around(
+      {
+        // deno-lint-ignore require-yield
+        *requestPermission([request]) {
+          seen.push(request.toolCall.kind ?? "none");
+          return { outcome: "selected", optionId: "opt-allow" };
         },
-        { at: "min" },
-      );
-      const scope = yield* useScope();
-      const unregister = bridge.register("backend-1", scope, SESSION);
-      try {
-        const result = yield* bridge.decision(makeAcpRequest("backend-1"), signal);
-        expect(seen).toEqual(["edit"]);
-        return result;
-      } finally {
-        unregister();
-      }
-    });
-    expect(decision).toEqual({ outcome: "allow_once" });
+      },
+      { at: "min" },
+    );
+    const registration = bridge.register("backend-1", yield* useScope(), SESSION);
+    try {
+      const result = yield* bridge.decision(makeAcpRequest("backend-1"), signal);
+      expect(seen).toEqual(["edit"]);
+      expect(result).toEqual({ outcome: "allow_once" });
+    } finally {
+      registration.unregister();
+    }
   });
 
-  it("PB2: concurrent sessions route to their own prompt scopes", function* () {
+  it("PB2: two simultaneously active scopes route concurrent decisions independently", function* () {
     const bridge = createPermissionBridge();
     yield* scoped(function* () {
-      yield* scoped(function* () {
-        yield* Agent.around(
-          {
-            // deno-lint-ignore require-yield
-            *requestPermission() {
-              return { outcome: "selected", optionId: "opt-allow" };
-            },
-          },
-          { at: "min" },
-        );
-        bridge.register("backend-a", yield* useScope(), SESSION);
-      });
-      // The second scope's policy rejects — proving each decision saw
-      // exactly its own scope's middleware.
-      yield* Agent.around(
-        {
-          // deno-lint-ignore require-yield
-          *requestPermission() {
-            return { outcome: "selected", optionId: "opt-reject" };
-          },
-        },
-        { at: "min" },
-      );
-      bridge.register("backend-b", yield* useScope(), SESSION);
+      // Both scopes are live at once; each blocks in its own policy
+      // until released, so the decisions genuinely overlap.
+      const releaseA = { pending: true };
+      const releaseB = { pending: true };
+      const scopeA = yield* startPolicyScope("opt-allow", releaseA);
+      const scopeB = yield* startPolicyScope("opt-reject", releaseB);
+      bridge.register("backend-a", scopeA, SESSION);
+      bridge.register("backend-b", scopeB, SESSION);
 
-      const [first, second] = [
-        yield* bridge.decision(makeAcpRequest("backend-a"), signal),
-        yield* bridge.decision(makeAcpRequest("backend-b"), signal),
-      ];
-      expect(first).toEqual({ outcome: "allow_once" });
-      expect(second).toEqual({ outcome: "reject_once" });
+      const results: Record<string, unknown> = {};
+      const a = yield* spawn(function* () {
+        results.a = yield* bridge.decision(makeAcpRequest("backend-a"), signal);
+      });
+      const b = yield* spawn(function* () {
+        results.b = yield* bridge.decision(makeAcpRequest("backend-b"), signal);
+      });
+      yield* sleep(10);
+      // Release B first to prove ordering is independent of arrival.
+      releaseB.pending = false;
+      releaseA.pending = false;
+      yield* a;
+      yield* b;
+      expect(results.a).toEqual({ outcome: "allow_once" });
+      expect(results.b).toEqual({ outcome: "reject_once" });
     });
   });
 
@@ -107,9 +139,9 @@ describe("Tier PB — permission bridge", () => {
     // unregisters as it exits, so a request after teardown finds no
     // registration and cancels.
     yield* scoped(function* () {
-      const unregister = bridge.register("backend-dead", yield* useScope(), SESSION);
+      const registration = bridge.register("backend-dead", yield* useScope(), SESSION);
       yield* ensure(() => {
-        unregister();
+        registration.unregister();
       });
     });
     expect(yield* bridge.decision(makeAcpRequest("backend-dead"), signal)).toEqual({
@@ -119,20 +151,83 @@ describe("Tier PB — permission bridge", () => {
 
   it("PB4: an unknown selected option id cancels", function* () {
     const bridge = createPermissionBridge();
-    const decision = yield* scoped(function* () {
-      yield* Agent.around(
-        {
-          // deno-lint-ignore require-yield
-          *requestPermission() {
-            return { outcome: "selected", optionId: "not-a-real-option" };
-          },
+    yield* Agent.around(
+      {
+        // deno-lint-ignore require-yield
+        *requestPermission() {
+          return { outcome: "selected", optionId: "not-a-real-option" };
         },
-        { at: "min" },
-      );
-      bridge.register("backend-4", yield* useScope(), SESSION);
-      return yield* bridge.decision(makeAcpRequest("backend-4"), signal);
+      },
+      { at: "min" },
+    );
+    bridge.register("backend-4", yield* useScope(), SESSION);
+    expect(yield* bridge.decision(makeAcpRequest("backend-4"), signal)).toEqual({
+      outcome: "cancel",
     });
-    expect(decision).toEqual({ outcome: "cancel" });
+  });
+
+  it("PB8: a mid-turn id replacement re-routes new-id requests to the same scope", function* () {
+    const bridge = createPermissionBridge();
+    const seen: string[] = [];
+    yield* Agent.around(
+      {
+        // deno-lint-ignore require-yield
+        *requestPermission() {
+          seen.push("policy");
+          return { outcome: "selected", optionId: "opt-allow" };
+        },
+      },
+      { at: "min" },
+    );
+    const registration = bridge.register("old-id", yield* useScope(), SESSION);
+
+    // acpx replaced the turn's ACP session id mid-turn; the provider
+    // would drive this from acpx's (future) resolved-id signal.
+    registration.rekey("new-id");
+
+    // The new id routes to the same scope; the stale old id no longer
+    // resolves and fails closed.
+    expect(yield* bridge.decision(makeAcpRequest("new-id"), signal)).toEqual({
+      outcome: "allow_once",
+    });
+    expect(yield* bridge.decision(makeAcpRequest("old-id"), signal)).toEqual({
+      outcome: "cancel",
+    });
+    expect(seen).toEqual(["policy"]);
+  });
+
+  it("PB9: the scope halting while a policy is pending resolves to cancel", function* () {
+    const bridge = createPermissionBridge();
+    yield* scoped(function* () {
+      const [outer, destroy] = createScope();
+      const ready = withResolvers<Scope>();
+      outer.run(function* () {
+        yield* Agent.around(
+          {
+            *requestPermission() {
+              yield* suspend();
+              return { outcome: "cancelled" };
+            },
+          },
+          { at: "min" },
+        );
+        ready.resolve(yield* useScope());
+        yield* suspend();
+      });
+      const scope = yield* ready.operation;
+      bridge.register("backend-9", scope, SESSION);
+
+      let decision: unknown;
+      const task = yield* spawn(function* () {
+        decision = yield* bridge.decision(makeAcpRequest("backend-9"), signal);
+      });
+      yield* sleep(10);
+      // The registered prompt scope is torn down mid-evaluation; the
+      // ACPX-facing decision must still resolve to cancel.
+      yield* until(destroy());
+      yield* task;
+      expect(decision).toEqual({ outcome: "cancel" });
+    });
   });
 
   it("PB5: aborts cancel — before evaluation and while it is pending", function* () {
