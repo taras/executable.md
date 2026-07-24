@@ -458,13 +458,12 @@ does not expose `--keep-alive` or an ACPX state-directory flag.
 
 Acceptance coverage is divided by the boundary under test:
 
-- The existing CI smoke document uses deterministic `AgentProviderApi` and
-  `AgentApi` Context API middleware instead of ACPX. It exercises the public
-  Markdown flow through `<AgentProvider>`, `<Agent>`, `<Session>`, and
-  `<Prompt>`, covering contextual defaults and overrides, named-session reuse,
-  permission middleware scoping, and rendered text output. The existing live
-  and replay smoke runner verifies that replay produces the same result
-  without invoking the mock provider again.
+- The CI smoke path runs `xmd test`-style sessions through the REAL ACPX
+  runtime and a real `xmd test-agent` worker (specs/test-agent-spec.md): one
+  complete availability/session/prompt/text/teardown path through
+  `<TestAgent>`, `<Agent>`, `<Session>`, and `<Prompt>`. Replaying the
+  completed main journal produces the same result without contacting ACPX
+  or a worker.
 - Context API tests cover provider registration and scoping, cwd and timeout
   propagation, permission modes, failure aggregation, and provider teardown
   with deterministic mocks.

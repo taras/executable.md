@@ -1,6 +1,6 @@
 # Executable.md ACP Test Agent
 
-**Status:** Draft\
+**Status:** Implemented\
 **Related:** [Executable.md ACP Client](./acp-client-spec.md)
 
 ## Purpose
@@ -251,7 +251,9 @@ Behavior journals are private to the test-agent controller and separate from the
 document-under-test journal. Each isolated scenario instance has one journal
 containing the matched prompt, captures, and completed stage transitions.
 
-When a worker restarts or ACPX resumes its session, the controller supplies the
+Restart recovery covers crashes between completed turns; a crash inside a
+turn's final delivery window is outside the supported guarantee. When a
+worker restarts or ACPX resumes its session, the controller supplies the
 same behavior document and journal. Replay restores captures and advances
 execution to the active `<WhenPrompt>` without requiring mutable state in the
 worker.
@@ -271,9 +273,22 @@ Behavior documents run with a deterministic test profile:
 - frontmatter, components, imports, eval state, interpolation, and matcher
   captures are available;
 - process and network access are denied by default;
-- environment values and cwd are fixed by the harness;
-- filesystem reads are served by the controller's virtual filesystem and are
-  limited to the behavior document and its permitted dependencies;
+- `cwd()` is supplied through the contextual cwd API and returns the virtual
+  scenario-directory root; `env()` returns undefined;
+- the filesystem is limited to controller-backed Markdown reads and stats
+  beneath the scenario directory; other filesystem operations are denied;
+- dependencies are Markdown components only. Normal component-candidate
+  order is preserved: an earlier Name.md wins; if Name.ts exists when
+  reached, the worker immediately raises the unsupported-TypeScript error;
+  if Name.ts is missing, resolution continues to later candidates such as
+  Name/index.md. `.ts` files are never read, materialized, or imported;
+- eval blocks are inline-only: static and dynamic module imports are
+  rejected before compilation, while inline eval state and Context API
+  access remain available. Arbitrary eval code is trusted — this profile is
+  a capability policy, not a security sandbox;
+- whitespace-only output before the first `<WhenPrompt>` is allowed;
+  rendering output whose trimmed text is non-empty before the first matcher
+  is a configuration error;
 - explicitly scoped Context middleware may provide additional controlled
   capabilities.
 

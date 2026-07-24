@@ -12,7 +12,7 @@ import { createSignal, each, ensure, race, scoped, spawn, until, withResolvers }
 import type { Operation } from "effection";
 import { connect } from "node:net";
 import { RequestError } from "@agentclientprotocol/sdk";
-import { DocumentOutput, execute } from "@executablemd/core";
+import { Component, DocumentOutput, execute } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
@@ -169,6 +169,15 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
       },
     });
     yield* installWhenPromptVocabulary(bridge);
+    // Behavior-document errors — eval preflight rejections, unsupported
+    // components, matcher configuration — must fail the scenario, never
+    // render as comments and let the turn succeed.
+    yield* Component.around({
+      // deno-lint-ignore require-yield
+      *raise([segment]) {
+        throw new Error(segment.message);
+      },
+    });
     yield* DocumentOutput.around({
       *output([text], next) {
         yield* bridge.events.send({ kind: "output", text });
