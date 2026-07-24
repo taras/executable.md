@@ -10,7 +10,8 @@ import { scoped, sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { Agent, Config } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
-import { createAcpxProvider } from "../src/provider.ts";
+import { createAcpxProvider, useAcpxProviderState } from "../src/provider.ts";
+import type { AcpxProviderState } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
 import type { FakeRuntimeHarness } from "./helpers.ts";
@@ -212,6 +213,57 @@ describe("Tier AP — ACPX provider", () => {
       expect(yield* Agent.operations.agent("codex")).toBe("codex");
       expect(harness.doctorCalls).toBe(2);
     });
+  });
+
+  it("AP10: sibling provider states are fully independent", function* () {
+    const first = createFakeRuntime();
+    const second = createFakeRuntime();
+    yield* useFlatWorld(CWD);
+
+    function* installState(harness: FakeRuntimeHarness): Operation<AcpxProviderState> {
+      const state = yield* useAcpxProviderState(
+        { defaultAgent: "codex", permissionMode: "deny-all" },
+        {
+          createRuntime: harness.create,
+          sessionStore: makeStore(),
+          agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        },
+      );
+      yield* Agent.around(
+        {
+          *agent([name], _next) {
+            return yield* state.agent(name);
+          },
+          *session([option], _next) {
+            return yield* state.session(option);
+          },
+          // deno-lint-ignore require-yield
+          *prompt([content, options], _next) {
+            return state.promptStream(content, options);
+          },
+        },
+        { at: "min" },
+      );
+      return state;
+    }
+
+    yield* scoped(function* () {
+      yield* installState(first);
+      const { close } = yield* collectPrompt("first state");
+      expect(close).toBe("hello world");
+    });
+    expect(first.closeCalls.length).toBe(1);
+    expect(second.createdOptions.length).toBe(0);
+
+    yield* scoped(function* () {
+      yield* installState(second);
+      yield* collectPrompt("second state");
+    });
+    // The sibling state probed and closed on its own: nothing was shared
+    // with the first state's caches or teardown.
+    expect(second.doctorCalls).toBe(1);
+    expect(second.closeCalls.length).toBe(1);
+    expect(first.closeCalls.length).toBe(1);
   });
 
   it("AP9: unknown, stale, or agent-mismatched sessions are rejected", function* () {

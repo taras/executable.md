@@ -8,6 +8,6 @@
  * resolve it through the `AgentProviders` Api.
  */
 
-export { createAcpxProvider } from "./src/provider.ts";
-export type { AcpxProviderSeams, ProbeCapableRuntime } from "./src/provider.ts";
+export { createAcpxProvider, useAcpxProviderState } from "./src/provider.ts";
+export type { AcpxProviderSeams, AcpxProviderState, ProbeCapableRuntime } from "./src/provider.ts";
 export { DEFAULT_AGENT_NAME } from "acpx/runtime";
