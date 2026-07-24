@@ -1,8 +1,12 @@
 /**
  * @module
- * Deterministic ACP test agent for Executable.md
- * (specs/test-agent-spec.md): the behavior-document engine — prompt
- * templates, the turn bridge, and the `<WhenPrompt>` vocabulary.
+ * Build reliable ACP integration tests with deterministic,
+ * document-driven agent behavior. In place of a probabilistic coding
+ * agent, the test agent answers ACP prompts by advancing through a
+ * Markdown behavior document, so an integration can be tested against
+ * scripted, repeatable responses (specs/test-agent-spec.md).
+ *
+ * This entry point exposes the behavior-document engine.
  */
 
 export { parseTemplate, matchPrompt } from "./src/template.ts";
