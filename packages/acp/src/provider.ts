@@ -45,6 +45,7 @@ import type {
 import { createPermissionBridge } from "./permission-bridge.ts";
 import { consumeTurn } from "./events.ts";
 import { resolveSessionPlacement } from "./session-key.ts";
+import { useSerialQueues } from "./serial-queue.ts";
 import { cwd } from "@executablemd/runtime";
 
 /** The runtime surface the provider needs — ACPX's runtime plus its probe. */
@@ -63,36 +64,6 @@ interface ManagedSession {
   agentCommand: string;
   cwd: string;
   session: Session;
-}
-
-interface Mutex {
-  tail: Operation<void> | undefined;
-}
-
-/**
- * Per-sessionKey FIFO lock: each acquirer waits on its predecessor's
- * release, so same-session prompts run in submission order while
- * different sessions run concurrently.
- */
-function* acquireLock(locks: Map<string, Mutex>, key: string): Operation<() => void> {
-  let mutex = locks.get(key);
-  if (!mutex) {
-    mutex = { tail: undefined };
-    locks.set(key, mutex);
-  }
-  const predecessor = mutex.tail;
-  const mine = withResolvers<void>();
-  mutex.tail = mine.operation;
-  if (predecessor) {
-    yield* predecessor;
-  }
-  let released = false;
-  return () => {
-    if (!released) {
-      released = true;
-      mine.resolve();
-    }
-  };
 }
 
 function toError(value: unknown): Error {
@@ -141,11 +112,11 @@ export function* useAcpxProviderState(
   const store = seams?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
   const registry = seams?.agentRegistry ?? createAgentRegistry();
   const bridge = createPermissionBridge();
+  const turns = yield* useSerialQueues();
 
   let runtime: ProbeCapableRuntime | undefined;
   const validatedAgents = new Set<string>();
   const managed = new Map<string, ManagedSession>();
-  const locks = new Map<string, Mutex>();
   const activeTurns = new Set<AcpRuntimeTurn>();
   const cleanupErrors: Error[] = [];
 
@@ -252,10 +223,7 @@ export function* useAcpxProviderState(
         const agentName = yield* Agent.operations.agent(options?.agent);
         const entry = yield* resolveManagedSession(agentName, options?.session);
 
-        const release = yield* acquireLock(locks, entry.session.sessionKey);
-        yield* ensure(() => {
-          release();
-        });
+        yield* turns.slot(entry.session.sessionKey);
 
         const scope = yield* useScope();
         const backendSessionId = entry.handle.backendSessionId;

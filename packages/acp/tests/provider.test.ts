@@ -136,6 +136,34 @@ describe("Tier AP — ACPX provider", () => {
     });
   });
 
+  it("AP11: a prompt halted while queued never blocks the session queue", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const first = yield* spawn(() => collectPrompt("one"));
+      yield* sleep(10);
+      expect(harness.turns.length).toBe(1);
+
+      // Queued behind "one", then halted before ever being granted.
+      const abandoned = yield* spawn(() => collectPrompt("two"));
+      yield* sleep(10);
+      yield* abandoned.halt();
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "done", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      yield* first;
+
+      // The old withResolvers chain deadlocked here: the halted
+      // request's link never resolved.
+      const third = yield* collectPrompt("three");
+      expect(third.close).toBe("hello world");
+      expect(harness.turns.length).toBe(2);
+    });
+  });
+
   it("AP5: halting a prompt mid-turn cancels its ACPX turn", function* () {
     const harness = createFakeRuntime();
     harness.script({ manual: true });

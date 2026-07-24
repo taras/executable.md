@@ -8,9 +8,8 @@
  * concurrent while every registry lookup sees the right route.
  */
 
-import { withResolvers } from "effection";
 import type { Operation } from "effection";
-import { useAcpxProviderState } from "@executablemd/acp";
+import { useAcpxProviderState, useSerialQueues } from "@executablemd/acp";
 import type { AcpxProviderSeams, AcpxProviderState } from "@executablemd/acp";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
@@ -47,7 +46,7 @@ export interface TestAgentAcpxOptions {
 
 export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<TestAgentAcpx> {
   let pendingRoute: string | undefined;
-  let tail: Operation<void> | undefined;
+  const routeQueue = yield* useSerialQueues();
 
   // ACPX tokenizes the command on whitespace with quote support, so
   // command segments containing spaces (e.g. a binary path) are quoted.
@@ -72,19 +71,17 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
   );
 
   function* withRoute<T>(route: string, op: () => Operation<T>): Operation<T> {
-    const predecessor = tail;
-    const mine = withResolvers<void>();
-    tail = mine.operation;
-    if (predecessor) {
-      yield* predecessor;
-    }
-    pendingRoute = route;
-    try {
-      return yield* op();
-    } finally {
-      pendingRoute = undefined;
-      mine.resolve();
-    }
+    // withSlot bounds the mutex to the operation without wrapping op
+    // in a scope of its own — op's acquisitions (turn resources) must
+    // belong to the caller and outlive the critical section.
+    return yield* routeQueue.withSlot("route", function* () {
+      pendingRoute = route;
+      try {
+        return yield* op();
+      } finally {
+        pendingRoute = undefined;
+      }
+    });
   }
 
   return { state, withRoute };
