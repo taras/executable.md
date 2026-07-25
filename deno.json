@@ -35,7 +35,7 @@
     "build": "deno compile --node-modules-dir=none --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd packages/cli/src/cli.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/cli.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
-    "test": "deno test --allow-all packages/core/tests/ packages/durable-streams/tests/ packages/testing/tests/ packages/code-review-agent/tests/ packages/test-agent/tests/ packages/acp/tests/",
+    "test": "deno test --allow-all packages/core/tests/ packages/durable-streams/tests/ packages/testing/tests/ packages/code-review-agent/tests/ packages/test-agent/tests/ packages/acp/tests/ scripts/tests/",
     "check": "deno check packages/core/mod.ts packages/testing/mod.ts packages/test-agent/mod.ts packages/acp/mod.ts",
     "check:jsr": "deno publish --dry-run --allow-dirty",
     "lint": "npx oxlint -c .oxlintrc.json packages/core/src/ packages/core/tests/ packages/cli/src/ packages/test-agent/ packages/acp/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/ && npx oxfmt --check packages/core/src/ packages/core/tests/ packages/cli/src/ packages/test-agent/ packages/acp/ packages/durable-streams/ packages/runtime/ packages/testing/ packages/test-support/ packages/code-review-agent/",
