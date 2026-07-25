@@ -40,7 +40,7 @@ Do not commit if any check fails. Fix the issue first, then re-run all four.
 10. Structure source through names and modules. Do not use decorative
     section-divider comments. Enforced by the
     `local/no-section-divider-comments` Oxlint rule
-    (`scripts/oxlint-plugin.js`), which autofixes with `oxlint --fix`.
+    (`scripts/oxlint-rules/`), which autofixes with `oxlint --fix`.
 11. Prefer expanding Executable.md capabilities over using JavaScript; Do not
     use JavaScript in MD without verifying with the user or planner agent.
 

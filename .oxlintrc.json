@@ -50,7 +50,8 @@
       "files": ["**/*.test.ts", "**/*.spec.ts", "**/test/**", "**/tests/**"],
       "rules": {
         "eslint/no-console": "off",
-        "eslint/no-empty-function": "off"
+        "eslint/no-empty-function": "off",
+        "local/no-redundant-test-scope": "error"
       }
     }
   ]

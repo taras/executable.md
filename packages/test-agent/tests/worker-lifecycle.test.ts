@@ -469,15 +469,13 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
   });
 
   it("TW2: probe workers initialize and never start a behavior document", function* () {
-    yield* scoped(function* () {
-      const controller = yield* useTestAgentController();
-      const worker = yield* useWorker(controller.probeRoute);
-      const init = yield* worker.request("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: {},
-      });
-      expect(init.result).toMatchObject({ protocolVersion: 1 });
+    const controller = yield* useTestAgentController();
+    const worker = yield* useWorker(controller.probeRoute);
+    const init = yield* worker.request("initialize", {
+      protocolVersion: 1,
+      clientCapabilities: {},
     });
+    expect(init.result).toMatchObject({ protocolVersion: 1 });
   });
 
   it("TW5: a cancel during journal commit is ignored — the turn finishes normally", function* () {
@@ -624,45 +622,43 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
   });
 
   it("TW11: a cancel while a diagnostic ack is held is ignored — the prompt still fails", function* () {
-    yield* scoped(function* () {
-      const controller = yield* useGatedController({
-        path: "doc.md",
-        source: '<WhenPrompt template="hi" />\n\nhello\n',
-      });
-      const worker = yield* useWorker(controller.route);
-      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-      const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
-      const sessionId = created.result?.sessionId;
-
-      // Freeze the worker waiting for the mismatch diagnostic to be recorded,
-      // cancel while it is held, and use the input-order barrier to prove the
-      // cancel was dispatched before releasing the ack.
-      const gate = controller.armGate("recorded");
-      const pending = yield* spawn(() =>
-        worker.request("session/prompt", {
-          sessionId,
-          prompt: [{ type: "text", text: "bye" }],
-        }),
-      );
-      yield* gate.held;
-      worker.notify("session/cancel", { sessionId });
-      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-      gate.release();
-
-      const reply = yield* pending;
-      // The cancel is ignored: the turn fails with the mismatch error, not
-      // cancelled.
-      expect(reply.result).toBe(undefined);
-      expect(reply.error).toBeDefined();
-
-      // The recorded ack was consumed, not stranded: a matching prompt at the
-      // same stage still succeeds through the shared response queue.
-      const retry = yield* worker.request("session/prompt", {
-        sessionId,
-        prompt: [{ type: "text", text: "hi" }],
-      });
-      expect(retry.result).toMatchObject({ stopReason: "end_turn" });
-      expect(chunkText(worker.notifications)).toContain("hello");
+    const controller = yield* useGatedController({
+      path: "doc.md",
+      source: '<WhenPrompt template="hi" />\n\nhello\n',
     });
+    const worker = yield* useWorker(controller.route);
+    yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+    const sessionId = created.result?.sessionId;
+
+    // Freeze the worker waiting for the mismatch diagnostic to be recorded,
+    // cancel while it is held, and use the input-order barrier to prove the
+    // cancel was dispatched before releasing the ack.
+    const gate = controller.armGate("recorded");
+    const pending = yield* spawn(() =>
+      worker.request("session/prompt", {
+        sessionId,
+        prompt: [{ type: "text", text: "bye" }],
+      }),
+    );
+    yield* gate.held;
+    worker.notify("session/cancel", { sessionId });
+    yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    gate.release();
+
+    const reply = yield* pending;
+    // The cancel is ignored: the turn fails with the mismatch error, not
+    // cancelled.
+    expect(reply.result).toBe(undefined);
+    expect(reply.error).toBeDefined();
+
+    // The recorded ack was consumed, not stranded: a matching prompt at the
+    // same stage still succeeds through the shared response queue.
+    const retry = yield* worker.request("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: "hi" }],
+    });
+    expect(retry.result).toMatchObject({ stopReason: "end_turn" });
+    expect(chunkText(worker.notifications)).toContain("hello");
   });
 });
