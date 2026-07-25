@@ -1,3 +1,35 @@
+/**
+ * `local/no-redundant-test-scope` — a scope that wraps a whole test body.
+ *
+ * The Effection BDD adapter runs each `it()` callback in its own scope and
+ * destroys it when the test settles. A `scoped()` call around the entire
+ * callback therefore opens a lifetime that begins and ends where the test's
+ * own lifetime already begins and ends: it owns nothing the test scope would
+ * not have owned, and destroys nothing sooner. What it does cost is clarity —
+ * a reader has two candidate owners for the test's resources instead of one,
+ * and the shape reads as though a test body needs a scope to be structured,
+ * which is what makes these wrappers multiply.
+ *
+ * A scope earns its place when it covers one phase of a test, because then
+ * its boundary is observable: the test can assert on what teardown did before
+ * the test itself completes.
+ *
+ *     it("cleans up", function* () {
+ *       let cleaned = false;
+ *
+ *       yield* scoped(function* () {
+ *         yield* ensure(() => {
+ *           cleaned = true;
+ *         });
+ *       });
+ *
+ *       expect(cleaned).toBe(true);
+ *     });
+ *
+ * Only the outer wrapper of a nested pair is reported. Unwrapping it exposes
+ * the inner one as a whole-body wrapper in turn, so repeated `oxlint --fix`
+ * passes peel the whole stack without a second rule.
+ */
 const EFFECTION = new Set(["effection", "effection/experimental"]);
 
 function isTestCall(node) {

@@ -43,11 +43,6 @@ Do not commit if any check fails. Fix the issue first, then re-run all four.
     (`scripts/oxlint-rules/`), which autofixes with `oxlint --fix`.
 11. Prefer expanding Executable.md capabilities over using JavaScript; Do not
     use JavaScript in MD without verifying with the user or planner agent.
-12. An `it()` callback already runs in its own scope — write the test body
-    directly; Do not wrap the whole body in `scoped()`. Reserve `scoped()` for
-    a phase of a test, such as observing teardown before the test ends.
-    Enforced by the `local/no-redundant-test-scope` Oxlint rule
-    (`scripts/oxlint-rules/`), which autofixes with `oxlint --fix`.
 
 ## Writing Guide
 
