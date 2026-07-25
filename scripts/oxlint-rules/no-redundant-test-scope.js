@@ -39,12 +39,14 @@ function isTestCall(node) {
     return callee.name === "it";
   }
 
-  return callee.type === "MemberExpression" &&
+  return (
+    callee.type === "MemberExpression" &&
     !callee.computed &&
     callee.object.type === "Identifier" &&
     callee.object.name === "it" &&
     callee.property.type === "Identifier" &&
-    callee.property.name === "only";
+    callee.property.name === "only"
+  );
 }
 
 function generatorCallback(node) {
@@ -107,10 +109,12 @@ function wholeBodyCall(block) {
 }
 
 function bindsOwnThis(node) {
-  return node.type === "FunctionExpression" ||
+  return (
+    node.type === "FunctionExpression" ||
     node.type === "FunctionDeclaration" ||
     node.type === "ClassExpression" ||
-    node.type === "ClassDeclaration";
+    node.type === "ClassDeclaration"
+  );
 }
 
 function usesEnclosingThis(node) {
@@ -233,12 +237,14 @@ export const noRedundantTestScope = {
         return names.has(callee.name);
       }
 
-      return callee.type === "MemberExpression" &&
+      return (
+        callee.type === "MemberExpression" &&
         !callee.computed &&
         callee.object.type === "Identifier" &&
         namespaces.has(callee.object.name) &&
         callee.property.type === "Identifier" &&
-        callee.property.name === "scoped";
+        callee.property.name === "scoped"
+      );
     }
 
     return {
@@ -286,7 +292,7 @@ export const noRedundantTestScope = {
             messageId: "redundant",
             fix: block
               ? (fixer) =>
-                fixer.replaceTextRange(statement.range, unwrappedText(text, statement, block))
+                  fixer.replaceTextRange(statement.range, unwrappedText(text, statement, block))
               : undefined,
           });
         }

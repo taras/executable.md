@@ -143,10 +143,7 @@ await main(function* (args) {
   // without this scoped mapping the install 404s. dnt writes package.json and
   // .npmignore into outDir but never an .npmrc, so this file survives the build.
   // npm excludes .npmrc from published tarballs, so it stays build-only.
-  yield* writeTextFile(
-    new URL(".npmrc", outDir),
-    "@jsr:registry=https://npm.jsr.io\n",
-  );
+  yield* writeTextFile(new URL(".npmrc", outDir), "@jsr:registry=https://npm.jsr.io\n");
 
   // dnt externalizes any import that resolves to an `npm:` specifier (that's how
   // effection/@effectionx end up as dependencies) and inlines anything that
