@@ -97,3 +97,42 @@ shared execution config. It supplies the contextual `timeout` in milliseconds
 `yield* Config.around({ timeout: () => 30_000 }, { at: "min" })`. The validated
 `yield* timeout` operation returns a positive, finite number of milliseconds and
 throws on any other value (zero, negative, NaN, Infinity, or a non-number).
+
+## ACPX provider
+
+`@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.
+`createAcpxProvider()` returns an `AgentProviderFactory` supplied directly to
+`installAgentVocabulary({ rootProvider: { factory: createAcpxProvider(), options } })`;
+`useAcpxProviderState` exposes the same operations without the Agent install, so
+several independent provider states can run in sibling scopes. The provider owns
+every resource it starts and creates the shared runtime lazily on first use with
+the contextual cwd and validated `timeout` — nothing spawns at install.
+
+- **Availability.** The first use of an agent validates it through a disposable
+  probe runtime's `doctor()`; a non-ok report throws with the agent's code and
+  details. Results are cached per agent.
+- **Sessions.** `session()` resolves a session by (agent, logical session,
+  contextual cwd): placement walks from the cwd up to the Git root and reuses the
+  nearest existing record for the same agent command and cwd, otherwise creates
+  one at the exact cwd. The resolved `sessionKey` — not the caller cwd — keys the
+  session queue. A `Session` value must come from this provider's `session()`; an
+  unknown or agent-mismatched session is rejected.
+- **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
+  owned by the subscriber. Events are normalized to one `started`, `text_delta`
+  for output-stream deltas only (thought/status/tool/usage stay private), and one
+  `terminal`, then the stream closes with the full concatenated text (including
+  partial text on failure). A completed turn with an absent stop reason is treated
+  as `end_turn`; any other stop reason is a failure.
+- **Serialization.** Prompts for one session run FIFO on that session's queue;
+  different sessions run concurrently. The route seam (`sessionRouting`) bounds
+  registry-dependent work (preparation, ensure/start) and is not held across turn
+  consumption.
+- **Permissions.** ACPX permission requests are routed — keyed by the record's
+  live ACP session id, refreshed on demand — to the in-flight prompt's scope and
+  answered through `Agent.requestPermission`; an ambiguous or unknown request
+  fails closed. ACPX's own Promise-returning leaves are consumed with `until`;
+  the provider's only Promise-producing adapter is the `onPermissionRequest`
+  callback, and the bridge itself is operation-based.
+- **Teardown.** Provider-scope teardown cancels active turns and closes each
+  distinct runtime handle with an all-settled strategy, throwing a single error or
+  an `AggregateError` from the provider scope.
