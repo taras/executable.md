@@ -25,9 +25,14 @@ import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
-import { execute, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import {
+  execute,
+  installAgentVocabulary,
+  useNormalizedOutput,
+  useTerminalOutput,
+} from "@executablemd/core";
 import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
-import { runTestAgentWorker } from "@executablemd/test-agent";
+import { installTestAgentVocabulary, runTestAgentWorker } from "@executablemd/test-agent";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
@@ -165,6 +170,19 @@ function* createJournalFile(filePath: string): Operation<void> {
   yield* until(handle.close());
 }
 
+/**
+ * The command that relaunches this xmd as a test-agent worker: the
+ * compiled binary invokes itself; dev mode reconstructs `deno run`.
+ */
+function resolveWorkerCommand(): string[] {
+  const execPath = Deno.execPath();
+  const name = execPath.split("/").pop() ?? execPath;
+  if (name === "deno" || name === "deno.exe") {
+    return [execPath, "run", "--allow-all", new URL(import.meta.url).pathname, "test-agent"];
+  }
+  return [execPath, "test-agent"];
+}
+
 function* run(
   config: {
     docPath: string;
@@ -224,6 +242,10 @@ function* run(
   // additionally activates root testing through a useTesting() session.
   if (mode.testing) {
     yield* useTesting({ verbose });
+    // TestAgent installs before the agent vocabulary so its <Prompt>
+    // interceptor runs first.
+    yield* installTestAgentVocabulary({ workerCommand: resolveWorkerCommand() });
+    yield* installAgentVocabulary();
   } else {
     yield* installTestingVocabulary({ verbose });
   }

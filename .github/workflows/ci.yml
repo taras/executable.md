@@ -77,6 +77,11 @@ jobs:
             --component-dir packages/core/components \
             --raw
 
+      # Covers the compiled binary relaunching itself as `xmd test-agent`,
+      # which the source-mode worker command never exercises.
+      - name: Smoke test the compiled binary as a test agent
+        run: ./dist/xmd test smoke-test/test-agent/README.md --raw
+
   site:
     runs-on: ubuntu-latest
     steps:
