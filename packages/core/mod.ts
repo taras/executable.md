@@ -99,3 +99,24 @@ export {
   InputSchemaError,
 } from "./src/validate.ts";
 export type { NormalizedIssue } from "./src/validate.ts";
+
+// Agent vocabulary — <Agent>/<Session>/<Prompt> over a provider-factory seam.
+export { installAgentVocabulary } from "./src/agent/vocabulary.ts";
+export type { AgentVocabularyOptions } from "./src/agent/vocabulary.ts";
+export { Agent } from "./src/agent/agent-api.ts";
+export type {
+  AgentApi,
+  AgentPromptEvent,
+  PermissionMode,
+  PermissionOption,
+  PermissionOutcome,
+  PermissionRequest,
+  PromptOptions,
+  Session,
+} from "./src/agent/agent-api.ts";
+export { AgentPromptError } from "./src/agent/errors.ts";
+export type { AgentProviderFactory, AgentProviderOptions } from "./src/agent/provider-seam.ts";
+
+// Shared execution config — contextual timeout (re-exported from runtime).
+export { Config, timeout } from "@executablemd/runtime";
+export type { ConfigApi } from "@executablemd/runtime";
