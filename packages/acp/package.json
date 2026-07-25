@@ -1,0 +1,15 @@
+{
+  "name": "@executablemd/acp",
+  "version": "0.4.2",
+  "description": "ACPX agent provider for executable.md documents: drives coding agents over the Agent Client Protocol.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "dependencies": {
+    "@executablemd/core": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "acpx": "0.12.0",
+    "effection": "4.1.0-alpha.7"
+  }
+}

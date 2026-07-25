@@ -1,0 +1,10 @@
+{
+  "name": "@executablemd/acp",
+  "version": "0.4.2",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "imports": {
+    "acpx": "npm:acpx@0.12.0"
+  }
+}

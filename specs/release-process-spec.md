@@ -50,7 +50,7 @@ sequenceDiagram
 
 Every package (`packages/core`, `packages/cli`, `packages/durable-streams`,
 `packages/runtime`, `packages/testing`, `packages/code-review-agent`,
-`packages/test-agent`) declares
+`packages/test-agent`, `packages/acp`) declares
 the same version in its `deno.json` and `package.json`. `packages/cli/src/cli.ts`
 imports `packages/cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
