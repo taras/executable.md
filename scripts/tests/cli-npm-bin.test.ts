@@ -1,16 +1,9 @@
 /**
- * The npm CLI is produced by dnt, not by `deno compile`, and nothing else in
- * the repository runs that build: `deno task check`, the compiled-binary
- * smoke test and the Deno suite all type-check and execute the source against
- * Deno, where a bare `Deno.*` global is perfectly valid. In the Node output
- * the same global fails to compile and, once compiled, fails at runtime —
- * which is how `@executablemd/cli@0.5.0` missed npm.
- *
- * This suite closes that gap the only way that proves anything: build
- * packages/cli exactly as the release workflow does, then run the emitted bin
- * under Node through the test-agent smoke document. That document drives a
- * full session/prompt/text path, so the Node parent has to relaunch *itself*
- * as `xmd test-agent` for the run to pass.
+ * Build packages/cli the way the release workflow does and run the emitted bin
+ * under Node. The test-agent smoke document drives a full session/prompt path,
+ * so the Node parent must relaunch itself as `xmd test-agent` to pass — the
+ * bare `Deno.*` global that kept `@executablemd/cli@0.5.0` off npm compiles
+ * fine under Deno and fails only here.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
@@ -39,11 +32,7 @@ interface Manifest {
   dependencies?: Record<string, string>;
 }
 
-/**
- * Read synchronously: the skip decision below happens while the module is
- * evaluated, before any test registers, and the repository forbids `await`
- * outside Effection operations.
- */
+/** Synchronous: the skip decision runs at module evaluation, outside any scope. */
 function readManifest(...segments: string[]): Manifest {
   return JSON.parse(Deno.readTextFileSync(path.join(ROOT, ...segments)));
 }
@@ -81,19 +70,12 @@ function workspaceVersions(): Record<string, string> {
 }
 
 /**
- * The internal dependency specifiers that prevent this build from running
- * against the default registry today.
- *
- * dnt resolves each `workspace:*` sibling to `^<its declared version>` and
- * installs it from the registry to type-check against, so packages/cli builds
- * only once its siblings are published, at the version the manifests declare
- * and free of `@jsr/*` dependencies — the same rule the DNT_SKIP_INSTALL
- * refusal already enforces. Both conditions hold on an ordinary branch and
- * throughout a release, where packages publish in dependency order. Neither
- * holds on a release-bump branch (the manifests name a version no publish has
- * produced), and the second does not hold until the first release after
- * `@std/assert` was dropped. Naming the specifiers keeps such a skip legible
- * instead of letting it read as a pass.
+ * Siblings that block the build today. dnt installs each `workspace:*` sibling
+ * from the registry to type-check against, so it must already be published, at
+ * the declared version and free of `@jsr/*` deps. A release-bump branch fails
+ * the first condition; the second stays unmet until the first release after
+ * `@std/assert` was dropped, since `.npmrc` no longer maps the `@jsr` scope.
+ * Returning the specifiers keeps the resulting skip from reading as a pass.
  */
 function unbuildableSiblings(): string[] {
   const versions = workspaceVersions();
@@ -113,11 +95,6 @@ function unbuildableSiblings(): string[] {
       missing.push(spec);
       continue;
     }
-    // A sibling published before the @std/assert removal still declares
-    // `@jsr/std__assert`, which the default registry does not serve. dnt
-    // installs that published sibling to type-check against, and the build no
-    // longer writes an `.npmrc`, so the build cannot succeed until a clean
-    // version of the sibling is on npm.
     const deps = npmQuery(["view", spec, "dependencies", "--json"]) ?? "";
     if (deps.includes("@jsr/")) {
       missing.push(`${spec} (published copy still depends on @jsr/*)`);
@@ -179,8 +156,6 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     }
 
     const run = yield* runEmittedBin(["test", DOC]);
-    // The document asserts both replies itself, so a non-zero exit means the
-    // Node parent never got a worker to answer them.
     if (run.code !== 0) {
       throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
     }

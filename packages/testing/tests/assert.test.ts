@@ -1,16 +1,11 @@
 /**
- * The assertion adapter, exercised on every runtime the package supports.
+ * The assertion adapter, exercised on Deno, Node and Bun — the premise of
+ * building on `node:assert/strict` is that all three agree.
  *
- * This suite imports only `src/assert.ts`, which pulls in nothing beyond
- * `node:assert/strict` — so unlike the document-level suites it can run under
- * Deno, Node and Bun. That breadth is the point: the adapter exists so the
- * package has no JSR-sourced dependency, and its whole premise is that
- * `node:assert/strict` behaves the same way in all three.
- *
- * The document-level suites (assertions.test.ts, assert-throws.test.ts) run on
- * Deno and Node only. They reach `@executablemd/runtime/test` through
- * tests/helpers.ts, and Bun cannot resolve a workspace package's subpath export
- * in CI, where `bun install` runs without pnpm's node_modules links.
+ * The document-level suites cannot join it under Bun: they reach
+ * `@executablemd/runtime/test` through tests/helpers.ts, and Bun does not
+ * resolve a workspace package's subpath export in CI, where `bun install` runs
+ * without pnpm's node_modules links.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
@@ -35,11 +30,7 @@ import {
   fail,
 } from "../src/assert.ts";
 
-/**
- * A value whose every formatting hook throws. Passing one through an assertion
- * that succeeds proves the operand was never formatted — the property the
- * document-level diagnostics rely on.
- */
+/** A value whose every formatting hook throws. */
 function hostile(): Record<string, unknown> {
   return {
     get trap(): never {
@@ -139,17 +130,13 @@ describe("assertion adapter", () => {
   });
 
   it("still raises an AssertionError when a failing operand is unformattable", function* () {
-    // A hostile value must not turn an assertion failure into some other error
-    // class — classification downstream keys off AssertionError.
     expect(() => assertStrictEquals(hostile(), {})).toThrow(NodeAssertionError);
     expect(() => assertEquals(hostile(), { a: 1 })).toThrow(NodeAssertionError);
   });
 
   it("lets a comparison-time coercion failure surface as itself", function* () {
-    // `>` coerces an object operand through toString/valueOf, so a throwing
-    // hook fails the comparison rather than the assertion. That happens while
-    // deciding the outcome, not while formatting it, so the adapter must not
-    // swallow it — the ordering assertions are documented as numeric.
+    // `>` coerces its operand, so a throwing toString fails the comparison
+    // itself rather than the assertion — not something to swallow.
     expect(() => assertGreater<unknown>(hostile(), 1)).toThrow("toString ran");
   });
 });

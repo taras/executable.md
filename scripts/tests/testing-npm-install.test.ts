@@ -1,17 +1,8 @@
 /**
- * `@executablemd/testing` used to depend on `@std/assert`, which dnt emitted as
- * `npm:@jsr/std__assert` — a package the default npm registry does not serve.
- * That single dependency made `npm install @executablemd/cli` fail for anyone
- * who had not configured `@jsr:registry`, and it is why the build wrote an
- * `.npmrc` into its own output directory.
- *
- * This suite proves the dependency is gone at the boundary that matters: build
- * the package the normal way, then install the emitted tarball into a scratch
- * directory using npm's *default* configuration. The install runs outside the
- * repository, with no `.npmrc` of its own, and with the machine's user and
- * global npm config pointed at empty files — otherwise an ambient
- * `@jsr:registry` on the developer's box or a CI runner would mask a
- * regression and the test would prove nothing.
+ * No published package may depend on a `jsr:` specifier
+ * (specs/release-process-spec.md): dnt turns one into a `@jsr/*` dependency
+ * that the default npm registry does not serve. This builds the package the
+ * normal way and installs the emitted tarball with stock npm configuration.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
@@ -55,11 +46,10 @@ function* buildTestingPackage(version: string): Operation<ProcessResult> {
 }
 
 /**
- * npm's environment with every source of ambient configuration neutralized.
- * `userconfig` and `globalconfig` point at empty files, so a developer's
- * `~/.npmrc` cannot supply the `@jsr` mapping this test exists to prove
- * unnecessary. Any `npm_config_*` variable already in the environment is
- * dropped for the same reason.
+ * Ambient npm configuration is neutralized rather than inherited: a developer
+ * or runner whose `~/.npmrc` already maps `@jsr` would supply the very setting
+ * this test exists to prove unnecessary, and the assertion would pass
+ * vacuously.
  */
 function* pristineNpmEnv(scratch: string): Operation<Record<string, string>> {
   // Two separate files: npm refuses to load one path as both user and global.
@@ -92,7 +82,6 @@ describe("npm install with default registry configuration", () => {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
-    // The emitted manifest is the contract users resolve against.
     const emitted = JSON.parse(yield* readTextFile(path.join(OUT_DIR, "package.json")));
     const jsrDeps = Object.entries(emitted.dependencies ?? {}).filter(
       ([name, range]) => name.startsWith("@jsr/") || String(range).includes("@jsr/"),
@@ -122,8 +111,6 @@ describe("npm install with default registry configuration", () => {
       env: yield* pristineNpmEnv(scratch),
     }).join();
 
-    // A surviving @jsr dependency fails here as
-    // `404 Not Found - GET https://registry.npmjs.org/@jsr%2f...`.
     if (installed.code !== 0) {
       throw new Error(`npm install exited ${installed.code}\n${installed.stderr}`);
     }
