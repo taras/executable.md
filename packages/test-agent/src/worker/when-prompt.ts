@@ -1,5 +1,5 @@
 /**
- * The `<WhenPrompt>` vocabulary (specs/test-agent-spec.md §Behavior
+ * The `<WhenPrompt>` component (specs/test-agent-spec.md §Behavior
  * documents). Each matcher signals the bridge that the previous stage's
  * rendering is complete, then suspends until an offered prompt matches.
  * A match is one durable `when_prompt` operation whose record restores
@@ -98,7 +98,7 @@ function* persistStage(
   return parsed;
 }
 
-export function* installWhenPromptVocabulary(bridge: TurnBridge): Operation<void> {
+export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void> {
   const ordinals = new Map<string, number>();
 
   function* expandWhenPrompt(

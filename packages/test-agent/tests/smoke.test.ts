@@ -1,7 +1,7 @@
 /**
  * Tier TG — test-agent smoke (specs/test-agent-spec.md acceptance
  * §3–§4). TG1 runs the fixture through the real `xmd test` CLI, so the
- * command's own vocabulary wiring is covered. TG2 runs the same fixture
+ * command's own component wiring is covered. TG2 runs the same fixture
  * in process to replay a completed journal — the CLI never loads an
  * existing journal, so replay cannot be exercised through it.
  */
@@ -13,11 +13,11 @@ import { timebox } from "@effectionx/timebox";
 import { exec } from "@effectionx/process";
 import * as path from "node:path";
 import process from "node:process";
-import { execute, installAgentVocabulary } from "@executablemd/core";
+import { execute, installAgentComponents } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
-import { installTestAgentVocabulary } from "../src/vocabulary.ts";
+import { installTestAgentComponents } from "../src/components.ts";
 
 const DOC = path.resolve("smoke-test/test-agent/README.md");
 const CLI = path.resolve("packages/cli/src/cli.ts");
@@ -81,8 +81,8 @@ function* runSmoke(
   // workers finish teardown and the completion settles.
   return yield* scoped(function* () {
     const testing = yield* useTesting();
-    yield* installTestAgentVocabulary({ workerCommand });
-    yield* installAgentVocabulary();
+    yield* installTestAgentComponents({ workerCommand });
+    yield* installAgentComponents();
     const execution = yield* execute({ docPath: DOC, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();

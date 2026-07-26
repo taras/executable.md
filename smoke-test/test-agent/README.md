@@ -13,8 +13,8 @@ real ACPX runtime and a real `xmd test-agent` worker.
   <Test name="reviews a change">
     <Agent name="test">
       <Session name="review">
-        <Prompt prompt="Review packages/core at revision abc123" as="firstReply" />
-        <Prompt prompt="Summarize packages/core" as="secondReply" />
+        <Prompt text="Review packages/core at revision abc123" as="firstReply" />
+        <Prompt text="Summarize packages/core" as="secondReply" />
       </Session>
     </Agent>
     <AssertStringIncludes actual={firstReply} expected="The review of **packages/core** at `abc123` passed." />

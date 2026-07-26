@@ -92,7 +92,7 @@ export function denyPermission(request: PermissionRequest): PermissionOutcome {
 function noProvider(operation: string): Error {
   return new Error(
     `Agent.${operation} has no provider — install one with ` +
-      `installAgentVocabulary({ rootProvider: { factory, options } })`,
+      `installAgentComponents({ rootProvider: { factory, options } })`,
   );
 }
 

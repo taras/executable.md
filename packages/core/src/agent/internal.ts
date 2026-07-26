@@ -1,10 +1,10 @@
 /**
- * Private agent-vocabulary state. Deliberately NOT exported from the
+ * Private agent-component state. Deliberately NOT exported from the
  * package: the per-execution prompt bookkeeping and the seeded provider
- * configuration are internal to the vocabulary — the public AgentApi
+ * configuration are internal to the components — the public AgentApi
  * stays exactly the specified four operations.
  *
- * The configuration values are seeded by `installAgentVocabulary()` and
+ * The configuration values are seeded by `installAgentComponents()` and
  * read back by `<AgentProvider>`; this Api is the seeding mechanism, not
  * a public way to override them.
  */
@@ -30,7 +30,7 @@ interface AgentInternalApi {
 function noExecution(operation: string): Error {
   return new Error(
     `${operation} requires an active agent execution — install the agent ` +
-      `vocabulary with installAgentVocabulary() before executing documents`,
+      `components with installAgentComponents() before executing documents`,
   );
 }
 

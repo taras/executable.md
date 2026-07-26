@@ -27,7 +27,7 @@ import { createTurnBridge, collectTurn } from "./bridge.ts";
 import type { TemplateMatchResult } from "../template.ts";
 import type { BridgeEvent } from "./bridge.ts";
 import { useLineClient } from "../net.ts";
-import { installWhenPromptVocabulary } from "./when-prompt.ts";
+import { installWhenPromptComponent } from "./when-prompt.ts";
 import { installWorkerProfile } from "./profile.ts";
 import { serveAcp, useProcessStdio } from "./acp-server.ts";
 import type { TurnResult } from "./acp-server.ts";
@@ -181,7 +181,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
             return { exists: reply.exists, isFile: reply.isFile, isDirectory: false };
           },
         });
-        yield* installWhenPromptVocabulary(bridge);
+        yield* installWhenPromptComponent(bridge);
         // Behavior-document errors — eval preflight rejections,
         // unsupported components, matcher configuration — must fail the
         // scenario, never render as comments and let the turn succeed.

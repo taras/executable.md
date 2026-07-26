@@ -1,6 +1,6 @@
 /**
  * Tier BE — behavior-engine tests (specs/test-agent-spec.md §Behavior
- * documents): the `<WhenPrompt>` vocabulary driven in-process against a
+ * documents): the `<WhenPrompt>` component driven in-process against a
  * real document execution, with no ACP transport, controller, or worker.
  * Proves stage advancement, capture exposure, mismatch retention, and
  * reaching a second stage through EOF.
@@ -18,7 +18,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { collectTurn, createTurnBridge } from "../src/worker/bridge.ts";
 import type { BridgeEvent } from "../src/worker/bridge.ts";
 import type { TemplateMatchResult } from "../src/template.ts";
-import { installWhenPromptVocabulary } from "../src/worker/when-prompt.ts";
+import { installWhenPromptComponent } from "../src/worker/when-prompt.ts";
 
 const REVIEW = [
   "<WhenPrompt",
@@ -50,7 +50,7 @@ function* useEngine(source: string): Operation<Engine> {
   const turnEvents = yield* bridge.events;
   const stream = new InMemoryStream();
 
-  yield* installWhenPromptVocabulary(bridge);
+  yield* installWhenPromptComponent(bridge);
   yield* Component.around({
     // deno-lint-ignore require-yield
     *raise([segment]) {

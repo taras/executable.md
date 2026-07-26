@@ -3,8 +3,8 @@ import { CodeBlock } from "../../components/Code.tsx";
 
 const REVIEW = `<Agent>
   <Session name="review">
-    <Prompt prompt="Review the current repository. List the highest-risk changes as a checklist." as="review" />
-    <Prompt prompt="Turn that review into the next three actions." as="actions" />
+    <Prompt text="Review the current repository. List the highest-risk changes as a checklist." as="review" />
+    <Prompt text="Turn that review into the next three actions." as="actions" />
   </Session>
 </Agent>
 
@@ -17,11 +17,11 @@ const REVIEW = `<Agent>
 {actions}`;
 
 const APPROVE_ALL = `<ApproveAll>
-  <Prompt prompt="Apply the approved migration." />
+  <Prompt text="Apply the approved migration." />
 </ApproveAll>`;
 
 const ASK = `<AskPermission>
-  <Prompt prompt="Make the proposed edit." />
+  <Prompt text="Make the proposed edit." />
 </AskPermission>`;
 
 export default define.page(function Agents() {

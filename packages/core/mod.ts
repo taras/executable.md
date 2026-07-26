@@ -100,9 +100,9 @@ export {
 } from "./src/validate.ts";
 export type { NormalizedIssue } from "./src/validate.ts";
 
-// Agent vocabulary — <Agent>/<Session>/<Prompt> over a provider-factory seam.
-export { installAgentVocabulary } from "./src/agent/vocabulary.ts";
-export type { AgentVocabularyOptions } from "./src/agent/vocabulary.ts";
+// Agent components — <Agent>/<Session>/<Prompt> over a provider-factory seam.
+export { installAgentComponents } from "./src/agent/components.ts";
+export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,

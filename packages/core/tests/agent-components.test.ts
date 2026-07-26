@@ -1,10 +1,10 @@
 /**
  * Tier AC — agent component tests (specs/acp-client-spec.md).
  *
- * Exercises the agent vocabulary end to end against a stub root provider:
+ * Exercises the agent components end to end against a stub root provider:
  * prompt input selection, scoping and overrides, failure semantics and
  * completion aggregation, and journal replay. The stub is installed through
- * `installAgentVocabulary`'s `rootProvider` seam — no real provider,
+ * `installAgentComponents`'s `rootProvider` seam — no real provider,
  * subprocess, or provider selection.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -21,7 +21,7 @@ import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agen
 import { AgentPromptError } from "../src/agent/errors.ts";
 import { readCompletedPrompts } from "../src/agent/journal.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
-import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
+import { installAgentComponents } from "../src/agent/components.ts";
 
 interface StubResponse {
   status?: "completed" | "failed" | "cancelled";
@@ -126,7 +126,7 @@ function createStubStream(
 }
 
 function* installStub(stub: Stub): Operation<void> {
-  yield* installAgentVocabulary({
+  yield* installAgentComponents({
     rootProvider: {
       factory: stub.factory,
       options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
@@ -161,7 +161,7 @@ describe("Tier AC — agent components", () => {
     const stub = createStubProvider();
     yield* installStub(stub);
     const { output, result } = yield* runDoc(
-      '<Prompt prompt="fallback">\nSay hello\n</Prompt>\n',
+      '<Prompt text="fallback">\nSay hello\n</Prompt>\n',
       new InMemoryStream(),
     );
     expect(result.ok).toBe(true);
@@ -173,29 +173,39 @@ describe("Tier AC — agent components", () => {
     expect(output).toContain("[stub-agent:stub:default:");
   });
 
-  it("AC2: empty wrapper children win over the prompt prop", function* () {
+  it("AC2: empty wrapper children win over the text prop", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
-    const { result } = yield* runDoc('<Prompt prompt="fallback"></Prompt>\n', new InMemoryStream());
+    const { result } = yield* runDoc('<Prompt text="fallback"></Prompt>\n', new InMemoryStream());
     expect(result.ok).toBe(true);
     expect(stub.promptCalls.length).toBe(1);
     expect(stub.promptCalls[0]!.content).toBe("");
   });
 
-  it("AC3: self-closing <Prompt> falls back to the prompt prop", function* () {
+  it("AC3: self-closing <Prompt> falls back to the text prop", function* () {
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    const { output, result } = yield* runDoc('<Prompt text="hello" />\n', new InMemoryStream());
+    expect(result.ok).toBe(true);
+    expect(stub.promptCalls[0]!.content).toBe("hello");
+    expect(output).toContain("[stub-agent:stub:default:hello]");
+  });
+
+  it("AC19: the removed prompt prop is rejected as an unknown prop", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
     const { output, result } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
     expect(result.ok).toBe(true);
-    expect(stub.promptCalls[0]!.content).toBe("hello");
-    expect(output).toContain("[stub-agent:stub:default:hello]");
+    expect(stub.promptCalls.length).toBe(0);
+    expect(output).toContain("<Prompt>");
+    expect(output).toContain("prompt");
   });
 
   it("AC4: as binding captures the response instead of emitting it", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
     const { output, result } = yield* runDoc(
-      '<Prompt prompt="hi" as="answer" />\n\nCaptured: {answer}\n',
+      '<Prompt text="hi" as="answer" />\n\nCaptured: {answer}\n',
       new InMemoryStream(),
     );
     expect(result.ok).toBe(true);
@@ -209,11 +219,11 @@ describe("Tier AC — agent components", () => {
     const doc = [
       '<Agent name="agent-two">',
       '  <Session name="review">',
-      '    <Prompt prompt="one" />',
+      '    <Prompt text="one" />',
       "  </Session>",
       "</Agent>",
       "",
-      '<Prompt prompt="two" agent="agent-three" session="named" timeout="500ms" />',
+      '<Prompt text="two" agent="agent-three" session="named" timeout="500ms" />',
       "",
     ].join("\n");
     const { result } = yield* runDoc(doc, new InMemoryStream());
@@ -258,11 +268,11 @@ describe("Tier AC — agent components", () => {
     });
     yield* installStub(stub);
     const doc = [
-      '<Prompt prompt="first-fail" />',
+      '<Prompt text="first-fail" />',
       "",
-      '<Prompt prompt="ok" />',
+      '<Prompt text="ok" />',
       "",
-      '<Prompt prompt="second-fail" />',
+      '<Prompt text="second-fail" />',
       "",
       "after all prompts",
       "",
@@ -292,7 +302,7 @@ describe("Tier AC — agent components", () => {
     const stub = createStubProvider(() => ({ status: "failed", stopReason: "refusal" }));
     yield* installStub(stub);
     const { output, result } = yield* runDoc(
-      '<Prompt prompt="boom" throwOnError />\n\nnever reached\n',
+      '<Prompt text="boom" throwOnError />\n\nnever reached\n',
       new InMemoryStream(),
     );
     expect(result.ok).toBe(false);
@@ -311,7 +321,7 @@ describe("Tier AC — agent components", () => {
     );
     yield* installStub(stub);
     const stream = new InMemoryStream();
-    const doc = '<Prompt prompt="good" />\n\n<Prompt prompt="bad" />\n';
+    const doc = '<Prompt text="good" />\n\n<Prompt text="bad" />\n';
 
     const first = yield* runDoc(doc, stream);
     expect(first.result.ok).toBe(false);
@@ -359,7 +369,7 @@ describe("Tier AC — agent components", () => {
     }));
     yield* installStub(stub);
     const stream = new InMemoryStream();
-    yield* runDoc('<Prompt prompt="describe" />\n', stream);
+    yield* runDoc('<Prompt text="describe" />\n', stream);
 
     const events = yield* stream.readAll();
     const prompts = events.filter(
@@ -390,7 +400,7 @@ describe("Tier AC — agent components", () => {
     );
     yield* installStub(stub);
     const stream = new InMemoryStream();
-    yield* runDoc('<Prompt prompt="plain-boom" />\n', stream);
+    yield* runDoc('<Prompt text="plain-boom" />\n', stream);
 
     const events = yield* stream.readAll();
     const plain = events.find(
@@ -404,7 +414,7 @@ describe("Tier AC — agent components", () => {
     }
 
     const thrown = new InMemoryStream();
-    yield* runDoc('<Prompt prompt="boom" throwOnError />\n', thrown);
+    yield* runDoc('<Prompt text="boom" throwOnError />\n', thrown);
     const thrownEvents = yield* thrown.readAll();
     const raisedEntry = thrownEvents.find(
       (event) => event.type === "yield" && event.description.type === "agent_prompt",

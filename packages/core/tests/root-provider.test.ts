@@ -21,7 +21,7 @@ import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
-import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
+import { installAgentComponents } from "../src/agent/components.ts";
 
 interface ProviderState {
   activeDuringPrompt: boolean;
@@ -144,8 +144,8 @@ const OPTIONS: AgentProviderOptions = { defaultAgent: "a", permissionMode: "deny
 describe("Tier RP — root-provider lifecycle", () => {
   it("RP1: provider is active during execution; its finalizer runs once, before completion settles", function* () {
     const { factory, state } = createProvider();
-    yield* installAgentVocabulary({ rootProvider: { factory, options: OPTIONS } });
-    const { output, result } = yield* runDoc('<Prompt prompt="hi" />\n');
+    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+    const { output, result } = yield* runDoc('<Prompt text="hi" />\n');
     expect(result.ok).toBe(true);
     expect(output).toContain("[hi]");
     expect(state.activeDuringPrompt).toBe(true);
@@ -157,8 +157,8 @@ describe("Tier RP — root-provider lifecycle", () => {
   it("RP2: a teardown failure still closes rendered output but makes completion an Err", function* () {
     const boom = new Error("teardown boom");
     const { factory } = createProvider({ teardownError: boom });
-    yield* installAgentVocabulary({ rootProvider: { factory, options: OPTIONS } });
-    const { output, result } = yield* runDoc('<Prompt prompt="hi" />\n');
+    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+    const { output, result } = yield* runDoc('<Prompt text="hi" />\n');
     expect(output).toContain("[hi]");
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -173,8 +173,8 @@ describe("Tier RP — root-provider lifecycle", () => {
       extraFinalizer: true,
       fail: true,
     });
-    yield* installAgentVocabulary({ rootProvider: { factory, options: OPTIONS } });
-    const { result } = yield* runDoc('<Prompt prompt="hi" />\n');
+    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+    const { result } = yield* runDoc('<Prompt text="hi" />\n');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(AggregateError);
