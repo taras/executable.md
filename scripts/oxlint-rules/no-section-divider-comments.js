@@ -62,15 +62,9 @@ export const noSectionDividerComments = {
             },
             messageId: "forbidden",
             fix(fixer) {
-              const lineStart =
-                source.text.lastIndexOf("\n", opening.range[0] - 1) + 1;
-              const nextNewline = source.text.indexOf(
-                "\n",
-                closing.range[1],
-              );
-              const lineEnd = nextNewline === -1
-                ? source.text.length
-                : nextNewline + 1;
+              const lineStart = source.text.lastIndexOf("\n", opening.range[0] - 1) + 1;
+              const nextNewline = source.text.indexOf("\n", closing.range[1]);
+              const lineEnd = nextNewline === -1 ? source.text.length : nextNewline + 1;
 
               return fixer.removeRange([lineStart, lineEnd]);
             },

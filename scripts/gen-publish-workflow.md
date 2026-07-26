@@ -152,14 +152,28 @@ npm stays per-package in `publish-one.yml`, and this job runs in the same
 ## Generate
 
 ```ts eval
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 
 const SCOPE = "@executablemd/";
 
 const root = JSON.parse(yield* readTextFile("deno.json"));
 
+// A `workspace` entry is either a directory or a one-level glob like
+// `packages/*`. Sorting keeps the generated job order stable across machines.
+const dirs = [];
+for (const entry of root.workspace) {
+  if (entry.endsWith("/*")) {
+    const parent = entry.slice(0, -2);
+    for (const name of (yield* readdir(parent)).sort()) {
+      dirs.push(`${parent}/${name}`);
+    }
+  } else {
+    dirs.push(entry);
+  }
+}
+
 const members = [];
-for (const dir of root.workspace) {
+for (const dir of dirs) {
   let denoJson;
   let pkgJson;
   try {

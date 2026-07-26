@@ -135,11 +135,7 @@ describe("local/no-redundant-test-scope", () => {
     const source = yield* fixed("doubled.ts");
 
     expect(source).toContain(
-      [
-        `  it("wraps the body twice", function* () {`,
-        `    expect(1).toBe(1);`,
-        `  });`,
-      ].join("\n"),
+      [`  it("wraps the body twice", function* () {`, `    expect(1).toBe(1);`, `  });`].join("\n"),
     );
   });
 

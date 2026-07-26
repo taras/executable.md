@@ -6,15 +6,27 @@ After making any changes to source files (`src/`) or test files (`tests/`),
 always run all four checks before committing:
 
 1. **Lint + Format**: `deno task lint` (runs `oxlint` + `oxfmt --check`) — must
-   produce 0 errors. Run `pnpm fmt` to auto-fix formatting.
-2. **Typecheck**: `deno check packages/core/mod.ts` — must produce no errors
-3. **Tests**:
-   `deno test --no-check --allow-all packages/core/tests/ packages/durable-streams/tests/` — all
-   tests must pass with 0 failures
+   produce 0 errors. Run `deno task fmt` to auto-fix formatting.
+2. **Typecheck**: `deno task check` — must produce no errors
+3. **Tests**: `deno task test` — all tests must pass with 0 failures
 4. **JSR publishability**: `deno task check:jsr` — must end with
    `Success Dry run complete`
 
 Do not commit if any check fails. Fix the issue first, then re-run all four.
+
+Each command derives its own scope, so a new package under `packages/` is
+covered without editing anything here:
+
+- `check`, `test`, and `check:jsr` follow the `packages/*` workspace glob in the
+  root `deno.json`. Its `exclude` list holds the paths that must stay
+  unchecked — currently the deliberately-malformed `scripts/tests/fixtures`.
+- `lint` and `fmt` are defined once, as `package.json` scripts that `deno task`
+  also exposes, and cover `packages` and `scripts`. Oxfmt skips Markdown
+  (`.oxfmtrc.json`): these documents are executable, and reformatting a fenced
+  block changes what they do. The fixtures stay out of both, on the lint task's
+  command line rather than in `.oxlintrc.json` — the rule tests in
+  `scripts/tests/` lint those same files through the repository config and need
+  it to keep reporting on them.
 
 ## MUST READ
 
