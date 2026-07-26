@@ -113,7 +113,7 @@ const AGENT_DOC = [
   "BEFORE_MARKER",
   "",
   "<Agent>",
-  '  <Prompt prompt="hello" />',
+  '  <Prompt text="hello" />',
   "</Agent>",
   "",
   "AFTER_MARKER",
@@ -123,7 +123,7 @@ const AGENT_DOC = [
 const BARE_PROMPT_DOC = [
   "BEFORE_MARKER",
   "",
-  '<Prompt prompt="hello" />',
+  '<Prompt text="hello" />',
   "",
   "AFTER_MARKER",
   "",

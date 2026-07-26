@@ -30,7 +30,7 @@ import {
   AgentProviders,
   Config,
   execute,
-  installAgentVocabulary,
+  installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
   useNormalizedOutput,
@@ -38,8 +38,8 @@ import {
 } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
-import { installTestAgentVocabulary, runTestAgentWorker } from "@executablemd/test-agent";
+import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
+import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/test-agent";
 import { resolveAgentConfig } from "./agent-config.ts";
 import type { AgentFlags } from "./agent-config.ts";
 import { FileStream } from "./file-stream.ts";
@@ -287,7 +287,7 @@ function findFlagText(args: string[], flag: string): string | undefined {
 
 /**
  * Install the agent stack for `xmd run`: permission mode, contextual
- * timeout, the ACPX registration, and the vocabulary with the resolved
+ * timeout, the ACPX registration, and the components with the resolved
  * root provider. Invalid flags and an unknown --agent-provider fail here
  * — before any document executes. Nothing starts an agent: the provider
  * validates availability on first use.
@@ -319,7 +319,7 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
   }
 
   const permissionMode = config.permissionMode;
-  yield* installAgentVocabulary({
+  yield* installAgentComponents({
     defaultAgent,
     permissionMode,
     rootProvider: { factory, options: { defaultAgent, permissionMode } },
@@ -381,17 +381,17 @@ function* run(
   }
 
   // Compose testing around the single core execution entrypoint: both
-  // commands register the vocabulary (assertions work in regular documents,
+  // commands register the components (assertions work in regular documents,
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
   // additionally activates root testing through a useTesting() session.
   if (mode.testing) {
     yield* useTesting({ verbose });
-    // TestAgent installs before the agent vocabulary so its <Prompt>
+    // TestAgent installs before the agent components so its <Prompt>
     // interceptor runs first.
-    yield* installTestAgentVocabulary({ workerCommand: resolveWorkerCommand() });
-    yield* installAgentVocabulary();
+    yield* installTestAgentComponents({ workerCommand: resolveWorkerCommand() });
+    yield* installAgentComponents();
   } else {
-    yield* installTestingVocabulary({ verbose });
+    yield* installTestingComponents({ verbose });
   }
 
   // Agent flags are exclusive to `xmd run` — `xmd test` drives agents

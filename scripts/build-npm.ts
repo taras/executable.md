@@ -13,9 +13,16 @@
  * are the single source of truth. Internal @executablemd siblings are declared
  * as external npm dependencies (resolved to the sibling's own version), never
  * inlined, so each published package resolves them from npm.
+ *
+ * `DNT_LOCAL_SIBLINGS=1` builds each internal sibling first and depends on those
+ * artifacts by path instead of by published version, so a branch can build and
+ * type-check against its own workspace sources. The resulting package.json names
+ * local directories and is therefore unpublishable; release workflows never set
+ * the variable.
  */
 
 import { exit, main, until } from "effection";
+import type { Operation } from "effection";
 import { build } from "jsr:@deno/dnt@0.42.3";
 import {
   copyFile,
@@ -61,10 +68,26 @@ function normalizeExports(exports: z.infer<typeof ExportsSchema>): Record<string
   return exports;
 }
 
+/** A workspace member's directory and declared version, keyed by package name. */
+interface WorkspaceMember {
+  dir: string;
+  version: string;
+}
+
+interface BuildContext {
+  repoRoot: URL;
+  rootDeno: z.infer<typeof RootDenoSchema>;
+  members: Record<string, WorkspaceMember>;
+  /** Depend on locally built sibling artifacts instead of published versions. */
+  localSiblings: boolean;
+  skipInstall: boolean;
+  /** Package names already built in this process, so a diamond builds once. */
+  built: Set<string>;
+}
+
 await main(function* (args) {
   const pkgArg = args[0];
   const version = args[1] ?? "0.0.0-dev";
-  const skipInstall = Deno.env.get("DNT_SKIP_INSTALL") === "1";
 
   if (!pkgArg) {
     console.error("usage: build-npm.ts <package-dir> [version]");
@@ -73,15 +96,14 @@ await main(function* (args) {
   }
 
   const repoRoot = new URL("../", import.meta.url);
-  const pkgDir = new URL(`${pkgArg}/`, repoRoot);
 
   const rootDeno = RootDenoSchema.parse(
     JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot))),
   );
 
-  // Map every @executablemd workspace member name -> its declared version, so
-  // internal deps can be pinned to the sibling's own version without hardcoding.
-  const siblingVersion: Record<string, string> = {};
+  // Map every @executablemd workspace member name -> where it lives and which
+  // version it declares, so internal deps resolve without hardcoding either.
+  const members: Record<string, WorkspaceMember> = {};
   for (const member of yield* listWorkspacePaths(rootDeno.workspace, repoRoot)) {
     const memberDenoUrl = new URL(`${member}/deno.json`, repoRoot);
     if (!(yield* exists(memberDenoUrl))) {
@@ -89,9 +111,26 @@ await main(function* (args) {
     }
     const parsed = DenoJsonSchema.safeParse(JSON.parse(yield* readTextFile(memberDenoUrl)));
     if (parsed.success && parsed.data.name.startsWith(INTERNAL_SCOPE)) {
-      siblingVersion[parsed.data.name] = parsed.data.version;
+      members[parsed.data.name] = { dir: member, version: parsed.data.version };
     }
   }
+
+  yield* buildPackage(pkgArg, version, {
+    repoRoot,
+    rootDeno,
+    members,
+    localSiblings: Deno.env.get("DNT_LOCAL_SIBLINGS") === "1",
+    skipInstall: Deno.env.get("DNT_SKIP_INSTALL") === "1",
+    built: new Set(),
+  });
+});
+
+function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Operation<void> {
+  const { repoRoot, rootDeno, skipInstall } = ctx;
+  const pkgDir = new URL(`${pkgArg}/`, repoRoot);
+  const siblingVersion: Record<string, string> = Object.fromEntries(
+    Object.entries(ctx.members).map(([name, member]) => [name, member.version]),
+  );
 
   const denoJson = DenoJsonSchema.parse(
     JSON.parse(yield* readTextFile(new URL("deno.json", pkgDir))),
@@ -101,18 +140,29 @@ await main(function* (args) {
   );
 
   // Dependencies come from package.json verbatim, except internal siblings
-  // (workspace:* protocol) which resolve to the sibling's own version range.
+  // (workspace:* protocol) which resolve to the sibling's own version range —
+  // or, with local siblings, to the artifact this process just built for it.
   const dependencies: Record<string, string> = {};
   for (const [name, range] of Object.entries(packageJson.dependencies ?? {})) {
-    if (name.startsWith(INTERNAL_SCOPE)) {
-      const resolved = siblingVersion[name];
-      if (!resolved) {
-        throw new Error(`no workspace version found for internal dependency "${name}"`);
-      }
-      dependencies[name] = `^${resolved}`;
-    } else {
+    if (!name.startsWith(INTERNAL_SCOPE)) {
       dependencies[name] = range;
+      continue;
     }
+    const member = ctx.members[name];
+    if (!member) {
+      throw new Error(`no workspace version found for internal dependency "${name}"`);
+    }
+    if (!ctx.localSiblings) {
+      dependencies[name] = `^${member.version}`;
+      continue;
+    }
+    if (!ctx.built.has(name)) {
+      yield* buildPackage(member.dir, member.version, ctx);
+    }
+    // An absolute path: npm resolves a relative `file:` against the dependent's
+    // own location, which differs for a sibling installed under another
+    // package's node_modules.
+    dependencies[name] = `file:${fromFileUrl(new URL(`${member.dir}/npm`, repoRoot))}`;
   }
 
   // Entry points come from deno.json exports; a package.json `bin` marks its
@@ -263,5 +313,8 @@ await main(function* (args) {
     yield* copyFile(license, new URL("LICENSE", outDir));
   }
 
-  console.log(`built ${denoJson.name}@${version} -> ${pkgArg}/npm`);
-});
+  ctx.built.add(denoJson.name);
+  const provenance =
+    ctx.localSiblings && workspaceDeps.length > 0 ? " (local siblings — not publishable)" : "";
+  console.log(`built ${denoJson.name}@${version} -> ${pkgArg}/npm${provenance}`);
+}

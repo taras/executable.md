@@ -1,5 +1,5 @@
 /**
- * Agent vocabulary registration (specs/acp-client-spec.md).
+ * Agent component registration (specs/acp-client-spec.md).
  *
  * Teaches the expansion loop the agent words via the core
  * `expandInvocation` hook and decorates the Execution Api so prompt
@@ -28,7 +28,7 @@ import { AgentPromptError } from "./errors.ts";
 import { createAgentHandlers } from "./handlers.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
 
-export interface AgentVocabularyOptions {
+export interface AgentComponentsOptions {
   /** Default agent seeded for `<AgentProvider>` inheritance. */
   defaultAgent?: string;
   /** Permission mode seeded for `<AgentProvider>` inheritance. */
@@ -47,7 +47,7 @@ interface SequencedFailure {
   error: AgentPromptError;
 }
 
-export function* installAgentVocabulary(options?: AgentVocabularyOptions): Operation<void> {
+export function* installAgentComponents(options?: AgentComponentsOptions): Operation<void> {
   const handlers = createAgentHandlers();
 
   if (options?.defaultAgent !== undefined) {

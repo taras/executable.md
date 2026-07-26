@@ -1,5 +1,5 @@
 /**
- * Document-level test harness: compose the testing vocabulary (or a full
+ * Document-level test harness: compose the testing components (or a full
  * useTesting() session) around core execute() inside a bounded scope, and
  * observe chunks, close value, completion Result, and the delegated test
  * results/boundaries.
@@ -13,7 +13,7 @@ import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
-import { installHandlers, installTestingVocabulary } from "../src/vocabulary.ts";
+import { installHandlers, installTestingComponents } from "../src/components.ts";
 import type { TestHandlers } from "../src/handlers.ts";
 import { Test } from "../src/test-api.ts";
 import type { BoundaryOutcome, TestResult } from "../src/test-api.ts";
@@ -24,7 +24,7 @@ export interface DocRun {
   /** The output stream's close value. */
   output: string;
   completion: Result<string>;
-  /** Results delegated past the session/vocabulary collectors. */
+  /** Results delegated past the session/component collectors. */
   results: TestResult[];
   boundaries: BoundaryOutcome[];
 }
@@ -67,7 +67,7 @@ export function* runDoc(
     } else if (options.testing) {
       yield* useTesting({ verbose: options.verbose });
     } else {
-      yield* installTestingVocabulary({ verbose: options.verbose });
+      yield* installTestingComponents({ verbose: options.verbose });
     }
 
     const execution = yield* execute({

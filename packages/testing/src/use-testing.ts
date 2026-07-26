@@ -2,7 +2,7 @@
  * useTesting — scope-local testing composition (specs/testing-spec.md).
  *
  * One `useTesting()` session per execution scope: it installs the testing
- * vocabulary, the collection and completion-policy middleware, and root
+ * components, the collection and completion-policy middleware, and root
  * activation, then returns a session handle whose `results` operation
  * snapshots completed tests in discovery order. Every install is removed
  * with the session's Effection scope.
@@ -19,7 +19,7 @@ import type { Operation } from "effection";
 import { Execution } from "@executablemd/core";
 import { sessionActive, Test, TestFailureError } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
-import { decorateCompletion, installTestingVocabulary } from "./vocabulary.ts";
+import { decorateCompletion, installTestingComponents } from "./components.ts";
 
 export interface Testing {
   /** Immutable snapshot of completed tests, in discovery order. */
@@ -34,7 +34,7 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
   }
   yield* Test.around({ sessionActive: () => true });
 
-  yield* installTestingVocabulary(options);
+  yield* installTestingComponents(options);
 
   const collected: TestResult[] = [];
   yield* Test.around({

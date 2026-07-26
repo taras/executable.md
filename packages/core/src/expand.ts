@@ -164,7 +164,7 @@ export function* expandSegments(
       }
 
       case "component": {
-        // Extension hook: an installed vocabulary may claim this invocation
+        // Extension hook: installed component support may claim this invocation
         // before built-in expansion. Returned error segments follow the
         // ambient raise policy, like any component-produced error.
         const handling = yield* expandInvocation(segment, {

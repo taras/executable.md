@@ -1,7 +1,7 @@
 /**
- * Agent + testing vocabulary composition (specs/acp-client-spec.md).
+ * Agent + testing component composition (specs/acp-client-spec.md).
  *
- * Both vocabularies decorate the same Execution Api; a prompt failure
+ * Both component sets decorate the same Execution Api; a prompt failure
  * outside a passing <Test> must still surface as the agent aggregate.
  * Lives in the testing package because core cannot depend on testing.
  */
@@ -13,9 +13,9 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { Agent, execute, installAgentVocabulary } from "@executablemd/core";
+import { Agent, execute, installAgentComponents } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
-import { installTestingVocabulary } from "../mod.ts";
+import { installTestingComponents } from "../mod.ts";
 
 function stubStream(
   content: string,
@@ -54,10 +54,10 @@ function stubStream(
 }
 
 describe("agent + testing composition", () => {
-  it("both vocabularies decorate one execution", function* () {
+  it("both component sets decorate one execution", function* () {
     const calls: string[] = [];
-    yield* installTestingVocabulary();
-    yield* installAgentVocabulary({
+    yield* installTestingComponents();
+    yield* installAgentComponents({
       rootProvider: {
         options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
         *factory(options) {
@@ -97,11 +97,11 @@ describe("agent + testing composition", () => {
         [
           "<Testing>",
           '<Test name="prompt works">',
-          '  <Prompt prompt="good" />',
+          '  <Prompt text="good" />',
           "</Test>",
           "</Testing>",
           "",
-          '<Prompt prompt="bad" />',
+          '<Prompt text="bad" />',
           "",
         ].join("\n"),
       );

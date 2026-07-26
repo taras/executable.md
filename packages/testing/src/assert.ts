@@ -1,5 +1,5 @@
 /**
- * Assertion primitives for the testing vocabulary (specs/testing-spec.md
+ * Assertion primitives for the testing components (specs/testing-spec.md
  * §Assertions). Every export keeps the operands-first, `msg`-last call shape
  * the ASSERTIONS table is written against.
  *
