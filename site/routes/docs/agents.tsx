@@ -1,211 +1,179 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
 
-const DOCUMENT = `<Agent name="codex">
+const REVIEW = `<Agent name="codex">
   <Session name="review">
-    <Prompt>Review the changes in this repository.</Prompt>
+    <Prompt prompt="Review the current repository. List the highest-risk changes as a checklist." as="review" />
+    <Prompt prompt="Turn that review into the next three actions." as="actions" />
   </Session>
-</Agent>`;
+</Agent>
+
+## Review checklist
+
+{review}
+
+## Next actions
+
+{actions}`;
 
 const APPROVE_ALL = `<ApproveAll>
-  <Prompt prompt="Update the dependency lockfile." />
+  <Prompt prompt="Apply the approved migration." />
 </ApproveAll>`;
 
-const ASK_PERMISSION = `<AskPermission>
-  <Prompt prompt="Apply the suggested change." />
+const ASK = `<AskPermission>
+  <Prompt prompt="Make the proposed edit." />
 </AskPermission>`;
 
 export default define.page(function Agents() {
   return (
     <>
       <h1 style="font-size:2rem;font-weight:800;">Coding agents</h1>
-      <p class="muted">
-        Run an ACP-compatible coding agent from a markdown document. The agent
-        reply becomes ordinary document output, so a review, plan, or generated
-        change request can sit beside the rest of your workflow.
+
+      <h2>Why put a coding agent in a document?</h2>
+      <p>
+        Use a coding agent when a workflow has both predictable steps and a part
+        that needs judgment. A single document keeps the instructions, agent
+        result, and later processing together. You can run a repository review,
+        planning task, maintenance check, migration preparation, or
+        documentation update the same way each time.
+      </p>
+      <p>
+        Capture the agent&apos;s result and use it in a later document stage.
+        Keep unattended work bounded by choosing the working directory,
+        permission policy, and time limit before it starts.
       </p>
 
-      <h2>Start with one prompt</h2>
+      <h2>When to use it</h2>
+      <p>Agent documents work well when you want to:</p>
+      <ul>
+        <li>Review a repository and turn the findings into a checklist.</li>
+        <li>
+          Investigate a failure, then pass the diagnosis to a later stage.
+        </li>
+        <li>Maintain documentation from source changes.</li>
+        <li>Ask several related questions in one working session.</li>
+        <li>Add agent judgment to an otherwise deterministic workflow.</li>
+      </ul>
       <p>
-        Save this as{" "}
-        <code>review.md</code>. This example uses the ACPX agent named{" "}
-        <code>codex</code>; choose an agent name that your ACPX setup can run.
+        Use normal executable components for deterministic shell and process
+        work. Use the stateless sampling API when no coding-agent session or
+        repository interaction is needed. For a one-off conversation, use an
+        interactive agent directly instead of creating a repeatable workflow.
       </p>
-      <CodeBlock filename="review.md">{DOCUMENT}</CodeBlock>
-      <p>Run it from the repository the agent should work in:</p>
+
+      <h2>A complete first workflow</h2>
+      <p>
+        This document asks for a review, captures it, asks a follow-up in the
+        same conversation, and presents both results. Save it as
+        <code>review.md</code> in the repository to review.
+      </p>
+      <CodeBlock filename="review.md">{REVIEW}</CodeBlock>
+      <p>
+        <code>&lt;Agent&gt;</code> chooses the coding agent. The first
+        <code>&lt;Prompt&gt;</code> captures its reply as <code>review</code>
+        instead of placing it immediately in the output. The two headings later
+        in the document show the captured review and actions.
+      </p>
+      <p>Run the workflow with an agent your ACPX setup can run:</p>
       <CodeBlock>{"xmd run review.md --default-agent codex"}</CodeBlock>
       <p>
-        <code>&lt;Prompt&gt;</code>{" "}
-        renders the agent&apos;s text where the tag appears. If the agent writes
-        a Markdown review, that Markdown is part of the rendered document. Add
-        {" "}
-        <code>as="reply"</code>{" "}
-        to capture the reply instead of rendering it, then use{" "}
-        <code>{"{reply}"}</code> later in the document.
+        The rendered document contains the review checklist followed by the next
+        actions. If you omit{" "}
+        <code>as</code>, a prompt reply appears at the prompt&apos;s position
+        instead.
       </p>
 
-      <h2>The three components</h2>
-      <ul>
-        <li>
-          <code>&lt;Agent&gt;</code> selects an agent for its body. Without a
-          <code>name</code>, it uses the current default.
-        </li>
-        <li>
-          <code>&lt;Session&gt;</code>{" "}
-          selects a named, reusable conversation. Prompts in the same session
-          run in order.
-        </li>
-        <li>
-          <code>&lt;Prompt&gt;</code> sends its rendered children, or its
-          <code>prompt</code> prop when self-closing, and renders the reply.
-        </li>
-      </ul>
+      <h2>Continue the same task</h2>
       <p>
-        A <code>name</code>, <code>session</code>, or <code>timeout</code>{" "}
-        prop on <code>&lt;Prompt&gt;</code>{" "}
-        overrides the enclosing choice for that one turn.
+        The named <code>&lt;Session name="review"&gt;</code>{" "}
+        in the example keeps the follow-up connected to the review. Use a
+        session when a later prompt should retain the context of earlier work,
+        such as asking an agent to turn findings into a plan. Use different
+        session names for separate conversations in the same document.
       </p>
 
-      <h2>Provider and agent selection</h2>
+      <h2>Run it safely</h2>
       <p>
-        <code>xmd run</code> installs the <code>acpx</code>{" "}
-        provider by default. Select it explicitly with{" "}
-        <code>--agent-provider acpx</code>{" "}
-        when you want the command line to state that dependency. Installing a
-        provider does not start an agent; the first agent use checks
-        availability.
-      </p>
-      <p>Defaults become more specific in this order:</p>
-      <ol>
-        <li>The ACPX default agent.</li>
-        <li>
-          <code>DEFAULT_AGENT_NAME</code>.
-        </li>
-        <li>
-          <code>--default-agent &lt;name&gt;</code>.
-        </li>
-        <li>
-          <code>&lt;AgentProvider defaultAgent="…"&gt;</code>.
-        </li>
-        <li>
-          <code>&lt;Agent name="…"&gt;</code> or{" "}
-          <code>&lt;Prompt agent="…" /&gt;</code>.
-        </li>
-      </ol>
-      <p>
-        In other words, the environment supplies a convenient machine-wide
-        default, the CLI selects a run, and explicit document choices win for
-        their scope.
-      </p>
-
-      <h2>Working directory, sessions, and time limits</h2>
-      <p>
-        ACPX uses the document&apos;s contextual working directory when it
-        starts or finds a session. In a Git repository, it reuses the nearest
-        matching session from that directory toward the Git root; otherwise it
-        starts a session at the exact directory. A session name distinguishes
-        parallel conversations in the same project. Prompts for one resolved
-        session are FIFO; different sessions can proceed concurrently.
-      </p>
-      <p>
-        Agent prompts use the shared execution timeout: two minutes by default.
-        Override it for a run with a positive number of seconds:
-      </p>
-      <CodeBlock>
-        {"xmd run review.md --default-agent codex --timeout 90"}
-      </CodeBlock>
-      <p>
-        The timeout also applies to process and fetch operations that use the
-        same execution context. A prompt&apos;s <code>timeout</code>{" "}
-        prop wins for that individual request.
-      </p>
-      <p>
-        The provider and every session it starts belong to the run. When the
-        document finishes, it cancels active turns and closes provider
-        resources; the command completes only after teardown finishes.
-      </p>
-
-      <h2>Permissions</h2>
-      <p>
-        Permissions control how agent tool requests are answered. Choose one
-        mode for <code>xmd run</code>:
+        Start from the default,{" "}
+        <code>--approve-reads</code>. It allows read and search requests, asks
+        about other requests in an interactive terminal, and denies those other
+        requests when no interactive terminal is available. This is the safest
+        common choice for reviews and investigations.
       </p>
       <ul>
         <li>
-          <code>--approve-reads</code>{" "}
-          is the default. It approves read and search requests, then asks about
-          other requests when the terminal is interactive. Without an
-          interactive terminal, those other requests are denied.
+          <strong>Where may it work?</strong> Run <code>xmd</code>{" "}
+          from the repository or directory the agent should use. That working
+          directory determines where its session starts or resumes.
         </li>
         <li>
-          <code>--approve-all</code>{" "}
-          selects an allow option whenever the agent offers one.
+          <strong>What may it do?</strong> Choose <code>--approve-reads</code>,
+          <code>--approve-all</code>, or{" "}
+          <code>--deny-all</code>. The flags are mutually exclusive.
         </li>
         <li>
-          <code>--deny-all</code> denies requests.
+          <strong>How long may it wait?</strong>{" "}
+          Prompts have a two-minute default limit. Use <code>--timeout 90</code>
+          {" "}
+          for a 90-second run, or set a prompt-specific <code>timeout</code>
+          {" "}
+          when one request needs a different limit.
         </li>
       </ul>
       <p>
-        The flags are mutually exclusive. A policy also denies when the agent
-        offers no allow option, so a request always receives a concrete answer.
-      </p>
-      <p>
-        Use the document-level components when one prompt needs a different,
-        scoped policy:
+        Give a single prompt a broader or interactive policy only when that work
+        requires it. These wrappers apply only to their contents:
       </p>
       <CodeBlock filename="review.md">{APPROVE_ALL}</CodeBlock>
-      <CodeBlock filename="review.md">{ASK_PERMISSION}</CodeBlock>
+      <CodeBlock filename="review.md">{ASK}</CodeBlock>
       <p>
-        <code>&lt;ApproveAll&gt;</code> and <code>&lt;AskPermission&gt;</code>
-        apply only to their bodies. They are the document-facing form of scoped
-        Agent API middleware: an undecided nested policy denies rather than
-        falling through to an enclosing policy. They do not change the
-        permission mode passed to the provider by the CLI. They are not eval
-        blocks, so a document does not need JavaScript to apply a scoped policy.
+        <code>&lt;ApproveAll&gt;</code> chooses an available allow option;
+        <code>&lt;AskPermission&gt;</code>{" "}
+        asks in an interactive terminal and otherwise denies. No JavaScript eval
+        block is needed to use either.
       </p>
 
-      <h2>When a run fails</h2>
-      <ul>
-        <li>
-          <code>Unknown agent provider "…"</code> means the value of{" "}
-          <code>--agent-provider</code> is not registered. Current{" "}
-          <code>xmd run</code> registers <code>acpx</code>.
-        </li>
-        <li>
-          <code>agent "…" is unavailable</code>{" "}
-          means ACPX could not validate the selected agent. Check the selected
-          name, its installation, and its ACPX configuration.
-        </li>
-        <li>
-          A timeout means the operation exceeded the shared or prompt-specific
-          limit. Check the working directory, permissions, and whether the agent
-          is waiting for input before increasing it.
-        </li>
-        <li>
-          A permission denial means the selected mode did not allow the
-          requested tool. Use the least permissive mode that permits the work,
-          or scope <code>&lt;ApproveAll&gt;</code> around the specific prompt.
-        </li>
-      </ul>
-
-      <h2>Test the integration without a model</h2>
+      <h2>Reference</h2>
       <p>
-        The bundled test agent drives the same ACPX path with scripted Markdown
-        scenarios. It makes tests repeatable without invoking a real coding
-        agent or asserting a nondeterministic response.
+        <code>xmd run</code>{" "}
+        uses ACPX by default. Agent defaults become more specific in this order:
+        ACPX default, <code>DEFAULT_AGENT_NAME</code>,
+        <code>--default-agent</code>, an enclosing
+        <code>&lt;AgentProvider defaultAgent="…"&gt;</code>, then an explicit
+        <code>&lt;Agent&gt;</code> or{" "}
+        <code>&lt;Prompt agent="…" /&gt;</code>. Use{" "}
+        <code>--agent-provider acpx</code>{" "}
+        to state the current provider explicitly.
       </p>
       <p>
-        Continue with the{" "}
+        A <code>session</code>, <code>agent</code>, or <code>timeout</code>{" "}
+        prop on <code>&lt;Prompt&gt;</code>{" "}
+        overrides the enclosing choice for that one request. When the document
+        finishes, active work is cancelled and the agent resources close before
+        the command completes.
+      </p>
+      <p>
+        <code>Unknown agent provider "…"</code>{" "}
+        means the provider flag is not registered.{" "}
+        <code>agent "…" is unavailable</code>{" "}
+        means the selected agent could not be checked; verify its name,
+        installation, and ACPX configuration. For a timeout or denial, first
+        check the working directory, permission choice, and limit.
+      </p>
+
+      <h2>Test the workflow without a model</h2>
+      <p>
+        Use the bundled test agent to verify prompts, sessions, captures, and
+        failure handling with controlled replies instead of a real model. The
         <a
           href="https://github.com/taras/executable.md/blob/main/packages/test-agent/README.md"
           rel="noopener"
         >
           deterministic test-agent guide
         </a>{" "}
-        for a direct ACPX walkthrough and an <code>xmd test</code> example using
-        {" "}
-        <code>&lt;TestAgent&gt;</code>, <code>&lt;Agent&gt;</code>,{" "}
-        <code>&lt;Session&gt;</code>, and <code>&lt;Prompt&gt;</code>.
+        starts with the normal <code>xmd test</code>{" "}
+        workflow and includes an advanced ACPX walkthrough for client
+        integration work.
       </p>
     </>
   );
