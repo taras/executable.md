@@ -118,6 +118,15 @@ The builder therefore refuses a package that declares one, naming the
 dependencies and leaving the output directory empty. Release workflows never set
 the variable.
 
+`DNT_LOCAL_SIBLINGS=1` builds each internal sibling first — depth-first over the
+`workspace:*` dependencies, once per package — and depends on those artifacts by
+absolute path (`file:<package-dir>/npm`) instead of by published version. The
+build therefore type-checks against the sources in the working tree, which is
+what a branch changing a shared API needs and what the `packages/cli` npm suite
+runs. The emitted package.json names local directories, so an artifact built this
+way is a verification artifact, never a publishable one. Release workflows never
+set the variable.
+
 ### JSR publishing
 
 `deno publish` runs once from the repo root and publishes every workspace member
