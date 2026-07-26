@@ -2,11 +2,9 @@ import { define } from "../utils.ts";
 import { Header } from "../components/Header.tsx";
 import { Footer } from "../components/Footer.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
-import { CodeBlock } from "../components/Code.tsx";
 import CopyCommand from "../islands/CopyCommand.tsx";
 
 const GITHUB = "https://github.com/taras/executable.md";
-const FENCE = String.fromCharCode(96).repeat(3);
 
 const OUTCOMES: { title: string; body: string }[] = [
   {
@@ -25,34 +23,6 @@ const OUTCOMES: { title: string; body: string }[] = [
       "Keep instructions, command output, and the next decision together instead of splitting a workflow across a script and a separate guide.",
   },
 ];
-
-const REPORT = [
-  "# Project snapshot",
-  "",
-  "## Working tree",
-  "",
-  FENCE + "bash exec",
-  "git status --short",
-  FENCE,
-  "",
-  "## Most recent commit",
-  "",
-  FENCE + "bash exec",
-  "git log -1 --oneline",
-  FENCE,
-].join("\n");
-
-const REPORT_OUTPUT = [
-  "# Project snapshot",
-  "",
-  "## Working tree",
-  "",
-  " M README.md",
-  "",
-  "## Most recent commit",
-  "",
-  "abc1234 Document the release process",
-].join("\n");
 
 export default define.page(function Home({ url }) {
   const installCmd = "curl -fsSL " + url.origin + "/install.sh | sh";
@@ -117,41 +87,6 @@ export default define.page(function Home({ url }) {
               <p class="muted" style="font-size:0.92rem;">{outcome.body}</p>
             </div>
           ))}
-        </div>
-      </section>
-
-      <section id="example" class="band">
-        <div class="container" style="padding-block:3.5rem;">
-          <h2 style="font-size:1.7rem;font-weight:700;text-align:center;margin-bottom:0.5rem;">
-            Start with a project snapshot
-          </h2>
-          <p
-            class="muted"
-            style="text-align:center;max-width:60ch;margin:0 auto 2rem;"
-          >
-            Keep <code>project-report.md</code>{" "}
-            as the executable source, then capture its rendered output as a
-            separate artifact:
-          </p>
-          <div style="max-width:34rem;margin:0 auto 2rem;">
-            <CodeBlock>
-              {"xmd run project-report.md > project-snapshot.md"}
-            </CodeBlock>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;align-items:start;">
-            <CodeBlock filename="project-report.md">{REPORT}</CodeBlock>
-            <CodeBlock filename="project-snapshot.md">
-              {REPORT_OUTPUT}
-            </CodeBlock>
-          </div>
-          <p
-            class="muted"
-            style="text-align:center;max-width:60ch;margin:1.5rem auto 0;"
-          >
-            <code>project-snapshot.md</code>{" "}
-            is ordinary Markdown, ready to share, commit, or use as input to the
-            next documented step.
-          </p>
         </div>
       </section>
 
