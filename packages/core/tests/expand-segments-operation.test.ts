@@ -223,6 +223,36 @@ describe("Component.expandSegments", () => {
     expect(projected).toEqual([{ who: "caller" }]);
   });
 
+  it("has no active expansion for ordinary work between elements", function* () {
+    // A modifier chain runs mid-expansion but claims nothing: the frame belongs
+    // to the offer, so a code block executing right after one cannot recurse
+    // with it.
+    let message = "";
+    const source = ["<Passthrough>done</Passthrough>", "", "```bash exec", "one", "```", ""].join(
+      "\n",
+    );
+    yield* scoped(function* () {
+      yield* useTestComponents({});
+      yield* useTestEnv({ values: {} });
+      yield* usePassthrough();
+      yield* Component.around(
+        {
+          *applyModifiers(_args, _next) {
+            try {
+              yield* Component.operations.expandSegments([]);
+            } catch (error) {
+              message = error instanceof Error ? error.message : String(error);
+            }
+            return { output: "", exitCode: 0, stderr: "" };
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    });
+    expect(message).toContain("no active expansion");
+  });
+
   it("has no active expansion outside a claimed element", function* () {
     let message = "";
     yield* scoped(function* () {

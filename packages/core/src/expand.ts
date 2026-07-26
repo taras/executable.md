@@ -21,6 +21,7 @@ import type {
   TextSegment,
   ErrorSegment,
   ComponentElement,
+  ComponentHandling,
   ComponentDefinition,
   EvalEnv,
   FunctionComponentDefinition,
@@ -72,6 +73,33 @@ function provideEnv(value: EvalEnv): Operation<void> {
 
 function provideEvalScope(value: EvalScope): Operation<void> {
   return Component.around({ evalScope: () => value }, { at: "min" });
+}
+
+/**
+ * Offer an element to extensions, with this expansion's recursion — its
+ * interpolation inputs, hide set, and block counter — bound for exactly the
+ * length of the offer. A claiming handler reaches it through
+ * `Component.expandSegments`; a nested claim replaces the binding for its own
+ * offer and restores this one. Nothing else in expansion sees a frame, so a
+ * code block or modifier running between elements finds none active.
+ */
+function* offerElement(
+  element: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<ComponentHandling | undefined> {
+  const scope = yield* useScope();
+  const enclosingFrame = scope.get(ExpansionFrame);
+  scope.set(ExpansionFrame, (inner: Segment[]) =>
+    expandSegments(inner, parentMeta, parentProps, hideSet, counter),
+  );
+  try {
+    return yield* Component.operations.expand(element);
+  } finally {
+    scope.set(ExpansionFrame, enclosingFrame);
+  }
 }
 
 /**
@@ -144,30 +172,6 @@ export function* expandSegments(
 ): Operation<Segment[]> {
   const result: Segment[] = [];
 
-  // The recursion extensions get from `Component.expandSegments`: this frame's
-  // interpolation inputs, hide set, and block counter. Held for the frame, not
-  // for one element — every element in it expands against the same state — and
-  // restored on the way out so an enclosing frame keeps answering with its own.
-  const scope = yield* useScope();
-  const enclosingFrame = scope.get(ExpansionFrame);
-  scope.set(ExpansionFrame, (inner: Segment[]) =>
-    expandSegments(inner, parentMeta, parentProps, hideSet, counter),
-  );
-  try {
-    return yield* expandFrame(segments, parentMeta, parentProps, hideSet, counter, result);
-  } finally {
-    scope.set(ExpansionFrame, enclosingFrame);
-  }
-}
-
-function* expandFrame(
-  segments: Segment[],
-  parentMeta: Record<string, unknown>,
-  parentProps: Record<string, Json>,
-  hideSet: Set<string>,
-  counter: BlockCounter,
-  result: Segment[],
-): Operation<Segment[]> {
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
@@ -191,7 +195,7 @@ function* expandFrame(
         // Extension hook: installed component support may claim this element
         // before built-in expansion. Returned error segments follow the
         // ambient raise policy, like any component-produced error.
-        const handling = yield* Component.operations.expand(segment);
+        const handling = yield* offerElement(segment, parentMeta, parentProps, hideSet, counter);
         if (handling) {
           for (const handled of handling.segments) {
             if (handled.type === "error") {

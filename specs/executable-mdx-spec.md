@@ -1826,13 +1826,15 @@ interface, and each operation is also exported directly:
 
 An extension claims component names by wrapping `expand`: it answers
 `{ segments }` for the names it owns and delegates the rest with
-`next(element)`. While an element is offered, `expandSegments` is the
-engine's own expansion bound to that expansion's interpolation inputs,
-hide set (§6.2), and block counter (§6.1) — so a handler recursing into
-`element.children` produces exactly what built-in expansion would, and
-cycle detection and block IDs continue across the claim. It answers from
-the expansion in scope, so a handler consumes it where it received the
-element rather than from a task that outlives the offer.
+`next(element)`. For the length of that offer — and no longer —
+`expandSegments` is the engine's own expansion bound to the offering
+expansion's interpolation inputs, hide set (§6.2), and block counter
+(§6.1), so a handler recursing into `element.children` produces exactly
+what built-in expansion would, and cycle detection and block IDs
+continue across the claim. A nested claim binds its own expansion for
+its offer and restores the enclosing one. Outside an offer — ordinary
+expansion, a code block, a modifier chain, or a task that outlives the
+offer — no expansion is active and the operation reports that.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.

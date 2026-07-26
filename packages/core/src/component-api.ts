@@ -33,9 +33,10 @@ import type {
 /**
  * The engine's segment expansion, already bound to one expansion's
  * interpolation inputs, cycle-detection hide set, and block counter. The
- * expansion loop keeps this set for the frame it is running, so a handler
- * claiming an element recurses with that frame's state rather than a fresh
- * one. Internal: extensions reach it through `Component.expandSegments`.
+ * expansion loop sets it around each element it offers to extensions and
+ * restores the enclosing one afterwards, so a claiming handler recurses with
+ * that expansion's state and nothing else in the run sees one at all.
+ * Internal: extensions reach it through `Component.expandSegments`.
  */
 export const ExpansionFrame: Context<((segments: Segment[]) => Operation<Segment[]>) | undefined> =
   createContext<((segments: Segment[]) => Operation<Segment[]>) | undefined>(
@@ -68,9 +69,10 @@ export interface ComponentApi {
    * interpolation inputs, cycle-detection state, and block-ID counter. A
    * handler uses it for an element's children or for segments it generates.
    *
-   * Provided only while an element is offered to `expand`, and consumed from
-   * the handler that received it — a call from a task outliving the offer
-   * answers from the enclosing expansion instead.
+   * Live for exactly one `expand` offer, so it answers only inside the handler
+   * that received the element. Ordinary expansion work — a code block, a
+   * modifier chain, a task that outlives the offer — finds no active expansion
+   * and gets an error.
    */
   expandSegments(segments: Segment[]): Operation<Segment[]>;
   codeBlock(): Operation<CodeBlockContext>;
