@@ -6,6 +6,11 @@
  * Deno, Node and Bun. That breadth is the point: the adapter exists so the
  * package has no JSR-sourced dependency, and its whole premise is that
  * `node:assert/strict` behaves the same way in all three.
+ *
+ * The document-level suites (assertions.test.ts, assert-throws.test.ts) run on
+ * Deno and Node only. They reach `@executablemd/runtime/test` through
+ * tests/helpers.ts, and Bun cannot resolve a workspace package's subpath export
+ * in CI, where `bun install` runs without pnpm's node_modules links.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
