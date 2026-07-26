@@ -134,8 +134,29 @@ await main(function* (args) {
     entryPoints.push({ name: subpath, path });
   }
 
+  const workspaceDeps = Object.entries(packageJson.dependencies ?? {})
+    .filter(([, range]) => range.startsWith("workspace:"))
+    .map(([name]) => name);
+
   const outDir = new URL("npm/", pkgDir);
   yield* emptyDir(fromFileUrl(outDir));
+
+  // A sibling's declarations exist only once it is installed, and dnt resolves
+  // them from outDir. Skipping the install silently emits the sibling's
+  // workspace source into the package instead (#148), so refuse rather than
+  // build. outDir is already empty, so nothing survives to look current.
+  if (skipInstall && workspaceDeps.length > 0) {
+    console.error(
+      `DNT_SKIP_INSTALL=1 cannot build "${denoJson.name}": it depends on ${workspaceDeps.join(
+        ", ",
+      )}.`,
+    );
+    console.error(
+      "Build without DNT_SKIP_INSTALL once those versions are published; skip-install builds only packages with no workspace dependencies.",
+    );
+    yield* exit(1);
+    return;
+  }
 
   // dnt runs `npm install` inside outDir, which has its own package.json, so npm
   // treats outDir as the project root and never walks up to the repo-root
