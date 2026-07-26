@@ -131,7 +131,7 @@ the intermediate representation between parsing and expansion.
 ```typescript
 type Segment =
   | TextSegment
-  | ComponentInvocation
+  | ComponentElement
   | ExecutableCodeBlock
   | ExecOutputSegment
   | ErrorSegment;
@@ -141,7 +141,7 @@ interface TextSegment {
   content: string;
 }
 
-interface ComponentInvocation {
+interface ComponentElement {
   type: "component";
   name: string;                          // PascalCase, e.g. "Greeting", "Ns.Sub"
   props: Record<string, Json>;           // JSX props resolved at scan time
@@ -185,8 +185,8 @@ markdown text:
 12-state JSX scanner. The scanner handles string attributes, expression
 attributes with nested braces, template literals, nested JSX in
 attributes, and spread props. Self-closing tags (`<Comp />`) produce a
-single `ComponentInvocation` with no children. Block tags
-(`<Comp>...</Comp>`) produce a `ComponentInvocation` whose `children`
+single `ComponentElement` with no children. Block tags
+(`<Comp>...</Comp>`) produce a `ComponentElement` whose `children`
 are the recursively scanned segments between the tags — including
 fenced code blocks (executable ones become `ExecutableCodeBlock`
 segments, non-executable ones become `TextSegment`s) and nested
@@ -1818,9 +1818,23 @@ interface, and each operation is also exported directly:
 | `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9) | returns the supplied segment |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
+| `expand(element)` | Offer a component element to extensions before built-in expansion (§6.1) | returns `undefined` — unclaimed |
+| `expandSegments(segments)` | Expand segments within the expansion that offered the current element | throws: no expansion is active |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
+
+An extension claims component names by wrapping `expand`: it answers
+`{ segments }` for the names it owns and delegates the rest with
+`next(element)`. For the length of that offer — and no longer —
+`expandSegments` is the engine's own expansion bound to the offering
+expansion's interpolation inputs, hide set (§6.2), and block counter
+(§6.1), so a handler recursing into `element.children` produces exactly
+what built-in expansion would, and cycle detection and block IDs
+continue across the claim. A nested claim binds its own expansion for
+its offer and restores the enclosing one. Outside an offer — ordinary
+expansion, a code block, a modifier chain, or a task that outlives the
+offer — no expansion is active and the operation reports that.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.
@@ -1952,7 +1966,7 @@ the current run.
 ### 6.3 Content slots: `<Content />` and `<Content slot="name" />`
 
 When the boundary scanner encounters `<Content />` inside a component
-body, it produces a `ComponentInvocation` with `name: "Content"`.
+body, it produces a `ComponentElement` with `name: "Content"`.
 During expansion, this is a special case — it is not resolved from the
 file system. Instead, it is replaced by the caller's children,
 partitioned by slot assignment.
@@ -1990,7 +2004,7 @@ Components, Astro, and Svelte.
 #### 6.3.2 Slot assignment rules
 
 A direct child of a component invocation is assigned to a named slot
-if and only if it is a `ComponentInvocation` segment with a `slot`
+if and only if it is a `ComponentElement` segment with a `slot`
 prop. All other children — text segments, executable code blocks, and
 component invocations without a `slot` prop — are assigned to the
 **default slot**.
@@ -2325,7 +2339,7 @@ components. The scanner distinguishes between **resolved props**
 (JSON literals known at scan time) and **eval expressions** (raw
 expression text to evaluate at expansion time).
 
-The `ComponentInvocation` segment has an `expressions` field that
+The `ComponentElement` segment has an `expressions` field that
 holds raw expression text for eval expression props. At expansion
 time, `expandComponent` evaluates these against `env.values` using
 `new Function()` with env values destructured into scope parameters.
@@ -2344,7 +2358,7 @@ resolved values can be type-checked. Results must be JSON-serializable
 (validated via JSON round-trip). Evaluation errors are thrown, not
 rendered as ErrorSegments — consistent with PropValidationError.
 
-The `expressions` field is always present on `ComponentInvocation`
+The `expressions` field is always present on `ComponentElement`
 (empty `{}` when no eval expressions exist). A prop name appears in
 either `props` or `expressions`, never both.
 
@@ -3488,7 +3502,7 @@ visible warning blocks, collect into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| A1 | Self-closing component | `<Comp />` → ComponentInvocation, selfClosing: true |
+| A1 | Self-closing component | `<Comp />` → ComponentElement, selfClosing: true |
 | A2 | Block component with text children | `<Comp>text</Comp>` → children: [TextSegment] |
 | A3 | Dotted component name | `<Ns.Sub />` → name: "Ns.Sub" |
 | A4 | String attribute with `>` | `<Comp title="a > b" />` → props.title: "a > b" |

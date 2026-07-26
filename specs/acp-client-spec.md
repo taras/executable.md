@@ -74,7 +74,7 @@ components.
 ## Components
 
 `installAgentComponents()` teaches the expansion loop six words through the core
-`expandInvocation` hook. Each supports the engine-wide `as` capture and takes
+`Component.expand` hook. Each supports the engine-wide `as` capture and takes
 string/boolean **literals** only (expression props are rejected).
 
 - **`<AgentProvider>`** resolves a registered provider by its `name` prop and

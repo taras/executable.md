@@ -2,7 +2,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import assert from "node:assert/strict";
 import { scanSegments, parseInfoString } from "../src/scanner.ts";
-import type { ComponentInvocation, ExecutableCodeBlock, TextSegment } from "../src/types.ts";
+import type { ComponentElement, ExecutableCodeBlock, TextSegment } from "../src/types.ts";
 
 describe("scanSegments", () => {
   // A1: Self-closing component
@@ -161,7 +161,7 @@ describe("scanSegments", () => {
     const input = '<Section title="test">\n\n```bash exec\necho hello\n```\n\n</Section>';
     const segments = scanSegments(input);
     assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
+    const comp = segments[0] as ComponentElement;
     assert.equal(comp.type, "component");
     assert.equal(comp.name, "Section");
     // Children should contain: text, codeBlock, text
@@ -177,7 +177,7 @@ describe("scanSegments", () => {
     const input = '<Section title="test">\n\n```yaml\nkey: value\n```\n\n</Section>';
     const segments = scanSegments(input);
     assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
+    const comp = segments[0] as ComponentElement;
     // Non-executable code block should be part of text children
     const codeBlocks = comp.children.filter((c) => c.type === "codeBlock");
     assert.equal(codeBlocks.length, 0);
@@ -195,7 +195,7 @@ describe("scanSegments", () => {
     const input = '<Section title="test">\n\nUse `<Content />` here\n\n</Section>';
     const segments = scanSegments(input);
     assert.equal(segments.length, 1);
-    const comp = segments[0] as ComponentInvocation;
+    const comp = segments[0] as ComponentElement;
     // Children should be a single text segment — Content is not parsed as component
     const components = comp.children.filter((c) => c.type === "component");
     assert.equal(components.length, 0);

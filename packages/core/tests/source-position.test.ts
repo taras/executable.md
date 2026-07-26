@@ -6,10 +6,10 @@ import { scanSegments } from "../src/scanner.ts";
 import { Component } from "../src/component-api.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import type { ComponentInvocation, SourcePosition } from "../src/types.ts";
+import type { ComponentElement, SourcePosition } from "../src/types.ts";
 
-function componentsOf(segments: ReturnType<typeof scanSegments>): ComponentInvocation[] {
-  const found: ComponentInvocation[] = [];
+function componentsOf(segments: ReturnType<typeof scanSegments>): ComponentElement[] {
+  const found: ComponentElement[] = [];
   for (const segment of segments) {
     if (segment.type === "component") {
       found.push(segment);
@@ -67,11 +67,11 @@ describe("source positions", () => {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": doc, "components/Probe.md": "probed\n" });
     yield* Component.around({
-      *expandInvocation([invocation, ctx], next) {
-        if (invocation.position) {
-          positions.push(invocation.position);
+      *expand([element], next) {
+        if (element.position) {
+          positions.push(element.position);
         }
-        return yield* next(invocation, ctx);
+        return yield* next(element);
       },
     });
 
@@ -101,9 +101,9 @@ describe("source positions", () => {
       "components/Probe.md": "probed\n",
     });
     yield* Component.around({
-      *expandInvocation([invocation, ctx], next) {
-        positions.push({ name: invocation.name, position: invocation.position });
-        return yield* next(invocation, ctx);
+      *expand([element], next) {
+        positions.push({ name: element.name, position: element.position });
+        return yield* next(element);
       },
     });
 

@@ -2,7 +2,7 @@
  * Agent component registration (specs/acp-client-spec.md).
  *
  * Teaches the expansion loop the agent words via the core
- * `expandInvocation` hook and decorates the Execution Api so prompt
+ * `Component.expand` hook and decorates the Execution Api so prompt
  * failures — and, when a root provider is configured, provider teardown
  * failures — participate in the DocumentExecution completion.
  *
@@ -60,22 +60,22 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
   }
 
   yield* Component.around({
-    *expandInvocation([invocation, ctx], next) {
-      switch (invocation.name) {
+    *expand([element], next) {
+      switch (element.name) {
         case "AgentProvider":
-          return { segments: yield* handlers.expandAgentProvider(invocation, ctx) };
+          return { segments: yield* handlers.expandAgentProvider(element) };
         case "Agent":
-          return { segments: yield* handlers.expandAgent(invocation, ctx) };
+          return { segments: yield* handlers.expandAgent(element) };
         case "Session":
-          return { segments: yield* handlers.expandSession(invocation, ctx) };
+          return { segments: yield* handlers.expandSession(element) };
         case "Prompt":
-          return { segments: yield* handlers.expandPrompt(invocation, ctx) };
+          return { segments: yield* handlers.expandPrompt(element) };
         case "ApproveAll":
-          return { segments: yield* handlers.expandApproveAll(invocation, ctx) };
+          return { segments: yield* handlers.expandApproveAll(element) };
         case "AskPermission":
-          return { segments: yield* handlers.expandAskPermission(invocation, ctx) };
+          return { segments: yield* handlers.expandAskPermission(element) };
         default:
-          return yield* next(invocation, ctx);
+          return yield* next(element);
       }
     },
   });

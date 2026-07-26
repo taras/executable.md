@@ -67,6 +67,22 @@ function useTestComponents(
   );
 }
 
+/**
+ * An extension that claims `<Broken />` and answers with an error segment —
+ * the engine re-raises it under whatever policy the region installed.
+ */
+function useBrokenExtension(): Operation<void> {
+  return Component.around({
+    // deno-lint-ignore require-yield
+    *expand([element], next) {
+      if (element.name === "Broken") {
+        return { segments: [{ type: "error", message: "broken thing", source: "Broken" }] };
+      }
+      return yield* next(element);
+    },
+  });
+}
+
 /** Install a binding environment on the current scope. */
 function useTestEnv(testEnv: EvalEnv): Operation<void> {
   return Component.around({ env: () => testEnv }, { at: "min" });
@@ -575,6 +591,29 @@ describe("component-declared output", () => {
       },
     );
     expect(output).toContain("ok");
+  });
+
+  it("renders a claimed element's error inside <Output> under the collecting policy", function* () {
+    const comp = makeComponent("Region", "<Output>\n<Broken />\n</Output>");
+    const output = yield* scoped(function* () {
+      yield* useBrokenExtension();
+      return yield* expand(scanSegments("<Region />"), { Region: comp });
+    });
+    expect(output).toContain("broken thing");
+  });
+
+  it("throws a claimed element's error from documentation, where errors are fatal", function* () {
+    const comp = makeComponent("Doc", "<Broken />\n\n<Output>ok</Output>");
+    let threw = false;
+    yield* scoped(function* () {
+      yield* useBrokenExtension();
+      try {
+        yield* expand(scanSegments("<Doc />"), { Doc: comp });
+      } catch {
+        threw = true;
+      }
+    });
+    expect(threw).toBe(true);
   });
 
   it("throws on a failure inside <Capture> documentation", function* () {

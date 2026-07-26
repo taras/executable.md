@@ -108,13 +108,13 @@ function* decide(kind?: string): Operation<PermissionOutcome> {
  */
 function* installAskComponent(outcomes: string[]): Operation<void> {
   yield* Component.around({
-    *expandInvocation([invocation, ctx], next) {
-      if (invocation.name === "Ask") {
+    *expand([element], next) {
+      if (element.name === "Ask") {
         const outcome = yield* decide();
         outcomes.push(outcome.outcome === "selected" ? outcome.optionId : "cancelled");
         return { segments: [] };
       }
-      return yield* next(invocation, ctx);
+      return yield* next(element);
     },
   });
 }

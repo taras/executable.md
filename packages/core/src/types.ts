@@ -14,7 +14,7 @@ export type JsonObject = { [key: string]: Json };
 
 export type Segment =
   | TextSegment
-  | ComponentInvocation
+  | ComponentElement
   | ExecutableCodeBlock
   | ExecOutputSegment
   | ErrorSegment;
@@ -24,7 +24,7 @@ export interface TextSegment {
   content: string;
 }
 
-export interface ComponentInvocation {
+export interface ComponentElement {
   type: "component";
   name: string;
   props: Record<string, Json>;
@@ -101,26 +101,10 @@ export interface EvalEnv {
 }
 
 /**
- * Expansion context offered to `expandInvocation` extensions alongside the
- * raw invocation. Exposes exactly what an extension needs: the parent scope's
- * interpolation inputs, caller-projected bindings, and incremental expansion
- * in the current context. Engine internals (hide set, block counter) stay
- * captured inside the `expand` closure.
- */
-export interface InvocationContext {
-  meta: Record<string, unknown>;
-  props: Record<string, Json>;
-  /** Caller-projected bindings (segment.projectedEnv) for expression evaluation. */
-  projectedEnv?: EvalEnv;
-  /** Incrementally expand segments in the current expansion context. */
-  expand(segments: Segment[]): Operation<Segment[]>;
-}
-
-/**
- * A claimed invocation's replacement segments. `{ segments: [] }` means
+ * A claimed element's replacement segments. `{ segments: [] }` means
  * handled-with-no-output — distinct from `undefined` (unhandled).
  */
-export interface InvocationHandling {
+export interface ComponentHandling {
   segments: Segment[];
 }
 
