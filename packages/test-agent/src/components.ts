@@ -1,8 +1,8 @@
 /**
- * The `<TestAgent>` vocabulary (specs/test-agent-spec.md §TestAgent).
+ * The `<TestAgent>` components (specs/test-agent-spec.md §TestAgent).
  *
- * `installTestAgentVocabulary` must be installed BEFORE
- * `installAgentVocabulary` in the same scope: in-scope middleware runs
+ * `installTestAgentComponents` must be installed BEFORE
+ * `installAgentComponents` in the same scope: in-scope middleware runs
  * in install order, so the global `<Prompt>` interceptor here sees the
  * invocation first, forces `throwOnError` only when both `<TestAgent>`
  * and `<Test>` are active, and otherwise delegates unchanged.
@@ -36,7 +36,7 @@ import type { ScenarioInstance, TestAgentController } from "./controller.ts";
 import { useTestAgentAcpx } from "./state.ts";
 import type { TestAgentAcpx } from "./state.ts";
 
-export interface TestAgentVocabularyOptions {
+export interface TestAgentComponentsOptions {
   /** Command segments that relaunch this xmd as `test-agent`. */
   workerCommand: string[];
 }
@@ -114,7 +114,7 @@ function resolvePinned(
   return pinned;
 }
 
-export function* installTestAgentVocabulary(options: TestAgentVocabularyOptions): Operation<void> {
+export function* installTestAgentComponents(options: TestAgentComponentsOptions): Operation<void> {
   function* expandTestAgent(
     invocation: ComponentInvocation,
     ctx: InvocationContext,

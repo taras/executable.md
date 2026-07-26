@@ -3384,7 +3384,7 @@ for the Api, `createChannel` from Effection, `forEach` from
 
 ## 10. Journal shape
 
-### 10.1 Effect vocabulary for MDX execution
+### 10.1 Effect types for MDX execution
 
 The execution boundary journals the following operation descriptions through
 `@executablemd/durable-streams`. These are diagnostic journal-entry types, not a

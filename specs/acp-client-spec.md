@@ -1,6 +1,6 @@
 # Executable.md ACP Client
 
-The `Agent` Api, the `<Agent>` / `<Session>` / `<Prompt>` vocabulary, prompt
+The `Agent` Api, the `<Agent>` / `<Session>` / `<Prompt>` components, prompt
 journaling and replay, the provider-factory seam, and the shared `Config`
 timeout are implemented in `@executablemd/core`. A provider is supplied through
 the `rootProvider` factory seam described below.
@@ -41,7 +41,7 @@ type AgentProviderFactory = (options: AgentProviderOptions) => Operation<void>;
 interface AgentProviderOptions { defaultAgent: string; permissionMode: PermissionMode; }
 ```
 
-`installAgentVocabulary({ rootProvider: { factory, options } })` owns the root
+`installAgentComponents({ rootProvider: { factory, options } })` owns the root
 provider's lifetime as part of each `DocumentExecution`: the factory runs inside
 a scoped provider lifetime, the document renders through it, and the completion
 resolves **only after the provider's finalizers have run**. Rendered output
@@ -65,15 +65,15 @@ until one is installed as a root provider or by `<AgentProvider>`.
 
 ### Seeded configuration
 
-`installAgentVocabulary({ defaultAgent, permissionMode })` seeds the values that
+`installAgentComponents({ defaultAgent, permissionMode })` seeds the values that
 `<AgentProvider>` inherits. The configuration surfaces are those options, the
 `defaultAgent` and `timeout` props on `<AgentProvider>`, and the permission
 components below; the contextual state holding them is private to the
-vocabulary.
+components.
 
 ## Components
 
-`installAgentVocabulary()` teaches the expansion loop six words through the core
+`installAgentComponents()` teaches the expansion loop six words through the core
 `expandInvocation` hook. Each supports the engine-wide `as` capture and takes
 string/boolean **literals** only (expression props are rejected).
 
@@ -85,7 +85,7 @@ string/boolean **literals** only (expression props are rejected).
 
   ```md
   <AgentProvider name="acpx" defaultAgent="codex" timeout="30s">
-    <Prompt prompt="Review this change" />
+    <Prompt text="Review this change" />
   </AgentProvider>
   ```
 
@@ -97,8 +97,8 @@ string/boolean **literals** only (expression props are rejected).
 - **`<Session name>`** resolves a session and pins it onto nested prompts.
   Self-closing validates only.
 - **`<Prompt>`** sends one prompt and renders the reply.
-  - Content is the rendered children; a self-closing `<Prompt prompt="…">` uses
-    the `prompt` prop. Non-empty children always win over the prop.
+  - Content is the rendered children; a self-closing `<Prompt text="…" />` uses
+    the `text` prop instead.
   - `agent`, `session`, and `timeout` props override the enclosing scope for
     that prompt; `timeout` accepts a duration string.
   - `as="name"` captures the reply into the eval environment instead of
@@ -219,7 +219,7 @@ prompt failure.
 
 `@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.
 `createAcpxProvider()` returns an `AgentProviderFactory` supplied directly to
-`installAgentVocabulary({ rootProvider: { factory: createAcpxProvider(), options } })`;
+`installAgentComponents({ rootProvider: { factory: createAcpxProvider(), options } })`;
 `useAcpxProviderState` exposes the same operations without the Agent install, so
 several independent provider states can run in sibling scopes. The provider owns
 every resource it starts and creates the shared runtime lazily on first use with

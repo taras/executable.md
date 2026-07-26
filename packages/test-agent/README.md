@@ -43,8 +43,8 @@ same session, and asserts the captured replies:
   <Test name="reviews a change">
     <Agent name="test">
       <Session name="review">
-        <Prompt prompt="Review packages/core at revision abc123" as="firstReply" />
-        <Prompt prompt="Summarize packages/core" as="secondReply" />
+        <Prompt text="Review packages/core at revision abc123" as="firstReply" />
+        <Prompt text="Summarize packages/core" as="secondReply" />
       </Session>
     </Agent>
     <AssertStringIncludes actual={firstReply} expected="The review of **packages/core** at `abc123` passed." />
@@ -102,7 +102,7 @@ mapping. A test may finish with later scenario stages unused.
 If the document sends this instead:
 
 ```md
-<Prompt prompt="Review packages/core" />
+<Prompt text="Review packages/core" />
 ```
 
 the test fails with the expected template and the actual prompt. Compare those

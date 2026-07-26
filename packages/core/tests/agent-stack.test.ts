@@ -26,7 +26,7 @@ import {
   installApproveReads,
   installAskPermission,
 } from "../src/agent/permission.ts";
-import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
+import { installAgentComponents } from "../src/agent/components.ts";
 
 /** A provider factory that records the options it is handed. */
 function recordingFactory(seen: AgentProviderOptions[]): AgentProviderFactory {
@@ -197,7 +197,7 @@ describe("Tier AG — provider registry and permission policies", () => {
       ["<Ask />", "", "<ApproveAll>", "<Ask />", "</ApproveAll>", "", "<Ask />", ""].join("\n"),
       function* () {
         yield* installAskComponent(outcomes);
-        yield* installAgentVocabulary();
+        yield* installAgentComponents();
       },
     );
     expect(result.ok).toBe(true);
@@ -213,18 +213,18 @@ describe("Tier AG — provider registry and permission policies", () => {
       function* () {
         yield* installAskComponent(outcomes);
         yield* installApproveAll();
-        yield* installAgentVocabulary();
+        yield* installAgentComponents();
       },
     );
     expect(result.ok).toBe(true);
     expect(outcomes).toEqual(["allow-once", "reject-once", "allow-once"]);
   });
 
-  it("AG9: installAgentVocabulary seeds the default agent and permission mode", function* () {
+  it("AG9: installAgentComponents seeds the default agent and permission mode", function* () {
     const seen: AgentProviderOptions[] = [];
     const { result } = yield* runDoc('<AgentProvider name="rec" />\n', function* () {
       yield* registerAgentProvider("rec", recordingFactory(seen));
-      yield* installAgentVocabulary({
+      yield* installAgentComponents({
         defaultAgent: "seeded-agent",
         permissionMode: "approve-reads",
       });
@@ -245,7 +245,7 @@ describe("Tier AG — provider registry and permission policies", () => {
       ].join("\n"),
       function* () {
         yield* registerAgentProvider("rec", recordingFactory(seen));
-        yield* installAgentVocabulary({
+        yield* installAgentComponents({
           defaultAgent: "seeded-agent",
           permissionMode: "deny-all",
         });
@@ -269,7 +269,7 @@ describe("Tier AG — provider registry and permission policies", () => {
       ].join("\n"),
       function* () {
         yield* registerAgentProvider("rec", recordingFactory(seen));
-        yield* installAgentVocabulary({ defaultAgent: "seeded-agent" });
+        yield* installAgentComponents({ defaultAgent: "seeded-agent" });
       },
     );
     expect(result.ok).toBe(false);
@@ -284,7 +284,7 @@ describe("Tier AG — provider registry and permission policies", () => {
       ['<AgentProvider name="rec">', "INSIDE_MARKER", "</AgentProvider>", ""].join("\n"),
       function* () {
         yield* registerAgentProvider("rec", recordingFactory(seen));
-        yield* installAgentVocabulary();
+        yield* installAgentComponents();
       },
     );
     expect(result.ok).toBe(false);

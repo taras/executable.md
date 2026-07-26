@@ -2,8 +2,8 @@
  * Agent component handlers (specs/acp-client-spec.md §Components).
  *
  * `<AgentProvider>`, `<Agent>`, `<Session>`, `<Prompt>`, `<ApproveAll>`,
- * and `<AskPermission>` are engine vocabulary claimed through the core
- * `expandInvocation` hook — the same pattern as the testing vocabulary.
+ * and `<AskPermission>` are engine components claimed through the core
+ * `expandInvocation` hook — the same pattern as the testing components.
  * Handlers implement the engine-wide `as` capture and prop validation
  * themselves because claimed invocations bypass built-in expansion.
  */
@@ -59,7 +59,7 @@ const SESSION_INPUTS: InputSchema = {
 const PROMPT_INPUTS: InputSchema = {
   type: "object",
   properties: {
-    prompt: { type: "string" },
+    text: { type: "string" },
     agent: { type: "string" },
     session: { type: "string" },
     timeout: { type: "string" },
@@ -74,7 +74,7 @@ function errorSegment(source: string, message: string): Segment {
 
 /**
  * Literal props for a claimed invocation. Expression props are rejected —
- * the agent vocabulary takes string and boolean literals only. `as` and
+ * the agent components take string and boolean literals only. `as` and
  * `slot` are engine-reserved and stripped before schema validation.
  */
 function parseLiteralProps(
@@ -304,7 +304,7 @@ export function createAgentHandlers(): AgentHandlers {
 
     let content: string;
     if (invocation.selfClosing) {
-      content = asString(props.prompt) ?? "";
+      content = asString(props.text) ?? "";
     } else {
       content = renderSegments(yield* ctx.expand(invocation.children));
     }

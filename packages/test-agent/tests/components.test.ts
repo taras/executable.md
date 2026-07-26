@@ -1,5 +1,5 @@
 /**
- * Tier TV — <TestAgent> vocabulary tests (specs/test-agent-spec.md
+ * Tier TV — <TestAgent> component tests (specs/test-agent-spec.md
  * acceptance §1): scenario mapping, per-<Test> and per-cwd isolation,
  * captures and constraints, failure propagation to the owning test, and
  * clean suspension at teardown — driven through the component surface
@@ -13,12 +13,12 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute, installAgentVocabulary } from "@executablemd/core";
+import { execute, installAgentComponents } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { installTestingVocabulary, useTesting } from "@executablemd/testing";
+import { installTestingComponents, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
-import { installTestAgentVocabulary } from "../src/vocabulary.ts";
+import { installTestAgentComponents } from "../src/components.ts";
 
 const CLI = path.resolve("packages/cli/src/cli.ts");
 const WORKER = ["deno", "run", "--allow-all", CLI, "test-agent"];
@@ -68,12 +68,12 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
       }
       let testing;
       if (options?.session === false) {
-        yield* installTestingVocabulary();
+        yield* installTestingComponents();
       } else {
         testing = yield* useTesting();
       }
-      yield* installTestAgentVocabulary({ workerCommand: WORKER });
-      yield* installAgentVocabulary();
+      yield* installTestAgentComponents({ workerCommand: WORKER });
+      yield* installAgentComponents();
       const execution = yield* execute({
         docPath: path.join(dir, "doc.md"),
         stream: new InMemoryStream(),
@@ -96,7 +96,7 @@ const HI = '<WhenPrompt template="hi" />\n\nhello there\n';
 const TWO_STAGES =
   '<WhenPrompt template="one" />\n\nfirst\n\n<WhenPrompt template="two" />\n\nsecond\n';
 
-describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResources: false }, () => {
+describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("TV1: <TestAgent> outside an active testing session is a configuration error", function* () {
     const run = yield* runDoc(
       { "doc.md": "<TestAgent>\nbody\n</TestAgent>\n" },
@@ -113,10 +113,10 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         '  <TestAgent.Scenario session="dup" src="./agents/hi.md" />',
         '  <TestAgent.Scenario session="dup" src="./agents/hi.md" />',
         '  <Test name="missing mapping">',
-        '    <Prompt prompt="hi" session="unmapped" />',
+        '    <Prompt text="hi" session="unmapped" />',
         "  </Test>",
         '  <Test name="duplicate mapping">',
-        '    <Prompt prompt="hi" session="dup" />',
+        '    <Prompt text="hi" session="dup" />',
         "  </Test>",
         "</TestAgent>",
         "",
@@ -134,10 +134,10 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/hi.md" />',
         '  <Test name="wrong prompt fails">',
-        '    <Prompt prompt="wrong" />',
+        '    <Prompt text="wrong" />',
         "  </Test>",
         '  <Test name="fresh instance passes">',
-        '    <Prompt prompt="hi" as="reply" />',
+        '    <Prompt text="hi" as="reply" />',
         '    <AssertStringIncludes actual={reply} expected="hello there" />',
         "  </Test>",
         "</TestAgent>",
@@ -156,7 +156,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/bad.md" />',
         '  <Test name="pre-matcher output">',
-        '    <Prompt prompt="hi" />',
+        '    <Prompt text="hi" />',
         "  </Test>",
         "</TestAgent>",
         "",
@@ -178,7 +178,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/dyn.md" />',
         '  <Test name="dynamic import rejected">',
-        '    <Prompt prompt="hi" />',
+        '    <Prompt text="hi" />',
         "  </Test>",
         "</TestAgent>",
         "",
@@ -200,7 +200,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/static.md" />',
         '  <Test name="static import rejected">',
-        '    <Prompt prompt="hi" />',
+        '    <Prompt text="hi" />',
         "  </Test>",
         "</TestAgent>",
         "",
@@ -214,7 +214,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/ws.md" />',
         '  <Test name="whitespace preamble is allowed">',
-        '    <Prompt prompt="hi" as="reply" />',
+        '    <Prompt text="hi" as="reply" />',
         '    <AssertStringIncludes actual={reply} expected="hello there" />',
         "  </Test>",
         "</TestAgent>",
@@ -234,7 +234,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/both.md" />',
         '  <Test name="precedence and fallback">',
-        '    <Prompt prompt="hi" as="reply" />',
+        '    <Prompt text="hi" as="reply" />',
         '    <AssertStringIncludes actual={reply} expected="markdown wins" />',
         '    <AssertStringIncludes actual={reply} expected="index fallback" />',
         "  </Test>",
@@ -251,7 +251,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "<TestAgent>",
         '  <TestAgent.Scenario src="./agents/ts-behavior.md" />',
         '  <Test name="typescript dependency">',
-        '    <Prompt prompt="hi" />',
+        '    <Prompt text="hi" />',
         "  </Test>",
         "</TestAgent>",
         "",
@@ -271,9 +271,9 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         '  <TestAgent.Scenario session="named" src="./agents/named.md" />',
         '  <TestAgent.Scenario agent="extra" src="./agents/extra.md" />',
         '  <Test name="mappings">',
-        '    <Prompt prompt="d" as="d" />',
-        '    <Prompt prompt="n" session="named" as="n" />',
-        '    <Prompt prompt="x" agent="extra" as="x" />',
+        '    <Prompt text="d" as="d" />',
+        '    <Prompt text="n" session="named" as="n" />',
+        '    <Prompt text="x" agent="extra" as="x" />',
         '    <AssertStringIncludes actual={d} expected="default-reply" />',
         '    <AssertStringIncludes actual={n} expected="named-reply" />',
         '    <AssertStringIncludes actual={x} expected="extra-reply" />',
@@ -294,13 +294,13 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
           "<TestAgent>",
           '  <TestAgent.Scenario src="./agents/hi.md" />',
           '  <Test name="cwd isolation">',
-          '    <Prompt prompt="hi" as="first" />',
+          '    <Prompt text="hi" as="first" />',
           "",
           "```bash exec silent",
           "flip-cwd",
           "```",
           "",
-          '    <Prompt prompt="hi" as="second" />',
+          '    <Prompt text="hi" as="second" />',
           '    <AssertStringIncludes actual={first} expected="hello there" />',
           '    <AssertStringIncludes actual={second} expected="hello there" />',
           "  </Test>",
@@ -324,11 +324,11 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         '  <TestAgent.Scenario src="./agents/hi.md" />',
         '  <TestAgent.Scenario session="partial" src="./agents/two.md" />',
         '  <Test name="exhausted">',
-        '    <Prompt prompt="hi" />',
-        '    <Prompt prompt="hi again" />',
+        '    <Prompt text="hi" />',
+        '    <Prompt text="hi again" />',
         "  </Test>",
         '  <Test name="suspended mid-scenario">',
-        '    <Prompt prompt="one" session="partial" as="reply" />',
+        '    <Prompt text="one" session="partial" as="reply" />',
         '    <AssertStringIncludes actual={reply} expected="first" />',
         "  </Test>",
         "</TestAgent>",
@@ -358,7 +358,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         "```",
         "",
         '  <Test name="snapshot survives source removal">',
-        '    <Prompt prompt="hi" as="reply" />',
+        '    <Prompt text="hi" as="reply" />',
         '    <AssertStringIncludes actual={reply} expected="hello there" />',
         "  </Test>",
         "</TestAgent>",
@@ -377,8 +377,8 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         '  <Test name="pinned session advances one instance">',
         '    <Agent name="test">',
         '      <Session name="review">',
-        '        <Prompt prompt="one" as="first" />',
-        '        <Prompt prompt="two" as="second" />',
+        '        <Prompt text="one" as="first" />',
+        '        <Prompt text="two" as="second" />',
         "      </Session>",
         "    </Agent>",
         '    <AssertStringIncludes actual={first} expected="first" />',
@@ -405,7 +405,7 @@ describe("Tier TV — TestAgent vocabulary", { sanitizeOps: false, sanitizeResou
         '    <Agent name="test">',
         '      <Session name="review">',
         '        <Agent name="extra">',
-        '          <Prompt prompt="one" />',
+        '          <Prompt text="one" />',
         "        </Agent>",
         "      </Session>",
         "    </Agent>",

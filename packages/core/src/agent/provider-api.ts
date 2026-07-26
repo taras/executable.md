@@ -2,7 +2,7 @@
  * The agent-provider factory contract and the AgentProviders Api
  * (specs/acp-client-spec.md §Provider seam). A provider factory installs
  * `Agent` middleware for its scope; it is supplied to
- * `installAgentVocabulary` through the `rootProvider` option and owned by
+ * `installAgentComponents` through the `rootProvider` option and owned by
  * each DocumentExecution.
  *
  * Registration is scope-local middleware: `registerAgentProvider`

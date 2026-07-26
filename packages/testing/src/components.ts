@@ -1,12 +1,12 @@
 /**
- * Vocabulary registration (specs/testing-spec.md).
+ * Component registration (specs/testing-spec.md).
  *
  * Teaches the expansion loop the testing words — `<Testing>`, `<Test>`, and
  * the assertion components — via the core `expandInvocation` hook, and
  * decorates the core Execution Api so explicit `<Testing>` boundaries affect
  * the execution outcome even when root testing is inactive.
  *
- * Registration is distinct from activation: installing the vocabulary
+ * Registration is distinct from activation: installing the components
  * leaves `testing` false, so `<Test>` skips and assertions stay usable.
  * Root activation is `useTesting()`'s job.
  *
@@ -27,7 +27,7 @@ import type { TestHandlers } from "./handlers.ts";
 
 const TEST_TIMEOUT_MS = 20_000;
 
-export function* installTestingVocabulary(options?: { verbose?: boolean }): Operation<void> {
+export function* installTestingComponents(options?: { verbose?: boolean }): Operation<void> {
   yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
 }
 

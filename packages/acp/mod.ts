@@ -4,9 +4,9 @@
  *
  * `createAcpxProvider()` returns an `AgentProviderFactory` that drives
  * coding agents over the Agent Client Protocol through the pinned `acpx`
- * runtime. Supply it directly to core's agent vocabulary through the
+ * runtime. Supply it directly to core's agent components through the
  * `rootProvider` option:
- * `installAgentVocabulary({ rootProvider: { factory: createAcpxProvider(), options } })`.
+ * `installAgentComponents({ rootProvider: { factory: createAcpxProvider(), options } })`.
  */
 
 export { createAcpxProvider, useAcpxProviderState } from "./src/provider.ts";

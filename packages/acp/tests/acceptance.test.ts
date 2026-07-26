@@ -10,7 +10,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute, installAgentVocabulary } from "@executablemd/core";
+import { execute, installAgentComponents } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createAcpxProvider } from "../mod.ts";
 import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
@@ -19,7 +19,7 @@ const CWD = "/work";
 const DOC = [
   '<Agent name="codex">',
   '<Session name="review">',
-  '<Prompt prompt="hi" />',
+  '<Prompt text="hi" />',
   "</Session>",
   "</Agent>",
   "",
@@ -36,7 +36,7 @@ describe("Tier XA — ACPX provider through the rootProvider seam", () => {
 
       const result = yield* scoped(function* () {
         yield* useFlatWorld(CWD);
-        yield* installAgentVocabulary({
+        yield* installAgentComponents({
           rootProvider: {
             factory: createAcpxProvider({
               createRuntime: harness.create,

@@ -99,7 +99,7 @@ pass or fail status, optional name, source location, and structured error
 details when it failed. Rendered test output is not duplicated in the result.
 
 `useTesting` composes testing around the core execution entrypoint. It
-installs the testing vocabulary and collectors, activates testing mode for
+installs the testing components and collectors, activates testing mode for
 the execution, and returns a session whose `results` operation snapshots
 completed tests in discovery order:
 
@@ -124,7 +124,7 @@ failure. One `useTesting` session applies per execution scope; its
 middleware is removed with that scope. `xmd test` composes `useTesting`
 around the same `execute` call the `run` command uses.
 
-Registering the testing vocabulary without `useTesting` leaves testing mode
+Registering the testing components without `useTesting` leaves testing mode
 inactive: `<Test>` is skipped, assertion components stay usable, and an
 explicit `<Testing>` boundary still activates its subtree and turns its
 failures — or an empty boundary — into an `Err` outcome for the execution.
