@@ -30,11 +30,10 @@ export default define.page(function GettingStarted({ url }) {
       </p>
       <CodeBlock>{`curl -fsSL ${url.origin}/install.sh | sh`}</CodeBlock>
       <p>
-        Or, for Deno users, run it from source (a published JSR package is
-        coming soon):
+        Or, for Deno users, run it straight from JSR:
       </p>
       <CodeBlock>
-        {"git clone https://github.com/taras/executable.md\ncd executable.md && deno task xmd run doc.md"}
+        {"deno run -A jsr:@executablemd/cli run doc.md"}
       </CodeBlock>
       <p>
         Prebuilt binaries for every platform are on the{" "}
@@ -44,6 +43,26 @@ export default define.page(function GettingStarted({ url }) {
         >
           releases page
         </a>. The binary is self-contained — no Node or Deno needed to run it.
+      </p>
+
+      <h3>From npm</h3>
+      <p>
+        <code>xmd</code> is published to npm as{" "}
+        <code>@executablemd/cli</code>. Installing it needs the{" "}
+        <code>@jsr</code> registry configured first:
+      </p>
+      <CodeBlock>
+        {"npm config set @jsr:registry https://npm.jsr.io\nnpm install -g @executablemd/cli"}
+      </CodeBlock>
+      <p>
+        The assertion vocabulary builds on{" "}
+        <code>@std/assert</code>, which ships as <code>@jsr/std__assert</code>
+        {" "}
+        from <code>npm.jsr.io</code>{" "}
+        rather than the default registry. Without that mapping the install fails
+        with a 404 for{" "}
+        <code>@jsr/std__assert</code>. A package cannot set this for you — npm
+        reads <code>@jsr:registry</code> from your own configuration.
       </p>
 
       <h2>Your first document</h2>

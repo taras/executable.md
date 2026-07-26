@@ -70,6 +70,24 @@ curl -fsSL https://executable.md/install.sh | sh
 
 Prebuilt binaries for each platform are published on the [releases page](https://github.com/taras/executable.md/releases). The binary is self-contained — no Node or Deno required to run it.
 
+### From npm
+
+`xmd` is also published to npm as [`@executablemd/cli`](https://www.npmjs.com/package/@executablemd/cli). Installing it needs one piece of registry configuration:
+
+```bash
+npm config set @jsr:registry https://npm.jsr.io
+npm install -g @executablemd/cli
+```
+
+The assertion vocabulary is built on [`@std/assert`](https://jsr.io/@std/assert), which is distributed as `@jsr/std__assert` from `npm.jsr.io` rather than from the default registry. Without that mapping the install fails with `404 Not Found - GET https://registry.npmjs.org/@jsr%2fstd__assert`. A package cannot supply this for you: npm reads `@jsr:registry` from your own configuration and strips `.npmrc` from published tarballs.
+
+For a project-local install, commit the setting instead of using `npm config`:
+
+```
+# .npmrc
+@jsr:registry=https://npm.jsr.io
+```
+
 ### Platform notes
 
 - **Size:** binaries are self-contained and fairly large (roughly 90–125 MB depending on platform) — the embedded Deno runtime dominates. Trimming this further is tracked in [#66](https://github.com/taras/executable.md/issues/66).
