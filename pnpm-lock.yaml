@@ -126,12 +126,18 @@ importers:
       '@effectionx/stream-helpers':
         specifier: 0.8.3
         version: 0.8.3(effection@4.1.0-alpha.7)
+      '@executablemd/acp':
+        specifier: workspace:*
+        version: link:../acp
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@executablemd/test-agent':
         specifier: workspace:*
         version: link:../test-agent

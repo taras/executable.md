@@ -18,3 +18,5 @@ export type {
   ProbeCapableRuntime,
   SessionRoutingContext,
 } from "./src/provider.ts";
+/** The agent ACPX selects when nothing else is configured. */
+export { DEFAULT_AGENT_NAME } from "acpx/runtime";

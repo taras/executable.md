@@ -26,13 +26,21 @@ import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
 import { z } from "zod";
 import {
+  AgentProviders,
+  Config,
   execute,
   installAgentVocabulary,
+  installPermissionMode,
+  registerAgentProvider,
   useNormalizedOutput,
   useTerminalOutput,
 } from "@executablemd/core";
+import { env as readEnv } from "@executablemd/runtime";
+import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingVocabulary, TestFailureError, useTesting } from "@executablemd/testing";
 import { installTestAgentVocabulary, runTestAgentWorker } from "@executablemd/test-agent";
+import { resolveAgentConfig } from "./agent-config.ts";
+import type { AgentFlags } from "./agent-config.ts";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
@@ -61,6 +69,30 @@ const runConfig = object({
   },
   raw: {
     description: "output raw markdown without normalization or terminal formatting",
+    ...field(z.boolean(), defaults(false)),
+  },
+  agentProvider: {
+    description: "agent provider for agent components",
+    ...field(z.string(), defaults("acpx")),
+  },
+  defaultAgent: {
+    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
+    ...field(z.string().optional()),
+  },
+  timeout: {
+    description: "shared timeout in seconds for process, fetch, and agent operations",
+    ...field(z.union([z.string(), z.number()]).optional()),
+  },
+  approveAll: {
+    description: "approve every agent permission request",
+    ...field(z.boolean(), defaults(false)),
+  },
+  approveReads: {
+    description: "approve read and search agent permissions, ask for the rest (default)",
+    ...field(z.boolean(), defaults(false)),
+  },
+  denyAll: {
+    description: "deny every agent permission request",
     ...field(z.boolean(), defaults(false)),
   },
 });
@@ -183,6 +215,86 @@ function resolveWorkerCommand(): string[] {
   return [execPath, "test-agent"];
 }
 
+const AGENT_ONLY_FLAGS = [
+  "--agent-provider",
+  "--default-agent",
+  "--timeout",
+  "--approve-all",
+  "--approve-reads",
+  "--deny-all",
+];
+
+/**
+ * Agent options belong to `xmd run`. The argument parser ignores options
+ * it does not define rather than rejecting them, so `xmd test` has to
+ * reject these itself instead of silently running without them.
+ */
+function findAgentOnlyFlag(args: string[]): string | undefined {
+  return args.find((arg) =>
+    AGENT_ONLY_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+  );
+}
+
+/**
+ * The text an option carried on the command line. `--timeout` validates
+ * this rather than the parsed value: the parser coerces `1e3` and `0x10`
+ * into numbers and drops `.5`, `+1` and `Infinity`, so forms the grammar
+ * rejects would otherwise reach the stack as valid seconds.
+ */
+function findFlagText(args: string[], flag: string): string | undefined {
+  for (const [index, arg] of args.entries()) {
+    if (arg === flag) {
+      return args[index + 1] ?? "";
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      return arg.slice(flag.length + 1);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Install the agent stack for `xmd run`: permission mode, contextual
+ * timeout, the ACPX registration, and the vocabulary with the resolved
+ * root provider. Invalid flags and an unknown --agent-provider fail here
+ * — before any document executes. Nothing starts an agent: the provider
+ * validates availability on first use.
+ */
+function* installAgentStack(flags: AgentFlags): Operation<void> {
+  const config = resolveAgentConfig(flags);
+  if ("error" in config) {
+    console.error(config.error);
+    yield* exit(1);
+    return;
+  }
+
+  if (config.timeoutMs !== undefined) {
+    const ms = config.timeoutMs;
+    yield* Config.around({ timeout: () => ms }, { at: "min" });
+  }
+
+  yield* registerAgentProvider("acpx", createAcpxProvider());
+  const defaultAgent =
+    config.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
+
+  let factory;
+  try {
+    factory = yield* AgentProviders.operations.resolve(flags.agentProvider);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    yield* exit(1);
+    return;
+  }
+
+  const permissionMode = config.permissionMode;
+  yield* installAgentVocabulary({
+    defaultAgent,
+    permissionMode,
+    rootProvider: { factory, options: { defaultAgent, permissionMode } },
+  });
+  yield* installPermissionMode(permissionMode);
+}
+
 function* run(
   config: {
     docPath: string;
@@ -191,7 +303,7 @@ function* run(
     journal: string | undefined;
     raw: boolean;
   },
-  mode: { testing: boolean },
+  mode: { testing: boolean; agent?: AgentFlags },
 ): Operation<void> {
   const { docPath, componentDir, verbose, journal, raw } = config;
 
@@ -248,6 +360,12 @@ function* run(
     yield* installAgentVocabulary();
   } else {
     yield* installTestingVocabulary({ verbose });
+  }
+
+  // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
+  // through the deterministic TestAgent stack instead.
+  if (mode.agent) {
+    yield* installAgentStack(mode.agent);
   }
 
   const execution = yield* execute({
@@ -309,12 +427,33 @@ await main(function* (args) {
         break;
       }
       switch (parsed.value.name) {
-        case "run":
-          yield* run(parsed.value.config, { testing: false });
+        case "run": {
+          const config = parsed.value.config;
+          yield* run(config, {
+            testing: false,
+            agent: {
+              agentProvider: config.agentProvider,
+              defaultAgent: config.defaultAgent,
+              timeout: findFlagText(args, "--timeout"),
+              approveAll: config.approveAll,
+              approveReads: config.approveReads,
+              denyAll: config.denyAll,
+            },
+          });
           break;
-        case "test":
+        }
+        case "test": {
+          const agentFlag = findAgentOnlyFlag(args);
+          if (agentFlag) {
+            console.error(
+              `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to xmd run`,
+            );
+            yield* exit(1);
+            break;
+          }
           yield* run(parsed.value.config, { testing: true });
           break;
+        }
         case "test-agent":
           yield* runTestAgentWorker({ connect: parsed.value.config.connect });
           break;

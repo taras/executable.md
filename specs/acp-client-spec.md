@@ -163,6 +163,58 @@ inside a more permissive one can never be overruled by it.
 
 Every permission request therefore receives a concrete decision.
 
+## Command-line configuration
+
+`xmd run` configures the agent stack; the options are exclusive to it, and
+`xmd test` rejects them, driving agents through the deterministic test-agent
+stack instead.
+
+| Option | Meaning |
+| --- | --- |
+| `--agent-provider <name>` | the registered provider to install (default `acpx`) |
+| `--default-agent <name>` | the default agent |
+| `--timeout <seconds>` | the shared contextual timeout |
+| `--approve-all` | approve every permission request |
+| `--approve-reads` | approve reads and searches, ask for the rest (default) |
+| `--deny-all` | deny every permission request |
+
+The permission options are mutually exclusive.
+
+`--timeout` is a number of seconds written as decimal digits with an optional
+fractional part, and the fractional form requires digits on both sides of the
+point — `30` and `0.5` are seconds, `.5` is not. The value is greater than zero.
+Signs, hexadecimal, scientific notation, `Infinity`, `NaN` and trailing text are
+rejected, and the whole argument has to match: `12seconds` is not twelve
+seconds. The raw argument text is what gets validated, because an argument
+parser may coerce or drop these forms before they reach the check.
+
+Invalid options and an unknown `--agent-provider` fail before the document
+executes, with a non-zero exit status.
+
+The default agent resolves in order, each entry overriding the ones above it:
+
+1. the ACPX default agent,
+2. the `DEFAULT_AGENT_NAME` environment variable,
+3. `--default-agent`,
+4. an enclosing `<AgentProvider defaultAgent>`,
+5. an explicit `<Agent name>` or `<Prompt agent>`.
+
+The installed provider belongs to the run's `DocumentExecution` scope and closes
+during its teardown.
+
+### Availability
+
+Installing a provider starts nothing. The **first** Agent API use validates the
+selected agent, and both `<Agent>` and `<Prompt>` resolve the agent through the
+Agent API before any turn begins or is journaled. A document that never uses an
+agent therefore never probes one, and a confirmed full replay restores its
+prompts without re-checking availability.
+
+A failed availability check aborts expansion where it occurs: the content after
+the failed operation does not render, no prompt failure is aggregated, and the
+run exits non-zero. A turn that fails for any other reason remains an ordinary
+prompt failure.
+
 ## ACPX provider
 
 `@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.

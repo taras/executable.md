@@ -26,16 +26,39 @@ function* useStatWorld(existing: Record<string, "file" | "dir">): Operation<void
 }
 
 describe("Tier SK — session identity", () => {
-  it("SK1: keys are namespaced, encoded, digested, and name-scoped", function* () {
+  it("SK1: keys are namespaced, digested, and name-scoped", function* () {
     const key = deriveSessionKey("codex --acp", "/repo", "review");
     const parts = key.split(":");
     expect(parts.slice(0, 2)).toEqual(["xmd", "v1"]);
-    expect(parts[2]).toBe(encodeURIComponent("codex --acp"));
+    expect(parts[2]).toMatch(/^[0-9a-f]{16}$/);
     expect(parts[3]).toMatch(/^[0-9a-f]{16}$/);
-    expect(parts[4]).toBe("review");
-    expect(deriveSessionKey("codex --acp", "/repo")).not.toBe(key);
-    expect(deriveSessionKey("codex --acp", "/repo").endsWith(":default")).toBe(true);
+    expect(parts[4]).toMatch(/^[0-9a-f]{16}$/);
     expect(deriveSessionKey("codex --acp", "/other", "review")).not.toBe(key);
+    expect(deriveSessionKey("claude --acp", "/repo", "review")).not.toBe(key);
+  });
+
+  it("SK8: the unnamed session is distinct from any given name", function* () {
+    const unnamed = deriveSessionKey("codex --acp", "/repo");
+    expect(unnamed.endsWith(":default")).toBe(true);
+    expect(unnamed).not.toBe(deriveSessionKey("codex --acp", "/repo", "review"));
+    expect(unnamed).not.toBe(deriveSessionKey("codex --acp", "/repo", "default"));
+    expect(deriveSessionKey("codex --acp", "/repo", "review")).not.toBe(
+      deriveSessionKey("codex --acp", "/repo", "release"),
+    );
+  });
+
+  it("SK9: long commands and long names stay usable as file names", function* () {
+    const command = `'${"/very/long/path".repeat(20)}/xmd' test-agent --connect 127.0.0.1:50049/${"a".repeat(64)}`;
+    const name = "session-".repeat(50);
+    for (const key of [
+      deriveSessionKey(command, "/repo", "review"),
+      deriveSessionKey("codex", `/${"deep".repeat(60)}`, "review"),
+      deriveSessionKey("codex", "/repo", name),
+      deriveSessionKey(command, `/${"deep".repeat(60)}`, name),
+    ]) {
+      expect(key.length).toBeLessThan(80);
+      expect(encodeURIComponent(key).length).toBeLessThan(255);
+    }
   });
 
   it("SK2: candidates walk from cwd to the git root, nearest first", function* () {
