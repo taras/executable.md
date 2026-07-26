@@ -1,7 +1,7 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
 
-const REVIEW = `<Agent name="codex">
+const REVIEW = `<Agent>
   <Session name="review">
     <Prompt prompt="Review the current repository. List the highest-risk changes as a checklist." as="review" />
     <Prompt prompt="Turn that review into the next three actions." as="actions" />
@@ -72,7 +72,10 @@ export default define.page(function Agents() {
         <code>&lt;Agent&gt;</code> chooses the coding agent. The first
         <code>&lt;Prompt&gt;</code> captures its reply as <code>review</code>
         instead of placing it immediately in the output. The two headings later
-        in the document show the captured review and actions.
+        in the document show the captured review and actions. Without a
+        <code>name</code> prop, <code>&lt;Agent&gt;</code>{" "}
+        uses the selected default; set <code>name</code>{" "}
+        only when this document needs to override that choice.
       </p>
       <p>Run the workflow with an agent your ACPX setup can run:</p>
       <CodeBlock>{"xmd run review.md --default-agent codex"}</CodeBlock>
@@ -115,8 +118,8 @@ export default define.page(function Agents() {
           <strong>How long may it wait?</strong>{" "}
           Prompts have a two-minute default limit. Use <code>--timeout 90</code>
           {" "}
-          for a 90-second run, or set a prompt-specific <code>timeout</code>
-          {" "}
+          for a shared 90-second limit for each operation without its own
+          timeout, or set a prompt-specific <code>timeout</code>{" "}
           when one request needs a different limit.
         </li>
       </ul>

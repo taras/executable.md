@@ -127,15 +127,18 @@ controller from this checkout:
 deno run --allow-all packages/test-agent/examples/acpx-walkthrough.ts
 ```
 
-It prints two complete commands. Run them in another terminal, in order:
+It prints two complete commands. Copy the exact lines into another terminal and
+run them in order. The controller fills in its route and the checkout's absolute
+CLI source path:
 
 ```sh
-acpx --agent "xmd test-agent --connect <route>" exec "Review packages/core at revision abc123"
-acpx --agent "xmd test-agent --connect <route>" exec "Summarize packages/core"
+acpx --agent "deno run --allow-all '<abs>/packages/cli/src/cli.ts' test-agent --connect <route>" exec "Review packages/core at revision abc123"
+acpx --agent "deno run --allow-all '<abs>/packages/cli/src/cli.ts' test-agent --connect <route>" exec "Summarize packages/core"
 ```
 
-The controller supplies the route and scenario state, so
-`xmd test-agent --connect <route>` runs only while that controller is active.
-Each `acpx exec` uses a temporary session; the second command still sees the
-first capture because the controller restores completed scenario stages for the
-worker. The worker has no standalone scenario-file mode.
+If an appropriate `xmd` binary is already on your `PATH`, its equivalent agent
+command is `xmd test-agent --connect <route>`. The controller still supplies
+the route and scenario state, and the worker has no standalone scenario-file
+mode. Each `acpx exec` uses a temporary session; the second command still sees
+the first capture because the controller restores completed scenario stages for
+the worker.
