@@ -11,7 +11,7 @@ import type { Operation, Task } from "effection";
 import { timebox } from "@effectionx/timebox";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { AssertionError } from "@std/assert";
+import { AssertionError, assertionError } from "./assert.ts";
 import { Component, env, evalScope, validateBindingName } from "@executablemd/core";
 import type {
   ComponentInvocation,
@@ -402,7 +402,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
 
 function* failAssertThrows(matcher: string | RegExp, actual: string | undefined): Operation<never> {
   const expected = describeMatcher(matcher);
-  const failure = new AssertionError(
+  const failure = assertionError(
     actual === undefined
       ? `AssertThrows: expected the body to raise an error matching ${expected}, but none was raised`
       : `AssertThrows: raised error ${JSON.stringify(actual)} did not match ${expected}`,

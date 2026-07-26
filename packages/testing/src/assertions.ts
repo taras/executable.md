@@ -1,7 +1,7 @@
 /**
  * Assertion components (specs/testing-spec.md §Assertions).
  *
- * Each component maps to an `@std/assert` export with the same name and
+ * Each component maps to an operation in `./assert.ts` with the same name and
  * parameter names. Expression props evaluate LIVE against the merged binding
  * environment — never through JSON serialization, which would destroy
  * `RegExp`s, `undefined`, and object identity.
@@ -28,7 +28,8 @@ import {
   assertNotStrictEquals,
   assertStrictEquals,
   assertStringIncludes,
-} from "@std/assert";
+  fail,
+} from "./assert.ts";
 import type { Operation } from "effection";
 import { DocumentOutput, env, renderSegments } from "@executablemd/core";
 import type {
@@ -50,7 +51,7 @@ type AssertionKind =
 export interface AssertionEntry {
   name: string;
   kind: AssertionKind;
-  /** Runs the underlying @std/assert function on the resolved raw values. */
+  /** Runs the underlying assertion operation on the resolved raw values. */
   run(values: ResolvedValues): void;
   allowsExpectedChildren: boolean;
 }
@@ -102,16 +103,14 @@ function coerceString(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  throw new AssertionError(`expected a string "actual"/"expected" value, got ${typeof value}`);
+  fail(`expected a string "actual"/"expected" value, got ${typeof value}`);
 }
 
 function requireRegExp(value: unknown): RegExp {
   if (value instanceof RegExp) {
     return value;
   }
-  throw new AssertionError(
-    "match assertions require a RegExp through the expected prop — use expected={/pattern/}",
-  );
+  fail("match assertions require a RegExp through the expected prop — use expected={/pattern/}");
 }
 
 const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
@@ -147,7 +146,7 @@ function safeFormat(value: unknown): string {
 /**
  * An assertion failure enriched with its Markdown diagnostic. Still an
  * `AssertionError`, so containment and classification treat it as the
- * original @std/assert failure.
+ * original assertion failure.
  */
 export class AssertionDiagnostic extends AssertionError {
   override name = "AssertionDiagnostic";
@@ -155,7 +154,8 @@ export class AssertionDiagnostic extends AssertionError {
   detail: { actual?: string; expected?: string };
 
   constructor(cause: Error, diagnostic: string, detail: { actual?: string; expected?: string }) {
-    super(cause.message);
+    // Node's AssertionError takes an options bag, not a message string.
+    super({ message: cause.message });
     this.diagnostic = diagnostic;
     this.detail = detail;
     this.cause = cause;
@@ -194,7 +194,7 @@ export function* failVisiblyThenThrow(
 
 /**
  * Expand one assertion component: validate props, resolve raw values, run the
- * @std/assert function, then build the diagnostic. Returns diagnostic text on
+ * assertion operation, then build the diagnostic. Returns diagnostic text on
  * a visible pass; throws `AssertionDiagnostic` on failure.
  */
 export function* expandAssertion(
@@ -276,7 +276,7 @@ export function* expandAssertion(
     }
   }
 
-  // @std/assert takes msg as a string; a non-string is rejected by TYPE
+  // Assertions take msg as a string; a non-string is rejected by TYPE
   // CHECK alone — formatting it here would run hostile toJSON/toString
   // side effects before the assertion outcome is established.
   if ("msg" in resolved && typeof resolved.msg !== "string") {

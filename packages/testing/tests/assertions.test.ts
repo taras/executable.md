@@ -1,6 +1,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { AssertionError } from "@std/assert";
+import { AssertionError } from "node:assert/strict";
 import { TestFailureError } from "../src/test-api.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 

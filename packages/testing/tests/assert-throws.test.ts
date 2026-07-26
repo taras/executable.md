@@ -1,6 +1,6 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { AssertionError } from "@std/assert";
+import { AssertionError } from "node:assert/strict";
 import type { ComponentInvocation, InvocationContext } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
 import { failureOf, runDoc } from "./helpers.ts";

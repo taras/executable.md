@@ -320,9 +320,6 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
-      '@std/assert':
-        specifier: npm:@jsr/std__assert@^1.0.17
-        version: '@jsr/std__assert@1.0.19'
       effection:
         specifier: 4.1.0-alpha.7
         version: 4.1.0-alpha.7
@@ -777,12 +774,6 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
-
-  '@jsr/std__assert@1.0.19':
-    resolution: {integrity: sha512-pEj6RPkGbqlgRmyKwATp4cUs6+ijxtdrv3bq8v1d2I2CEcMEyPaO8cVKro61wGRDH4cNg8Zx6haztvK/9m7gkA==, tarball: https://npm.jsr.io/~/11/@jsr/std__assert/1.0.19.tgz}
-
-  '@jsr/std__internal@1.0.14':
-    resolution: {integrity: sha512-JT8b/t40WcR9q0GDwRZUooY7aXeXnFal8iidE/5TckdAFtvpVAsaJ71/Xgf1SfoChs41s6CZkuCYM8toaNgdvA==, tarball: https://npm.jsr.io/~/11/@jsr/std__internal/1.0.14.tgz}
 
   '@lmdb/lmdb-darwin-arm64@3.5.6':
     resolution: {integrity: sha512-mY5FG4TjPAkY4P0w+OhHaUka5mDh2TX2WKYIwuKzJ1zeW3VvRgxdam/lGJTquI+bthTx5CSHDW+BAQCnNAzkEA==}
@@ -2122,12 +2113,6 @@ snapshots:
       chalk: 4.1.2
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
-
-  '@jsr/std__assert@1.0.19':
-    dependencies:
-      '@jsr/std__internal': 1.0.14
-
-  '@jsr/std__internal@1.0.14': {}
 
   '@lmdb/lmdb-darwin-arm64@3.5.6':
     optional: true

@@ -3,7 +3,8 @@
  * Testing vocabulary for executable.md documents (specs/testing-spec.md).
  *
  * `<Testing>` activates testing mode for its expanded subtree, `<Test>`
- * defines an atomic test, and the assertion components map to `@std/assert`.
+ * defines an atomic test, and the assertion components build on
+ * `node:assert/strict`.
  *
  * Composition with core execution:
  *

@@ -72,21 +72,13 @@ Prebuilt binaries for each platform are published on the [releases page](https:/
 
 ### From npm
 
-`xmd` is also published to npm as [`@executablemd/cli`](https://www.npmjs.com/package/@executablemd/cli). Installing it needs one piece of registry configuration:
+`xmd` is also published to npm as [`@executablemd/cli`](https://www.npmjs.com/package/@executablemd/cli):
 
 ```bash
-npm config set @jsr:registry https://npm.jsr.io
 npm install -g @executablemd/cli
 ```
 
-The assertion vocabulary is built on [`@std/assert`](https://jsr.io/@std/assert), which is distributed as `@jsr/std__assert` from `npm.jsr.io` rather than from the default registry. Without that mapping the install fails with `404 Not Found - GET https://registry.npmjs.org/@jsr%2fstd__assert`. A package cannot supply this for you: npm reads `@jsr:registry` from your own configuration and strips `.npmrc` from published tarballs.
-
-For a project-local install, commit the setting instead of using `npm config`:
-
-```
-# .npmrc
-@jsr:registry=https://npm.jsr.io
-```
+No registry configuration is needed — every `@executablemd` package resolves from the default npm registry.
 
 ### Platform notes
 

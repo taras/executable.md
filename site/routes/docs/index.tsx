@@ -47,22 +47,13 @@ export default define.page(function GettingStarted({ url }) {
 
       <h3>From npm</h3>
       <p>
-        <code>xmd</code> is published to npm as{" "}
-        <code>@executablemd/cli</code>. Installing it needs the{" "}
-        <code>@jsr</code> registry configured first:
+        <code>xmd</code> is published to npm as <code>@executablemd/cli</code>:
       </p>
-      <CodeBlock>
-        {"npm config set @jsr:registry https://npm.jsr.io\nnpm install -g @executablemd/cli"}
-      </CodeBlock>
+      <CodeBlock>{"npm install -g @executablemd/cli"}</CodeBlock>
       <p>
-        The assertion vocabulary builds on{" "}
-        <code>@std/assert</code>, which ships as <code>@jsr/std__assert</code>
+        No registry configuration is needed — every <code>@executablemd</code>
         {" "}
-        from <code>npm.jsr.io</code>{" "}
-        rather than the default registry. Without that mapping the install fails
-        with a 404 for{" "}
-        <code>@jsr/std__assert</code>. A package cannot set this for you — npm
-        reads <code>@jsr:registry</code> from your own configuration.
+        package resolves from the default npm registry.
       </p>
 
       <h2>Your first document</h2>
