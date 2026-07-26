@@ -12,6 +12,13 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const BOOTSTRAP_VERSION = "0.0.0-bootstrap.0";
 
+/**
+ * The registry states the script distinguishes. `mistagged` is the one that
+ * needs both halves of the resumability guard: the version is exactly the
+ * bootstrap version, so only the dist-tag check can reject it.
+ */
+type NpmState = "missing" | "bootstrap" | "unexpected" | "mistagged";
+
 function* bootstrapSource(): Operation<string> {
   const document = yield* readTextFile(path.join(ROOT, "scripts/bootstrap-npm-package.md"));
   const start = document.indexOf("```bash exec\n");
@@ -19,7 +26,7 @@ function* bootstrapSource(): Operation<string> {
   return document.slice(start + "```bash exec\n".length, end);
 }
 
-function* fakeNpm(state: "missing" | "bootstrap" | "unexpected"): Operation<string> {
+function* fakeNpm(state: NpmState): Operation<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-npm-package-"));
   yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
@@ -33,11 +40,16 @@ function* fakeNpm(state: "missing" | "bootstrap" | "unexpected"): Operation<stri
     "        version)",
     '          case "$NPM_STATE" in',
     `            missing) echo "npm error E404" >&2; return 1 ;;`,
-    `            bootstrap) echo "\\\"${BOOTSTRAP_VERSION}\\\"" ;;`,
+    `            bootstrap|mistagged) echo "\\\"${BOOTSTRAP_VERSION}\\\"" ;;`,
     '            unexpected) echo "\\\"1.0.0\\\"" ;;',
     "          esac",
     "          ;;",
-    `        dist-tags) echo '{"bootstrap":"${BOOTSTRAP_VERSION}"}' ;;`,
+    "        dist-tags)",
+    '          case "$NPM_STATE" in',
+    `            mistagged) echo '{"latest":"${BOOTSTRAP_VERSION}"}' ;;`,
+    `            *) echo '{"bootstrap":"${BOOTSTRAP_VERSION}"}' ;;`,
+    "          esac",
+    "          ;;",
     "      esac",
     "      ;;",
     '    pack) echo "[]" ;;',
@@ -51,7 +63,7 @@ function* fakeNpm(state: "missing" | "bootstrap" | "unexpected"): Operation<stri
   return file;
 }
 
-function* runBootstrap(state: "missing" | "bootstrap" | "unexpected") {
+function* runBootstrap(state: NpmState) {
   const envFile = yield* fakeNpm(state);
   const log = path.join(path.dirname(envFile), "npm.log");
   const result = yield* exec("bash", {
@@ -93,6 +105,20 @@ describe("bootstrap npm package", () => {
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("version other than 0.0.0-bootstrap.0");
+    const calls = yield* readTextFile(log);
+    expect(calls).not.toContain("publish --access public --tag bootstrap");
+    expect(calls).not.toContain("trust github @executablemd/acp");
+  });
+
+  // The version alone cannot establish resumability: a package sitting at
+  // 0.0.0-bootstrap.0 under some other dist-tag is not the artifact this
+  // script published, so resuming onto it would configure trust for a record
+  // it does not own.
+  it("rejects the bootstrap version when it is not under the bootstrap dist-tag", function* () {
+    const { result, log } = yield* runBootstrap("mistagged");
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("does not have the expected bootstrap dist-tag");
     const calls = yield* readTextFile(log);
     expect(calls).not.toContain("publish --access public --tag bootstrap");
     expect(calls).not.toContain("trust github @executablemd/acp");
