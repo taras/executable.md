@@ -167,25 +167,22 @@ tokens minted outside the gated environment.
 ## 6. Adding a new package
 
 npm exposes trusted-publisher settings only on a package that already exists,
-and the workflows carry no npm token, so bootstrap a new package by hand once:
+and the workflows carry no npm token, so bootstrap a new package once:
 
 1. Create its directory under `packages/` with a `deno.json` (name under
    `@executablemd`) and a `package.json` declaring its dependencies
    (`workspace:*` for internal siblings). The root `deno.json` covers it through
    the `packages/*` workspace glob, so membership needs no edit. Run
    `deno task gen:publish-workflow` and commit the regenerated orchestrator.
-2. Publish its first version by hand as a logged-in `@executablemd` scope
-   owner:
-   ```sh
-   deno run -A scripts/build-npm.ts <package-dir> <version>
-   ( cd <package-dir>/npm && npm publish --access public )
-   ```
-   This covers a package with no `workspace:*` dependencies. A package that
-   declares them cannot build its first artifact until those sibling versions
-   are on npm, because the build resolves siblings from the registry. That
-   bootstrap is tracked in #152 rather than specified here.
-3. Configure its trusted publisher with the table in §4.
-4. Create the package on jsr.io under the `@executablemd` scope and link it to
+2. Run `scripts/bootstrap-npm-package.md` as a logged-in `@executablemd` scope
+   owner. It previews a deliberately empty `0.0.0-bootstrap.0` artifact by
+   default and, after `PUBLISH=1`, publishes it only under the `bootstrap`
+   dist-tag before configuring the trusted publisher from §4. It does not build
+   the implementation; the first tagged release publishes that artifact as
+   `latest`. Follow the document's terminal instructions: npm web
+   authentication needs an interactive terminal, and the document resumes
+   trusted-publisher configuration when its bootstrap version already exists.
+3. Create the package on jsr.io under the `@executablemd` scope and link it to
    this repository, **before** the first tagged release that includes it.
    `deno publish` fails for a package that does not exist on JSR, and the JSR
    job publishes the workspace as a unit — so one uncreated package fails the
