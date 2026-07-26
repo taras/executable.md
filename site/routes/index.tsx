@@ -129,20 +129,28 @@ export default define.page(function Home({ url }) {
             class="muted"
             style="text-align:center;max-width:60ch;margin:0 auto 2rem;"
           >
-            This small document explains what it checks and then replaces each
-            executable block with the current result. Save it in a Git
-            repository and run <code>xmd run project-report.md</code>.
+            Keep <code>project-report.md</code>{" "}
+            as the executable source, then capture its rendered output as a
+            separate artifact:
           </p>
+          <div style="max-width:34rem;margin:0 auto 2rem;">
+            <CodeBlock>
+              {"xmd run project-report.md > project-snapshot.md"}
+            </CodeBlock>
+          </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;align-items:start;">
             <CodeBlock filename="project-report.md">{REPORT}</CodeBlock>
-            <CodeBlock filename="rendered result">{REPORT_OUTPUT}</CodeBlock>
+            <CodeBlock filename="project-snapshot.md">
+              {REPORT_OUTPUT}
+            </CodeBlock>
           </div>
           <p
             class="muted"
             style="text-align:center;max-width:60ch;margin:1.5rem auto 0;"
           >
-            The result is ordinary Markdown, ready to commit, share, or use as
-            input to the next documented step.
+            <code>project-snapshot.md</code>{" "}
+            is ordinary Markdown, ready to share, commit, or use as input to the
+            next documented step.
           </p>
         </div>
       </section>

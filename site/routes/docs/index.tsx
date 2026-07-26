@@ -33,9 +33,10 @@ export default define.page(function GettingStarted({ url }) {
       <h2>Run a useful first document</h2>
       <p>
         In a Git repository, save this as{" "}
-        <code>project-report.md</code>. The commands run where you invoke{" "}
+        <code>project-report.md</code>. It remains the executable source
+        document. The commands run where you invoke{" "}
         <code>xmd</code>; their standard output replaces the executable blocks
-        in the rendered document.
+        in the rendered result.
       </p>
       <CodeBlock filename="project-report.md">{REPORT}</CodeBlock>
 
@@ -44,17 +45,22 @@ export default define.page(function GettingStarted({ url }) {
         Install the standalone <code>xmd</code> binary on macOS or Linux:
       </p>
       <CodeBlock>{"curl -fsSL " + url.origin + "/install.sh | sh"}</CodeBlock>
-      <p>Then run the report from that repository:</p>
-      <CodeBlock>{"xmd run project-report.md"}</CodeBlock>
+      <p>Then render the report and save the shareable result:</p>
+      <CodeBlock>
+        {"xmd run project-report.md > project-snapshot.md"}
+      </CodeBlock>
       <p>
-        The result is Markdown with the current working-tree status and latest
-        commit in place. Put it in a pull-request checklist, a maintenance run,
-        or a handoff note when the same evidence is useful again.
+        The command leaves <code>project-report.md</code>{" "}
+        unchanged and writes ordinary Markdown with the current working-tree
+        status and latest commit to{" "}
+        <code>project-snapshot.md</code>. Share or commit that artifact for a
+        pull-request checklist, maintenance run, or handoff note.
       </p>
       <p>
         You can also run the checkout from source with{" "}
-        <code>deno task xmd run project-report.md</code>. Prebuilt binaries are
-        available from the{" "}
+        <code>
+          deno task xmd run project-report.md &gt; project-snapshot.md
+        </code>. Prebuilt binaries are available from the{" "}
         <a
           href="https://github.com/taras/executable.md/releases"
           rel="noopener"
