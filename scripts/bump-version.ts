@@ -11,6 +11,7 @@
 
 import { exit, main } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { listWorkspacePaths } from "./lib/workspace.ts";
 import { z } from "npm:zod@^4";
 
 const SCOPE = "@executablemd/";
@@ -35,7 +36,7 @@ await main(function* (args) {
   const repoRoot = new URL("../", import.meta.url);
   const root = RootSchema.parse(JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot))));
 
-  for (const dir of root.workspace) {
+  for (const dir of yield* listWorkspacePaths(root.workspace, repoRoot)) {
     let denoText: string;
     try {
       denoText = yield* readTextFile(new URL(`${dir}/deno.json`, repoRoot));
