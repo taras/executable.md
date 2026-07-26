@@ -309,11 +309,10 @@ export function createAgentHandlers(): AgentHandlers {
       content = renderSegments(yield* ctx.expand(invocation.children));
     }
 
-    const options: PromptOptions = {};
-    const agentProp = asString(props.agent);
-    if (agentProp !== undefined) {
-      options.agent = agentProp;
-    }
+    // Resolving before the durable operation makes this the availability
+    // boundary: an unavailable agent fails expansion rather than being
+    // journaled and collected as a prompt failure.
+    const options: PromptOptions = { agent: yield* Agent.operations.agent(asString(props.agent)) };
     const sessionProp = asString(props.session);
     if (sessionProp !== undefined) {
       options.session = sessionProp;

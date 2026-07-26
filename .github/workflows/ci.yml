@@ -82,6 +82,12 @@ jobs:
       - name: Smoke test the compiled binary as a test agent
         run: ./dist/xmd test smoke-test/test-agent/README.md --raw
 
+      - name: Smoke test xmd run through ACPX
+        run: |
+          ./dist/xmd test smoke-test/agent/README.md \
+            --component-dir smoke-test/agent/components \
+            --raw
+
   site:
     runs-on: ubuntu-latest
     steps:

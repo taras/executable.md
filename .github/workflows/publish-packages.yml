@@ -104,7 +104,7 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   cli:
-    needs: [version, core, durable-streams, test-agent, testing]
+    needs: [version, acp, core, durable-streams, runtime, test-agent, testing]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/cli

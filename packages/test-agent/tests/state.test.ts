@@ -10,6 +10,7 @@ import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
 import type { SessionRoutingContext } from "@executablemd/acp";
 import { useTestAgentAcpx } from "../src/state.ts";
+import { deriveSessionKey } from "../../acp/src/session-key.ts";
 import { createFakeRuntime, useFlatWorld } from "../../acp/tests/helpers.ts";
 
 const INST = "127.0.0.1:1/tok/inst-1";
@@ -49,11 +50,16 @@ describe("Tier TS — test-agent ACPX state", () => {
     );
 
     // During a prompt the ensure sees the pinned instance route: the
-    // session key derives from the routed worker command. (The runtime
-    // is created lazily on first use.)
+    // session key derives from the routed worker command, not the probe
+    // one. (The runtime is created lazily on first use.)
     yield* drainPrompt();
     const registry = harness.createdOptions[0]!.agentRegistry;
-    expect(harness.ensureCalls[0]!.sessionKey).toContain("xmd%20test-agent");
+    expect(harness.ensureCalls[0]!.sessionKey).toBe(
+      deriveSessionKey(`xmd test-agent --connect ${INST}`, "/work"),
+    );
+    expect(harness.ensureCalls[0]!.sessionKey).not.toBe(
+      deriveSessionKey(`xmd test-agent --connect ${PROBE}`, "/work"),
+    );
     // Outside the seam the route is released — the registry falls
     // back to the probe route.
     expect(registry.resolve("test")).toBe(`xmd test-agent --connect ${PROBE}`);

@@ -3,8 +3,12 @@
  *
  * Keys are namespaced `xmd:v1:` so they can never collide with sessions
  * owned by other ACPX consumers (ACPX's only key convention is an
- * optional `agent:<name>:` prefix, which this scheme avoids), and the
- * directory digest keeps keys short and filesystem-safe.
+ * optional `agent:<name>:` prefix, which this scheme avoids). Every
+ * variable-length identity component — the agent command, the directory
+ * and an explicit session name — is digested, so a key stays bounded and
+ * filesystem-safe however long its inputs are. A session store may use
+ * the key as a file name and encode it again, which an undigested
+ * component overruns.
  *
  * Session resolution walks candidates from the contextual cwd toward the
  * Git repository root and reuses the nearest candidate whose record
@@ -27,14 +31,19 @@ export interface SessionCandidate {
   cwd: string;
 }
 
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
 export function deriveSessionKey(agentCommand: string, dir: string, name?: string): string {
-  const digest = createHash("sha256").update(resolve(dir)).digest("hex").slice(0, 16);
+  // The unnamed session keeps a literal marker so it stays recognisable
+  // and distinct from any given name.
   return [
     "xmd",
     "v1",
-    encodeURIComponent(agentCommand),
-    digest,
-    encodeURIComponent(name ?? "default"),
+    digest(agentCommand),
+    digest(resolve(dir)),
+    name === undefined ? "default" : digest(name),
   ].join(":");
 }
 
