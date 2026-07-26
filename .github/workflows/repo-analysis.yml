@@ -29,11 +29,12 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      # Version-pinned so a new (or compromised) release cannot silently change
-      # analysis behavior; bump the pin as part of each release.
+      # install.sh resolves the latest published release, for the same reason
+      # PR Review does — a pinned version names an unpublished release for the
+      # whole of a release-bump PR. See .github/workflows/review.yml.
       - name: Install xmd release binary
         run: |
-          curl -fsSL https://executable.md/install.sh | XMD_VERSION=v0.5.1 sh
+          curl -fsSL https://executable.md/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run repo analysis
