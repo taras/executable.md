@@ -101,6 +101,20 @@ manifests (§3).
   `@std/assert`) becomes a `@jsr/*` dependency the default registry does not
   serve, so the install would otherwise 404.
 
+### Local builds
+
+A normal build installs the package's dependencies from npm and resolves its
+siblings to their published versions. That is the path `publish-one.yml` runs.
+
+`DNT_SKIP_INSTALL=1` skips that install and the type check, for exercising the
+tooling before a version reaches npm. It covers only packages that declare no
+`workspace:*` dependencies. dnt emits through TypeScript, which resolves from
+the output directory, so the install is what supplies a sibling's declarations;
+without it a sibling resolves to its workspace source and lands in the package.
+The builder therefore refuses a package that declares one, naming the
+dependencies and leaving the output directory empty. Release workflows never set
+the variable.
+
 ### JSR publishing
 
 `deno publish` runs once from the repo root and publishes every workspace member
@@ -166,6 +180,10 @@ and the workflows carry no npm token, so bootstrap a new package by hand once:
    deno run -A scripts/build-npm.ts <package-dir> <version>
    ( cd <package-dir>/npm && npm publish --access public )
    ```
+   This covers a package with no `workspace:*` dependencies. A package that
+   declares them cannot build its first artifact until those sibling versions
+   are on npm, because the build resolves siblings from the registry. That
+   bootstrap is tracked in #152 rather than specified here.
 3. Configure its trusted publisher with the table in §4.
 4. Create the package on jsr.io under the `@executablemd` scope and link it to
    this repository, **before** the first tagged release that includes it.
