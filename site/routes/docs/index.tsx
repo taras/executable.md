@@ -1,90 +1,101 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
 
-const DOC = `---
-title: My Project
----
+const FENCE = String.fromCharCode(96).repeat(3);
 
-# {meta.title}
-
-<Greeting name="world" />
-
-\`\`\`bash exec
-ls ./src
-\`\`\``;
+const REPORT = [
+  "# Project snapshot",
+  "",
+  "## Working tree",
+  "",
+  FENCE + "bash exec",
+  "git status --short",
+  FENCE,
+  "",
+  "## Most recent commit",
+  "",
+  FENCE + "bash exec",
+  "git log -1 --oneline",
+  FENCE,
+].join("\n");
 
 export default define.page(function GettingStarted({ url }) {
   return (
     <>
       <h1 style="font-size:2rem;font-weight:800;">Getting started</h1>
       <p class="muted">
-        executable.md runs markdown documents as executable workflows using the
-        {" "}
-        <code>xmd</code>{" "}
-        command. This page gets you from install to your first run.
+        Use Executable Markdown when a repeatable command needs an explanation,
+        its result, and a place in a document someone can read. A project status
+        report is a small example: it records what it checks and turns the
+        current repository state into a shareable Markdown result.
       </p>
 
-      <h2>Install</h2>
+      <h2>Run a useful first document</h2>
       <p>
-        Install the standalone <code>xmd</code> binary (macOS / Linux):
+        In a Git repository, save this as{" "}
+        <code>project-report.md</code>. The commands run where you invoke{" "}
+        <code>xmd</code>; their standard output replaces the executable blocks
+        in the rendered document.
       </p>
-      <CodeBlock>{`curl -fsSL ${url.origin}/install.sh | sh`}</CodeBlock>
+      <CodeBlock filename="project-report.md">{REPORT}</CodeBlock>
+
+      <h2>Install and run it</h2>
       <p>
-        Or, for Deno users, run it from source (a published JSR package is
-        coming soon):
+        Install the standalone <code>xmd</code> binary on macOS or Linux:
       </p>
-      <CodeBlock>
-        {"git clone https://github.com/taras/executable.md\ncd executable.md && deno task xmd run doc.md"}
-      </CodeBlock>
+      <CodeBlock>{"curl -fsSL " + url.origin + "/install.sh | sh"}</CodeBlock>
+      <p>Then run the report from that repository:</p>
+      <CodeBlock>{"xmd run project-report.md"}</CodeBlock>
       <p>
-        Prebuilt binaries for every platform are on the{" "}
+        The result is Markdown with the current working-tree status and latest
+        commit in place. Put it in a pull-request checklist, a maintenance run,
+        or a handoff note when the same evidence is useful again.
+      </p>
+      <p>
+        You can also run the checkout from source with{" "}
+        <code>deno task xmd run project-report.md</code>. Prebuilt binaries are
+        available from the{" "}
         <a
           href="https://github.com/taras/executable.md/releases"
           rel="noopener"
         >
           releases page
-        </a>. The binary is self-contained — no Node or Deno needed to run it.
+        </a>.
       </p>
 
-      <h2>Your first document</h2>
+      <h2>See what happened when a run needs debugging</h2>
       <p>
-        A document is a component. Frontmatter becomes{" "}
-        <code>meta</code>, capitalized JSX tags expand other markdown files, and
-        fenced blocks marked <code>exec</code> run and render their output.
+        Add a journal when you need the command inputs, outputs, and errors
+        behind a result. It writes a new JSONL file; choose a path that does not
+        already exist, and treat the file as potentially sensitive.
       </p>
-      <CodeBlock filename="README.md">{DOC}</CodeBlock>
-      <p>Run it:</p>
-      <CodeBlock>{"xmd run README.md"}</CodeBlock>
-
-      <h2>Write a diagnostic journal</h2>
+      <CodeBlock>
+        {"xmd run project-report.md --journal .xmd/project-report.jsonl"}
+      </CodeBlock>
       <p>
-        Pass <code>--journal</code>{" "}
-        to write a JSONL trace of the run to a new file for troubleshooting. The
-        path must not already exist, and the trace is never replayed.
+        Add <code>--verbose</code>{" "}
+        to see journal events on stderr while the document runs. Use{" "}
+        <code>--component-dir</code>{" "}
+        when your reusable document patterns live outside the default{" "}
+        <code>components</code> and current directories.
       </p>
-      <CodeBlock>{"xmd run README.md --journal .xmd/events.jsonl"}</CodeBlock>
 
-      <h2>Useful flags</h2>
+      <h2>Choose the next capability</h2>
       <ul>
         <li>
-          <code>--journal</code>, <code>-j</code>{" "}
-          — write current-run journal entries to a new JSONL file (the path must
-          not exist).
+          Reuse a report or check with different inputs:{" "}
+          <a href="/docs/components">Components</a>.
         </li>
         <li>
-          <code>--verbose</code>, <code>-V</code>{" "}
-          — print journal entries to stderr while running.
+          Need a command, a calculated value, or a short-lived local process:
+          {" "}
+          <a href="/docs/exec-eval">Exec &amp; Eval</a>.
         </li>
         <li>
-          <code>--component-dir</code>{" "}
-          — add component search directories (defaults to{" "}
-          <code>components</code> and <code>.</code>).
+          Need an LLM response in a document:{" "}
+          <a href="/docs/providers">LLM providers</a>.
         </li>
       </ul>
-
-      <p style="margin-top:2rem;">
-        Next: <a href="/docs/components">Components →</a>
-      </p>
     </>
   );
 });
