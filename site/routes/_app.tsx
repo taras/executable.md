@@ -36,6 +36,11 @@ const META: Record<string, { title: string; desc: string }> = {
     desc:
       "Wire cloud and local models into a document with provider components and <Sample>.",
   },
+  "/docs/agents": {
+    title: "Coding agents · executable.md docs",
+    desc:
+      "Run an ACP-compatible coding agent from executable markdown and test the integration deterministically.",
+  },
   "/docs/reference": {
     title: "Reference · executable.md docs",
     desc:
