@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/runtime",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Runtime host APIs for executable.md documents.",
   "type": "module",
   "exports": {
