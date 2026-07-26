@@ -26,6 +26,7 @@ import {
   rm,
   writeTextFile,
 } from "@effectionx/fs";
+import { listWorkspacePaths } from "./lib/workspace.ts";
 import { join } from "node:path";
 // Recursive directory copy and temp-dir creation are not part of @effectionx/fs.
 import { cp, mkdtemp } from "node:fs/promises";
@@ -81,7 +82,7 @@ await main(function* (args) {
   // Map every @executablemd workspace member name -> its declared version, so
   // internal deps can be pinned to the sibling's own version without hardcoding.
   const siblingVersion: Record<string, string> = {};
-  for (const member of rootDeno.workspace) {
+  for (const member of yield* listWorkspacePaths(rootDeno.workspace, repoRoot)) {
     const memberDenoUrl = new URL(`${member}/deno.json`, repoRoot);
     if (!(yield* exists(memberDenoUrl))) {
       continue;
