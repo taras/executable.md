@@ -21,13 +21,18 @@ import { Component } from "../component-api.ts";
 import { Execution } from "../execute.ts";
 import type { DocumentExecution, ExecuteOptions } from "../execute.ts";
 import { createReplayStream } from "../replay-stream.ts";
-import type { AgentProviderFactory, AgentProviderOptions } from "./provider-seam.ts";
+import type { PermissionMode } from "./agent-api.ts";
+import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
 import { AgentInternal } from "./internal.ts";
 import { AgentPromptError } from "./errors.ts";
 import { createAgentHandlers } from "./handlers.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
 
 export interface AgentVocabularyOptions {
+  /** Default agent seeded for `<AgentProvider>` inheritance. */
+  defaultAgent?: string;
+  /** Permission mode seeded for `<AgentProvider>` inheritance. */
+  permissionMode?: PermissionMode;
   /**
    * Root provider whose lifetime is owned by each DocumentExecution. Its
    * factory installs `Agent` middleware for the execution; resolve it
@@ -45,15 +50,30 @@ interface SequencedFailure {
 export function* installAgentVocabulary(options?: AgentVocabularyOptions): Operation<void> {
   const handlers = createAgentHandlers();
 
+  if (options?.defaultAgent !== undefined) {
+    const defaultAgent = options.defaultAgent;
+    yield* AgentInternal.around({ defaultAgentName: () => defaultAgent }, { at: "min" });
+  }
+  if (options?.permissionMode !== undefined) {
+    const permissionMode = options.permissionMode;
+    yield* AgentInternal.around({ permissionMode: () => permissionMode }, { at: "min" });
+  }
+
   yield* Component.around({
     *expandInvocation([invocation, ctx], next) {
       switch (invocation.name) {
+        case "AgentProvider":
+          return { segments: yield* handlers.expandAgentProvider(invocation, ctx) };
         case "Agent":
           return { segments: yield* handlers.expandAgent(invocation, ctx) };
         case "Session":
           return { segments: yield* handlers.expandSession(invocation, ctx) };
         case "Prompt":
           return { segments: yield* handlers.expandPrompt(invocation, ctx) };
+        case "ApproveAll":
+          return { segments: yield* handlers.expandApproveAll(invocation, ctx) };
+        case "AskPermission":
+          return { segments: yield* handlers.expandAskPermission(invocation, ctx) };
         default:
           return yield* next(invocation, ctx);
       }

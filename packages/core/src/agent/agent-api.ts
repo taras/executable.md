@@ -74,6 +74,21 @@ export interface AgentApi {
   requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
 }
 
+/**
+ * The deny decision: `reject_once`, then `reject_always`, otherwise
+ * cancellation. Shared by the base handler and every scoped policy, so a
+ * policy that cannot approve denies exactly as the base would.
+ */
+export function denyPermission(request: PermissionRequest): PermissionOutcome {
+  const rejection =
+    request.options.find((option) => option.kind === "reject_once") ??
+    request.options.find((option) => option.kind === "reject_always");
+  if (rejection) {
+    return { outcome: "selected", optionId: rejection.optionId };
+  }
+  return { outcome: "cancelled" };
+}
+
 function noProvider(operation: string): Error {
   return new Error(
     `Agent.${operation} has no provider — install one with ` +
@@ -100,12 +115,6 @@ export const Agent: Api<AgentApi> = createApi<AgentApi>("Agent", {
   },
   // deno-lint-ignore require-yield
   *requestPermission(request: PermissionRequest): Operation<PermissionOutcome> {
-    const rejection =
-      request.options.find((option) => option.kind === "reject_once") ??
-      request.options.find((option) => option.kind === "reject_always");
-    if (rejection) {
-      return { outcome: "selected", optionId: rejection.optionId };
-    }
-    return { outcome: "cancelled" };
+    return denyPermission(request);
   },
 });

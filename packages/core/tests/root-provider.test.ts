@@ -20,7 +20,7 @@ import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
-import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-seam.ts";
+import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
 import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
 
 interface ProviderState {

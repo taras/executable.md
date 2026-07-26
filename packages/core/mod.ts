@@ -115,7 +115,18 @@ export type {
   Session,
 } from "./src/agent/agent-api.ts";
 export { AgentPromptError } from "./src/agent/errors.ts";
-export type { AgentProviderFactory, AgentProviderOptions } from "./src/agent/provider-seam.ts";
+export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
+export type {
+  AgentProviderApi,
+  AgentProviderFactory,
+  AgentProviderOptions,
+} from "./src/agent/provider-api.ts";
+export {
+  installApproveAll,
+  installApproveReads,
+  installAskPermission,
+  installPermissionMode,
+} from "./src/agent/permission.ts";
 
 // Shared execution config — contextual timeout (re-exported from runtime).
 export { Config, timeout } from "@executablemd/runtime";

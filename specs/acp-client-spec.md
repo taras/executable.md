@@ -51,12 +51,47 @@ or its prompts already failed the teardown error joins them in an
 `AggregateError` (primary errors first). Every finalizer runs even if one
 throws.
 
+### The provider registry
+
+`AgentProviders` resolves a factory by name. `registerAgentProvider(name,
+factory)` installs a resolver for that one name in the current scope and
+delegates every other name outward, so a nested registration overrides an outer
+one for its own name without affecting siblings or process-global state.
+Resolving an unregistered name throws `Unknown agent provider "<name>"`.
+
+Registering a provider only makes a factory **resolvable**; it does not install
+that provider into the `Agent` Api. Operations still report a missing provider
+until one is installed as a root provider or by `<AgentProvider>`.
+
+### Seeded configuration
+
+`installAgentVocabulary({ defaultAgent, permissionMode })` seeds the values that
+`<AgentProvider>` inherits. The configuration surfaces are those options, the
+`defaultAgent` and `timeout` props on `<AgentProvider>`, and the permission
+components below; the contextual state holding them is private to the
+vocabulary.
+
 ## Components
 
-`installAgentVocabulary()` teaches the expansion loop three words through the
-core `expandInvocation` hook. Each supports the engine-wide `as` capture and
-takes string/boolean **literals** only (expression props are rejected).
+`installAgentVocabulary()` teaches the expansion loop six words through the core
+`expandInvocation` hook. Each supports the engine-wide `as` capture and takes
+string/boolean **literals** only (expression props are rejected).
 
+- **`<AgentProvider>`** resolves a registered provider by its `name` prop and
+  installs it for its body. The optional `defaultAgent` prop overrides the
+  inherited default agent for that body, and the optional `timeout` prop
+  overrides the contextual timeout. The permission mode is **inherited and has
+  no prop** — it always reaches the factory unchanged.
+
+  ```md
+  <AgentProvider name="acpx" defaultAgent="codex" timeout="30s">
+    <Prompt prompt="Review this change" />
+  </AgentProvider>
+  ```
+
+  An unknown provider name, or no default agent configured, **fails the
+  execution before the body expands**: neither the body nor any later content
+  renders.
 - **`<Agent name>`** resolves an agent and, for its body, pins it onto nested
   prompts. Self-closing validates only (no output).
 - **`<Session name>`** resolves a session and pins it onto nested prompts.
@@ -73,6 +108,14 @@ takes string/boolean **literals** only (expression props are rejected).
     aggregated into the execution completion as an `AggregateError` of
     `AgentPromptError`s ("N agent prompt(s) failed"), ordered by execution
     sequence.
+- **`<ApproveAll>`** answers each request in its body by selecting an allow
+  option, and denies when none is offered.
+- **`<AskPermission>`** asks for every request in its body, and denies without an
+  interactive TTY or a valid choice.
+
+  Both apply to their body only; the enclosing policy applies again after the
+  closing tag. They change which policy answers requests — not the provider's
+  `permissionMode`, which a provider factory still receives as inherited.
 
 ## Journaling and replay
 
@@ -97,6 +140,28 @@ shared execution config. It supplies the contextual `timeout` in milliseconds
 `yield* Config.around({ timeout: () => 30_000 }, { at: "min" })`. The validated
 `yield* timeout` operation returns a positive, finite number of milliseconds and
 throws on any other value (zero, negative, NaN, Infinity, or a non-number).
+
+The timeout is shared: a per-call `timeout` always wins, and otherwise Process
+`exec`, Fetch, and agent prompts each resolve the validated contextual value. An
+explicit per-call timeout short-circuits that resolution, so an invalid
+contextual value is never consulted.
+
+## Permissions
+
+`PermissionMode` selects the policy that answers `Agent.requestPermission`. It is
+`approve-all`, `approve-reads`, or `deny-all`:
+
+- **approve-all** selects `allow_once`, then `allow_always`.
+- **approve-reads** approves the `read` and `search` tool kinds and asks for
+  everything else. Asking prompts only on an interactive TTY.
+- **deny-all** uses the base deny behavior, so it installs no policy of its own.
+
+A policy **decides every request inside its scope**. When it cannot approve — no
+allow option is offered, there is no TTY, or no valid option is selected — it
+denies with the base semantics rather than deferring outward, so a policy nested
+inside a more permissive one can never be overruled by it.
+
+Every permission request therefore receives a concrete decision.
 
 ## ACPX provider
 
@@ -130,9 +195,11 @@ the contextual cwd and validated `timeout` — nothing spawns at install.
 - **Permissions.** ACPX permission requests are routed — keyed by the record's
   live ACP session id, refreshed on demand — to the in-flight prompt's scope and
   answered through `Agent.requestPermission`; an ambiguous or unknown request
-  fails closed. ACPX's own Promise-returning leaves are consumed with `until`;
-  the provider's only Promise-producing adapter is the `onPermissionRequest`
-  callback, and the bridge itself is operation-based.
+  fails closed. The permission callback always returns a concrete outcome and
+  therefore never delegates to ACPX's fallback resolver. ACPX's own
+  Promise-returning leaves are consumed with `until`; the provider's only
+  Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
+  itself is operation-based.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
   an `AggregateError` from the provider scope.

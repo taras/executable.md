@@ -20,7 +20,7 @@ import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
 import { readCompletedPrompts } from "../src/agent/journal.ts";
-import type { AgentProviderFactory } from "../src/agent/provider-seam.ts";
+import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import { installAgentVocabulary } from "../src/agent/vocabulary.ts";
 
 interface StubResponse {

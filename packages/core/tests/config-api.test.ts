@@ -1,13 +1,16 @@
 /**
  * Tier CF — Config Api (specs/acp-client-spec.md §Config).
  *
- * The contextual timeout: base value, scoped override, and validation.
- * Imported through @executablemd/core to exercise the core re-export.
+ * The contextual timeout: base value, scoped override, validation, and
+ * the Process and Fetch operations that resolve it when a call supplies
+ * no timeout of its own. Imported through @executablemd/core to exercise
+ * the core re-export.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";
 import { Config, timeout } from "@executablemd/core";
+import { exec, fetch } from "@executablemd/runtime";
 import { installInvalidTimeout } from "./invalid-config.fixture.js";
 
 describe("Tier CF — Config Api", () => {
@@ -55,5 +58,42 @@ describe("Tier CF — Config Api", () => {
       });
       expect(result).toBeInstanceOf(Error);
     }
+  });
+
+  it("CF4: the contextual timeout bounds exec when the call supplies none", function* () {
+    yield* Config.around({ timeout: () => 25 }, { at: "min" });
+    let message = "";
+    try {
+      yield* exec({ command: ["sleep", "2"] });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("timed out after 25ms");
+  });
+
+  it("CF5: an explicit exec timeout is used without consulting the contextual value", function* () {
+    // An invalid contextual timeout is a tripwire: resolving it throws, so
+    // a successful run proves the explicit value short-circuited it.
+    yield* installInvalidTimeout("500");
+    const result = yield* exec({ command: ["echo", "hi"], timeout: 5_000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("hi");
+  });
+
+  it("CF6: fetch resolves the contextual timeout when the call supplies none", function* () {
+    yield* installInvalidTimeout("500");
+    let message = "";
+    try {
+      yield* fetch("data:text/plain,hello");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("Config timeout must be a positive");
+  });
+
+  it("CF7: an explicit fetch timeout is used without consulting the contextual value", function* () {
+    yield* installInvalidTimeout("500");
+    const response = yield* fetch("data:text/plain,hello", { timeout: 5_000 });
+    expect(response.status).toBe(200);
   });
 });

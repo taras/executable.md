@@ -4,7 +4,10 @@
  * With no provider installed: agent()/session() throw a "no provider"
  * error, prompt() is cold (the stream is returned but subscribing throws),
  * and the default requestPermission denies. The error text references only
- * the provider-factory seam — never a deferred registry or CLI flag.
+ * the provider-factory seam: registering a provider makes a factory
+ * resolvable, but installing one into the Agent Api is what these
+ * operations need, so the message must not point at the registry or a CLI
+ * flag.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
@@ -15,7 +18,8 @@ function assertNoProviderError(error: unknown): void {
   expect(error).toBeInstanceOf(Error);
   const message = error instanceof Error ? error.message : String(error);
   expect(message).toContain("no provider");
-  // Must not point at deferred provider-selection APIs or CLI flags.
+  // Must not point at provider-selection APIs or CLI flags: resolving a
+  // provider is not installing one.
   expect(message).not.toContain("AgentProvider");
   expect(message).not.toContain("registerAgentProvider");
   expect(message).not.toContain("--agent-provider");

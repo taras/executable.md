@@ -1,15 +1,16 @@
 /**
  * Agent component handlers (specs/acp-client-spec.md §Components).
  *
- * `<Agent>`, `<Session>`, and `<Prompt>` are engine vocabulary claimed
- * through the core `expandInvocation` hook — the same pattern as the
- * testing vocabulary. Handlers implement the engine-wide `as` capture and
- * prop validation themselves because claimed invocations bypass built-in
- * expansion.
+ * `<AgentProvider>`, `<Agent>`, `<Session>`, `<Prompt>`, `<ApproveAll>`,
+ * and `<AskPermission>` are engine vocabulary claimed through the core
+ * `expandInvocation` hook — the same pattern as the testing vocabulary.
+ * Handlers implement the engine-wide `as` capture and prop validation
+ * themselves because claimed invocations bypass built-in expansion.
  */
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
+import { Config } from "@executablemd/runtime";
 import { env } from "../component-api.ts";
 import { validateBindingName } from "../expand.ts";
 import { renderSegments } from "../render.ts";
@@ -18,11 +19,30 @@ import { validateProps, PropValidationError } from "../validate.ts";
 import type { ComponentInvocation, InputSchema, InvocationContext, Segment } from "../types.ts";
 import { Agent } from "./agent-api.ts";
 import type { PromptOptions, Session } from "./agent-api.ts";
+import { AgentProviders } from "./provider-api.ts";
+import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal } from "./internal.ts";
 import { serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { persistPrompt, promptFailureFromRecord } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
+
+const AGENT_PROVIDER_INPUTS: InputSchema = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    defaultAgent: { type: "string" },
+    timeout: { type: "string" },
+  },
+  required: ["name"],
+  additionalProperties: false,
+};
+
+const NO_PROPS_INPUTS: InputSchema = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+};
 
 const AGENT_INPUTS: InputSchema = {
   type: "object",
@@ -127,12 +147,90 @@ function asString(value: unknown): string | undefined {
 }
 
 export interface AgentHandlers {
+  expandAgentProvider(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<Segment[]>;
   expandAgent(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
   expandSession(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
   expandPrompt(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
+  expandApproveAll(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
+  expandAskPermission(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<Segment[]>;
 }
 
 export function createAgentHandlers(): AgentHandlers {
+  function* expandAgentProvider(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<Segment[]> {
+    const parsed = parseLiteralProps("AgentProvider", invocation, AGENT_PROVIDER_INPUTS);
+    if ("error" in parsed) {
+      return [parsed.error];
+    }
+    const { props } = parsed;
+    const name = String(props.name);
+    // An unresolvable provider or a missing default agent is structural:
+    // both throw before the body expands, so no part of the body renders.
+    const factory = yield* AgentProviders.operations.resolve(name);
+    const inheritedDefault = yield* AgentInternal.operations.defaultAgentName;
+    const permissionMode = yield* AgentInternal.operations.permissionMode;
+    const defaultAgent = asString(props.defaultAgent) ?? inheritedDefault;
+    if (defaultAgent === undefined) {
+      throw new Error(
+        `<AgentProvider name="${name}"> has no default agent — set the defaultAgent ` +
+          `prop, an enclosing <AgentProvider defaultAgent>, or the installed default`,
+      );
+    }
+
+    return yield* scoped(function* () {
+      const timeoutProp = asString(props.timeout);
+      if (timeoutProp !== undefined) {
+        const ms = parseDuration(timeoutProp);
+        yield* Config.around({ timeout: () => ms }, { at: "min" });
+      }
+      yield* AgentInternal.around({ defaultAgentName: () => defaultAgent }, { at: "min" });
+      yield* factory({ defaultAgent, permissionMode });
+      if (invocation.selfClosing) {
+        return [];
+      }
+      const segments = yield* ctx.expand(invocation.children);
+      return yield* captureAs("AgentProvider", invocation, segments);
+    });
+  }
+
+  function* expandApproveAll(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<Segment[]> {
+    const parsed = parseLiteralProps("ApproveAll", invocation, NO_PROPS_INPUTS);
+    if ("error" in parsed) {
+      return [parsed.error];
+    }
+    return yield* scoped(function* () {
+      yield* installApproveAll();
+      const segments = yield* ctx.expand(invocation.children);
+      return yield* captureAs("ApproveAll", invocation, segments);
+    });
+  }
+
+  function* expandAskPermission(
+    invocation: ComponentInvocation,
+    ctx: InvocationContext,
+  ): Operation<Segment[]> {
+    const parsed = parseLiteralProps("AskPermission", invocation, NO_PROPS_INPUTS);
+    if ("error" in parsed) {
+      return [parsed.error];
+    }
+    return yield* scoped(function* () {
+      yield* installAskPermission();
+      const segments = yield* ctx.expand(invocation.children);
+      return yield* captureAs("AskPermission", invocation, segments);
+    });
+  }
+
   function* expandAgent(
     invocation: ComponentInvocation,
     ctx: InvocationContext,
@@ -250,9 +348,12 @@ export function createAgentHandlers(): AgentHandlers {
   }
 
   return {
+    expandAgentProvider,
     expandAgent,
     expandSession,
     expandPrompt,
+    expandApproveAll,
+    expandAskPermission,
   };
 }
 
