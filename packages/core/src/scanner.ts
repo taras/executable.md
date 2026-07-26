@@ -12,7 +12,7 @@
 import type {
   Segment,
   TextSegment,
-  ComponentInvocation,
+  ComponentElement,
   ExecutableCodeBlock,
   Modifier,
   ParsedInfoString,
@@ -323,7 +323,7 @@ function findFenceClose(
 }
 
 interface ParsedComponent {
-  segment: ComponentInvocation;
+  segment: ComponentElement;
   end: number;
 }
 

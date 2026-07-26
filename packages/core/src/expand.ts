@@ -13,14 +13,14 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { scoped } from "effection";
+import { scoped, useScope } from "effection";
 import type { Operation } from "effection";
 import { parse } from "acorn";
 import type {
   Segment,
   TextSegment,
   ErrorSegment,
-  ComponentInvocation,
+  ComponentElement,
   ComponentDefinition,
   EvalEnv,
   FunctionComponentDefinition,
@@ -31,10 +31,10 @@ import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
   Component,
+  ExpansionFrame,
   applyModifiers,
   env,
   evalScope,
-  expandInvocation,
   importComponent,
   raise,
 } from "./component-api.ts";
@@ -144,6 +144,30 @@ export function* expandSegments(
 ): Operation<Segment[]> {
   const result: Segment[] = [];
 
+  // The recursion extensions get from `Component.expandSegments`: this frame's
+  // interpolation inputs, hide set, and block counter. Held for the frame, not
+  // for one element — every element in it expands against the same state — and
+  // restored on the way out so an enclosing frame keeps answering with its own.
+  const scope = yield* useScope();
+  const enclosingFrame = scope.get(ExpansionFrame);
+  scope.set(ExpansionFrame, (inner: Segment[]) =>
+    expandSegments(inner, parentMeta, parentProps, hideSet, counter),
+  );
+  try {
+    return yield* expandFrame(segments, parentMeta, parentProps, hideSet, counter, result);
+  } finally {
+    scope.set(ExpansionFrame, enclosingFrame);
+  }
+}
+
+function* expandFrame(
+  segments: Segment[],
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  result: Segment[],
+): Operation<Segment[]> {
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
@@ -164,15 +188,10 @@ export function* expandSegments(
       }
 
       case "component": {
-        // Extension hook: installed component support may claim this invocation
+        // Extension hook: installed component support may claim this element
         // before built-in expansion. Returned error segments follow the
         // ambient raise policy, like any component-produced error.
-        const handling = yield* expandInvocation(segment, {
-          meta: parentMeta,
-          props: parentProps,
-          projectedEnv: segment.projectedEnv,
-          expand: (segments) => expandSegments(segments, parentMeta, parentProps, hideSet, counter),
-        });
+        const handling = yield* Component.operations.expand(segment);
         if (handling) {
           for (const handled of handling.segments) {
             if (handled.type === "error") {
@@ -958,7 +977,7 @@ function isModuleBindingName(name: string): boolean {
  * context. Merges resolved values into the props record.
  *
  * Expression props are stored as raw expression text in the
- * `expressions` field of `ComponentInvocation`. At expansion time,
+ * `expressions` field of `ComponentElement`. At expansion time,
  * they are evaluated as JavaScript using `new Function()` with
  * `env.values` destructured into scope.
  *
@@ -1091,7 +1110,7 @@ function validateSlotName(name: string, source: string): ErrorSegment | undefine
  * Slot assignment: returns the slot name if the segment is a component
  * invocation with a `slot` prop, undefined otherwise.
  *
- * Only ComponentInvocation segments can carry a `slot` prop. Text
+ * Only ComponentElement segments can carry a `slot` prop. Text
  * segments and code blocks are always default-slot content.
  */
 function getSlotAssignment(segment: Segment): string | undefined {
@@ -1114,7 +1133,7 @@ export interface SlotMap {
 }
 
 /**
- * Partition children into slot buckets. Only ComponentInvocation segments
+ * Partition children into slot buckets. Only ComponentElement segments
  * with a `slot` prop are assigned to named slots. Everything else goes
  * to the default slot.
  *
@@ -1269,7 +1288,7 @@ function misplacedOutputError(): ErrorSegment {
   };
 }
 
-function previewOutput(segment: ComponentInvocation): string {
+function previewOutput(segment: ComponentElement): string {
   const text = segment.children
     .filter((child): child is TextSegment => child.type === "text")
     .map((child) => child.content)
@@ -1323,7 +1342,7 @@ export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment |
   };
 }
 
-function validateOutputProps(segment: ComponentInvocation): ErrorSegment | undefined {
+function validateOutputProps(segment: ComponentElement): ErrorSegment | undefined {
   const hasProps = Object.keys(segment.props).length > 0;
   const hasExpressions = Object.keys(segment.expressions).length > 0;
   if (hasProps || hasExpressions) {

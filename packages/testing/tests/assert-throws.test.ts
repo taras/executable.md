@@ -1,7 +1,9 @@
 import { describe, it } from "@effectionx/bdd/node";
+import { scoped } from "effection";
 import { expect } from "@effectionx/bdd/expect";
 import { AssertionError } from "node:assert/strict";
-import type { ComponentInvocation, InvocationContext } from "@executablemd/core";
+import { Component } from "@executablemd/core";
+import type { ComponentElement } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 
@@ -82,7 +84,7 @@ describe("<AssertThrows>", () => {
     // guard is unreachable through a document. Ajv/env context defaults to
     // undefined when no provider is installed on the scope.
     const handlers = createTestHandlers({ timeoutMs: 100 });
-    const invocation: ComponentInvocation = {
+    const element: ComponentElement = {
       type: "component",
       name: "AssertThrows",
       props: { message: "must", as: "thrown" },
@@ -90,15 +92,20 @@ describe("<AssertThrows>", () => {
       children: [],
       selfClosing: false,
     };
-    const ctx: InvocationContext = {
-      meta: {},
-      props: {},
-      // deno-lint-ignore require-yield
-      *expand(segments) {
-        return segments;
-      },
-    };
-    const segments = yield* handlers.expandAssertThrows(invocation, ctx);
+    // The children never expand — the guard answers first — but the handler is
+    // called outside an expansion, so stand in for the engine's provider.
+    const segments = yield* scoped(function* () {
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *expandSegments([segments]) {
+            return segments;
+          },
+        },
+        { at: "min" },
+      );
+      return yield* handlers.expandAssertThrows(element);
+    });
     const segment = segments[0];
     expect(segment).toMatchObject({ type: "error" });
     if (segment && segment.type === "error") {

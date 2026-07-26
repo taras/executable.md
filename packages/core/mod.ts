@@ -9,7 +9,7 @@
 export type {
   Segment,
   TextSegment,
-  ComponentInvocation,
+  ComponentElement,
   ExecutableCodeBlock,
   ExecOutputSegment,
   ErrorSegment,
@@ -26,8 +26,7 @@ export type {
   Json,
   JsonObject,
   SourcePosition,
-  InvocationContext,
-  InvocationHandling,
+  ComponentHandling,
 } from "./src/types.ts";
 
 export type { Workflow } from "@executablemd/durable-streams";
@@ -49,7 +48,8 @@ export {
   raise,
   env,
   evalScope,
-  expandInvocation,
+  expand,
+  expandSegments,
   codeBlock,
   persistent,
   content,

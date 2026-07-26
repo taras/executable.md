@@ -11,8 +11,14 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
-import { Component, env, renderSegments, validateBindingName } from "@executablemd/core";
-import type { ComponentInvocation, InvocationContext, Segment } from "@executablemd/core";
+import {
+  Component,
+  env,
+  expandSegments,
+  renderSegments,
+  validateBindingName,
+} from "@executablemd/core";
+import type { ComponentElement, Segment } from "@executablemd/core";
 import { matchPrompt, parseTemplate } from "../template.ts";
 import type { ParsedTemplate } from "../template.ts";
 import type { TurnBridge } from "./bridge.ts";
@@ -52,8 +58,8 @@ function configError(message: string): Segment {
   return { type: "error", message: `<WhenPrompt> ${message}`, source: "WhenPrompt" };
 }
 
-function formatLocation(invocation: ComponentInvocation): string {
-  const position = invocation.position;
+function formatLocation(element: ComponentElement): string {
+  const position = element.position;
   if (!position) {
     return "unknown";
   }
@@ -101,17 +107,14 @@ function* persistStage(
 export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void> {
   const ordinals = new Map<string, number>();
 
-  function* expandWhenPrompt(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    for (const name of Object.keys({ ...invocation.props, ...invocation.expressions })) {
+  function* expandWhenPrompt(element: ComponentElement): Operation<Segment[]> {
+    for (const name of Object.keys({ ...element.props, ...element.expressions })) {
       if (name !== "template" && name !== "as") {
         return [configError(`does not accept a "${name}" prop (allowed: template, as).`)];
       }
     }
-    const templateProp = invocation.props.template;
-    const hasChildren = !invocation.selfClosing && invocation.children.length > 0;
+    const templateProp = element.props.template;
+    const hasChildren = !element.selfClosing && element.children.length > 0;
     if (typeof templateProp === "string" && hasChildren) {
       return [configError("accepts either a template prop or children, not both.")];
     }
@@ -119,7 +122,7 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
     if (typeof templateProp === "string") {
       source = templateProp;
     } else if (hasChildren) {
-      source = renderSegments(yield* ctx.expand(invocation.children)).trim();
+      source = renderSegments(yield* expandSegments(element.children)).trim();
     } else {
       return [configError("requires a template prop or template children.")];
     }
@@ -128,7 +131,7 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
     if (!parsed.ok) {
       return [configError(parsed.error)];
     }
-    const binding = invocation.props.as;
+    const binding = element.props.as;
     if (parsed.template.captureNames.length > 0 && typeof binding !== "string") {
       return [configError('captures require an "as" prop.')];
     }
@@ -146,7 +149,7 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
       return [configError("requires an eval scope in context.")];
     }
 
-    const location = formatLocation(invocation);
+    const location = formatLocation(element);
     const ordinal = ordinals.get(location) ?? 0;
     ordinals.set(location, ordinal + 1);
 
@@ -176,11 +179,11 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
   }
 
   yield* Component.around({
-    *expandInvocation([invocation, ctx], next) {
-      if (invocation.name === "WhenPrompt") {
-        return { segments: yield* expandWhenPrompt(invocation, ctx) };
+    *expand([element], next) {
+      if (element.name === "WhenPrompt") {
+        return { segments: yield* expandWhenPrompt(element) };
       }
-      return yield* next(invocation, ctx);
+      return yield* next(element);
     },
   });
 }

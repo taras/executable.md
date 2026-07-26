@@ -2,7 +2,7 @@
  * Component registration (specs/testing-spec.md).
  *
  * Teaches the expansion loop the testing words — `<Testing>`, `<Test>`, and
- * the assertion components — via the core `expandInvocation` hook, and
+ * the assertion components — via the core `Component.expand` hook, and
  * decorates the core Execution Api so explicit `<Testing>` boundaries affect
  * the execution outcome even when root testing is inactive.
  *
@@ -11,7 +11,7 @@
  * Root activation is `useTesting()`'s job.
  *
  * Installs are scope-local — call this inside a bounded scope (one CLI
- * command invocation, one `scoped()` block).
+ * command element, one `scoped()` block).
  */
 
 import { Err } from "effection";
@@ -43,21 +43,21 @@ export function* installHandlers(
     yield* Test.around({ verbose: () => true });
   }
   yield* Component.around({
-    *expandInvocation([invocation, ctx], next) {
-      if (invocation.name === "Testing") {
-        return { segments: yield* handlers.expandTesting(invocation, ctx) };
+    *expand([element], next) {
+      if (element.name === "Testing") {
+        return { segments: yield* handlers.expandTesting(element) };
       }
-      if (invocation.name === "Test") {
-        return { segments: yield* handlers.expandTest(invocation, ctx) };
+      if (element.name === "Test") {
+        return { segments: yield* handlers.expandTest(element) };
       }
-      if (invocation.name === "AssertThrows") {
-        return { segments: yield* handlers.expandAssertThrows(invocation, ctx) };
+      if (element.name === "AssertThrows") {
+        return { segments: yield* handlers.expandAssertThrows(element) };
       }
-      const assertion = ASSERTIONS.get(invocation.name);
+      const assertion = ASSERTIONS.get(element.name);
       if (assertion) {
-        return { segments: yield* handlers.expandAssertion(assertion, invocation, ctx) };
+        return { segments: yield* handlers.expandAssertion(assertion, element) };
       }
-      return yield* next(invocation, ctx);
+      return yield* next(element);
     },
   });
   yield* Execution.around({

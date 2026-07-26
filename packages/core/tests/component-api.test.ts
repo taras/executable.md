@@ -13,6 +13,8 @@ import {
   raise,
   env,
   evalScope,
+  expand,
+  expandSegments,
   codeBlock,
   persistent,
   content,
@@ -20,7 +22,7 @@ import {
 import { ephemeral } from "@executablemd/durable-streams";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { persistFactory } from "../src/modifiers/persist.ts";
-import type { ComponentDefinition, ErrorSegment } from "../src/types.ts";
+import type { ComponentDefinition, ComponentElement, ErrorSegment } from "../src/types.ts";
 
 function stubComponent(name: string): ComponentDefinition {
   return {
@@ -68,6 +70,24 @@ describe("Component Api", () => {
     const message = yield* messageOf(content());
     expect(message).toContain("content");
     expect(message).toContain("has no provider");
+  });
+
+  it("expand answers undefined by default — the element is unclaimed", function* () {
+    const element: ComponentElement = {
+      type: "component",
+      name: "Anything",
+      props: {},
+      expressions: {},
+      children: [],
+      selfClosing: true,
+    };
+    expect(yield* expand(element)).toBe(undefined);
+  });
+
+  it("expandSegments outside an expansion reports that none is active", function* () {
+    const message = yield* messageOf(expandSegments([]));
+    expect(message).toContain("expandSegments");
+    expect(message).toContain("no active expansion");
   });
 
   it("raise returns the supplied ErrorSegment by default", function* () {

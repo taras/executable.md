@@ -14,20 +14,34 @@
  */
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
-import type { Operation } from "effection";
+import { createContext } from "effection";
+import type { Context, Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import type {
   CodeBlockContext,
   CodeBlockResult,
   ComponentDefinition,
-  ComponentInvocation,
+  ComponentElement,
+  ComponentHandling,
   ErrorSegment,
   EvalEnv,
   FunctionComponentDefinition,
-  InvocationContext,
-  InvocationHandling,
   Modifier,
+  Segment,
 } from "./types.ts";
+
+/**
+ * The engine's segment expansion, already bound to one expansion's
+ * interpolation inputs, cycle-detection hide set, and block counter. The
+ * expansion loop keeps this set for the frame it is running, so a handler
+ * claiming an element recurses with that frame's state rather than a fresh
+ * one. Internal: extensions reach it through `Component.expandSegments`.
+ */
+export const ExpansionFrame: Context<((segments: Segment[]) => Operation<Segment[]>) | undefined> =
+  createContext<((segments: Segment[]) => Operation<Segment[]>) | undefined>(
+    "component.expansionFrame",
+    undefined,
+  );
 
 export interface ComponentApi {
   /** `"__root__"` imports the root document. */
@@ -42,15 +56,23 @@ export interface ComponentApi {
   env: EvalEnv | undefined;
   evalScope: EvalScope | undefined;
   /**
-   * Offer a raw component invocation to extensions before built-in expansion.
+   * Offer a component element to extensions before built-in expansion.
    * Extensions install middleware that returns `{ segments }` for the names
    * they claim and delegates to `next` for everything else. The default
    * answers `undefined` — unhandled — so expansion proceeds normally.
    */
-  expandInvocation(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<InvocationHandling | undefined>;
+  expand(element: ComponentElement): Operation<ComponentHandling | undefined>;
+  /**
+   * Expand segments within the expansion that offered the current element:
+   * the engine's own recursion, already bound to that expansion's
+   * interpolation inputs, cycle-detection state, and block-ID counter. A
+   * handler uses it for an element's children or for segments it generates.
+   *
+   * Provided only while an element is offered to `expand`, and consumed from
+   * the handler that received it — a call from a task outliving the offer
+   * answers from the enclosing expansion instead.
+   */
+  expandSegments(segments: Segment[]): Operation<Segment[]>;
   codeBlock(): Operation<CodeBlockContext>;
   /** Whether the current block runs with persistent resource lifetime. */
   persistent: boolean;
@@ -80,8 +102,18 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
   env: undefined,
   evalScope: undefined,
   // deno-lint-ignore require-yield
-  *expandInvocation(): Operation<InvocationHandling | undefined> {
+  *expand(): Operation<ComponentHandling | undefined> {
     return undefined;
+  },
+  *expandSegments(segments: Segment[]): Operation<Segment[]> {
+    const frame = yield* ExpansionFrame.get();
+    if (!frame) {
+      throw new Error(
+        "Component.expandSegments() has no active expansion in this scope. It is available " +
+          "to a Component.around({ expand }) handler, for the element it was offered.",
+      );
+    }
+    return yield* frame(segments);
   },
   // deno-lint-ignore require-yield
   *codeBlock(): Operation<CodeBlockContext> {
@@ -105,8 +137,9 @@ export const applyModifiers: Operations<ComponentApi>["applyModifiers"] =
 export const raise: Operations<ComponentApi>["raise"] = Component.operations.raise;
 export const env: Operations<ComponentApi>["env"] = Component.operations.env;
 export const evalScope: Operations<ComponentApi>["evalScope"] = Component.operations.evalScope;
-export const expandInvocation: Operations<ComponentApi>["expandInvocation"] =
-  Component.operations.expandInvocation;
+export const expand: Operations<ComponentApi>["expand"] = Component.operations.expand;
+export const expandSegments: Operations<ComponentApi>["expandSegments"] =
+  Component.operations.expandSegments;
 export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operations.codeBlock;
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;

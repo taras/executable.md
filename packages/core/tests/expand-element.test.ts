@@ -6,7 +6,7 @@ import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import type { ComponentDefinition, EvalEnv, InvocationContext, Segment } from "../src/types.ts";
+import type { ComponentDefinition, ComponentElement, EvalEnv, Segment } from "../src/types.ts";
 
 function makeComponent(name: string, body: string): ComponentDefinition {
   return {
@@ -39,7 +39,7 @@ function useTestEnv(testEnv: EvalEnv): Operation<void> {
   return Component.around({ env: () => testEnv }, { at: "min" });
 }
 
-describe("expandInvocation hook", () => {
+describe("the expand hook", () => {
   it("falls through to normal expansion when no extension is installed", function* () {
     const output = yield* scoped(function* () {
       yield* useTestComponents({ Greeting: makeComponent("Greeting", "Hello world!") });
@@ -55,12 +55,12 @@ describe("expandInvocation hook", () => {
       yield* useTestComponents({});
       yield* useTestEnv({ values: {} });
       yield* Component.around({
-        *expandInvocation([invocation, ctx], next) {
-          if (invocation.name === "Shout") {
-            const inner = yield* ctx.expand(invocation.children);
+        *expand([element], next) {
+          if (element.name === "Shout") {
+            const inner = yield* Component.operations.expandSegments(element.children);
             return { segments: [{ type: "text", content: renderSegments(inner).toUpperCase() }] };
           }
-          return yield* next(invocation, ctx);
+          return yield* next(element);
         },
       });
       const expanded = yield* expandSegments(
@@ -80,11 +80,11 @@ describe("expandInvocation hook", () => {
       yield* useTestEnv({ values: {} });
       yield* Component.around({
         // deno-lint-ignore require-yield
-        *expandInvocation([invocation, ctx], next) {
-          if (invocation.name === "Nothing") {
+        *expand([element], next) {
+          if (element.name === "Nothing") {
             return { segments: [] };
           }
-          return yield* next(invocation, ctx);
+          return yield* next(element);
         },
       });
       const expanded = yield* expandSegments(
@@ -105,12 +105,12 @@ describe("expandInvocation hook", () => {
       yield* useTestEnv({ values: {} });
       yield* Component.around({
         // deno-lint-ignore require-yield
-        *expandInvocation([invocation, ctx], next) {
-          seen.push(invocation.name);
-          if (invocation.name === "Silent") {
+        *expand([element], next) {
+          seen.push(element.name);
+          if (element.name === "Silent") {
             return { segments: [] };
           }
-          return yield* next(invocation, ctx);
+          return yield* next(element);
         },
       });
       const expanded = yield* expandSegments(
@@ -137,12 +137,12 @@ describe("expandInvocation hook", () => {
       });
       yield* Component.around({
         // deno-lint-ignore require-yield
-        *expandInvocation([invocation, ctx], next) {
-          if (invocation.name === "Broken") {
+        *expand([element], next) {
+          if (element.name === "Broken") {
             const error: Segment = { type: "error", message: "broken thing", source: "Broken" };
             return { segments: [error] };
           }
-          return yield* next(invocation, ctx);
+          return yield* next(element);
         },
       });
       const expanded = yield* expandSegments(scanSegments("<Broken />"), {}, {}, new Set());
@@ -152,29 +152,30 @@ describe("expandInvocation hook", () => {
     expect(output).toContain("broken thing");
   });
 
-  it("passes projectedEnv and parent meta/props through the context", function* () {
-    let observed: InvocationContext | undefined;
+  it("offers the element itself — name, position, and projected bindings", function* () {
+    let observed: ComponentElement | undefined;
     yield* scoped(function* () {
       yield* useTestComponents({});
       yield* useTestEnv({ values: {} });
       yield* Component.around({
         // deno-lint-ignore require-yield
-        *expandInvocation([invocation, ctx], next) {
-          if (invocation.name === "Probe") {
-            observed = ctx;
+        *expand([element], next) {
+          if (element.name === "Probe") {
+            observed = element;
             return { segments: [] };
           }
-          return yield* next(invocation, ctx);
+          return yield* next(element);
         },
       });
+      const [probe] = scanSegments("<Probe />");
       yield* expandSegments(
-        scanSegments("<Probe />"),
+        [{ ...(probe as ComponentElement), projectedEnv: { values: { who: "caller" } } }],
         { title: "Doc" },
         { color: "red" },
         new Set(),
       );
     });
-    expect(observed?.meta).toEqual({ title: "Doc" });
-    expect(observed?.props).toEqual({ color: "red" });
+    expect(observed?.name).toBe("Probe");
+    expect(observed?.projectedEnv?.values).toEqual({ who: "caller" });
   });
 });

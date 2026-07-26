@@ -3,7 +3,7 @@
  *
  * `<AgentProvider>`, `<Agent>`, `<Session>`, `<Prompt>`, `<ApproveAll>`,
  * and `<AskPermission>` are engine components claimed through the core
- * `expandInvocation` hook — the same pattern as the testing components.
+ * `Component.expand` hook — the same pattern as the testing components.
  * Handlers implement the engine-wide `as` capture and prop validation
  * themselves because claimed invocations bypass built-in expansion.
  */
@@ -11,12 +11,12 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { Config } from "@executablemd/runtime";
-import { env } from "../component-api.ts";
+import { env, expandSegments } from "../component-api.ts";
 import { validateBindingName } from "../expand.ts";
 import { renderSegments } from "../render.ts";
 import { parseDuration } from "../modifiers/timeout.ts";
 import { validateProps, PropValidationError } from "../validate.ts";
-import type { ComponentInvocation, InputSchema, InvocationContext, Segment } from "../types.ts";
+import type { ComponentElement, InputSchema, Segment } from "../types.ts";
 import { Agent } from "./agent-api.ts";
 import type { PromptOptions, Session } from "./agent-api.ts";
 import { AgentProviders } from "./provider-api.ts";
@@ -73,23 +73,23 @@ function errorSegment(source: string, message: string): Segment {
 }
 
 /**
- * Literal props for a claimed invocation. Expression props are rejected —
+ * Literal props for a claimed element. Expression props are rejected —
  * the agent components take string and boolean literals only. `as` and
  * `slot` are engine-reserved and stripped before schema validation.
  */
 function parseLiteralProps(
   source: string,
-  invocation: ComponentInvocation,
+  element: ComponentElement,
   schema: InputSchema,
 ): { props: Record<string, unknown> } | { error: Segment } {
-  for (const name of Object.keys(invocation.expressions)) {
+  for (const name of Object.keys(element.expressions)) {
     if (name !== "as" && name !== "slot") {
       return {
         error: errorSegment(source, `the "${name}" prop must be a literal, not an expression.`),
       };
     }
   }
-  const literals = { ...invocation.props };
+  const literals = { ...element.props };
   delete literals.as;
   delete literals.slot;
   try {
@@ -108,21 +108,21 @@ function parseLiteralProps(
  */
 function* captureAs(
   source: string,
-  invocation: ComponentInvocation,
+  element: ComponentElement,
   segments: Segment[],
   rendered?: string,
 ): Operation<Segment[]> {
-  if (!("as" in invocation.props) && !("as" in invocation.expressions)) {
+  if (!("as" in element.props) && !("as" in element.expressions)) {
     return segments;
   }
-  if ("as" in invocation.expressions) {
+  if ("as" in element.expressions) {
     return [errorSegment(source, 'the "as" prop must be a string literal, not an expression.')];
   }
   const currentEnv = yield* env;
   if (!currentEnv) {
     return [errorSegment(source, 'binding with "as" requires an eval scope in context.')];
   }
-  const parsed = validateBindingName(invocation.props.as);
+  const parsed = validateBindingName(element.props.as);
   if (!parsed.ok) {
     return [errorSegment(source, `the "as" prop ${parsed.error}`)];
   }
@@ -133,8 +133,8 @@ function* captureAs(
   return [];
 }
 
-function formatLocation(invocation: ComponentInvocation): string {
-  const position = invocation.position;
+function formatLocation(element: ComponentElement): string {
+  const position = element.position;
   if (!position) {
     return "unknown";
   }
@@ -147,26 +147,17 @@ function asString(value: unknown): string | undefined {
 }
 
 export interface AgentHandlers {
-  expandAgentProvider(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]>;
-  expandAgent(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
-  expandSession(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
-  expandPrompt(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
-  expandApproveAll(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
-  expandAskPermission(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]>;
+  expandAgentProvider(element: ComponentElement): Operation<Segment[]>;
+  expandAgent(element: ComponentElement): Operation<Segment[]>;
+  expandSession(element: ComponentElement): Operation<Segment[]>;
+  expandPrompt(element: ComponentElement): Operation<Segment[]>;
+  expandApproveAll(element: ComponentElement): Operation<Segment[]>;
+  expandAskPermission(element: ComponentElement): Operation<Segment[]>;
 }
 
 export function createAgentHandlers(): AgentHandlers {
-  function* expandAgentProvider(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    const parsed = parseLiteralProps("AgentProvider", invocation, AGENT_PROVIDER_INPUTS);
+  function* expandAgentProvider(element: ComponentElement): Operation<Segment[]> {
+    const parsed = parseLiteralProps("AgentProvider", element, AGENT_PROVIDER_INPUTS);
     if ("error" in parsed) {
       return [parsed.error];
     }
@@ -193,54 +184,45 @@ export function createAgentHandlers(): AgentHandlers {
       }
       yield* AgentInternal.around({ defaultAgentName: () => defaultAgent }, { at: "min" });
       yield* factory({ defaultAgent, permissionMode });
-      if (invocation.selfClosing) {
+      if (element.selfClosing) {
         return [];
       }
-      const segments = yield* ctx.expand(invocation.children);
-      return yield* captureAs("AgentProvider", invocation, segments);
+      const segments = yield* expandSegments(element.children);
+      return yield* captureAs("AgentProvider", element, segments);
     });
   }
 
-  function* expandApproveAll(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    const parsed = parseLiteralProps("ApproveAll", invocation, NO_PROPS_INPUTS);
+  function* expandApproveAll(element: ComponentElement): Operation<Segment[]> {
+    const parsed = parseLiteralProps("ApproveAll", element, NO_PROPS_INPUTS);
     if ("error" in parsed) {
       return [parsed.error];
     }
     return yield* scoped(function* () {
       yield* installApproveAll();
-      const segments = yield* ctx.expand(invocation.children);
-      return yield* captureAs("ApproveAll", invocation, segments);
+      const segments = yield* expandSegments(element.children);
+      return yield* captureAs("ApproveAll", element, segments);
     });
   }
 
-  function* expandAskPermission(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    const parsed = parseLiteralProps("AskPermission", invocation, NO_PROPS_INPUTS);
+  function* expandAskPermission(element: ComponentElement): Operation<Segment[]> {
+    const parsed = parseLiteralProps("AskPermission", element, NO_PROPS_INPUTS);
     if ("error" in parsed) {
       return [parsed.error];
     }
     return yield* scoped(function* () {
       yield* installAskPermission();
-      const segments = yield* ctx.expand(invocation.children);
-      return yield* captureAs("AskPermission", invocation, segments);
+      const segments = yield* expandSegments(element.children);
+      return yield* captureAs("AskPermission", element, segments);
     });
   }
 
-  function* expandAgent(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    const parsed = parseLiteralProps("Agent", invocation, AGENT_INPUTS);
+  function* expandAgent(element: ComponentElement): Operation<Segment[]> {
+    const parsed = parseLiteralProps("Agent", element, AGENT_INPUTS);
     if ("error" in parsed) {
       return [parsed.error];
     }
     const resolved = yield* Agent.operations.agent(asString(parsed.props.name));
-    if (invocation.selfClosing) {
+    if (element.selfClosing) {
       return [];
     }
     return yield* scoped(function* () {
@@ -255,21 +237,18 @@ export function createAgentHandlers(): AgentHandlers {
         },
         { at: "min" },
       );
-      const segments = yield* ctx.expand(invocation.children);
-      return yield* captureAs("Agent", invocation, segments);
+      const segments = yield* expandSegments(element.children);
+      return yield* captureAs("Agent", element, segments);
     });
   }
 
-  function* expandSession(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    const parsed = parseLiteralProps("Session", invocation, SESSION_INPUTS);
+  function* expandSession(element: ComponentElement): Operation<Segment[]> {
+    const parsed = parseLiteralProps("Session", element, SESSION_INPUTS);
     if ("error" in parsed) {
       return [parsed.error];
     }
     const session: Session = yield* Agent.operations.session(asString(parsed.props.name));
-    if (invocation.selfClosing) {
+    if (element.selfClosing) {
       return [];
     }
     return yield* scoped(function* () {
@@ -287,26 +266,23 @@ export function createAgentHandlers(): AgentHandlers {
         },
         { at: "min" },
       );
-      const segments = yield* ctx.expand(invocation.children);
-      return yield* captureAs("Session", invocation, segments);
+      const segments = yield* expandSegments(element.children);
+      return yield* captureAs("Session", element, segments);
     });
   }
 
-  function* expandPrompt(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    const parsed = parseLiteralProps("Prompt", invocation, PROMPT_INPUTS);
+  function* expandPrompt(element: ComponentElement): Operation<Segment[]> {
+    const parsed = parseLiteralProps("Prompt", element, PROMPT_INPUTS);
     if ("error" in parsed) {
       return [parsed.error];
     }
     const { props } = parsed;
 
     let content: string;
-    if (invocation.selfClosing) {
+    if (element.selfClosing) {
       content = asString(props.text) ?? "";
     } else {
-      content = renderSegments(yield* ctx.expand(invocation.children));
+      content = renderSegments(yield* expandSegments(element.children));
     }
 
     // Resolving before the durable operation makes this the availability
@@ -322,7 +298,7 @@ export function createAgentHandlers(): AgentHandlers {
       options.timeout = parseDuration(timeoutProp);
     }
 
-    const location = formatLocation(invocation);
+    const location = formatLocation(element);
     const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
     const sequence = yield* AgentInternal.operations.nextPromptSequence();
 
@@ -343,7 +319,7 @@ export function createAgentHandlers(): AgentHandlers {
     }
 
     const segments: Segment[] = record.text ? [{ type: "text", content: record.text }] : [];
-    return yield* captureAs("Prompt", invocation, segments, record.text);
+    return yield* captureAs("Prompt", element, segments, record.text);
   }
 
   return {

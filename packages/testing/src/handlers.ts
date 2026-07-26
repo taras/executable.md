@@ -12,14 +12,8 @@ import { timebox } from "@effectionx/timebox";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { AssertionError, assertionError } from "./assert.ts";
-import { Component, env, evalScope, validateBindingName } from "@executablemd/core";
-import type {
-  ComponentInvocation,
-  ErrorSegment,
-  EvalEnv,
-  InvocationContext,
-  Segment,
-} from "@executablemd/core";
+import { Component, env, evalScope, expandSegments, validateBindingName } from "@executablemd/core";
+import type { ComponentElement, ErrorSegment, EvalEnv, Segment } from "@executablemd/core";
 import { Test, boundary, inTest, record, testing, verbose } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import {
@@ -88,23 +82,16 @@ function* leaseChildEvalScope(parentScope: EvalScope): Operation<EvalScopeLease>
 }
 
 export interface TestHandlers {
-  expandTesting(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
-  expandTest(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
-  expandAssertion(
-    assertion: AssertionEntry,
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]>;
-  expandAssertThrows(invocation: ComponentInvocation, ctx: InvocationContext): Operation<Segment[]>;
+  expandTesting(element: ComponentElement): Operation<Segment[]>;
+  expandTest(element: ComponentElement): Operation<Segment[]>;
+  expandAssertion(assertion: AssertionEntry, element: ComponentElement): Operation<Segment[]>;
+  expandAssertThrows(element: ComponentElement): Operation<Segment[]>;
 }
 
 export function createTestHandlers(options: { timeoutMs: number }): TestHandlers {
   const { timeoutMs } = options;
 
-  function* expandTesting(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
+  function* expandTesting(element: ComponentElement): Operation<Segment[]> {
     return yield* scoped(function* () {
       const local: TestResult[] = [];
       yield* Test.around(
@@ -121,7 +108,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         },
         { at: "min" },
       );
-      const report = yield* ctx.expand(invocation.children);
+      const report = yield* expandSegments(element.children);
       // Journal the outcome before the root Close so a full replay can
       // restore it without re-expanding this boundary.
       const outcome = yield* persistBoundaryOutcome(
@@ -129,17 +116,14 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
           tests: local.length,
           failed: local.filter((result) => result.status === "fail").length,
         },
-        formatLocation(invocation),
+        formatLocation(element),
       );
       yield* boundary(outcome);
       return report;
     });
   }
 
-  function* expandTest(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
+  function* expandTest(element: ComponentElement): Operation<Segment[]> {
     if (!(yield* testing)) {
       return [];
     }
@@ -154,8 +138,8 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
       return [error];
     }
 
-    const name = typeof invocation.props.name === "string" ? invocation.props.name : undefined;
-    const location = formatLocation(invocation);
+    const name = typeof element.props.name === "string" ? element.props.name : undefined;
+    const location = formatLocation(element);
 
     const parentEnv = yield* env;
     const parentScope = yield* evalScope;
@@ -178,7 +162,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     // <Content /> still sees the caller's eval bindings.
     const testEnv: EvalEnv = {
       values: {
-        ...(ctx.projectedEnv?.values ?? {}),
+        ...(element.projectedEnv?.values ?? {}),
         ...(parentEnv?.values ?? {}),
       },
     };
@@ -216,9 +200,9 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         established = true;
 
         const boxed = yield* timebox(timeoutMs, function* () {
-          for (const child of invocation.children) {
+          for (const child of element.children) {
             try {
-              testOutput.push(...(yield* ctx.expand([child])));
+              testOutput.push(...(yield* expandSegments([child])));
             } catch (error) {
               bodyError = error;
               throw error;
@@ -264,14 +248,8 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     return testOutput;
   }
 
-  function* expandAssertThrows(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
-    for (const propName of [
-      ...Object.keys(invocation.props),
-      ...Object.keys(invocation.expressions),
-    ]) {
+  function* expandAssertThrows(element: ComponentElement): Operation<Segment[]> {
+    for (const propName of [...Object.keys(element.props), ...Object.keys(element.expressions)]) {
       if (propName !== "message" && propName !== "as") {
         return [
           validationError(
@@ -281,10 +259,10 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         ];
       }
     }
-    if (!("message" in invocation.props) && !("message" in invocation.expressions)) {
+    if (!("message" in element.props) && !("message" in element.expressions)) {
       return [validationError("AssertThrows", 'requires a "message" prop.')];
     }
-    if ("as" in invocation.expressions) {
+    if ("as" in element.expressions) {
       return [
         validationError(
           "AssertThrows",
@@ -295,15 +273,15 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
 
     const currentEnv = yield* env;
     const merged = {
-      ...(ctx.projectedEnv?.values ?? {}),
+      ...(element.projectedEnv?.values ?? {}),
       ...(currentEnv?.values ?? {}),
     };
 
     let matcher: string | RegExp;
-    if ("message" in invocation.expressions) {
+    if ("message" in element.expressions) {
       let evaluated: unknown;
       try {
-        evaluated = evaluateExpression(invocation.expressions["message"]!, merged);
+        evaluated = evaluateExpression(element.expressions["message"]!, merged);
       } catch (error) {
         return [
           validationError(
@@ -325,7 +303,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         ];
       }
     } else {
-      const literal = invocation.props["message"];
+      const literal = element.props["message"];
       if (typeof literal !== "string") {
         return [validationError("AssertThrows", 'the "message" prop must be a string.')];
       }
@@ -333,13 +311,13 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     }
 
     let binding: string | undefined;
-    if ("as" in invocation.props) {
+    if ("as" in element.props) {
       if (!currentEnv) {
         return [
           validationError("AssertThrows", 'binding with "as" requires an eval scope in context.'),
         ];
       }
-      const parsed = validateBindingName(invocation.props["as"]);
+      const parsed = validateBindingName(element.props["as"]);
       if (!parsed.ok) {
         return [validationError("AssertThrows", `the "as" prop ${parsed.error}`)];
       }
@@ -365,7 +343,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
             throw new CapturedRaise(segment);
           },
         });
-        yield* ctx.expand(invocation.children);
+        yield* expandSegments(element.children);
       });
     } catch (error) {
       if (error instanceof CapturedRaise || error instanceof RaisedSegmentError) {
@@ -424,8 +402,8 @@ function describeMatcher(matcher: string | RegExp): string {
   return matcher instanceof RegExp ? String(matcher) : `substring ${JSON.stringify(matcher)}`;
 }
 
-function formatLocation(invocation: ComponentInvocation): string {
-  const position = invocation.position;
+function formatLocation(element: ComponentElement): string {
+  const position = element.position;
   if (!position) {
     return "unknown";
   }

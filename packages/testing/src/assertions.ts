@@ -31,13 +31,8 @@ import {
   fail,
 } from "./assert.ts";
 import type { Operation } from "effection";
-import { DocumentOutput, env, renderSegments } from "@executablemd/core";
-import type {
-  ComponentInvocation,
-  ErrorSegment,
-  InvocationContext,
-  Segment,
-} from "@executablemd/core";
+import { DocumentOutput, env, expandSegments, renderSegments } from "@executablemd/core";
+import type { ComponentElement, ErrorSegment, Segment } from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
 type AssertionKind =
@@ -199,11 +194,10 @@ export function* failVisiblyThenThrow(
  */
 export function* expandAssertion(
   assertion: AssertionEntry,
-  invocation: ComponentInvocation,
-  ctx: InvocationContext,
+  element: ComponentElement,
 ): Operation<Segment[]> {
   const rules = KIND_PROPS[assertion.kind];
-  const supplied = [...Object.keys(invocation.props), ...Object.keys(invocation.expressions)];
+  const supplied = [...Object.keys(element.props), ...Object.keys(element.expressions)];
 
   for (const name of supplied) {
     if (!rules.allowed.includes(name)) {
@@ -216,7 +210,7 @@ export function* expandAssertion(
     }
   }
 
-  const hasChildren = !invocation.selfClosing && invocation.children.length > 0;
+  const hasChildren = !element.selfClosing && element.children.length > 0;
   if (hasChildren && !assertion.allowsExpectedChildren) {
     return [validationError(assertion.name, "does not accept expected children.")];
   }
@@ -246,7 +240,7 @@ export function* expandAssertion(
   // (the same precedence core uses for projected children).
   const currentEnv = yield* env;
   const merged = {
-    ...(ctx.projectedEnv?.values ?? {}),
+    ...(element.projectedEnv?.values ?? {}),
     ...(currentEnv?.values ?? {}),
   };
 
@@ -258,9 +252,9 @@ export function* expandAssertion(
     "msg",
   ];
   for (const name of resolutionOrder) {
-    if (name in invocation.expressions) {
+    if (name in element.expressions) {
       try {
-        resolved[name] = evaluateExpression(invocation.expressions[name]!, merged);
+        resolved[name] = evaluateExpression(element.expressions[name]!, merged);
       } catch (error) {
         return [
           validationError(
@@ -271,8 +265,8 @@ export function* expandAssertion(
           ),
         ];
       }
-    } else if (name in invocation.props) {
-      resolved[name] = invocation.props[name];
+    } else if (name in element.props) {
+      resolved[name] = element.props[name];
     }
   }
 
@@ -291,7 +285,7 @@ export function* expandAssertion(
   };
 
   if (hasChildren) {
-    const expanded = yield* ctx.expand(invocation.children);
+    const expanded = yield* expandSegments(element.children);
     values.expected = renderSegments(expanded).replace(/\s+$/, "");
   }
 

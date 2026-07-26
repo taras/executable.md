@@ -4,7 +4,7 @@
  * `installTestAgentComponents` must be installed BEFORE
  * `installAgentComponents` in the same scope: in-scope middleware runs
  * in install order, so the global `<Prompt>` interceptor here sees the
- * invocation first, forces `throwOnError` only when both `<TestAgent>`
+ * element first, forces `throwOnError` only when both `<TestAgent>`
  * and `<Test>` are active, and otherwise delegates unchanged.
  *
  * Each `<Test>` receives fresh ACPX state keyed by its lease EvalScope;
@@ -26,8 +26,8 @@ import { createContext, scoped, spawn, suspend, useScope, withResolvers } from "
 import type { Operation, Scope } from "effection";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { Agent, Component, evalScope } from "@executablemd/core";
-import type { ComponentInvocation, InvocationContext, Segment, Session } from "@executablemd/core";
+import { Agent, Component, evalScope, expandSegments } from "@executablemd/core";
+import type { ComponentElement, Segment, Session } from "@executablemd/core";
 import type { SessionRoutingContext } from "@executablemd/acp";
 import { cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
@@ -115,10 +115,7 @@ function resolvePinned(
 }
 
 export function* installTestAgentComponents(options: TestAgentComponentsOptions): Operation<void> {
-  function* expandTestAgent(
-    invocation: ComponentInvocation,
-    ctx: InvocationContext,
-  ): Operation<Segment[]> {
+  function* expandTestAgent(element: ComponentElement): Operation<Segment[]> {
     if (!(yield* Test.operations.sessionActive)) {
       return [
         configError(
@@ -127,7 +124,7 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
         ),
       ];
     }
-    const agentProp = invocation.props.agent;
+    const agentProp = element.props.agent;
     if (agentProp !== undefined && typeof agentProp !== "string") {
       return [configError("TestAgent", 'the "agent" prop must be a string literal.')];
     }
@@ -307,17 +304,17 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
         { at: "min" },
       );
 
-      const segments = yield* ctx.expand(invocation.children);
+      const segments = yield* expandSegments(element.children);
       return segments;
     });
   }
 
-  function* expandScenario(invocation: ComponentInvocation): Operation<Segment[]> {
+  function* expandScenario(element: ComponentElement): Operation<Segment[]> {
     const session = yield* TestAgentCtx.expect();
     if (session === undefined) {
       return [configError("TestAgent.Scenario", "is valid only inside <TestAgent>.")];
     }
-    const { agent, session: sessionProp, src } = invocation.props;
+    const { agent, session: sessionProp, src } = element.props;
     if (typeof src !== "string" || src.length === 0) {
       return [configError("TestAgent.Scenario", 'requires a "src" prop.')];
     }
@@ -328,7 +325,7 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
       return [configError("TestAgent.Scenario", 'the "session" prop must be a string literal.')];
     }
 
-    const declaredIn = invocation.position?.path;
+    const declaredIn = element.position?.path;
     const baseDir = declaredIn ? dirname(declaredIn) : ".";
     const srcPath = isAbsolute(src) ? src : resolve(baseDir, src);
     const source = yield* readTextFile(srcPath);
@@ -351,27 +348,24 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
   }
 
   yield* Component.around({
-    *expandInvocation([invocation, ctx], next) {
-      if (invocation.name === "TestAgent") {
-        return { segments: yield* expandTestAgent(invocation, ctx) };
+    *expand([element], next) {
+      if (element.name === "TestAgent") {
+        return { segments: yield* expandTestAgent(element) };
       }
-      if (invocation.name === "TestAgent.Scenario") {
-        return { segments: yield* expandScenario(invocation) };
+      if (element.name === "TestAgent.Scenario") {
+        return { segments: yield* expandScenario(element) };
       }
-      if (invocation.name === "Prompt") {
+      if (element.name === "Prompt") {
         const session = yield* TestAgentCtx.expect();
         if (
           session !== undefined &&
           (yield* Test.operations.inTest) &&
-          invocation.props.throwOnError !== true
+          element.props.throwOnError !== true
         ) {
-          return yield* next(
-            { ...invocation, props: { ...invocation.props, throwOnError: true } },
-            ctx,
-          );
+          return yield* next({ ...element, props: { ...element.props, throwOnError: true } });
         }
       }
-      return yield* next(invocation, ctx);
+      return yield* next(element);
     },
   });
 }
