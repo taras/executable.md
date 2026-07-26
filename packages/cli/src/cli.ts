@@ -21,6 +21,7 @@ import {
 import { forEach } from "@effectionx/stream-helpers";
 import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { basename, extname } from "node:path";
 import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands, type Mods } from "configliere";
@@ -203,14 +204,45 @@ function* createJournalFile(filePath: string): Operation<void> {
 }
 
 /**
- * The command that relaunches this xmd as a test-agent worker: the
- * compiled binary invokes itself; dev mode reconstructs `deno run`.
+ * The CLI entry script to hand back to a relaunched runtime. Deno and
+ * Node both report the module they started as `process.argv[1]`: the
+ * source `cli.ts` under `deno run`, the generated bin under npm. Only
+ * the compiled binary carries no entry script, and it never asks.
+ */
+function cliEntrypoint(): string {
+  const entrypoint = process.argv[1];
+  if (!entrypoint) {
+    throw new Error(
+      "cannot start the test-agent worker: this xmd was launched without a CLI entry script, so there is nothing for the worker process to run",
+    );
+  }
+  return entrypoint;
+}
+
+/**
+ * A worker inheriting the parent's `--inspect` would exit immediately on
+ * the debug port the parent already holds, so those options do not carry
+ * across the relaunch. Everything else the parent runs under does.
+ */
+function workerExecArgv(): string[] {
+  return process.execArgv.filter((option) => !option.startsWith("--inspect"));
+}
+
+/**
+ * The command that relaunches this xmd as a test-agent worker. Three
+ * builds reach this: the compiled binary invokes itself, the Deno source
+ * CLI reconstructs `deno run`, and the npm package reconstructs `node`.
+ * `process.execPath` names the running executable under both runtimes —
+ * `Deno.execPath()` exists in neither the Node build nor Node itself.
  */
 function resolveWorkerCommand(): string[] {
-  const execPath = Deno.execPath();
-  const name = execPath.split("/").pop() ?? execPath;
-  if (name === "deno" || name === "deno.exe") {
-    return [execPath, "run", "--allow-all", new URL(import.meta.url).pathname, "test-agent"];
+  const execPath = process.execPath;
+  const runtime = basename(execPath, extname(execPath));
+  if (runtime === "deno") {
+    return [execPath, "run", "--allow-all", cliEntrypoint(), "test-agent"];
+  }
+  if (runtime === "node") {
+    return [execPath, ...workerExecArgv(), cliEntrypoint(), "test-agent"];
   }
   return [execPath, "test-agent"];
 }

@@ -236,6 +236,18 @@ await main(function* (args) {
           target: "ES2022",
           lib: ["ESNext", "DOM"],
         },
+        // dnt writes `_dnt.polyfills.ts` itself and then type-checks its own
+        // output alongside ours. At 0.42.3 that file does not compile: the
+        // ImportMeta.resolve polyfill hands an `unknown` parentURL to
+        // createRequire (TS2345). The emitted JavaScript is correct, and no
+        // change on our side can fix a file dnt generates — so drop exactly
+        // that diagnostic, matched to both the code and the generated
+        // filename. Diagnostics in our own sources still fail the build.
+        filterDiagnostic: (diagnostic) =>
+          !(
+            diagnostic.code === 2345 &&
+            (diagnostic.file?.fileName ?? "").endsWith("_dnt.polyfills.ts")
+          ),
         package: {
           name: denoJson.name,
           version,
