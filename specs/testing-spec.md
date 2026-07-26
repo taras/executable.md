@@ -131,7 +131,7 @@ failures — or an empty boundary — into an `Err` outcome for the execution.
 
 ## Assertions
 
-Assertion components use `@std/assert` and follow its function names and
+Assertion components follow the conventional assertion function names and
 parameter names. The initial components are:
 
 - `<Assert>` and `<AssertFalse>`
@@ -158,9 +158,26 @@ Numeric comparisons require an `expected` prop. Match assertions require a
 `RegExp` through the `expected` prop. Unary assertions do not accept expected
 children.
 
-Assertion components work inside and outside tests. A failed assertion throws
-the `@std/assert` assertion error. Outside a test, that error aborts document
-expansion. Inside a test, `<Test>` contains and records it.
+Comparisons are those of `node:assert/strict`, a runtime builtin rather than a
+dependency, so a published package needs no registry configuration to install.
+`<AssertEquals>` and `<AssertNotEquals>` are deep strict equality;
+`<AssertStrictEquals>` and `<AssertNotStrictEquals>` are `Object.is`. Existence,
+falsity, string inclusion and the ordering comparisons have no builtin
+equivalent and are defined here: existence rejects only `null` and `undefined`,
+string inclusion is `String.prototype.includes`, and the ordering comparisons
+apply the relational operators — which coerce object operands, so a value whose
+`toString` throws fails the comparison itself.
+
+Deep equality is stricter than the `@std/assert` implementation used before
+0.5.2 in two respects: `0` and `-0` are no longer equal, and an object with a
+`null` prototype is no longer equal to an otherwise-identical plain object. Two
+distinct `Error` values with the same name and message now compare equal, where
+previously their stacks made them differ. Pathological operands — an invalid
+`Date`, a `WeakMap` — are not specified and may differ between runtimes.
+
+Assertion components work inside and outside tests. A failed assertion throws an
+`AssertionError`. Outside a test, that error aborts document expansion. Inside a
+test, `<Test>` contains and records it.
 
 Assertions emit Markdown diagnostics in testing mode. During regular execution,
 diagnostics are hidden unless `--verbose` is enabled. Failed assertions still
@@ -172,8 +189,8 @@ include the underlying assertion detail when available. Their exact Markdown
 layout is not prescribed, and formatting arbitrary values must not change the
 assertion outcome or introduce a new failure.
 
-`<AssertThrows>` is the one assertion whose semantics are not an `@std/assert`
-export. It wraps children rather than taking `actual`/`expected`, and it
+`<AssertThrows>` is the one assertion that is not a value comparison. It wraps
+children rather than taking `actual`/`expected`, and it
 **requires** a `message` prop: a literal string is matched as a substring of the
 raised error's message, or an expression evaluating to a `RegExp` is tested
 against it. The assertion passes when expanding the body raises an error whose
@@ -184,9 +201,11 @@ assertions. Like the other assertions, it emits a pass diagnostic only in
 testing or verbose mode, and a failure aborts the document when it occurs outside
 a test (inside a `<Test>` it is contained and recorded).
 
-Additional assertion components use the same rules: their names and props map to
-an `@std/assert` export, they preserve its comparison and error semantics, and
-they use the shared diagnostic behavior.
+Additional assertion components use the same rules: they state their comparison
+here, they raise an `AssertionError` on failure, and they use the shared
+diagnostic behavior. A component must decide its outcome before anything formats
+its operands, so that a value with a throwing or mutating `toJSON`, `toString`
+or getter cannot change whether an assertion passes.
 
 ## Mocking
 

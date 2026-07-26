@@ -1,20 +1,13 @@
 /**
- * The npm CLI is produced by dnt, not by `deno compile`, and nothing else in
- * the repository runs that build: `deno task check`, the compiled-binary
- * smoke test and the Deno suite all type-check and execute the source against
- * Deno, where a bare `Deno.*` global is perfectly valid. In the Node output
- * the same global fails to compile and, once compiled, fails at runtime —
- * which is how `@executablemd/cli@0.5.0` missed npm.
- *
- * This suite closes that gap the only way that proves anything: build
- * packages/cli exactly as the release workflow does, then run the emitted bin
- * under Node through the test-agent smoke document. That document drives a
- * full session/prompt/text path, so the Node parent has to relaunch *itself*
- * as `xmd test-agent` for the run to pass.
+ * Build packages/cli the way the release workflow does and run the emitted bin
+ * under Node. The test-agent smoke document drives a full session/prompt path,
+ * so the Node parent must relaunch itself as `xmd test-agent` to pass — the
+ * bare `Deno.*` global that kept `@executablemd/cli@0.5.0` off npm compiles
+ * fine under Deno and fails only here.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { ensure, until } from "effection";
+import { ensure } from "effection";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
@@ -39,22 +32,33 @@ interface Manifest {
   dependencies?: Record<string, string>;
 }
 
-async function readManifest(...segments: string[]): Promise<Manifest> {
-  return JSON.parse(await Deno.readTextFile(path.join(ROOT, ...segments)));
+/** Synchronous: the skip decision runs at module evaluation, outside any scope. */
+function readManifest(...segments: string[]): Manifest {
+  return JSON.parse(Deno.readTextFileSync(path.join(ROOT, ...segments)));
+}
+
+/** Run npm and hand back stdout, or `undefined` when it fails. */
+function npmQuery(args: string[]): string | undefined {
+  const result = new Deno.Command("npm", {
+    args,
+    stdout: "piped",
+    stderr: "null",
+  }).outputSync();
+  return result.success ? new TextDecoder().decode(result.stdout) : undefined;
 }
 
 /**
  * Every workspace member's declared version, keyed by package name — the same
  * map build-npm.ts builds to pin internal dependencies.
  */
-async function workspaceVersions(): Promise<Record<string, string>> {
+function workspaceVersions(): Record<string, string> {
   const versions: Record<string, string> = {};
-  for await (const entry of Deno.readDir(path.join(ROOT, "packages"))) {
+  for (const entry of Deno.readDirSync(path.join(ROOT, "packages"))) {
     if (!entry.isDirectory) {
       continue;
     }
     try {
-      const manifest = await readManifest("packages", entry.name, "deno.json");
+      const manifest = readManifest("packages", entry.name, "deno.json");
       if (manifest.name?.startsWith(INTERNAL_SCOPE) && manifest.version) {
         versions[manifest.name] = manifest.version;
       }
@@ -66,21 +70,16 @@ async function workspaceVersions(): Promise<Record<string, string>> {
 }
 
 /**
- * The internal dependency specifiers this build needs from npm that npm
- * cannot yet serve.
- *
- * dnt resolves each `workspace:*` sibling to `^<its declared version>` and
- * installs it from the registry, so packages/cli builds only once its
- * siblings are published at the version the manifests declare — the same rule
- * the DNT_SKIP_INSTALL refusal already enforces. That holds on every ordinary
- * branch and throughout a release, where packages publish in dependency
- * order. It does not hold on a release-bump branch, whose manifests name a
- * version no publish has produced yet. Naming the specifiers keeps such a
- * skip legible instead of letting it read as a pass.
+ * Siblings that block the build today. dnt installs each `workspace:*` sibling
+ * from the registry to type-check against, so it must already be published, at
+ * the declared version and free of `@jsr/*` deps. A release-bump branch fails
+ * the first condition; the second stays unmet until the first release after
+ * `@std/assert` was dropped, since `.npmrc` no longer maps the `@jsr` scope.
+ * Returning the specifiers keeps the resulting skip from reading as a pass.
  */
-async function unresolvableSiblings(): Promise<string[]> {
-  const versions = await workspaceVersions();
-  const cli = await readManifest(PKG_DIR, "package.json");
+function unbuildableSiblings(): string[] {
+  const versions = workspaceVersions();
+  const cli = readManifest(PKG_DIR, "package.json");
   const missing: string[] = [];
   for (const [name, range] of Object.entries(cli.dependencies ?? {})) {
     if (!name.startsWith(INTERNAL_SCOPE) || !range.startsWith("workspace:")) {
@@ -92,13 +91,13 @@ async function unresolvableSiblings(): Promise<string[]> {
       continue;
     }
     const spec = `${name}@^${declared}`;
-    const view = await new Deno.Command("npm", {
-      args: ["view", spec, "version"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    if (!view.success) {
+    if (npmQuery(["view", spec, "version"]) === undefined) {
       missing.push(spec);
+      continue;
+    }
+    const deps = npmQuery(["view", spec, "dependencies", "--json"]) ?? "";
+    if (deps.includes("@jsr/")) {
+      missing.push(`${spec} (published copy still depends on @jsr/*)`);
     }
   }
   return missing;
@@ -139,21 +138,17 @@ function* runEmittedBin(args: string[]): Operation<ProcessResult> {
   return result.value;
 }
 
-const unresolvable = await unresolvableSiblings();
+const unbuildable = unbuildableSiblings();
 
 describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, () => {
-  if (unresolvable.length > 0) {
-    it.skip(
-      `relaunches its test-agent worker under Node — npm cannot resolve ${unresolvable.join(
-        ", ",
-      )} yet`,
-    );
+  if (unbuildable.length > 0) {
+    it.skip(`relaunches its test-agent worker under Node — blocked on ${unbuildable.join(", ")}`);
     return;
   }
 
   it("relaunches its test-agent worker under Node", function* () {
     yield* ensure(() => rm(OUT_DIR, { recursive: true, force: true }));
-    const { version } = yield* until(readManifest(PKG_DIR, "deno.json"));
+    const { version } = readManifest(PKG_DIR, "deno.json");
 
     const built = yield* buildCliPackage(version ?? "0.0.0-dev");
     if (built.code !== 0) {
@@ -161,8 +156,6 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     }
 
     const run = yield* runEmittedBin(["test", DOC]);
-    // The document asserts both replies itself, so a non-zero exit means the
-    // Node parent never got a worker to answer them.
     if (run.code !== 0) {
       throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
     }

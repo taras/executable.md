@@ -95,11 +95,14 @@ manifests (§3).
 - **`publish-one.yml`** (`workflow_call`, inputs `package`/`version`): builds
   one package with dnt (`scripts/build-npm.ts`) and publishes it to npm. Runs in
   the `npm-publish` environment. npm publishing is idempotent: it skips an
-  already-published version. dnt runs `npm install` inside the generated output dir, so
-  `build-npm.ts` writes an `.npmrc` there mapping the `@jsr` scope to
-  `https://npm.jsr.io` — a package with a `jsr:` dependency (e.g. `testing`'s
-  `@std/assert`) becomes a `@jsr/*` dependency the default registry does not
-  serve, so the install would otherwise 404.
+  already-published version.
+
+No published package may depend on a `jsr:` specifier. dnt rewrites one into a
+`@jsr/*` npm dependency, which the default registry does not serve, so every
+consumer would need a `@jsr:registry` mapping in their own npm configuration —
+something a package cannot ship, because npm strips `.npmrc` from published
+tarballs. `scripts/tests/testing-npm-install.test.ts` enforces this by
+installing a freshly built package with npm's configuration neutralized.
 
 ### Local builds
 

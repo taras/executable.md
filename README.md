@@ -70,6 +70,16 @@ curl -fsSL https://executable.md/install.sh | sh
 
 Prebuilt binaries for each platform are published on the [releases page](https://github.com/taras/executable.md/releases). The binary is self-contained — no Node or Deno required to run it.
 
+### From npm
+
+`xmd` is also published to npm as [`@executablemd/cli`](https://www.npmjs.com/package/@executablemd/cli):
+
+```bash
+npm install -g @executablemd/cli
+```
+
+No registry configuration is needed — every `@executablemd` package resolves from the default npm registry.
+
 ### Platform notes
 
 - **Size:** binaries are self-contained and fairly large (roughly 90–125 MB depending on platform) — the embedded Deno runtime dominates. Trimming this further is tracked in [#66](https://github.com/taras/executable.md/issues/66).

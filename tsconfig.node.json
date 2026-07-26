@@ -17,6 +17,7 @@
       "@executablemd/runtime/test": ["./packages/runtime/test/mod.ts"],
       "@executablemd/durable-streams": ["./packages/durable-streams/mod.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
+      "@executablemd/testing": ["./packages/testing/mod.ts"],
       "@effectionx/bdd/node": ["./packages/test-support/bdd.ts"],
       "@effectionx/bdd/expect": ["./packages/test-support/expect.ts"]
     }
@@ -26,7 +27,8 @@
     "packages/durable-streams/**/*.ts",
     "packages/runtime/**/*.ts",
     "packages/code-review-agent/**/*.ts",
-    "packages/test-support/**/*.ts"
+    "packages/test-support/**/*.ts",
+    "packages/testing/**/*.ts"
   ],
   "exclude": [
     "packages/durable-streams/demo/**"

@@ -30,11 +30,10 @@ export default define.page(function GettingStarted({ url }) {
       </p>
       <CodeBlock>{`curl -fsSL ${url.origin}/install.sh | sh`}</CodeBlock>
       <p>
-        Or, for Deno users, run it from source (a published JSR package is
-        coming soon):
+        Or, for Deno users, run it straight from JSR:
       </p>
       <CodeBlock>
-        {"git clone https://github.com/taras/executable.md\ncd executable.md && deno task xmd run doc.md"}
+        {"deno run -A jsr:@executablemd/cli run doc.md"}
       </CodeBlock>
       <p>
         Prebuilt binaries for every platform are on the{" "}
@@ -44,6 +43,17 @@ export default define.page(function GettingStarted({ url }) {
         >
           releases page
         </a>. The binary is self-contained — no Node or Deno needed to run it.
+      </p>
+
+      <h3>From npm</h3>
+      <p>
+        <code>xmd</code> is published to npm as <code>@executablemd/cli</code>:
+      </p>
+      <CodeBlock>{"npm install -g @executablemd/cli"}</CodeBlock>
+      <p>
+        No registry configuration is needed — every <code>@executablemd</code>
+        {" "}
+        package resolves from the default npm registry.
       </p>
 
       <h2>Your first document</h2>
