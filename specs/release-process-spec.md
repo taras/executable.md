@@ -101,8 +101,8 @@ No published package may depend on a `jsr:` specifier. dnt rewrites one into a
 `@jsr/*` npm dependency, which the default registry does not serve, so every
 consumer would need a `@jsr:registry` mapping in their own npm configuration —
 something a package cannot ship, because npm strips `.npmrc` from published
-tarballs. `scripts/tests/testing-npm-install.test.ts` enforces this by
-installing a freshly built package with npm's configuration neutralized.
+tarballs. Verify it on the emitted manifest: after a `scripts/build-npm.ts` run,
+`packages/<name>/npm/package.json` declares no `@jsr/*` dependency.
 
 ### Local builds
 
