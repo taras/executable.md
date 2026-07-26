@@ -12,6 +12,7 @@ import { exec, Stdio } from "@effectionx/process";
 import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import type { ProcessResult } from "@effectionx/process";
 import path from "node:path";
+import { removeNpmOutput } from "./npm-output.ts";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -41,6 +42,10 @@ function* buildTestingPackage(version: string): Operation<ProcessResult> {
       // match against the pinned 4.x prerelease — the same allowance
       // publish-one.yml makes.
       NPM_CONFIG_LEGACY_PEER_DEPS: "true",
+      // Internal siblings come from this branch, so what installs here is what
+      // the branch would publish rather than what the last release did. They
+      // arrive as path dependencies; a `@jsr/*` one still could not.
+      DNT_LOCAL_SIBLINGS: "1",
     },
   }).join();
 }
@@ -74,7 +79,7 @@ function* pristineNpmEnv(scratch: string): Operation<Record<string, string>> {
 
 describe("npm install with default registry configuration", () => {
   it("installs the built testing package without a @jsr registry mapping", function* () {
-    yield* ensure(() => rm(OUT_DIR, { recursive: true, force: true }));
+    yield* ensure(removeNpmOutput);
     const manifest = JSON.parse(yield* readTextFile(path.join(ROOT, PKG_DIR, "deno.json")));
 
     const built = yield* buildTestingPackage(manifest.version ?? "0.0.0-dev");

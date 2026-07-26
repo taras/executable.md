@@ -18,8 +18,8 @@ import { ensure } from "effection";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
-import { readdir, rm } from "@effectionx/fs";
 import { timebox } from "@effectionx/timebox";
+import { removeNpmOutput } from "./npm-output.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,20 +78,9 @@ function* runEmittedBin(args: string[]): Operation<ProcessResult> {
   return result.value;
 }
 
-/**
- * Remove every generated npm output directory. A local-sibling build writes one
- * per workspace member, and a stale one left behind is both a lint subject and
- * something a later build could mistake for current.
- */
-function* removeBuildOutput(): Operation<void> {
-  for (const member of yield* readdir(path.join(ROOT, "packages"))) {
-    yield* rm(path.join(ROOT, "packages", member, "npm"), { recursive: true, force: true });
-  }
-}
-
 describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("relaunches its test-agent worker under Node", function* () {
-    yield* ensure(removeBuildOutput);
+    yield* ensure(removeNpmOutput);
     const { version } = readManifest(PKG_DIR, "deno.json");
 
     const built = yield* buildCliPackage(version ?? "0.0.0-dev");
