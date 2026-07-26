@@ -58,10 +58,13 @@ are the single source. The npm version derives from the tag, and both
 workflows refuse a tag the manifests do not declare, so the two cannot
 diverge.
 
-To cut a release: run `deno task bump <version>` (stamps every manifest and
-the `XMD_VERSION` binary pins in the review/analysis workflows),
+To cut a release: run `deno task bump <version>` (stamps every manifest),
 merge to `main`, then publish the draft release — its tag follows the
 manifests (§3).
+
+The bump touches nothing but the manifests. PR Review and Repo Analysis install
+the latest published release rather than a pinned version, so preparing a
+release never depends on a binary that release has not published yet.
 
 ## 3. Workflows
 

@@ -15,11 +15,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Version-pinned so a new (or compromised) release cannot silently change
-      # PR-review behavior; bump the pin as part of each release.
+      # install.sh resolves the latest published release. Pinning a version here
+      # broke every release-bump PR, which pinned the release it was preparing
+      # and downloaded a binary that did not exist yet; the tradeoff is that a
+      # new release changes PR-review behavior as soon as it is the latest.
       - name: Install xmd release binary
         run: |
-          curl -fsSL https://executable.md/install.sh | XMD_VERSION=v0.5.1 sh
+          curl -fsSL https://executable.md/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run review
