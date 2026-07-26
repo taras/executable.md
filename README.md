@@ -95,6 +95,16 @@ Useful flags:
 - `--verbose`, `-V` - print durable journal entries to stderr while running.
 - `--component-dir` - add component search directories. Defaults to `components` and `.`.
 
+## Coding agents
+
+Run ACP-compatible coding agents directly from a document with `<Agent>`,
+`<Session>`, and `<Prompt>`. The [coding-agent guide](https://executable.md/docs/agents)
+explains provider selection, permissions, timeouts, sessions, and deterministic
+tests with the bundled test agent.
+
+For the deterministic test-agent walkthrough and its scenario format, see
+[`packages/test-agent/README.md`](packages/test-agent/README.md).
+
 ## Document model
 
 executable.md treats the root document like a component:
