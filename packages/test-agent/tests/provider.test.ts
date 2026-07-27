@@ -9,7 +9,7 @@ import { sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
 import type { SessionRouteContext } from "@executablemd/acp";
-import { useTestAgentAcpx } from "../src/state.ts";
+import { useTestAgentProvider } from "../src/provider.ts";
 import { deriveSessionKey } from "../../acp/src/session-key.ts";
 import { createFakeRuntime, useFlatWorld } from "../../acp/tests/helpers.ts";
 
@@ -29,21 +29,21 @@ describe("Tier TS — test-agent ACPX state", () => {
   it("TS1: withSessionRoute pins the instance route for provider work; probe route otherwise", function* () {
     const harness = createFakeRuntime();
     yield* useFlatWorld("/work");
-    const acpx = yield* useTestAgentAcpx({
+    const provider = yield* useTestAgentProvider({
       defaultAgent: "test",
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
       probeRoute: PROBE,
-      routeFor: (_context: SessionRouteContext) => INST,
+      resolveRoute: (_context: SessionRouteContext) => INST,
       dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(
       {
         *agent([name], _next) {
-          return yield* acpx.state.agent(name);
+          return yield* provider.agent(name);
         },
         *prompt([content, options], _next) {
-          return acpx.state.promptStream(content, options);
+          return provider.promptStream(content, options);
         },
       },
       { at: "min" },
@@ -70,12 +70,12 @@ describe("Tier TS — test-agent ACPX state", () => {
     harness.script({ manual: true });
     yield* useFlatWorld("/work");
     const routes: string[] = [];
-    const acpx = yield* useTestAgentAcpx({
+    const provider = yield* useTestAgentProvider({
       defaultAgent: "test",
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
       probeRoute: PROBE,
-      routeFor: (context: SessionRouteContext) => {
+      resolveRoute: (context: SessionRouteContext) => {
         routes.push(String(context.session ?? "default"));
         return INST;
       },
@@ -84,10 +84,10 @@ describe("Tier TS — test-agent ACPX state", () => {
     yield* Agent.around(
       {
         *agent([name], _next) {
-          return yield* acpx.state.agent(name);
+          return yield* provider.agent(name);
         },
         *prompt([content, options], _next) {
-          return acpx.state.promptStream(content, options);
+          return provider.promptStream(content, options);
         },
       },
       { at: "min" },

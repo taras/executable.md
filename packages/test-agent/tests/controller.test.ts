@@ -2,7 +2,7 @@
  * Tier TC — controller tests (specs/test-agent-spec.md §Controller and
  * worker): token auth, probe/scenario config, journal ack ordering,
  * on-demand Markdown reads/stats with a canonical filesystem boundary,
- * failure marks, instance isolation, connection revocation on unregister,
+ * failure marks, scenario isolation, connection revocation on unregister,
  * and teardown.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -17,7 +17,7 @@ import { symlink } from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { useTestAgentController } from "../src/controller.ts";
-import type { ScenarioInstance } from "../src/controller.ts";
+import type { ScenarioRecord } from "../src/controller.ts";
 import { useLineClient } from "../src/net.ts";
 import { encodeMessage, parseControllerMessage, parseRoute } from "../src/protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "../src/protocol.ts";
@@ -78,18 +78,18 @@ describe("Tier TC — controller", () => {
       yield* writeTextFile(path.join(dir, "secret.ts"), "export {}\n");
       yield* scoped(function* () {
         const controller = yield* useTestAgentController();
-        const instance = yield* controller.useInstance({
-          doc: { path: "review.md", source: '<WhenPrompt template="hi" />' },
-          scenarioDir: dir,
+        const scenario = yield* controller.useScenario({
+          document: { path: "review.md", source: '<WhenPrompt template="hi" />' },
+          rootDir: dir,
         });
-        const parsed = parseRoute(instance.route);
+        const parsed = parseRoute(scenario.route);
         expect(parsed.ok).toBe(true);
         if (!parsed.ok) {
           return;
         }
 
-        const client = yield* useClient(instance.route);
-        client.send({ t: "attach", token: parsed.message.token, instance: instance.id });
+        const client = yield* useClient(scenario.route);
+        client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
         const config = yield* client.next();
         expect(config).toMatchObject({ t: "config", mode: "scenario" });
         if (config.t === "config" && config.mode === "scenario") {
@@ -108,7 +108,7 @@ describe("Tier TC — controller", () => {
           },
         });
         expect(yield* client.next()).toEqual({ t: "ack", seq: 0 });
-        expect(controller.instance(instance.id)?.journal.length).toBe(1);
+        expect(controller.getScenarioRecord(scenario.id)?.journal.length).toBe(1);
 
         client.send({ t: "stat", path: "components/Helper.md" });
         expect(yield* client.next()).toEqual({
@@ -138,7 +138,7 @@ describe("Tier TC — controller", () => {
         });
         const outOfOrder = yield* client.next();
         expect(outOfOrder.t).toBe("error");
-        expect(controller.instance(instance.id)?.failure).toEqual({
+        expect(controller.getScenarioRecord(scenario.id)?.failure).toEqual({
           kind: "mismatch",
           expected: "hi",
           actual: "bye",
@@ -149,22 +149,22 @@ describe("Tier TC — controller", () => {
     }
   });
 
-  it("TC5: ending an instance's scope revokes its worker, removes routing, and rejects new workers", function* () {
+  it("TC5: ending a scenario's scope revokes its worker, removes routing, and rejects new workers", function* () {
     const controller = yield* useTestAgentController();
     const ready = withResolvers<{ route: string; token: string; id: string }>();
     const release = withResolvers<void>();
-    // The instance lives in its own task, ended on demand; the controller
+    // The scenario lives in its own task, ended on demand; the controller
     // outlives it so a late worker can still be rejected.
-    const instanceTask = yield* spawn(function* () {
-      const instance = yield* controller.useInstance({
-        doc: { path: "hi.md", source: '<WhenPrompt template="hi" />' },
-        scenarioDir: os.tmpdir(),
+    const scenarioTask = yield* spawn(function* () {
+      const scenario = yield* controller.useScenario({
+        document: { path: "hi.md", source: '<WhenPrompt template="hi" />' },
+        rootDir: os.tmpdir(),
       });
-      const parsed = parseRoute(instance.route);
+      const parsed = parseRoute(scenario.route);
       if (!parsed.ok) {
         return;
       }
-      ready.resolve({ route: instance.route, token: parsed.message.token, id: instance.id });
+      ready.resolve({ route: scenario.route, token: parsed.message.token, id: scenario.id });
       yield* release.operation;
     });
     const info = yield* ready.operation;
@@ -178,29 +178,29 @@ describe("Tier TC — controller", () => {
       event: { type: "close", coroutineId: "root", result: { status: "ok" } },
     });
     expect((yield* client.next()).t).toBe("ack");
-    expect(controller.instance(info.id)?.journal.length).toBe(1);
+    expect(controller.getScenarioRecord(info.id)?.journal.length).toBe(1);
 
-    // Ending the instance's scope revokes its worker and clears its state.
+    // Ending the scenario's scope revokes its worker and clears its state.
     release.resolve();
-    yield* instanceTask;
+    yield* scenarioTask;
     yield* client.closed;
-    expect(controller.instance(info.id)).toBe(undefined);
+    expect(controller.getScenarioRecord(info.id)).toBe(undefined);
 
-    // A fresh worker for the now-unregistered instance is rejected.
+    // A fresh worker for the now-unregistered scenario is rejected.
     const late = yield* useClient(info.route);
     late.send({ t: "attach", token: info.token, instance: info.id });
     expect((yield* late.next()).t).toBe("error");
   });
 
-  it("TC6: a second worker cannot attach to a live instance, and instances stay independent", function* () {
+  it("TC6: a second worker cannot attach to a live instance, and scenarios stay independent", function* () {
     const controller = yield* useTestAgentController();
-    const a = yield* controller.useInstance({
-      doc: { path: "a.md", source: '<WhenPrompt template="a" />' },
-      scenarioDir: os.tmpdir(),
+    const a = yield* controller.useScenario({
+      document: { path: "a.md", source: '<WhenPrompt template="a" />' },
+      rootDir: os.tmpdir(),
     });
-    const b = yield* controller.useInstance({
-      doc: { path: "b.md", source: '<WhenPrompt template="b" />' },
-      scenarioDir: os.tmpdir(),
+    const b = yield* controller.useScenario({
+      document: { path: "b.md", source: '<WhenPrompt template="b" />' },
+      rootDir: os.tmpdir(),
     });
     const token = parseRoute(a.route);
     if (!token.ok) {
@@ -215,7 +215,7 @@ describe("Tier TC — controller", () => {
       expect(configA.doc.path).toBe("a.md");
     }
 
-    // A second concurrent worker for the same instance is refused.
+    // A second concurrent worker for the same scenario is refused.
     const intruder = yield* useClient(a.route);
     intruder.send({ t: "attach", token: token.message.token, instance: a.id });
     expect((yield* intruder.next()).t).toBe("error");
@@ -235,11 +235,11 @@ describe("Tier TC — controller", () => {
     // before acknowledging it, so the assertions below never race.
     expect((yield* clientB.next()).t).toBe("recorded");
 
-    // A prompt B failure never touches instance A's journal or failure.
-    expect(controller.instance(a.id)?.journal.length).toBe(1);
-    expect(controller.instance(a.id)?.failure).toBe(undefined);
-    expect(controller.instance(b.id)?.journal.length).toBe(0);
-    expect(controller.instance(b.id)?.failure).toMatchObject({ kind: "mismatch" });
+    // A prompt B failure never touches scenario A's journal or failure.
+    expect(controller.getScenarioRecord(a.id)?.journal.length).toBe(1);
+    expect(controller.getScenarioRecord(a.id)?.failure).toBe(undefined);
+    expect(controller.getScenarioRecord(b.id)?.journal.length).toBe(0);
+    expect(controller.getScenarioRecord(b.id)?.failure).toMatchObject({ kind: "mismatch" });
   });
 
   it("TC7: reads serve only in-root Markdown — .ts is stat-visible but unreadable, symlinks cannot escape", function* () {
@@ -255,16 +255,16 @@ describe("Tier TC — controller", () => {
 
       yield* scoped(function* () {
         const controller = yield* useTestAgentController();
-        const instance = yield* controller.useInstance({
-          doc: { path: "root.md", source: '<WhenPrompt template="hi" />' },
-          scenarioDir: dir,
+        const scenario = yield* controller.useScenario({
+          document: { path: "root.md", source: '<WhenPrompt template="hi" />' },
+          rootDir: dir,
         });
-        const parsed = parseRoute(instance.route);
+        const parsed = parseRoute(scenario.route);
         if (!parsed.ok) {
           return;
         }
-        const client = yield* useClient(instance.route);
-        client.send({ t: "attach", token: parsed.message.token, instance: instance.id });
+        const client = yield* useClient(scenario.route);
+        client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
         expect((yield* client.next()).t).toBe("config");
 
         // A normal in-root Markdown read succeeds.
@@ -295,7 +295,7 @@ describe("Tier TC — controller", () => {
     }
   });
 
-  it("TC3: malformed lines and unknown instances are rejected", function* () {
+  it("TC3: malformed lines and unknown scenarios are rejected", function* () {
     const controller = yield* useTestAgentController();
     const parsed = parseRoute(controller.probeRoute);
     if (!parsed.ok) {
@@ -310,7 +310,7 @@ describe("Tier TC — controller", () => {
     expect((yield* unknown.next()).t).toBe("error");
   });
 
-  it("TC4: halting the controller task tears the instance down before the controller", function* () {
+  it("TC4: halting the controller task tears the scenario down before the controller", function* () {
     // One task owns the controller and THEN the instance, so on halt the
     // instance finalizer runs before the controller/server teardown. The
     // worker client lives in this scope to observe the revocation.
@@ -319,31 +319,31 @@ describe("Tier TC — controller", () => {
       token: string;
       port: number;
       host: string;
-      instance: ScenarioInstance;
+      scenario: ScenarioRecord;
     }>();
     const task = yield* spawn(function* () {
       const controller = yield* useTestAgentController();
-      const instance = yield* controller.useInstance({
-        doc: { path: "hi.md", source: '<WhenPrompt template="hi" />' },
-        scenarioDir: os.tmpdir(),
+      const scenario = yield* controller.useScenario({
+        document: { path: "hi.md", source: '<WhenPrompt template="hi" />' },
+        rootDir: os.tmpdir(),
       });
-      const parsed = parseRoute(instance.route);
+      const parsed = parseRoute(scenario.route);
       if (!parsed.ok) {
         return;
       }
       ready.resolve({
-        route: instance.route,
+        route: scenario.route,
         token: parsed.message.token,
         port: parsed.message.port,
         host: parsed.message.host,
-        instance,
+        scenario,
       });
       yield* suspend();
     });
     const info = yield* ready.operation;
 
     const client = yield* useClient(info.route);
-    client.send({ t: "attach", token: info.token, instance: info.instance.id });
+    client.send({ t: "attach", token: info.token, instance: info.scenario.id });
     expect((yield* client.next()).t).toBe("config");
     client.send({
       t: "journal",
@@ -351,14 +351,14 @@ describe("Tier TC — controller", () => {
       event: { type: "close", coroutineId: "root", result: { status: "ok" } },
     });
     expect((yield* client.next()).t).toBe("ack");
-    expect(info.instance.journal.length).toBe(1);
+    expect(info.scenario.journal.length).toBe(1);
 
     yield* task.halt();
     // The instance finalizer revoked the worker before the server closed;
     // the retained instance shows its state cleared.
     yield* client.closed;
-    expect(info.instance.journal.length).toBe(0);
-    expect(info.instance.failure).toBe(undefined);
+    expect(info.scenario.journal.length).toBe(0);
+    expect(info.scenario.failure).toBe(undefined);
 
     // The listener is gone too.
     const socket = connect(info.port, info.host);

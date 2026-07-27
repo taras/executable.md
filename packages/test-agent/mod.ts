@@ -6,43 +6,28 @@
  * Markdown behavior document, so an integration can be tested against
  * scripted, repeatable responses (specs/test-agent-spec.md).
  *
- * This entry point exposes the `<TestAgent>` components, the
- * behavior-document engine, and the controller that registers scenarios
- * and serves them to workers over the wire protocol.
+ * A harness needs three things from here: `installTestAgentComponents()` to
+ * teach a document `<TestAgent>`, `useTestAgentController()` to register
+ * scenarios and serve them, and `runTestAgentWorker()` for the process that
+ * answers as the agent. The behavior-document engine, the wire protocol
+ * between controller and worker, and the scenario records they exchange are
+ * implementation.
  */
 
-export { parseTemplate, matchPrompt } from "./src/template.ts";
-export type {
-  ParsedTemplate,
-  TemplateMatchResult,
-  TemplateParseResult,
-  TemplateToken,
-} from "./src/template.ts";
-export {
-  createLineSplitter,
-  encodeMessage,
-  formatRoute,
-  parseControllerMessage,
-  parseRoute,
-  parseWorkerMessage,
-  PROBE_INSTANCE,
-} from "./src/protocol.ts";
-export type {
-  ControllerMessage,
-  ParsedRoute,
-  ParseResult,
-  WireDurableEvent,
-  WorkerMessage,
-} from "./src/protocol.ts";
-export { useTestAgentController } from "./src/controller.ts";
-export type { InstanceFailure, ScenarioInstance, TestAgentController } from "./src/controller.ts";
+import type { Operation } from "effection";
+import { useTestAgentController as useController } from "./src/controller.ts";
+import type { TestAgentController } from "./src/controller.ts";
+
+export type { ScenarioHandle, TestAgentController } from "./src/controller.ts";
+
+/**
+ * Acquire the controller for the calling scope: a localhost server that serves
+ * behavior documents to workers and tears every scenario down with the scope.
+ */
+export function useTestAgentController(): Operation<TestAgentController> {
+  return useController();
+}
+
 export { installTestAgentComponents } from "./src/components.ts";
 export type { TestAgentComponentsOptions } from "./src/components.ts";
-export { createMemorySessionStore, useTestAgentAcpx } from "./src/state.ts";
-export type { TestAgentAcpx, TestAgentAcpxOptions } from "./src/state.ts";
 export { runTestAgentWorker } from "./src/worker/run.ts";
-export { installWhenPromptComponent } from "./src/worker/when-prompt.ts";
-export { installWorkerProfile } from "./src/worker/profile.ts";
-export type { WorkerFilesystem } from "./src/worker/profile.ts";
-export { collectTurn, createTurnBridge } from "./src/worker/bridge.ts";
-export type { BridgeEvent, PromptOffer, TurnBridge } from "./src/worker/bridge.ts";

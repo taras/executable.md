@@ -11,19 +11,19 @@ import { useTestAgentController } from "@executablemd/test-agent";
 import { join, resolve } from "node:path";
 
 await main(function* () {
-  const scenarioDir = import.meta.dirname ?? ".";
-  const source = yield* readTextFile(join(scenarioDir, "review.md"));
+  const rootDir = import.meta.dirname ?? ".";
+  const source = yield* readTextFile(join(rootDir, "review.md"));
 
   const controller = yield* useTestAgentController();
-  const instance = yield* controller.useInstance({
-    doc: { path: "review.md", source },
-    scenarioDir,
+  const scenario = yield* controller.useScenario({
+    document: { path: "review.md", source },
+    rootDir,
   });
 
   // ACPX reparses the agent string, so the absolute path is single-quoted to
   // survive a checkout path containing spaces.
-  const cli = resolve(scenarioDir, "../../../packages/cli/src/cli.ts");
-  const agent = `deno run --allow-all '${cli}' test-agent --connect ${instance.route}`;
+  const cli = resolve(rootDir, "../../../packages/cli/src/cli.ts");
+  const agent = `deno run --allow-all '${cli}' test-agent --connect ${scenario.route}`;
   console.log("Controller ready. Drive the worker with ACPX in another terminal:\n");
   console.log(
     `  acpx --agent ${JSON.stringify(agent)} exec "Review packages/core at revision abc123"`,

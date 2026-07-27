@@ -1,5 +1,5 @@
 /**
- * The route slot (specs/test-agent-spec.md §Scenario instances). Scenario
+ * The route slot (specs/test-agent-spec.md §Scenario scenarios). Scenario
  * routes reach the ACPX registry through one mutable field, so the provider's
  * registry-dependent work has to hold this slot while its own route is pinned.
  *
