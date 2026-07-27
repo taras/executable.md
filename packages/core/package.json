@@ -20,7 +20,7 @@
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "acorn": "^8.16.0",
-    "effection": "4.1.0-alpha.7",
+    "effection": "4.1.0-alpha.10",
     "gray-matter": "^4.0.3",
     "magic-string": "^0.30.21",
     "marked": "^17.0.4",
