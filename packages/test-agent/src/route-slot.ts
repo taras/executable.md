@@ -9,8 +9,8 @@
  * to the caller and outlive the critical section.
  */
 
-import { createChannel, useScope, withResolvers } from "effection";
-import type { Operation, Scope } from "effection";
+import { createChannel, spawn, withResolvers } from "effection";
+import type { Operation } from "effection";
 
 interface SlotRequest {
   grant(): void;
@@ -23,13 +23,12 @@ export interface RouteSlot {
 }
 
 export function* useRouteSlot(): Operation<RouteSlot> {
-  const owner: Scope = yield* useScope();
   const requests = createChannel<SlotRequest, never>();
   // The subscription must belong to the loop task itself — created in a
   // holder's scope it would die with that holder. The ready gate keeps sends
   // from racing the subscribe.
   const ready = withResolvers<void>();
-  yield* owner.spawn(function* () {
+  yield* spawn(function* () {
     const subscription = yield* requests;
     ready.resolve();
     while (true) {
