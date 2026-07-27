@@ -9,7 +9,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { ensure } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -123,7 +123,9 @@ function stubStream(
 function* runDoc(doc: string): Operation<{ output: string; result: Result<string> }> {
   const dir = path.join(os.tmpdir(), `xmd-rp-test-${randomUUID()}`);
   yield* ensureDir(dir);
-  try {
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
     const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
@@ -134,9 +136,7 @@ function* runDoc(doc: string): Operation<{ output: string; result: Result<string
     }
     const result = yield* execution;
     return { output: next.value, result };
-  } finally {
-    yield* rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 const OPTIONS: AgentProviderOptions = { defaultAgent: "a", permissionMode: "deny-all" };

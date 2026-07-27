@@ -11,7 +11,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { timebox } from "@effectionx/timebox";
-import { spawn, each } from "effection";
+import { ensure, scoped, spawn, each } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -99,14 +99,14 @@ function* useFixture<T>(
   const fixture: Fixture = { dir: path.join(root, "work"), home: path.join(root, "home") };
   yield* ensureDir(fixture.dir);
   yield* ensureDir(fixture.home);
-  try {
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+
     for (const [name, content] of Object.entries(files)) {
       yield* writeTextFile(path.join(fixture.dir, name), content);
     }
     return yield* body(fixture);
-  } finally {
-    yield* rm(root, { recursive: true, force: true });
-  }
+  });
 }
 
 const AGENT_DOC = [

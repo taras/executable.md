@@ -7,7 +7,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { scoped } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -38,7 +38,9 @@ interface RunOptions {
 function* runDoc(files: Record<string, string>, options?: RunOptions): Operation<Run> {
   const dir = path.join(os.tmpdir(), `xmd-tv-${randomUUID()}`);
   yield* ensureDir(dir);
-  try {
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
     for (const [name, content] of Object.entries(files)) {
       const target = path.join(dir, name);
       yield* ensureDir(path.dirname(target));
@@ -87,9 +89,7 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
       const results = testing ? yield* testing.results : [];
       return { result, output: next.value, results };
     });
-  } finally {
-    yield* rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 const HI = '<WhenPrompt template="hi" />\n\nhello there\n';

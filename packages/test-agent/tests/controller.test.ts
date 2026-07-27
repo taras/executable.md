@@ -7,7 +7,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { race, scoped, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, race, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -73,80 +73,78 @@ describe("Tier TC — controller", () => {
   it("TC2: scenario attach serves config, ordered journal acks, reads, and stats", function* () {
     const dir = path.join(os.tmpdir(), `xmd-tc-${randomUUID()}`);
     yield* ensureDir(path.join(dir, "components"));
-    try {
-      yield* writeTextFile(path.join(dir, "components", "Helper.md"), "helper body\n");
-      yield* writeTextFile(path.join(dir, "secret.ts"), "export {}\n");
-      yield* scoped(function* () {
-        const controller = yield* useTestAgentController();
-        const scenario = yield* controller.useScenario({
-          document: { path: "review.md", source: '<WhenPrompt template="hi" />' },
-          rootDir: dir,
-        });
-        const parsed = parseRoute(scenario.route);
-        expect(parsed.ok).toBe(true);
-        if (!parsed.ok) {
-          return;
-        }
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
-        const client = yield* useClient(scenario.route);
-        client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
-        const config = yield* client.next();
-        expect(config).toMatchObject({ t: "config", mode: "scenario" });
-        if (config.t === "config" && config.mode === "scenario") {
-          expect(config.doc.path).toBe("review.md");
-          expect(config.journal).toEqual([]);
-        }
-
-        client.send({
-          t: "journal",
-          seq: 0,
-          event: {
-            type: "yield",
-            coroutineId: "root.0",
-            description: { type: "when_prompt", name: "when:review.md:1:1#0" },
-            result: { status: "ok", value: { prompt: "hi", captures: {} } },
-          },
-        });
-        expect(yield* client.next()).toEqual({ t: "ack", seq: 0 });
-        expect(controller.getScenarioRecord(scenario.id)?.journal.length).toBe(1);
-
-        client.send({ t: "stat", path: "components/Helper.md" });
-        expect(yield* client.next()).toEqual({
-          t: "stat",
-          path: "components/Helper.md",
-          exists: true,
-          isFile: true,
-        });
-        client.send({ t: "read", path: "components/Helper.md" });
-        const read = yield* client.next();
-        expect(read).toMatchObject({ t: "read", missing: false, source: "helper body\n" });
-
-        // stat reports actual existence and file type — including .ts
-        // candidates, whose handling belongs to the worker.
-        client.send({ t: "stat", path: "secret.ts" });
-        expect(yield* client.next()).toMatchObject({ t: "stat", exists: true, isFile: true });
-
-        client.send({ t: "read", path: "../outside.md" });
-        expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
-
-        client.send({ t: "turn-failure", kind: "mismatch", expected: "hi", actual: "bye" });
-        expect((yield* client.next()).t).toBe("recorded");
-        client.send({
-          t: "journal",
-          seq: 5,
-          event: { type: "close", coroutineId: "root", result: { status: "ok" } },
-        });
-        const outOfOrder = yield* client.next();
-        expect(outOfOrder.t).toBe("error");
-        expect(controller.getScenarioRecord(scenario.id)?.failure).toEqual({
-          kind: "mismatch",
-          expected: "hi",
-          actual: "bye",
-        });
+    yield* writeTextFile(path.join(dir, "components", "Helper.md"), "helper body\n");
+    yield* writeTextFile(path.join(dir, "secret.ts"), "export {}\n");
+    yield* scoped(function* () {
+      const controller = yield* useTestAgentController();
+      const scenario = yield* controller.useScenario({
+        document: { path: "review.md", source: '<WhenPrompt template="hi" />' },
+        rootDir: dir,
       });
-    } finally {
-      yield* rm(dir, { recursive: true, force: true });
-    }
+      const parsed = parseRoute(scenario.route);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) {
+        return;
+      }
+
+      const client = yield* useClient(scenario.route);
+      client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
+      const config = yield* client.next();
+      expect(config).toMatchObject({ t: "config", mode: "scenario" });
+      if (config.t === "config" && config.mode === "scenario") {
+        expect(config.doc.path).toBe("review.md");
+        expect(config.journal).toEqual([]);
+      }
+
+      client.send({
+        t: "journal",
+        seq: 0,
+        event: {
+          type: "yield",
+          coroutineId: "root.0",
+          description: { type: "when_prompt", name: "when:review.md:1:1#0" },
+          result: { status: "ok", value: { prompt: "hi", captures: {} } },
+        },
+      });
+      expect(yield* client.next()).toEqual({ t: "ack", seq: 0 });
+      expect(controller.getScenarioRecord(scenario.id)?.journal.length).toBe(1);
+
+      client.send({ t: "stat", path: "components/Helper.md" });
+      expect(yield* client.next()).toEqual({
+        t: "stat",
+        path: "components/Helper.md",
+        exists: true,
+        isFile: true,
+      });
+      client.send({ t: "read", path: "components/Helper.md" });
+      const read = yield* client.next();
+      expect(read).toMatchObject({ t: "read", missing: false, source: "helper body\n" });
+
+      // stat reports actual existence and file type — including .ts
+      // candidates, whose handling belongs to the worker.
+      client.send({ t: "stat", path: "secret.ts" });
+      expect(yield* client.next()).toMatchObject({ t: "stat", exists: true, isFile: true });
+
+      client.send({ t: "read", path: "../outside.md" });
+      expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
+
+      client.send({ t: "turn-failure", kind: "mismatch", expected: "hi", actual: "bye" });
+      expect((yield* client.next()).t).toBe("recorded");
+      client.send({
+        t: "journal",
+        seq: 5,
+        event: { type: "close", coroutineId: "root", result: { status: "ok" } },
+      });
+      const outOfOrder = yield* client.next();
+      expect(outOfOrder.t).toBe("error");
+      expect(controller.getScenarioRecord(scenario.id)?.failure).toEqual({
+        kind: "mismatch",
+        expected: "hi",
+        actual: "bye",
+      });
+    });
   });
 
   it("TC5: ending a scenario's scope revokes its worker, removes routing, and rejects new workers", function* () {
@@ -247,52 +245,52 @@ describe("Tier TC — controller", () => {
     const outside = path.join(os.tmpdir(), `xmd-tc7-out-${randomUUID()}`);
     yield* ensureDir(dir);
     yield* ensureDir(outside);
-    try {
-      yield* writeTextFile(path.join(dir, "ok.md"), "in root\n");
-      yield* writeTextFile(path.join(dir, "code.ts"), "export {}\n");
-      yield* writeTextFile(path.join(outside, "secret.md"), "top secret\n");
-      yield* until(symlink(path.join(outside, "secret.md"), path.join(dir, "escape.md")));
-
-      yield* scoped(function* () {
-        const controller = yield* useTestAgentController();
-        const scenario = yield* controller.useScenario({
-          document: { path: "root.md", source: '<WhenPrompt template="hi" />' },
-          rootDir: dir,
-        });
-        const parsed = parseRoute(scenario.route);
-        if (!parsed.ok) {
-          return;
-        }
-        const client = yield* useClient(scenario.route);
-        client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
-        expect((yield* client.next()).t).toBe("config");
-
-        // A normal in-root Markdown read succeeds.
-        client.send({ t: "read", path: "ok.md" });
-        expect(yield* client.next()).toMatchObject({
-          t: "read",
-          missing: false,
-          source: "in root\n",
-        });
-
-        // .ts is visible to stat (for the unsupported-TypeScript
-        // diagnostic) but is never read.
-        client.send({ t: "stat", path: "code.ts" });
-        expect(yield* client.next()).toMatchObject({ t: "stat", exists: true, isFile: true });
-        client.send({ t: "read", path: "code.ts" });
-        expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
-
-        // A Markdown symlink whose target escapes the canonical root is
-        // denied on both read and stat.
-        client.send({ t: "read", path: "escape.md" });
-        expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
-        client.send({ t: "stat", path: "escape.md" });
-        expect(yield* client.next()).toMatchObject({ t: "stat", exists: false });
-      });
-    } finally {
+    yield* ensure(function* () {
       yield* rm(dir, { recursive: true, force: true });
       yield* rm(outside, { recursive: true, force: true });
-    }
+    });
+
+    yield* writeTextFile(path.join(dir, "ok.md"), "in root\n");
+    yield* writeTextFile(path.join(dir, "code.ts"), "export {}\n");
+    yield* writeTextFile(path.join(outside, "secret.md"), "top secret\n");
+    yield* until(symlink(path.join(outside, "secret.md"), path.join(dir, "escape.md")));
+
+    yield* scoped(function* () {
+      const controller = yield* useTestAgentController();
+      const scenario = yield* controller.useScenario({
+        document: { path: "root.md", source: '<WhenPrompt template="hi" />' },
+        rootDir: dir,
+      });
+      const parsed = parseRoute(scenario.route);
+      if (!parsed.ok) {
+        return;
+      }
+      const client = yield* useClient(scenario.route);
+      client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
+      expect((yield* client.next()).t).toBe("config");
+
+      // A normal in-root Markdown read succeeds.
+      client.send({ t: "read", path: "ok.md" });
+      expect(yield* client.next()).toMatchObject({
+        t: "read",
+        missing: false,
+        source: "in root\n",
+      });
+
+      // .ts is visible to stat (for the unsupported-TypeScript
+      // diagnostic) but is never read.
+      client.send({ t: "stat", path: "code.ts" });
+      expect(yield* client.next()).toMatchObject({ t: "stat", exists: true, isFile: true });
+      client.send({ t: "read", path: "code.ts" });
+      expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
+
+      // A Markdown symlink whose target escapes the canonical root is
+      // denied on both read and stat.
+      client.send({ t: "read", path: "escape.md" });
+      expect(yield* client.next()).toMatchObject({ t: "read", missing: true });
+      client.send({ t: "stat", path: "escape.md" });
+      expect(yield* client.next()).toMatchObject({ t: "stat", exists: false });
+    });
   });
 
   it("TC3: malformed lines and unknown scenarios are rejected", function* () {

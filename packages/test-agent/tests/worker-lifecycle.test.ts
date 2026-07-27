@@ -259,7 +259,11 @@ function* runScenario(
 ): Operation<void> {
   const dir = path.join(os.tmpdir(), `xmd-causal-${randomUUID()}`);
   yield* ensureDir(dir);
-  try {
+  // The fixtures outlive the scenario scope nested below, and both end
+  // before this helper returns to the test that called it.
+  yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
     yield* writeTextFile(path.join(dir, "doc.md"), source);
     yield* scoped(function* () {
       const controller = yield* useTestAgentController();
@@ -271,96 +275,92 @@ function* runScenario(
       yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
       yield* body({ controller, scenarioId: scenario.id, worker });
     });
-  } finally {
-    yield* rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("TW1: initialize, session/new, matched turns, mismatch, restart + session/load", function* () {
     const dir = path.join(os.tmpdir(), `xmd-tw-${randomUUID()}`);
     yield* ensureDir(dir);
-    try {
-      yield* writeTextFile(path.join(dir, "review.md"), BEHAVIOR);
-      yield* scoped(function* () {
-        const controller = yield* useTestAgentController();
-        const scenario = yield* controller.useScenario({
-          document: { path: "review.md", source: BEHAVIOR },
-          rootDir: dir,
-        });
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
-        let sessionId = "";
-        yield* scoped(function* () {
-          const worker = yield* useWorker(scenario.route);
-          const init = yield* worker.request("initialize", {
-            protocolVersion: 1,
-            clientCapabilities: {},
-          });
-          expect(init.result).toMatchObject({
-            protocolVersion: 1,
-            agentCapabilities: { loadSession: true },
-          });
-
-          const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
-          expect(typeof created.result?.sessionId).toBe("string");
-          if (typeof created.result?.sessionId === "string") {
-            sessionId = created.result.sessionId;
-          }
-
-          const first = yield* worker.request("session/prompt", {
-            sessionId,
-            prompt: [{ type: "text", text: "Review packages/core at revision abc123" }],
-          });
-          expect(first.result).toMatchObject({ stopReason: "end_turn" });
-          expect(chunkText(worker.notifications)).toContain(
-            "The review of **packages/core** at `abc123` passed.",
-          );
-
-          const mismatch = yield* worker.request("session/prompt", {
-            sessionId,
-            prompt: [{ type: "text", text: "Do something else entirely" }],
-          });
-          expect(mismatch.error?.message).toContain("Summarize {review.subject}");
-          expect(mismatch.error?.message).toContain("Do something else entirely");
-          expect(controller.getScenarioRecord(scenario.id)?.failure?.kind).toBe("mismatch");
-        });
-        // The first worker is gone (killed between completed turns); its
-        // stage-1 transition was acknowledged, so a fresh worker
-        // rehydrates with the capture intact and stage 2 active.
-        expect(controller.getScenarioRecord(scenario.id)?.journal.length).toBeGreaterThan(0);
-
-        yield* scoped(function* () {
-          const worker = yield* useWorker(scenario.route);
-          yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-          const loaded = yield* worker.request("session/load", {
-            sessionId,
-            cwd: "/",
-            mcpServers: [],
-          });
-          expect(loaded.error).toBe(undefined);
-
-          const second = yield* worker.request("session/prompt", {
-            sessionId,
-            prompt: [{ type: "text", text: "Summarize packages/core" }],
-          });
-          if (second.error) {
-            throw new Error(`second turn failed: ${second.error.message}`);
-          }
-          expect(second.result).toMatchObject({ stopReason: "end_turn" });
-          expect(chunkText(worker.notifications)).toContain(
-            "The review of **packages/core** passed.",
-          );
-
-          const exhaustedReply = yield* worker.request("session/prompt", {
-            sessionId,
-            prompt: [{ type: "text", text: "Anything more?" }],
-          });
-          expect(exhaustedReply.error?.message).toContain("scenario exhausted");
-        });
+    yield* writeTextFile(path.join(dir, "review.md"), BEHAVIOR);
+    yield* scoped(function* () {
+      const controller = yield* useTestAgentController();
+      const scenario = yield* controller.useScenario({
+        document: { path: "review.md", source: BEHAVIOR },
+        rootDir: dir,
       });
-    } finally {
-      yield* rm(dir, { recursive: true, force: true });
-    }
+
+      let sessionId = "";
+      yield* scoped(function* () {
+        const worker = yield* useWorker(scenario.route);
+        const init = yield* worker.request("initialize", {
+          protocolVersion: 1,
+          clientCapabilities: {},
+        });
+        expect(init.result).toMatchObject({
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: true },
+        });
+
+        const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+        expect(typeof created.result?.sessionId).toBe("string");
+        if (typeof created.result?.sessionId === "string") {
+          sessionId = created.result.sessionId;
+        }
+
+        const first = yield* worker.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "Review packages/core at revision abc123" }],
+        });
+        expect(first.result).toMatchObject({ stopReason: "end_turn" });
+        expect(chunkText(worker.notifications)).toContain(
+          "The review of **packages/core** at `abc123` passed.",
+        );
+
+        const mismatch = yield* worker.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "Do something else entirely" }],
+        });
+        expect(mismatch.error?.message).toContain("Summarize {review.subject}");
+        expect(mismatch.error?.message).toContain("Do something else entirely");
+        expect(controller.getScenarioRecord(scenario.id)?.failure?.kind).toBe("mismatch");
+      });
+      // The first worker is gone (killed between completed turns); its
+      // stage-1 transition was acknowledged, so a fresh worker
+      // rehydrates with the capture intact and stage 2 active.
+      expect(controller.getScenarioRecord(scenario.id)?.journal.length).toBeGreaterThan(0);
+
+      yield* scoped(function* () {
+        const worker = yield* useWorker(scenario.route);
+        yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+        const loaded = yield* worker.request("session/load", {
+          sessionId,
+          cwd: "/",
+          mcpServers: [],
+        });
+        expect(loaded.error).toBe(undefined);
+
+        const second = yield* worker.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "Summarize packages/core" }],
+        });
+        if (second.error) {
+          throw new Error(`second turn failed: ${second.error.message}`);
+        }
+        expect(second.result).toMatchObject({ stopReason: "end_turn" });
+        expect(chunkText(worker.notifications)).toContain(
+          "The review of **packages/core** passed.",
+        );
+
+        const exhaustedReply = yield* worker.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "Anything more?" }],
+        });
+        expect(exhaustedReply.error?.message).toContain("scenario exhausted");
+      });
+    });
   });
 
   it("TW3: cancellation is transactional — nothing commits and the stage re-matches", function* () {
@@ -381,91 +381,87 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
     ].join("\n");
     const dir = path.join(os.tmpdir(), `xmd-tw3-${randomUUID()}`);
     yield* ensureDir(dir);
-    try {
-      yield* writeTextFile(path.join(dir, "slow.md"), behavior);
-      yield* scoped(function* () {
-        const controller = yield* useTestAgentController();
-        const scenario = yield* controller.useScenario({
-          document: { path: "slow.md", source: behavior },
-          rootDir: dir,
-        });
-        const worker = yield* useWorker(scenario.route);
-        yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-        const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
-        const sessionId = created.result?.sessionId;
-        const baseline = controller.getScenarioRecord(scenario.id)!.journal.length;
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
-        const pending = yield* spawn(() =>
-          worker.request("session/prompt", {
-            sessionId,
-            prompt: [{ type: "text", text: "go" }],
-          }),
-        );
-        yield* sleep(120);
-        worker.notify("session/cancel", { sessionId });
-        const cancelled = yield* pending;
-        expect(cancelled.result).toMatchObject({ stopReason: "cancelled" });
-        // Nothing committed: the controller journal is exactly where it
-        // was before the cancelled turn.
-        expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBe(baseline);
+    yield* writeTextFile(path.join(dir, "slow.md"), behavior);
+    yield* scoped(function* () {
+      const controller = yield* useTestAgentController();
+      const scenario = yield* controller.useScenario({
+        document: { path: "slow.md", source: behavior },
+        rootDir: dir,
+      });
+      const worker = yield* useWorker(scenario.route);
+      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+      const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+      const sessionId = created.result?.sessionId;
+      const baseline = controller.getScenarioRecord(scenario.id)!.journal.length;
 
-        // The rebuilt runtime re-enters stage 1 deterministically.
-        const retried = yield* worker.request("session/prompt", {
+      const pending = yield* spawn(() =>
+        worker.request("session/prompt", {
           sessionId,
           prompt: [{ type: "text", text: "go" }],
-        });
-        expect(retried.result).toMatchObject({ stopReason: "end_turn" });
-        expect(chunkText(worker.notifications)).toContain("slow reply");
-        expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBeGreaterThan(baseline);
+        }),
+      );
+      yield* sleep(120);
+      worker.notify("session/cancel", { sessionId });
+      const cancelled = yield* pending;
+      expect(cancelled.result).toMatchObject({ stopReason: "cancelled" });
+      // Nothing committed: the controller journal is exactly where it
+      // was before the cancelled turn.
+      expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBe(baseline);
 
-        const second = yield* worker.request("session/prompt", {
-          sessionId,
-          prompt: [{ type: "text", text: "next" }],
-        });
-        expect(second.result).toMatchObject({ stopReason: "end_turn" });
-        expect(chunkText(worker.notifications)).toContain("done");
+      // The rebuilt runtime re-enters stage 1 deterministically.
+      const retried = yield* worker.request("session/prompt", {
+        sessionId,
+        prompt: [{ type: "text", text: "go" }],
       });
-    } finally {
-      yield* rm(dir, { recursive: true, force: true });
-    }
+      expect(retried.result).toMatchObject({ stopReason: "end_turn" });
+      expect(chunkText(worker.notifications)).toContain("slow reply");
+      expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBeGreaterThan(baseline);
+
+      const second = yield* worker.request("session/prompt", {
+        sessionId,
+        prompt: [{ type: "text", text: "next" }],
+      });
+      expect(second.result).toMatchObject({ stopReason: "end_turn" });
+      expect(chunkText(worker.notifications)).toContain("done");
+    });
   });
 
   it("TW4: losing the controller fails turns through ACP instead of hanging", function* () {
     const dir = path.join(os.tmpdir(), `xmd-tw4-${randomUUID()}`);
     yield* ensureDir(dir);
-    try {
-      yield* writeTextFile(path.join(dir, "hi.md"), '<WhenPrompt template="hi" />\n\nhello\n');
-      const started = withResolvers<string>();
-      const stop = withResolvers<void>();
-      yield* spawn(() =>
-        scoped(function* () {
-          const controller = yield* useTestAgentController();
-          const scenario = yield* controller.useScenario({
-            document: { path: "hi.md", source: '<WhenPrompt template="hi" />\n\nhello\n' },
-            rootDir: dir,
-          });
-          started.resolve(scenario.route);
-          yield* stop.operation;
-        }),
-      );
-      const route = yield* started.operation;
-      const worker = yield* useWorker(route);
-      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-      const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
-      const sessionId = created.result?.sessionId;
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
-      stop.resolve();
-      yield* sleep(50);
+    yield* writeTextFile(path.join(dir, "hi.md"), '<WhenPrompt template="hi" />\n\nhello\n');
+    const started = withResolvers<string>();
+    const stop = withResolvers<void>();
+    yield* spawn(() =>
+      scoped(function* () {
+        const controller = yield* useTestAgentController();
+        const scenario = yield* controller.useScenario({
+          document: { path: "hi.md", source: '<WhenPrompt template="hi" />\n\nhello\n' },
+          rootDir: dir,
+        });
+        started.resolve(scenario.route);
+        yield* stop.operation;
+      }),
+    );
+    const route = yield* started.operation;
+    const worker = yield* useWorker(route);
+    yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+    const sessionId = created.result?.sessionId;
 
-      const reply = yield* worker.request("session/prompt", {
-        sessionId,
-        prompt: [{ type: "text", text: "hi" }],
-      });
-      expect(reply.result).toBe(undefined);
-      expect(reply.error).toBeDefined();
-    } finally {
-      yield* rm(dir, { recursive: true, force: true });
-    }
+    stop.resolve();
+    yield* sleep(50);
+
+    const reply = yield* worker.request("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: "hi" }],
+    });
+    expect(reply.result).toBe(undefined);
+    expect(reply.error).toBeDefined();
   });
 
   it("TW2: probe workers initialize and never start a behavior document", function* () {

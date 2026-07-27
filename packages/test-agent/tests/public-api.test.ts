@@ -7,7 +7,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { scoped, withResolvers } from "effection";
+import { ensure, scoped, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { connect } from "node:net";
 import { once } from "@effectionx/node";
@@ -23,16 +23,20 @@ function* reachable(route: string): Operation<boolean> {
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
-  const settled = withResolvers<boolean>();
-  const socket = connect({ host: parsed.message.host, port: parsed.message.port });
-  socket.once("connect", () => settled.resolve(true));
-  socket.once("error", () => settled.resolve(false));
-  try {
+  // The socket is closed, and its close observed, before the probe answers,
+  // so a later probe never races the previous connection's teardown.
+  return yield* scoped(function* () {
+    const settled = withResolvers<boolean>();
+    const socket = connect({ host: parsed.message.host, port: parsed.message.port });
+    yield* ensure(function* () {
+      socket.destroy();
+      yield* once(socket, "close");
+    });
+
+    socket.once("connect", () => settled.resolve(true));
+    socket.once("error", () => settled.resolve(false));
     return yield* settled.operation;
-  } finally {
-    socket.destroy();
-    yield* once(socket, "close");
-  }
+  });
 }
 
 describe("Tier PA — public controller facade", () => {

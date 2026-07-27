@@ -21,7 +21,7 @@
  * the variable.
  */
 
-import { exit, main, until } from "effection";
+import { ensure, exit, main, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { build } from "jsr:@deno/dnt@0.42.3";
 import {
@@ -254,7 +254,11 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     ),
   );
 
-  try {
+  // The build tree is removed when this scope closes, before the finished
+  // package is completed below.
+  yield* scoped(function* () {
+    yield* ensure(() => rm(buildRoot, { recursive: true, force: true }));
+
     yield* until(
       build({
         entryPoints: entryPoints.map((entry) => ({ ...entry, path: join(srcCopy, entry.path) })),
@@ -304,9 +308,7 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
         },
       }),
     );
-  } finally {
-    yield* rm(buildRoot, { recursive: true, force: true });
-  }
+  });
 
   const license = new URL("LICENSE", repoRoot);
   if (yield* exists(license)) {

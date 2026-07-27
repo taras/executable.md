@@ -8,7 +8,7 @@
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
-import { scoped } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -63,7 +63,9 @@ function* runDoc(
 ): Operation<{ output: string; result: Result<string> }> {
   const dir = path.join(os.tmpdir(), `xmd-ag-${randomUUID()}`);
   yield* ensureDir(dir);
-  try {
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
     yield* install();
@@ -75,9 +77,7 @@ function* runDoc(
     }
     const result = yield* execution;
     return { output: next.value, result };
-  } finally {
-    yield* rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 const OPTIONS: PermissionRequest["options"] = [

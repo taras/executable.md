@@ -10,6 +10,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { exec, type Exec } from "@effectionx/process";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
@@ -134,14 +135,14 @@ function* useFixture<T>(
 ): Operation<T> {
   const dir = path.join(os.tmpdir(), `xmd-pc-${randomUUID()}`);
   yield* ensureDir(dir);
-  try {
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
     for (const [name, content] of Object.entries(files)) {
       yield* writeTextFile(path.join(dir, name), content);
     }
     return yield* body({ dir });
-  } finally {
-    yield* rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 function runCli(args: string[], fixture: Fixture, overrides: Record<string, string> = {}): Exec {
