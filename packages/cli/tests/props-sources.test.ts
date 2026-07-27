@@ -203,6 +203,36 @@ describe("Tier PR — property source resolution", () => {
     }
   });
 
+  it("PR18: only a scalar enum gets an individual binding", function* () {
+    const inputs = {
+      type: "object",
+      properties: {
+        mode: { enum: ["fast", "slow"] },
+        level: { enum: [1, 2, null] },
+        shape: { enum: [{ a: 1 }, { a: 2 }] },
+        pair: { enum: [["a"], ["b"]] },
+      },
+      additionalProperties: false,
+    };
+    const enumBindings = buildBindings(inputs);
+    expect(enumBindings.map((entry) => entry.property)).toEqual(["mode", "level"]);
+    expect(enumBindings[0].form).toBe("<fast|slow>");
+    expect(enumBindings[1].form).toBe("<1|2|null>");
+
+    const extraction = extractPropsArgs(["--props-mode", "fast"], enumBindings);
+    const props = resolveProps({
+      inputs,
+      bindings: enumBindings,
+      individual: extraction.individual,
+      // A structured enum has no option, so it arrives through the aggregate.
+      aggregateCli: '{"shape":{"a":1},"pair":["b"]}',
+      individualEnv: [],
+    });
+    expect(props.mode).toBe("fast");
+    expect(props.shape).toEqual({ a: 1 });
+    expect(props.pair).toEqual(["b"]);
+  });
+
   it("PR16: structured properties resolve through Configliere too", function* () {
     const structured = resolve({
       aggregateCli: '{"user":{"name":"cli"}}',

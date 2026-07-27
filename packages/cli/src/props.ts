@@ -108,6 +108,15 @@ function deref(value: unknown, root: unknown, seen: Set<string> = new Set()): un
 
 const SCALAR_TYPES = new Set(["string", "number", "integer", "boolean", "null"]);
 
+function isJsonScalar(value: unknown): boolean {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
 function typeNames(schema: SchemaLike): string[] {
   if (typeof schema.type === "string") {
     return [schema.type];
@@ -127,7 +136,8 @@ function typeNames(schema: SchemaLike): string[] {
 function isScalar(value: unknown, root: unknown): boolean {
   const schema = readSchema(deref(value, root));
   if (schema.enum) {
-    return true;
+    // An enum may list objects or arrays, which have no command-line form.
+    return schema.enum.every(isJsonScalar);
   }
   const names = typeNames(schema);
   if (names.length > 0 && names.every((name) => SCALAR_TYPES.has(name))) {
@@ -137,6 +147,17 @@ function isScalar(value: unknown, root: unknown): boolean {
     return schema.union.every((member) => isScalar(member, root));
   }
   return false;
+}
+
+/**
+ * Whether a property's enum lists objects or arrays. Zod converts such an
+ * enum into a union of literals compared by identity, so a structurally
+ * equal value never matches and could never reach Ajv, which compares
+ * enum members by value.
+ */
+function hasStructuralEnum(value: unknown, root: unknown): boolean {
+  const schema = readSchema(deref(value, root));
+  return schema.enum !== undefined && !schema.enum.every(isJsonScalar);
 }
 
 function isScalarArray(value: unknown, root: unknown): boolean {
@@ -150,8 +171,8 @@ function isScalarArray(value: unknown, root: unknown): boolean {
 
 function valueForm(value: unknown, root: unknown): string {
   const schema = readSchema(deref(value, root));
-  if (schema.enum) {
-    return `<${schema.enum.join("|")}>`;
+  if (schema.enum?.every(isJsonScalar)) {
+    return `<${schema.enum.map((entry) => String(entry)).join("|")}>`;
   }
   if (isScalarArray(value, root)) {
     return `<${typeNames(readSchema(deref(schema.items, root))).join("|") || "value"}>...`;
@@ -322,6 +343,15 @@ function readTagged(value: unknown): TaggedText | TaggedTextArray | undefined {
   }
   return undefined;
 }
+
+/** Defers a property entirely to whole-object validation. */
+const anyValue: StandardSchemaV1<unknown> = {
+  "~standard": {
+    version: 1,
+    vendor: "xmd",
+    validate: (value: unknown) => ({ value }),
+  },
+};
 
 function validate(
   schema: StandardSchemaV1<unknown>,
@@ -676,8 +706,9 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
   const arrayBindings = new Map(bindings.map((binding) => [binding.property, binding]));
 
   const attrs: Record<string, Partial<Parser<unknown>>> = {};
-  for (const property of Object.keys(properties)) {
-    const native = shape[property];
+  for (const [property, declaration] of Object.entries(properties)) {
+    const structural = hasStructuralEnum(declaration, inputs);
+    const native = structural ? anyValue : shape[property];
     if (!native) {
       continue;
     }

@@ -228,9 +228,6 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
-  // The root receives props on the same contract as an imported component:
-  // validated and defaulted before any body effect, so an invalid document
-  // invocation produces no output and no side effects.
   const validatedProps = validateProps("__root__", props, root.inputs);
 
   const rootEnv: EvalEnv = { values: { ...validatedProps } };

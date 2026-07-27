@@ -18,16 +18,22 @@ function isJsonSchemaInput(value: unknown): value is JsonSchemaInput {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function shapeOf(schema: InputSchema, target: "draft-7" | "draft-2020-12" = "draft-7") {
+function isSchemaShape(value: unknown): value is Record<string, z.ZodType> {
+  return typeof value === "object" && value !== null;
+}
+
+function shapeOf(
+  schema: InputSchema,
+  target: "draft-7" | "draft-2020-12" = "draft-7",
+): Record<string, z.ZodType> {
   if (!isJsonSchemaInput(schema)) {
     throw new Error("expected an object schema");
   }
   const root = z.fromJSONSchema(schema, { defaultTarget: target });
-  const shape = (root as { shape?: Record<string, z.ZodType> }).shape;
-  if (!shape) {
+  if (!("shape" in root) || !isSchemaShape(root.shape)) {
     throw new Error("expected an object schema");
   }
-  return shape;
+  return root.shape;
 }
 
 const SCALARS: InputSchema = {

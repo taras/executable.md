@@ -50,7 +50,7 @@ export function parseMarkdownDefinition(
   });
 
   return {
-    kind: "markdown" as const,
+    kind: "markdown",
     name,
     path,
     meta,

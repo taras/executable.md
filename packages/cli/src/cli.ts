@@ -603,10 +603,6 @@ function* resolveRunProps(
 }
 
 await main(function* (args) {
-  // Document-derived options are only known once the document is, so the
-  // props phase runs before the authoritative parse: help is remembered
-  // and removed, the document is located, and its generated tokens are
-  // lifted out of argv with their original text intact.
   const helpRequest = takeHelpFlag(args);
   const propsPhase = yield* preparePropsPhase(helpRequest.args);
 
