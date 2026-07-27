@@ -87,11 +87,10 @@ describe("prop-validation error segment", () => {
   });
 });
 
-// #177 renamed `inputs` to `props` with no compatibility alias. The full form
-// still parses — `inputs` simply lands in meta — so the failure surfaces later,
-// when a caller passes a prop the component no longer declares.
+// A full `inputs` schema parses — `inputs` lands in meta — so the failure
+// surfaces later, when a caller passes a prop the component does not declare.
 describe("`inputs` is not a compatibility alias for `props`", () => {
-  it("a component declaring `inputs` rejects the prop it used to accept", function* () {
+  it("a component declaring `inputs` declares no props", function* () {
     yield* useStubFs({
       "README.md": '<Legacy name="world" />\n',
       "Legacy.md": [

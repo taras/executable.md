@@ -110,9 +110,8 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  // #177 renamed the schema export from `inputs` to `props` with no alias.
-  // A module still exporting `inputs` declares nothing, so it inherits the
-  // default closed empty-object schema and accepts no props at all.
+  // A function component declares its schema through `props`; an `inputs`
+  // export is ignored, leaving the default closed empty-object schema.
   it("FC-alias: an `inputs` export declares no props and rejects one", function* () {
     const tmpDir = makeTempDir();
     try {

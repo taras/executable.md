@@ -161,7 +161,7 @@ describe("parseFrontmatter — concise props", () => {
     },
   };
 
-  it("B16: an props map normalizes to a closed object schema", function* () {
+  it("B16: a props map normalizes to a closed object schema", function* () {
     expect(parseFrontmatter(CONCISE).props).toEqual(FULL.props);
   });
 
@@ -225,9 +225,8 @@ describe("parseFrontmatter — concise props", () => {
     expect(() => parseFrontmatter({ required: ["name"] })).toThrow('"required" without "props"');
   });
 
-  // #177 renamed `inputs` to `props` with no compatibility alias. A document
-  // written against the old vocabulary is not a second spelling: `inputs` is an
-  // ordinary meta key, and the component is left declaring no props at all.
+  // `inputs` is ordinary metadata, not a compatibility alias for `props`, so a
+  // document declaring it is left with no declared props at all.
   it("treats a full `inputs` schema as ordinary metadata, not a props declaration", function* () {
     const declared = {
       type: "object",
@@ -239,8 +238,8 @@ describe("parseFrontmatter — concise props", () => {
     expect(result.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
   });
 
-  // `required` stays reserved, so the concise old spelling cannot degrade
-  // quietly the way the full one does — it fails during frontmatter parsing.
+  // Top-level `required` remains reserved, so this fails during parsing rather
+  // than degrading quietly the way a full `inputs` schema does.
   it("rejects a concise `inputs` map declared with a top-level `required`", function* () {
     expect(() =>
       parseFrontmatter({ inputs: { name: { type: "string" } }, required: ["name"] }),

@@ -13,7 +13,7 @@ export interface DocumentInfo {
   /** The path the document was read from. */
   path: string;
 
-  /** Frontmatter keys other than the reserved `props`. */
+  /** Frontmatter keys other than the reserved `props` and `required`. */
   meta: Record<string, unknown>;
 
   /** The document's declared props schema. */

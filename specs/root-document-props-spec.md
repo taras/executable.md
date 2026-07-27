@@ -2,8 +2,8 @@
 
 An executable Markdown document can declare the values it needs and receive
 them when it runs. The declaration is the same one imported components use
-(§5.1.1); `xmd run` turns its top-level properties into command-line and
-environment props.
+(§5.1.1); `xmd run` turns its top-level properties into command-line options
+and environment-variable sources.
 
 ```markdown
 ---
@@ -33,7 +33,7 @@ $ xmd run hello.md --props-name Ada --props-loud
 Hello, Ada!
 ```
 
-Environment variables provide the same props:
+Environment variables provide the same values:
 
 ```console
 $ XMD_PROPS_NAME=Ada xmd run hello.md
