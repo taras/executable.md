@@ -13,37 +13,37 @@ importers:
         version: 0.2.2
       '@effectionx/context-api':
         specifier: 0.6.0
-        version: 0.6.0(effection@4.1.0-alpha.7)
+        version: 0.6.0(effection@4.1.0-alpha.10)
       '@effectionx/converge':
         specifier: 0.1.4
-        version: 0.1.4(effection@4.1.0-alpha.7)
+        version: 0.1.4(effection@4.1.0-alpha.10)
       '@effectionx/fetch':
         specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0-alpha.7)
+        version: 0.2.0(effection@4.1.0-alpha.10)
       '@effectionx/fs':
         specifier: 0.3.0
-        version: 0.3.0(effection@4.1.0-alpha.7)
+        version: 0.3.0(effection@4.1.0-alpha.10)
       '@effectionx/middleware':
         specifier: 0.1.1
         version: 0.1.1
       '@effectionx/node':
         specifier: 0.2.4
-        version: 0.2.4(effection@4.1.0-alpha.7)
+        version: 0.2.4(effection@4.1.0-alpha.10)
       '@effectionx/process':
         specifier: 0.8.1
-        version: 0.8.1(effection@4.1.0-alpha.7)
+        version: 0.8.1(effection@4.1.0-alpha.10)
       '@effectionx/scope-eval':
         specifier: 0.1.3
-        version: 0.1.3(effection@4.1.0-alpha.7)
+        version: 0.1.3(effection@4.1.0-alpha.10)
       '@effectionx/stream-helpers':
         specifier: 0.8.3
-        version: 0.8.3(effection@4.1.0-alpha.7)
+        version: 0.8.3(effection@4.1.0-alpha.10)
       '@effectionx/test-adapter':
         specifier: 0.7.4
-        version: 0.7.4(effection@4.1.0-alpha.7)
+        version: 0.7.4(effection@4.1.0-alpha.10)
       '@effectionx/timebox':
         specifier: 0.4.3
-        version: 0.4.3(effection@4.1.0-alpha.7)
+        version: 0.4.3(effection@4.1.0-alpha.10)
       acorn:
         specifier: ^8.16.0
         version: 8.16.0
@@ -51,8 +51,8 @@ importers:
         specifier: ^8.17.1
         version: 8.20.0
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -118,14 +118,14 @@ importers:
         specifier: 0.12.0
         version: 0.12.0
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
 
   packages/cli:
     dependencies:
       '@effectionx/stream-helpers':
         specifier: 0.8.3
-        version: 0.8.3(effection@4.1.0-alpha.7)
+        version: 0.8.3(effection@4.1.0-alpha.10)
       '@executablemd/acp':
         specifier: workspace:*
         version: link:../acp
@@ -148,8 +148,8 @@ importers:
         specifier: ^0.2.3
         version: 0.2.4
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -160,34 +160,34 @@ importers:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0
-        version: 0.6.0(effection@4.1.0-alpha.7)
+        version: 0.6.0(effection@4.1.0-alpha.10)
       '@effectionx/converge':
         specifier: 0.1.4
-        version: 0.1.4(effection@4.1.0-alpha.7)
+        version: 0.1.4(effection@4.1.0-alpha.10)
       '@effectionx/fetch':
         specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0-alpha.7)
+        version: 0.2.0(effection@4.1.0-alpha.10)
       '@effectionx/fs':
         specifier: 0.3.0
-        version: 0.3.0(effection@4.1.0-alpha.7)
+        version: 0.3.0(effection@4.1.0-alpha.10)
       '@effectionx/middleware':
         specifier: 0.1.1
         version: 0.1.1
       '@effectionx/node':
         specifier: 0.2.4
-        version: 0.2.4(effection@4.1.0-alpha.7)
+        version: 0.2.4(effection@4.1.0-alpha.10)
       '@effectionx/process':
         specifier: 0.8.1
-        version: 0.8.1(effection@4.1.0-alpha.7)
+        version: 0.8.1(effection@4.1.0-alpha.10)
       '@effectionx/scope-eval':
         specifier: 0.1.3
-        version: 0.1.3(effection@4.1.0-alpha.7)
+        version: 0.1.3(effection@4.1.0-alpha.10)
       '@effectionx/stream-helpers':
         specifier: 0.8.3
-        version: 0.8.3(effection@4.1.0-alpha.7)
+        version: 0.8.3(effection@4.1.0-alpha.10)
       '@effectionx/timebox':
         specifier: 0.4.3
-        version: 0.4.3(effection@4.1.0-alpha.7)
+        version: 0.4.3(effection@4.1.0-alpha.10)
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
@@ -198,8 +198,8 @@ importers:
         specifier: ^8.16.0
         version: 8.16.0
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -231,29 +231,29 @@ importers:
         specifier: ^0.2.2
         version: 0.2.2
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
 
   packages/runtime:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0
-        version: 0.6.0(effection@4.1.0-alpha.7)
+        version: 0.6.0(effection@4.1.0-alpha.10)
       '@effectionx/fetch':
         specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0-alpha.7)
+        version: 0.2.0(effection@4.1.0-alpha.10)
       '@effectionx/fs':
         specifier: 0.3.0
-        version: 0.3.0(effection@4.1.0-alpha.7)
+        version: 0.3.0(effection@4.1.0-alpha.10)
       '@effectionx/node':
         specifier: 0.2.4
-        version: 0.2.4(effection@4.1.0-alpha.7)
+        version: 0.2.4(effection@4.1.0-alpha.10)
       '@effectionx/process':
         specifier: 0.8.1
-        version: 0.8.1(effection@4.1.0-alpha.7)
+        version: 0.8.1(effection@4.1.0-alpha.10)
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
 
   packages/test-agent:
     dependencies:
@@ -262,13 +262,13 @@ importers:
         version: 1.3.0(zod@4.3.6)
       '@effectionx/node':
         specifier: 0.2.4
-        version: 0.2.4(effection@4.1.0-alpha.7)
+        version: 0.2.4(effection@4.1.0-alpha.10)
       '@effectionx/scope-eval':
         specifier: 0.1.3
-        version: 0.1.3(effection@4.1.0-alpha.7)
+        version: 0.1.3(effection@4.1.0-alpha.10)
       '@effectionx/stream-helpers':
         specifier: 0.8.3
-        version: 0.8.3(effection@4.1.0-alpha.7)
+        version: 0.8.3(effection@4.1.0-alpha.10)
       '@executablemd/acp':
         specifier: workspace:*
         version: link:../acp
@@ -291,8 +291,8 @@ importers:
         specifier: 0.12.0
         version: 0.12.0
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -307,13 +307,13 @@ importers:
     dependencies:
       '@effectionx/context-api':
         specifier: 0.6.0
-        version: 0.6.0(effection@4.1.0-alpha.7)
+        version: 0.6.0(effection@4.1.0-alpha.10)
       '@effectionx/scope-eval':
         specifier: 0.1.3
-        version: 0.1.3(effection@4.1.0-alpha.7)
+        version: 0.1.3(effection@4.1.0-alpha.10)
       '@effectionx/timebox':
         specifier: 0.4.3
-        version: 0.4.3(effection@4.1.0-alpha.7)
+        version: 0.4.3(effection@4.1.0-alpha.10)
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
@@ -321,8 +321,8 @@ importers:
         specifier: workspace:*
         version: link:../durable-streams
       effection:
-        specifier: 4.1.0-alpha.7
-        version: 4.1.0-alpha.7
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
 
 packages:
 
@@ -1287,8 +1287,8 @@ packages:
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
 
-  effection@4.1.0-alpha.7:
-    resolution: {integrity: sha512-ir7qM7vQXOo7eiuNxaD6FgwUetdy3XMB3dwtzUxp9ytiZl6abZUrXwM3vMqKWdMW4cW1KZzJqSEuXofJFscwFw==}
+  effection@4.1.0-alpha.10:
+    resolution: {integrity: sha512-XgWZxmmPRGShLedlO2S13FiSXL69rwJwwUz9yBeHIDZO4HAsVavbHmTS6dqrl2XKlfNh3lEsIz5lFhqwHZYr4g==}
     engines: {node: '>= 16'}
 
   emoji-regex@8.0.0:
@@ -1866,66 +1866,66 @@ snapshots:
       '@durable-streams/client': 0.2.6
       '@standard-schema/spec': 1.1.0
 
-  '@effectionx/context-api@0.6.0(effection@4.1.0-alpha.7)':
+  '@effectionx/context-api@0.6.0(effection@4.1.0-alpha.10)':
     dependencies:
       '@effectionx/middleware': 0.1.1
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
 
-  '@effectionx/converge@0.1.4(effection@4.1.0-alpha.7)':
+  '@effectionx/converge@0.1.4(effection@4.1.0-alpha.10)':
     dependencies:
-      '@effectionx/timebox': 0.4.3(effection@4.1.0-alpha.7)
-      effection: 4.1.0-alpha.7
+      '@effectionx/timebox': 0.4.3(effection@4.1.0-alpha.10)
+      effection: 4.1.0-alpha.10
 
-  '@effectionx/fetch@0.2.0(effection@4.1.0-alpha.7)':
+  '@effectionx/fetch@0.2.0(effection@4.1.0-alpha.10)':
     dependencies:
-      '@effectionx/context-api': 0.6.0(effection@4.1.0-alpha.7)
-      effection: 4.1.0-alpha.7
+      '@effectionx/context-api': 0.6.0(effection@4.1.0-alpha.10)
+      effection: 4.1.0-alpha.10
 
-  '@effectionx/fs@0.3.0(effection@4.1.0-alpha.7)':
+  '@effectionx/fs@0.3.0(effection@4.1.0-alpha.10)':
     dependencies:
-      '@effectionx/context-api': 0.6.0(effection@4.1.0-alpha.7)
-      effection: 4.1.0-alpha.7
+      '@effectionx/context-api': 0.6.0(effection@4.1.0-alpha.10)
+      effection: 4.1.0-alpha.10
 
   '@effectionx/middleware@0.1.1': {}
 
-  '@effectionx/node@0.2.4(effection@4.1.0-alpha.7)':
+  '@effectionx/node@0.2.4(effection@4.1.0-alpha.10)':
     dependencies:
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
 
-  '@effectionx/process@0.8.1(effection@4.1.0-alpha.7)':
+  '@effectionx/process@0.8.1(effection@4.1.0-alpha.10)':
     dependencies:
-      '@effectionx/context-api': 0.6.0(effection@4.1.0-alpha.7)
-      '@effectionx/node': 0.2.4(effection@4.1.0-alpha.7)
-      '@effectionx/scope-eval': 0.1.3(effection@4.1.0-alpha.7)
+      '@effectionx/context-api': 0.6.0(effection@4.1.0-alpha.10)
+      '@effectionx/node': 0.2.4(effection@4.1.0-alpha.10)
+      '@effectionx/scope-eval': 0.1.3(effection@4.1.0-alpha.10)
       cross-spawn: 7.0.6
       ctrlc-windows: 2.2.0
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
       shellwords-ts: 3.0.1
 
-  '@effectionx/scope-eval@0.1.3(effection@4.1.0-alpha.7)':
+  '@effectionx/scope-eval@0.1.3(effection@4.1.0-alpha.10)':
     dependencies:
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
 
-  '@effectionx/signals@0.5.4(effection@4.1.0-alpha.7)':
+  '@effectionx/signals@0.5.4(effection@4.1.0-alpha.10)':
     dependencies:
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
       immutable: 5.1.5
 
-  '@effectionx/stream-helpers@0.8.3(effection@4.1.0-alpha.7)':
+  '@effectionx/stream-helpers@0.8.3(effection@4.1.0-alpha.10)':
     dependencies:
-      '@effectionx/signals': 0.5.4(effection@4.1.0-alpha.7)
-      '@effectionx/timebox': 0.4.3(effection@4.1.0-alpha.7)
-      effection: 4.1.0-alpha.7
+      '@effectionx/signals': 0.5.4(effection@4.1.0-alpha.10)
+      '@effectionx/timebox': 0.4.3(effection@4.1.0-alpha.10)
+      effection: 4.1.0-alpha.10
       immutable: 5.1.5
       remeda: 2.33.6
 
-  '@effectionx/test-adapter@0.7.4(effection@4.1.0-alpha.7)':
+  '@effectionx/test-adapter@0.7.4(effection@4.1.0-alpha.10)':
     dependencies:
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
 
-  '@effectionx/timebox@0.4.3(effection@4.1.0-alpha.7)':
+  '@effectionx/timebox@0.4.3(effection@4.1.0-alpha.10)':
     dependencies:
-      effection: 4.1.0-alpha.7
+      effection: 4.1.0-alpha.10
 
   '@esbuild/aix-ppc64@0.27.4':
     optional: true
@@ -2460,7 +2460,7 @@ snapshots:
     dependencies:
       dequal: 2.0.3
 
-  effection@4.1.0-alpha.7: {}
+  effection@4.1.0-alpha.10: {}
 
   emoji-regex@8.0.0: {}
 

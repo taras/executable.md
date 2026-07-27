@@ -18,7 +18,7 @@
         "@effectionx/timebox": "0.4.3",
         "acorn": "^8.16.0",
         "ajv": "^8.17.1",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
         "gray-matter": "^4.0.3",
         "magic-string": "^0.30.21",
         "marked": "^17.0.4",
@@ -47,7 +47,7 @@
         "@executablemd/core": "workspace:*",
         "@executablemd/runtime": "workspace:*",
         "acpx": "0.12.0",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
       },
     },
     "packages/cli": {
@@ -65,7 +65,7 @@
         "@executablemd/test-agent": "workspace:*",
         "@executablemd/testing": "workspace:*",
         "configliere": "^0.2.3",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
         "zod": "^4.3.6",
       },
     },
@@ -90,7 +90,7 @@
         "@executablemd/durable-streams": "workspace:*",
         "@executablemd/runtime": "workspace:*",
         "acorn": "^8.16.0",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
         "gray-matter": "^4.0.3",
         "magic-string": "^0.30.21",
         "marked": "^17.0.4",
@@ -106,7 +106,7 @@
       "version": "0.5.2",
       "dependencies": {
         "@durable-streams/client": "^0.2.2",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
       },
     },
     "packages/runtime": {
@@ -118,7 +118,7 @@
         "@effectionx/fs": "0.3.0",
         "@effectionx/node": "0.2.4",
         "@effectionx/process": "0.8.1",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
       },
     },
     "packages/test-agent": {
@@ -136,7 +136,7 @@
         "@executablemd/testing": "workspace:*",
         "acorn": "^8.16.0",
         "acpx": "0.12.0",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
         "zod": "^4.3.6",
       },
     },
@@ -156,7 +156,7 @@
         "@effectionx/timebox": "0.4.3",
         "@executablemd/core": "workspace:*",
         "@executablemd/durable-streams": "workspace:*",
-        "effection": "4.1.0-alpha.7",
+        "effection": "4.1.0-alpha.10",
       },
     },
   },
@@ -493,7 +493,7 @@
 
     "devlop": ["devlop@1.1.0", "", { "dependencies": { "dequal": "2.0.3" } }, "sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA=="],
 
-    "effection": ["effection@4.1.0-alpha.7", "", {}, "sha512-ir7qM7vQXOo7eiuNxaD6FgwUetdy3XMB3dwtzUxp9ytiZl6abZUrXwM3vMqKWdMW4cW1KZzJqSEuXofJFscwFw=="],
+    "effection": ["effection@4.1.0-alpha.10", "", {}, "sha512-XgWZxmmPRGShLedlO2S13FiSXL69rwJwwUz9yBeHIDZO4HAsVavbHmTS6dqrl2XKlfNh3lEsIz5lFhqwHZYr4g=="],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 

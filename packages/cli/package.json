@@ -16,7 +16,7 @@
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "configliere": "^0.2.3",
-    "effection": "4.1.0-alpha.7",
+    "effection": "4.1.0-alpha.10",
     "zod": "^4.3.6"
   }
 }
