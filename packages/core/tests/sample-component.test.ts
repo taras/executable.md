@@ -126,7 +126,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -171,7 +171,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -217,7 +217,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -249,7 +249,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -289,7 +289,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output1 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -300,7 +300,7 @@ describe("Tier SC — Sample component", () => {
       // Second run (replay) — same stream
       const output2 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -338,7 +338,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -382,7 +382,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -434,7 +434,7 @@ describe("Tier SC — Sample component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -462,7 +462,7 @@ describe("Tier EO — eval output() function", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -481,7 +481,7 @@ describe("Tier EO — eval output() function", () => {
     // First run
     const output1 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -491,7 +491,7 @@ describe("Tier EO — eval output() function", () => {
     // Replay
     const output2 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -510,7 +510,7 @@ describe("Tier EO — eval output() function", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -530,7 +530,7 @@ describe("Tier EO — eval output() function", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -548,7 +548,7 @@ describe("Tier EO — eval output() function", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -579,7 +579,7 @@ describe("Tier RC — renderChildren and render closures", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -608,7 +608,7 @@ describe("Tier RC — renderChildren and render closures", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -637,7 +637,7 @@ describe("Tier RC — renderChildren and render closures", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -673,7 +673,7 @@ describe("Tier RC — renderChildren and render closures", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("text item=injected shadow=override-wins");
     expect(output).toContain("child-eval:override-wins/injected");
@@ -702,7 +702,7 @@ describe("Tier RC — renderChildren and render closures", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("caller-after:undefined");
     expect(output).not.toContain("ERROR");
@@ -734,7 +734,7 @@ describe("Tier RC — renderChildren and render closures", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("caught:6/6");
   });
@@ -773,7 +773,7 @@ describe("Tier IN — Instruction component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -811,7 +811,7 @@ describe("Tier IN — Instruction component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -859,7 +859,7 @@ describe("Tier IN — Instruction component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -896,7 +896,7 @@ describe("Tier IN — Instruction component", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -959,7 +959,7 @@ describe("Tier AG — Agent component pattern", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -1044,7 +1044,7 @@ describe("Tier AG — Agent component pattern", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),

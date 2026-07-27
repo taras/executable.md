@@ -102,7 +102,7 @@ it("renders from stubbed inputs", function* () {
   yield* useStubFs({ "doc.md": "# Hello\n" });
   yield* useEchoExec();
 
-  const execution = yield* execute({ docPath: "doc.md", stream });
+  const execution = yield* execute({ path: "doc.md", stream });
   const output = yield* collect(execution);
 });
 ```

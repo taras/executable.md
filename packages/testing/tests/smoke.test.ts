@@ -76,7 +76,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("smoke document passes its embedded tests live and on replay", function* () {
     const stream = new InMemoryStream();
     const options: ExecuteOptions = {
-      docPath: "smoke-test/README.md",
+      path: "smoke-test/README.md",
       stream,
       componentDirs: ["smoke-test", "packages/core/components"],
     };

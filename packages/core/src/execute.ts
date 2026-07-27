@@ -31,10 +31,9 @@ import type {
   InputSchema,
   ImportResult,
 } from "./types.ts";
-import { scanSegments } from "./scanner.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
 import { parseJsonObject } from "./json.ts";
-import { compileInputSchema } from "./validate.ts";
+import { compileInputSchema, validateProps } from "./validate.ts";
+import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 import {
   expandSegments,
   expandBody,
@@ -60,15 +59,15 @@ import type { EvalEnv } from "./types.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 
-// Re-export gray-matter — we use it for YAML frontmatter extraction
-import matter from "gray-matter";
-
 export interface ExecuteOptions {
   /** Path to the root markdown document (workspace-relative). */
-  docPath: string;
+  path: string;
 
   /** Durable stream for journaling. */
   stream: DurableStream;
+
+  /** JSON values supplied to the root document (default: `{}`). */
+  props?: Record<string, Json>;
 
   /** Component search directories (default: ["./components", "./"]) */
   componentDirs?: string[];
@@ -101,7 +100,7 @@ function* durableImportComponent(
   )) as ImportResult;
 
   // Function component: .ts file — import() the module
-  if (result.path.endsWith(".ts")) {
+  if (isFunctionComponentPath(result.path)) {
     // Resolve to absolute path for dynamic import
     const currentDir = yield* ephemeral(cwd());
     const absolutePath = result.path.startsWith("/") ? result.path : `${currentDir}/${result.path}`;
@@ -134,40 +133,7 @@ function* durableImportComponent(
   }
 
   // Markdown component: parse at runtime — deterministic from content
-  const parsed = matter(result.content);
-  const { meta, inputs } = parseFrontmatter(parsed.data);
-  compileInputSchema(inputs);
-  // The markdown body is a verbatim suffix of the raw file, so the body start
-  // is computed by length — never by content search, which could false-match
-  // body text repeated inside frontmatter. The invariant check turns any
-  // gray-matter normalization surprise into a loud error instead of silently
-  // wrong source positions.
-  const bodyStart = result.content.length - parsed.content.length;
-  if (result.content.slice(bodyStart) !== parsed.content) {
-    throw new Error(
-      `frontmatter parse did not preserve the markdown body verbatim: ${result.path}`,
-    );
-  }
-  let baseLine = 1;
-  for (let i = 0; i < bodyStart; i++) {
-    if (result.content[i] === "\n") {
-      baseLine++;
-    }
-  }
-  const bodySegments = scanSegments(parsed.content, {
-    path: result.path,
-    baseOffset: bodyStart,
-    baseLine,
-  });
-
-  return {
-    kind: "markdown" as const,
-    name,
-    path: result.path,
-    meta,
-    inputs,
-    bodySegments,
-  };
+  return parseMarkdownDefinition(name, result.path, result.content);
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
@@ -251,7 +217,7 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
     return { output: "", exitCode: 0, stderr: "" };
   })();
 
-function* documentWorkflow(): Workflow<string> {
+function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the document path. The
   // ephemeral() wrapper bridges typing only — the import inside remains a
@@ -262,7 +228,9 @@ function* documentWorkflow(): Workflow<string> {
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
-  const rootEnv: EvalEnv = { values: {} };
+  const validatedProps = validateProps("__root__", props, root.inputs);
+
+  const rootEnv: EvalEnv = { values: { ...validatedProps } };
 
   // Per-root-segment emission loop (spec §9).
   // Mutable counter preserves deterministic blockIds across
@@ -294,7 +262,7 @@ function* documentWorkflow(): Workflow<string> {
         root.bodySegments,
         [],
         root.meta,
-        {},
+        validatedProps,
         new Set(),
         counter,
         undefined,
@@ -311,7 +279,13 @@ function* documentWorkflow(): Workflow<string> {
     const chunks: string[] = [];
 
     for (const segment of root.bodySegments) {
-      const expanded = yield* expandSegments([segment], root.meta, {}, new Set(), counter);
+      const expanded = yield* expandSegments(
+        [segment],
+        root.meta,
+        validatedProps,
+        new Set(),
+        counter,
+      );
 
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -379,8 +353,9 @@ export interface DocumentExecution extends Operation<Result<string>> {
  */
 function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution> {
   const {
-    docPath,
+    path: rootPath,
     stream,
+    props = {},
     componentDirs = ["components", "."],
     modifiers: customModifiers = {},
   } = options;
@@ -448,7 +423,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
           *importComponent([name], _next) {
             return yield* durableImportComponent(
               name,
-              name === "__root__" ? docPath : undefined,
+              name === "__root__" ? rootPath : undefined,
               componentDirs,
             );
           },
@@ -461,7 +436,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      const output = yield* durableRun(() => documentWorkflow(), {
+      const output = yield* durableRun(() => documentWorkflow(props), {
         stream,
       });
 

@@ -170,7 +170,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -211,7 +211,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -250,7 +250,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -290,7 +290,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -324,7 +324,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -357,7 +357,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -391,7 +391,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -430,7 +430,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -463,7 +463,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -496,7 +496,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -541,7 +541,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -578,7 +578,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -614,7 +614,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -660,7 +660,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -696,14 +696,14 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output1 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
       );
       const output2 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -750,7 +750,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -796,7 +796,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),

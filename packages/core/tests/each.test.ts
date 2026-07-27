@@ -197,7 +197,7 @@ describe("Tier Each — eval in the loop body", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("got:alpha");
     expect(output).toContain("got:beta");
@@ -218,7 +218,7 @@ describe("Tier Each — eval in the loop body", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("| x | 1 |");
     expect(output).toContain("| y | 2 |");
@@ -245,7 +245,7 @@ describe("Tier Each — eval in the loop body", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("iter1:absent");
     expect(output).toContain("iter2:absent");
@@ -269,7 +269,7 @@ describe("Tier Each — eval in the loop body", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ docPath: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("[L:1]");
     expect(output).toContain("[L:2]");

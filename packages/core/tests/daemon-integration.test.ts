@@ -56,7 +56,7 @@ describe("Tier Q — Daemon integration", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -84,7 +84,7 @@ describe("Tier Q — Daemon integration", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -111,7 +111,7 @@ describe("Tier Q — Daemon integration", () => {
       const stream = new InMemoryStream();
       yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -146,7 +146,7 @@ describe("Tier Q — Daemon integration", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -189,7 +189,7 @@ describe("Tier Q — Daemon integration", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -225,7 +225,7 @@ describe("Tier Q — Daemon integration", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -265,7 +265,7 @@ describe("Tier Q — Daemon integration", () => {
       // Golden run
       const output1 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -277,7 +277,7 @@ describe("Tier Q — Daemon integration", () => {
       // daemon spawns a fresh process with the restored interpolated value.
       const output2 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -320,7 +320,7 @@ describe("Tier Q — Daemon integration", () => {
       const result = yield* race([
         collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
           }),
         ),

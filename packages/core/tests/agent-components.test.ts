@@ -143,7 +143,7 @@ function* runDoc(
   try {
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
-    const execution = yield* execute({ docPath, stream });
+    const execution = yield* execute({ path: docPath, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {

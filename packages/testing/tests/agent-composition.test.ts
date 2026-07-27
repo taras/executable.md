@@ -105,7 +105,7 @@ describe("agent + testing composition", () => {
           "",
         ].join("\n"),
       );
-      const execution = yield* execute({ docPath, stream: new InMemoryStream() });
+      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {

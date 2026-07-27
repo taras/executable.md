@@ -103,9 +103,7 @@ describe("definition-loading rejects invalid input schemas", () => {
     });
     let message = "";
     try {
-      message = yield* collect(
-        yield* execute({ docPath: "README.md", stream: new InMemoryStream() }),
-      );
+      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -129,9 +127,7 @@ describe("definition-loading rejects invalid input schemas", () => {
     });
     let message = "";
     try {
-      message = yield* collect(
-        yield* execute({ docPath: "README.md", stream: new InMemoryStream() }),
-      );
+      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }

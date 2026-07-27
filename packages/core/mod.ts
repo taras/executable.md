@@ -86,6 +86,9 @@ export { useTerminalOutput } from "./src/output/terminal.ts";
 
 export { execute, Execution } from "./src/execute.ts";
 export type { ExecuteOptions, ExecutionApi, DocumentExecution } from "./src/execute.ts";
+export { inspectDocument } from "./src/inspect.ts";
+export type { DocumentInfo, InspectOptions } from "./src/inspect.ts";
+export { parseMarkdownDefinition } from "./src/definition.ts";
 export { useDenoCompiler } from "./src/deno-compiler.ts";
 export { useTempFileCompiler } from "./src/temp-file-compiler.ts";
 

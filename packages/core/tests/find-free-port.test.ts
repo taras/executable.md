@@ -165,7 +165,7 @@ describe("Tier R — findFreePort in eval blocks", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -202,7 +202,7 @@ describe("Tier R — findFreePort in eval blocks", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -237,7 +237,7 @@ describe("Tier R — findFreePort in eval blocks", () => {
       // Golden run
       const output1 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -245,7 +245,7 @@ describe("Tier R — findFreePort in eval blocks", () => {
       // Replay — durableEval returns stored port, findFreePort not invoked
       const output2 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -292,7 +292,7 @@ describe("Tier R — when in eval blocks", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -331,7 +331,7 @@ describe("Tier R — when in eval blocks", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );
@@ -364,7 +364,7 @@ describe("Tier R — when in eval blocks", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
         }),
       );

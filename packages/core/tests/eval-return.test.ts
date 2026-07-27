@@ -23,7 +23,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -41,7 +41,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -59,7 +59,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -78,7 +78,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -96,7 +96,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -115,7 +115,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -133,7 +133,7 @@ describe("Eval block return value", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -153,7 +153,7 @@ describe("Eval block return value", () => {
     // Golden run
     const output1 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -163,7 +163,7 @@ describe("Eval block return value", () => {
     // Replay
     const output2 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );

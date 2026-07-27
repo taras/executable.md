@@ -22,7 +22,7 @@ describe("Tier T7 — timeout modifier", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -63,7 +63,7 @@ describe("Tier T7 — timeout modifier", () => {
     // Should work with default timeout
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );

@@ -32,7 +32,7 @@ export interface DocRun {
 export interface RunDocOptions {
   testing?: boolean;
   verbose?: boolean;
-  docPath?: string;
+  path?: string;
   /** Inject handlers (e.g. a short timeout) instead of the public set. */
   handlers?: TestHandlers;
   /** Supply a journal stream (e.g. for replay scenarios). */
@@ -71,7 +71,7 @@ export function* runDoc(
     }
 
     const execution = yield* execute({
-      docPath: options.docPath ?? "README.md",
+      path: options.path ?? "README.md",
       stream: options.stream ?? new InMemoryStream(),
     });
 

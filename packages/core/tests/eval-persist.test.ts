@@ -27,7 +27,7 @@ describe("Tier T6 — persist modifier", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -46,7 +46,7 @@ describe("Tier T6 — persist modifier", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -66,7 +66,7 @@ describe("Tier T6 — persist modifier", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -85,14 +85,14 @@ describe("Tier T6 — persist modifier", () => {
 
     const output1 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
 
     const output2 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -146,7 +146,7 @@ describe("Tier T6 — persist modifier", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
