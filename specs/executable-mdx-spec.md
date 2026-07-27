@@ -1390,22 +1390,64 @@ inputs:
 Frontmatter has two sections: **meta** (the component's own data) and
 **inputs** (the declared input interface).
 
-**Meta** — every frontmatter key except `inputs` is a meta value.
-Meta values are the component's own constants, accessible via
-`{meta.key}` in the body. They can be any YAML value: strings,
+**Meta** — every frontmatter key except `inputs` and `required` is a
+meta value. Meta values are the component's own constants, accessible
+via `{meta.key}` in the body. They can be any YAML value: strings,
 numbers, booleans, arrays, objects.
 
 **Inputs** — the reserved `inputs` key declares the props callers can
-pass. Its value is a complete JSON Schema (draft-07) describing the
-props object.
+pass. Its value is either a map of prop names to draft-07 subschemas or
+a complete draft-07 object schema. The reserved `required` key names the
+props a caller must supply when `inputs` is a map.
 
 #### Input definitions
 
-`inputs` is a canonical JSON Schema (draft-07) whose root is an object
-schema. `properties` names the accepted props, and each property value
-is an ordinary draft-07 subschema. Requiredness is expressed by the
-parent-level `required` array — never a per-field flag. An object that
-rejects unknown keys sets `additionalProperties: false`.
+`inputs` declares the props a component accepts. Most components name a
+few props and leave the enclosing object implicit:
+
+```yaml
+required: [name]
+
+inputs:
+  name: { type: string }
+  greeting: { type: string, default: Hello }
+```
+
+`inputs` is a map of prop names to draft-07 subschemas, and the
+top-level `required` array names the props a caller must supply. The
+declaration means exactly this schema:
+
+```yaml
+inputs:
+  type: object
+  properties:
+    name: { type: string }
+    greeting: { type: string, default: Hello }
+  required: [name]
+  additionalProperties: false
+```
+
+Writing that schema directly is the second form, and it is what a
+component needs when the root object is not a plain closed map — `$ref`,
+`allOf`, `patternProperties`, or a root that accepts additional
+properties. A `type` or `$schema` key selects it, even when the value is
+malformed, so a broken schema is reported as one rather than read as a
+map of props. Two consequences follow: the map form cannot declare props
+named `type` or `$schema`, which the full form declares under
+`properties` like any other name; and the map form never carries
+`$schema`, because it is draft-07 by construction.
+
+The forms are alternatives. A top-level `required` beside a full schema
+is a configuration error and the two lists are never merged, as is a
+top-level `required` with no `inputs`. A name in `required` that the map
+does not declare is an error too: the map is closed, so the name could
+never be supplied.
+
+Property definitions are ordinary draft-07 subschemas in both forms.
+`properties` names the accepted props, and each property value is a
+subschema. Requiredness is expressed by a `required` array — never a
+per-field flag. An object that rejects unknown keys sets
+`additionalProperties: false`; the map form is always closed.
 
 ```yaml
 inputs:
@@ -1457,10 +1499,12 @@ properties. Schemas are self-contained: only local `$ref`s are allowed
 (no remote references), and asynchronous schemas (`$async: true`) are
 rejected. These rules are enforced when the component definition loads.
 
-There is no shorthand, no per-field `required`, no inferred
-requiredness, and no `type: any`. The earlier mini-language has been
-replaced wholesale with canonical JSON Schema, with no compatibility
-layer.
+Both forms compile to one canonical draft-07 schema, so the map form is
+a spelling of the enclosing object and nothing else. There is no
+per-field `required`, no inferred requiredness, and no `type: any`, and
+property definitions are never a mini-language. The map form is a
+Markdown frontmatter spelling: a function component's `inputs` export is
+always the full schema (§5.1.2).
 
 #### Meta with type constraints (optional)
 
@@ -1493,7 +1537,7 @@ inputs:
 When `meta` is a mapping and an entry is a typed definition (an object
 with a `type` key), its `default` becomes the resolved value; any other
 entry is used verbatim. When `meta` is absent, all top-level keys except
-`inputs` are meta values (the simple case).
+`inputs` and `required` are meta values (the simple case).
 
 This convention is independent of `inputs`, which is always a canonical
 draft-07 JSON Schema — it lets a component's own metadata range from
@@ -1543,8 +1587,9 @@ export interface FunctionComponentDefinition {
 **Input declaration.** Function components declare their inputs via
 a named `export const inputs = { ... }` holding a canonical draft-07
 JSON Schema (§5.1.1), enforced by the same project contract as Markdown
-components at load time. This is equivalent to the `inputs:` key in
-markdown component frontmatter. If no `inputs`
+components at load time. This is equivalent to the full `inputs:` schema
+in markdown component frontmatter; the prop-name map is a frontmatter
+spelling and does not apply to a TypeScript export. If no `inputs`
 export exists, the component accepts no props.
 
 **Children via `useContent()`.** Function components access children
@@ -1747,12 +1792,18 @@ interface ComponentDefinition {
 
 The frontmatter root is narrowed from `unknown` through the shared JSON
 parser (§5.1.1), so a non-JSON value anywhere rejects the frontmatter
-before Ajv sees it. `inputs` is passed through as the component's JSON
-Schema; parsing does not rewrite it into any other shape. The project
-contract (root `type: "object"`, reserved `slot`/`as`, local refs only,
-no `$async`) is enforced later, when the schema is compiled to a validator
-(§6.5). Meta is everything except `inputs`; a `meta` entry written as a
-typed definition (an object with a `type` key) resolves to its `default`.
+before Ajv sees it. `inputs` is then normalized to the component's
+canonical schema: a declaration carrying `type` or `$schema` is the
+schema itself and passes through unchanged, and any other declaration is
+a prop-name map that becomes `{ type: "object", properties,
+additionalProperties: false }` with the top-level `required` array
+attached. Normalization is the only rewrite, and it builds a fresh
+object per component so the compiled-validator cache never shares state
+across definitions. The project contract (root `type: "object"`,
+reserved `slot`/`as`, local refs only, no `$async`) is enforced later,
+when the schema is compiled to a validator (§6.5). Meta is everything
+except `inputs` and `required`; a `meta` entry written as a typed
+definition (an object with a `type` key) resolves to its `default`.
 
 ```typescript
 function parseFrontmatter(raw: unknown): {
@@ -1761,12 +1812,10 @@ function parseFrontmatter(raw: unknown): {
 } {
   const root: JsonObject = raw === null || raw === undefined ? {} : parseJsonObject(raw);
 
-  // `inputs` is the component's JSON Schema. Absent → the closed
-  // empty-object schema. A fresh object per component keeps the
+  // `inputs` is the component's JSON Schema, in either spelling. Absent →
+  // the closed empty-object schema. A fresh object per component keeps the
   // compiled-validator cache from sharing state across definitions.
-  const inputs: InputSchema = root.inputs === undefined
-    ? { type: "object", properties: {}, additionalProperties: false }
-    : parseJsonObject(root.inputs);
+  const inputs: InputSchema = normalizeInputs(root.inputs, root.required);
 
   const meta: Record<string, unknown> = {};
   const rawMeta = root.meta;
@@ -1776,13 +1825,31 @@ function parseFrontmatter(raw: unknown): {
     }
   } else {
     for (const [key, value] of Object.entries(root)) {
-      if (key !== "inputs") {
+      if (key !== "inputs" && key !== "required") {
         meta[key] = value;
       }
     }
   }
 
   return { meta, inputs };
+}
+
+/** `type` or `$schema` selects the full schema; anything else is a
+ *  prop-name map that becomes the enclosing closed object. */
+function normalizeInputs(declared: Json | undefined, required: Json | undefined): InputSchema {
+  if (declared === undefined) {
+    return { type: "object", properties: {}, additionalProperties: false };
+  }
+  const declaration = parseJsonObject(declared);
+  if ("type" in declaration || "$schema" in declaration) {
+    return declaration; // `required` at the frontmatter root is an error here
+  }
+  return {
+    type: "object",
+    properties: declaration,
+    ...(required === undefined ? {} : { required }),
+    additionalProperties: false,
+  };
 }
 
 /** A typed `meta` definition — an object with a `type` key. Used only to
@@ -3544,15 +3611,18 @@ visible warning blocks, collect into a separate error report).
 | B1 | `durableImportComponent` golden run | Single `import_component` entry with path + content |
 | B2 | `durableImportComponent` replay | Stored result is returned without a file read |
 | B3 | Runtime parsing | Current content parsed to meta/inputs/segments |
-| B4 | Import with simple frontmatter | `meta` correctly parsed, keys except `inputs` |
+| B4 | Import with simple frontmatter | `meta` correctly parsed, keys except `inputs` and `required` |
 | B5 | Import with typed meta | `meta` key with type definitions, defaults resolved |
-| B6 | Import with inputs (schema passthrough) | `inputs` is kept verbatim as the component's draft-07 JSON Schema |
+| B6 | Import with inputs (schema passthrough) | An `inputs` carrying `type` or `$schema` is kept verbatim as the component's draft-07 JSON Schema |
 | B7 | Import with inputs (property default) | A property's `default` fills the prop when a caller omits it |
 | B8 | Import with inputs (required array) | `required: [name]` makes `name` a required prop |
 | B9 | Import missing component | Resolve Api throws, error propagated |
 | B12 | Root document as component | `__root__` import, same journal shape |
 | B13 | Dotted name resolution | `Ns.Sub` → `components/Ns/Sub.md` |
 | B14 | No inputs key | Component accepts no props; `inputs` is the closed empty-object schema |
+| B16 | Import with an inputs map | `inputs` as a prop-name map normalizes to `{ type: object, properties, additionalProperties: false }` |
+| B17 | Import with top-level `required` | `required` becomes the normalized schema's `required` and is not a meta value |
+| B18 | Mixed map and full declarations | Top-level `required` beside a full schema is a configuration error; the lists are never merged |
 | B15 | Default resolver middleware | Resolves via `runtime.stat` probe in search path order |
 | B19 | Resolver middleware composition | Custom alias middleware + directory resolver |
 
@@ -4038,8 +4108,8 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 12 | `<Content />` is the content slot | Valid JSX, familiar (Astro/React), zero parser changes |
 | 13 | `{meta.key}` / `{props.key}` for interpolation | MDX-compatible expression syntax, parsed by regex |
 | 16 | Props must be declared in `inputs` frontmatter | Undeclared props are rejected — components are contracts |
-| 17 | `inputs` is a canonical draft-07 JSON Schema | The declared input interface is a complete draft-07 schema validated by a shared Ajv instance (strict, `useDefaults`); no bespoke mini-language and no compatibility layer |
-| 18 | Requiredness via a parent `required` array | Draft-07 `required` lists the props a caller must supply — no per-field `required` flag, no inferred requiredness |
+| 17 | `inputs` is a canonical draft-07 JSON Schema | The declared input interface compiles to a complete draft-07 schema validated by a shared Ajv instance (strict, `useDefaults`). Markdown frontmatter also spells it as a prop-name map, which normalizes to a closed object schema before compilation; no bespoke mini-language and no compatibility layer |
+| 18 | Requiredness via a `required` array | Draft-07 `required` lists the props a caller must supply — the top-level frontmatter key with the map form, the schema's own key with the full form. No per-field `required` flag, no inferred requiredness |
 | 19 | No declared inputs = closed empty-object schema | A component with no `inputs` uses `{ type: object, properties: {}, additionalProperties: false }` and accepts no props |
 | 20 | Meta supports optional typed definitions | `meta:` key with JSON Schema subset for components that need schema validation on their own metadata |
 | 21 | Prop validation is runtime, not durable | Deterministic from component definition + caller props — no journal entry needed |

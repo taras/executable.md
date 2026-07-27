@@ -9,6 +9,8 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { parseFrontmatter } from "../src/frontmatter.ts";
+import { compileInputSchema } from "../src/validate.ts";
 import type { ComponentDefinition, EvalEnv, Json, Segment } from "../src/types.ts";
 
 function markdownComponent(name: string, inputs: Record<string, Json>): ComponentDefinition {
@@ -132,5 +134,43 @@ describe("definition-loading rejects invalid input schemas", () => {
       message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain("reserved");
+  });
+
+  it("rejects a reserved name declared through an inputs map", function* () {
+    yield* useStubFs({
+      "README.md": "<Bad />\n",
+      "Bad.md": ["---", "inputs:", "  slot: { type: string }", "---", "body", ""].join("\n"),
+    });
+    let message = "";
+    try {
+      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    // Normalization runs first, so the contract still sees `slot` under
+    // `properties`.
+    expect(message).toContain("reserved");
+  });
+});
+
+describe("the root-object contract applies to the normalized schema", () => {
+  it("reports a non-object root type", function* () {
+    const { inputs } = parseFrontmatter({ inputs: { type: "array", items: { type: "string" } } });
+    expect(() => compileInputSchema(inputs)).toThrow('type: "object"');
+  });
+
+  it("reports a missing root type behind a draft-07 dialect", function* () {
+    const { inputs } = parseFrontmatter({
+      inputs: { $schema: "http://json-schema.org/draft-07/schema#", properties: {} },
+    });
+    expect(() => compileInputSchema(inputs)).toThrow('type: "object"');
+  });
+
+  it("compiles a normalized inputs map", function* () {
+    const { inputs } = parseFrontmatter({
+      required: ["name"],
+      inputs: { name: { type: "string" } },
+    });
+    expect(() => compileInputSchema(inputs)).not.toThrow();
   });
 });
