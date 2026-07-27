@@ -42,7 +42,8 @@
     "typescript/no-redundant-type-constituents": "warn",
     "typescript/no-unnecessary-boolean-literal-compare": "warn",
 
-    "local/no-section-divider-comments": "error"
+    "local/no-section-divider-comments": "error",
+    "local/no-yield-in-finally": "error"
   },
 
   "overrides": [
