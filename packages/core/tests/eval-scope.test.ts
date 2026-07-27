@@ -22,7 +22,7 @@ describe("Tier T10 — eval-scope hierarchy", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -44,7 +44,7 @@ describe("Tier T10 — eval-scope hierarchy", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );

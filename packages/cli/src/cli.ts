@@ -16,6 +16,7 @@ import {
   InMemoryStream,
   type DurableEvent,
   type DurableStream,
+  type Json,
 } from "@executablemd/durable-streams";
 
 import { forEach } from "@effectionx/stream-helpers";
@@ -30,6 +31,7 @@ import {
   AgentProviders,
   Config,
   execute,
+  inspectDocument,
   installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
@@ -43,10 +45,19 @@ import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/te
 import { resolveAgentConfig } from "./agent-config.ts";
 import type { AgentFlags } from "./agent-config.ts";
 import { FileStream } from "./file-stream.ts";
+import {
+  AGGREGATE_ENV,
+  AGGREGATE_OPTION,
+  buildBindings,
+  extractPropsArgs,
+  formatProperties,
+  resolveProps,
+} from "./props.ts";
+import type { Binding, Extraction } from "./props.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
 const runConfig = object({
-  docPath: {
+  path: {
     description: "markdown document to execute",
     ...field(z.string(), cli.argument()),
   },
@@ -95,7 +106,7 @@ const runConfig = object({
 });
 
 const testConfig = object({
-  docPath: {
+  path: {
     description: "markdown document to test",
     ...field(z.string(), cli.argument()),
   },
@@ -325,15 +336,15 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
 
 function* run(
   config: {
-    docPath: string;
+    path: string;
     componentDir: string[];
     verbose: boolean;
     journal: string | undefined;
     raw: boolean;
   },
-  mode: { testing: boolean; agent?: AgentFlags },
+  mode: { testing: boolean; agent?: AgentFlags; props?: Record<string, Json> },
 ): Operation<void> {
-  const { docPath, componentDir, verbose, journal, raw } = config;
+  const { path: rootPath, componentDir, verbose, journal, raw } = config;
 
   // Every CLI invocation starts from an empty stream. --journal writes
   // current-run diagnostics only; existing traces are never loaded.
@@ -397,8 +408,9 @@ function* run(
   }
 
   const execution = yield* execute({
-    docPath,
+    path: rootPath,
     stream,
+    props: mode.props,
     componentDirs: componentDir,
   });
 
@@ -435,8 +447,176 @@ function* run(
   }
 }
 
+interface HelpRequest {
+  requested: boolean;
+  args: string[];
+}
+
+/**
+ * Remove `--help` wherever it appears so document-aware help works in
+ * every documented position. `--version` keeps its own handling.
+ */
+function takeHelpFlag(args: string[]): HelpRequest {
+  const kept: string[] = [];
+  let requested = false;
+
+  for (const [index, arg] of args.entries()) {
+    if (arg === "--") {
+      kept.push(...args.slice(index));
+      break;
+    }
+    if (arg === "--help" || arg === "-h") {
+      requested = true;
+      continue;
+    }
+    kept.push(arg);
+  }
+
+  return { requested, args: kept };
+}
+
+function findPropsFlag(args: string[]): string | undefined {
+  return args.find((arg) => arg === AGGREGATE_OPTION || arg.startsWith("--props"));
+}
+
+interface PropsPhase {
+  /** argv with document-derived tokens removed. */
+  args: string[];
+  documentPath?: string;
+  bindings: Binding[];
+  extraction?: Extraction;
+  inputs?: unknown;
+  error?: string;
+}
+
+/**
+ * Locate the document, read what it declares, and lift its generated
+ * options out of argv. A provisional parse finds the path: it stops at
+ * the first token it does not define, which is exactly where
+ * document-derived options begin.
+ */
+function* preparePropsPhase(args: string[]): Operation<PropsPhase> {
+  const provisional = xmd.parse({ args });
+  // `program` short-circuits on `--version` and leaves no configuration
+  // behind, so there is nothing to inspect.
+  const selected = provisional.ok ? provisional.value.config : undefined;
+  const command = selected && !selected.help ? selected.name : undefined;
+  const documentPath =
+    selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
+
+  if (typeof documentPath !== "string") {
+    const stray = findPropsFlag(args);
+    if (stray && command && command !== "run") {
+      return {
+        args,
+        bindings: [],
+        error: `unrecognized option for xmd ${command}: ${stray} — document properties are exclusive to xmd run`,
+      };
+    }
+    if (stray) {
+      return {
+        args,
+        bindings: [],
+        error: `unrecognized option: ${stray} — document properties follow the document, as in \`xmd run <document> ${stray} …\``,
+      };
+    }
+    return { args, bindings: [] };
+  }
+
+  try {
+    const document = yield* inspectDocument({ path: documentPath });
+    const bindings = buildBindings(document.inputs);
+    const extraction = extractPropsArgs(args, bindings);
+    return {
+      args: extraction.rest,
+      documentPath,
+      bindings,
+      extraction,
+      inputs: document.inputs,
+    };
+  } catch (error) {
+    return { args, bindings: [], documentPath, error: (error as Error).message };
+  }
+}
+
+const COMMAND_NAMES = ["run", "test", "test-agent"];
+
+/**
+ * Help for whichever command the arguments name. A command renders its
+ * own help when `--help` is its first argument, so the flag removed
+ * during the props phase is reinstated there rather than falling back to
+ * program help.
+ */
+function renderHelp(phase: PropsPhase): string {
+  const [first] = phase.args;
+  const command = COMMAND_NAMES.includes(first) ? first : phase.documentPath ? "run" : undefined;
+
+  if (!command) {
+    return xmd.help({ args: phase.args });
+  }
+
+  const help = xmd.parse({ args: [command, "--help"] });
+  const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
+
+  if (!phase.documentPath || phase.bindings.length === 0) {
+    return base;
+  }
+  return `${base}\n\n${formatProperties(phase.documentPath, phase.bindings)}`;
+}
+
+function* resolveRunProps(
+  phase: PropsPhase,
+): Operation<{ value?: Record<string, Json>; error?: string }> {
+  if (!phase.extraction || phase.inputs === undefined) {
+    return { value: {} };
+  }
+
+  try {
+    const individualEnv: { binding: Binding; value: string }[] = [];
+    for (const binding of phase.bindings) {
+      const value = yield* readEnv(binding.env);
+      if (value !== undefined) {
+        individualEnv.push({ binding, value });
+      }
+    }
+    const aggregateEnv = yield* readEnv(AGGREGATE_ENV);
+
+    return {
+      value: resolveProps({
+        inputs: phase.inputs,
+        bindings: phase.bindings,
+        individual: phase.extraction.individual,
+        aggregateCli: phase.extraction.aggregate,
+        aggregateEnv,
+        individualEnv,
+      }),
+    };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
 await main(function* (args) {
-  const parsed = xmd.parse({ args });
+  // Document-derived options are only known once the document is, so the
+  // props phase runs before the authoritative parse: help is remembered
+  // and removed, the document is located, and its generated tokens are
+  // lifted out of argv with their original text intact.
+  const helpRequest = takeHelpFlag(args);
+  const propsPhase = yield* preparePropsPhase(helpRequest.args);
+
+  if (propsPhase.error) {
+    console.error(propsPhase.error);
+    yield* exit(1);
+    return;
+  }
+
+  const parsed = xmd.parse({ args: propsPhase.args });
+
+  if (helpRequest.requested) {
+    console.log(renderHelp(propsPhase));
+    yield* exit(0);
+    return;
+  }
 
   if (!parsed.ok) {
     console.error(parsed.error.message);
@@ -444,13 +624,7 @@ await main(function* (args) {
     return;
   }
 
-  const { help, version, config: command } = parsed.value;
-
-  if (help) {
-    console.log(xmd.help({ args }));
-    yield* exit(0);
-    return;
-  }
+  const { version, config: command } = parsed.value;
 
   if (version) {
     console.log(version);
@@ -458,8 +632,6 @@ await main(function* (args) {
     return;
   }
 
-  // A command intercepts `--help` in its own first argument position and
-  // hands back rendered text instead of a configuration.
   if (command.help) {
     console.log(command.text);
     yield* exit(0);
@@ -469,8 +641,15 @@ await main(function* (args) {
   switch (command.name) {
     case "run": {
       const config = command.config;
+      const props = yield* resolveRunProps(propsPhase);
+      if (props.error) {
+        console.error(props.error);
+        yield* exit(1);
+        break;
+      }
       yield* run(config, {
         testing: false,
+        props: props.value,
         agent: {
           agentProvider: config.agentProvider,
           defaultAgent: config.defaultAgent,
@@ -487,6 +666,14 @@ await main(function* (args) {
       if (agentFlag) {
         console.error(
           `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to xmd run`,
+        );
+        yield* exit(1);
+        break;
+      }
+      const propsFlag = findPropsFlag(args);
+      if (propsFlag) {
+        console.error(
+          `unrecognized option for xmd test: ${propsFlag} — document properties are exclusive to xmd run`,
         );
         yield* exit(1);
         break;

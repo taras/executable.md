@@ -42,7 +42,7 @@ function* render(lines: AddedLine[], construct: string): Operation<string> {
     "doc.md": doc(lines, construct),
   });
 
-  return yield* collect(yield* execute({ docPath: "doc.md", stream: new InMemoryStream() }));
+  return yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() }));
 }
 
 describe("UnusedInDiff", () => {

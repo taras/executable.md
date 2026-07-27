@@ -25,7 +25,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -47,7 +47,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     // Golden run
     const output1 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -55,7 +55,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     // Replay
     const output2 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -74,7 +74,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     const output1 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -82,7 +82,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
     // Replay
     const output2 = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -101,7 +101,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -121,7 +121,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -141,7 +141,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -172,7 +172,7 @@ describe("Tier T4 — eval factory and journal integration", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );

@@ -75,7 +75,7 @@ describe("source positions", () => {
       },
     });
 
-    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("probed");
 
     const probeLine = doc.split("\n").indexOf("<Probe />") + 1;
@@ -107,7 +107,7 @@ describe("source positions", () => {
       },
     });
 
-    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("probed");
 
     const probe = positions.find((p) => p.name === "Probe");

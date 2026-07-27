@@ -134,7 +134,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -163,7 +163,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -206,7 +206,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -236,7 +236,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -288,7 +288,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -349,7 +349,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -394,7 +394,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -470,7 +470,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -538,7 +538,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -606,7 +606,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -670,7 +670,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -701,7 +701,7 @@ describe(
         // Golden run
         const output1 = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs,
           }),
@@ -713,7 +713,7 @@ describe(
         // Replay — eval blocks replay from journal, daemon spawns fresh
         const output2 = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs,
           }),
@@ -746,7 +746,7 @@ describe(
         const stream1 = new InMemoryStream();
         const output1 = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream: stream1,
             componentDirs,
           }),
@@ -773,7 +773,7 @@ describe(
         const stream2 = new InMemoryStream();
         const output2 = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream: stream2,
             componentDirs,
           }),
@@ -812,7 +812,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -898,7 +898,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),
@@ -973,7 +973,7 @@ describe(
         const stream = new InMemoryStream();
         const output = yield* collect(
           yield* execute({
-            docPath: path.join(tmpDir, "doc.md"),
+            path: path.join(tmpDir, "doc.md"),
             stream,
             componentDirs: [path.join(tmpDir, "components"), tmpDir],
           }),

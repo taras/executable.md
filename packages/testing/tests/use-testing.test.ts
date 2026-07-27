@@ -29,7 +29,7 @@ describe("useTesting composition", () => {
         "README.md": '<Test name="one"><Assert expr={true} /></Test>\n',
       });
       const tests = yield* useTesting();
-      const execution = yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
       const result = yield* execution;
       const results = yield* tests.results;
       return { result, results };
@@ -45,7 +45,7 @@ describe("useTesting composition", () => {
         "README.md": '<Test name="bad"><Assert expr={false} /></Test>\n',
       });
       const tests = yield* useTesting();
-      const execution = yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
       const result = yield* execution;
       const results = yield* tests.results;
       return { result, results };
@@ -61,7 +61,7 @@ describe("useTesting composition", () => {
     const result = yield* scoped(function* () {
       yield* useStubFs({});
       yield* useTesting();
-      const execution = yield* execute({ docPath: "missing.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "missing.md", stream: new InMemoryStream() });
       return yield* execution;
     });
     expect(result.ok).toBe(false);
@@ -82,10 +82,10 @@ describe("useTesting composition", () => {
         "empty.md": "no tests here\n",
       });
       yield* useTesting();
-      const execution = yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
       const result = yield* execution;
       try {
-        yield* execute({ docPath: "empty.md", stream: new InMemoryStream() });
+        yield* execute({ path: "empty.md", stream: new InMemoryStream() });
       } catch (failure) {
         thrown = failure instanceof Error ? failure : new Error(String(failure));
       }
@@ -112,7 +112,7 @@ describe("useTesting composition", () => {
     yield* scoped(function* () {
       yield* useStubFs({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
       yield* useTesting();
-      const execution = yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
       const result = yield* execution;
       expect(result.ok).toBe(true);
     });
@@ -127,7 +127,7 @@ describe("useTesting composition", () => {
   });
 
   it("completion returns Err instead of throwing for document failures", function* () {
-    const run = yield* runDoc({}, { docPath: "missing.md" });
+    const run = yield* runDoc({}, { path: "missing.md" });
     const error = failureOf(run);
     expect(error?.message).toContain("missing.md");
     expect(run.output).toBe("");
@@ -144,7 +144,7 @@ describe("useTesting composition", () => {
         },
       });
       try {
-        yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+        yield* execute({ path: "README.md", stream: new InMemoryStream() });
       } catch (failure) {
         thrown = failure instanceof Error ? failure : new Error(String(failure));
       }
@@ -157,7 +157,7 @@ describe("useTesting composition", () => {
       yield* useStubFs({ "README.md": "hello world\n" });
       yield* useTesting();
       const execution = yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream: new InMemoryStream(),
       });
       const result = yield* execution;
@@ -198,7 +198,7 @@ describe("useTesting composition", () => {
 
     yield* scoped(function* () {
       yield* useTesting();
-      const execution = yield* execute({ docPath: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
       yield* spawn(function* () {
         yield* scoped(function* () {
           yield* drain(yield* execution.output);

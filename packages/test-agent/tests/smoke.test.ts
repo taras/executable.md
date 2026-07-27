@@ -83,7 +83,7 @@ function* runSmoke(
     const testing = yield* useTesting();
     yield* installTestAgentComponents({ workerCommand });
     yield* installAgentComponents();
-    const execution = yield* execute({ docPath: DOC, stream });
+    const execution = yield* execute({ path: DOC, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {

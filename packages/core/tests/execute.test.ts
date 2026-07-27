@@ -47,7 +47,7 @@ describe("Tier B — durable import", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -81,7 +81,7 @@ describe("Tier B — durable import", () => {
     // Golden run
     const firstResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -89,7 +89,7 @@ describe("Tier B — durable import", () => {
     // Replay — middleware is in scope but durable stream replays from journal
     const secondResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -107,14 +107,14 @@ describe("Tier B — durable import", () => {
 
     const firstResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
 
     const secondResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -131,7 +131,7 @@ describe("Tier B — durable import", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -150,7 +150,7 @@ describe("Tier B — durable import", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "doc.md",
+        path: "doc.md",
         stream,
       }),
     );
@@ -179,7 +179,7 @@ describe("Tier B — durable import", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -214,7 +214,7 @@ describe("Tier B — durable import", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -234,7 +234,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -262,7 +262,7 @@ describe("Tier D — code execution and modifiers", () => {
     // Golden run
     const firstResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -270,7 +270,7 @@ describe("Tier D — code execution and modifiers", () => {
     // Replay — middleware in scope, durable stream replays from journal
     const secondResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -287,7 +287,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -306,7 +306,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -344,7 +344,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -371,7 +371,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -396,7 +396,7 @@ describe("Tier D — code execution and modifiers", () => {
     // Golden
     const firstResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -404,7 +404,7 @@ describe("Tier D — code execution and modifiers", () => {
     // Replay — durable stream replays from journal
     const secondResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -423,7 +423,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -442,7 +442,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -462,7 +462,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
         modifiers: {
           uppercase: (_params) => (_args, next) =>
@@ -493,7 +493,7 @@ describe("Tier D — code execution and modifiers", () => {
 
     yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
         modifiers: {
           timeout: (params) => (_args, next) => {
@@ -546,7 +546,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -585,7 +585,7 @@ describe("execute", () => {
     // First run — golden
     const firstResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -593,7 +593,7 @@ describe("execute", () => {
     // Replay — durable stream replays from journal, middleware not invoked
     const secondResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -624,7 +624,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -643,7 +643,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -665,7 +665,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -689,7 +689,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -720,7 +720,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -767,7 +767,7 @@ describe("execute", () => {
     // Golden run to get full journal
     yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -787,7 +787,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream: partialStream,
       }),
     );
@@ -811,7 +811,7 @@ describe("execute", () => {
     // Golden run with just Header
     yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -824,7 +824,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream: newStream,
       }),
     );
@@ -844,7 +844,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -899,7 +899,7 @@ describe("execute", () => {
     // Golden run
     const firstResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -910,7 +910,7 @@ describe("execute", () => {
     // Replay — durable stream replays from journal
     const secondResult = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -936,7 +936,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -964,7 +964,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -992,7 +992,7 @@ describe("execute", () => {
 
     const result = yield* collect(
       yield* execute({
-        docPath: "README.md",
+        path: "README.md",
         stream,
       }),
     );
@@ -1012,7 +1012,7 @@ describe("Component Api dispatch — journal shape", () => {
     });
     yield* useStubExec();
 
-    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("note!");
 
     const events = stream.snapshot();
@@ -1043,7 +1043,7 @@ describe("component-declared output — document workflow", () => {
       "components/Warn.md": "Docs line.\n\n<Output>\nWARNING_SHOWN\n</Output>\n",
     });
     yield* useStubExec();
-    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("Intro paragraph.");
     expect(output).toContain("WARNING_SHOWN");
     expect(output).not.toContain("Docs line");
@@ -1052,7 +1052,7 @@ describe("component-declared output — document workflow", () => {
   it("applies <Output> to a root document the same way", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
-    const output = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("ROOT_SHOWN");
     expect(output).not.toContain("Root docs");
   });
@@ -1061,7 +1061,7 @@ describe("component-declared output — document workflow", () => {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
 
-    const execution = yield* execute({ docPath: "README.md", stream });
+    const execution = yield* execute({ path: "README.md", stream });
     const chunks: string[] = [];
     const full = yield* forEach(function* (chunk: string) {
       chunks.push(chunk);
@@ -1078,7 +1078,7 @@ describe("component-declared output — document workflow", () => {
     });
     yield* useFailingExec(1, "command not found");
 
-    const execution = yield* execute({ docPath: "README.md", stream });
+    const execution = yield* execute({ path: "README.md", stream });
     const chunks: string[] = [];
     yield* forEach(function* (chunk: string) {
       chunks.push(chunk);
@@ -1096,7 +1096,7 @@ describe("component-declared output — document workflow", () => {
     });
     yield* useStubExec();
 
-    const execution = yield* execute({ docPath: "README.md", stream });
+    const execution = yield* execute({ path: "README.md", stream });
     const chunks: string[] = [];
     yield* forEach(function* (chunk: string) {
       chunks.push(chunk);
@@ -1109,7 +1109,7 @@ describe("component-declared output — document workflow", () => {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": "Root docs.\n\n<Output />\n" });
 
-    const execution = yield* execute({ docPath: "README.md", stream });
+    const execution = yield* execute({ path: "README.md", stream });
     const chunks: string[] = [];
     const full = yield* forEach(function* (chunk: string) {
       chunks.push(chunk);
@@ -1123,8 +1123,8 @@ describe("component-declared output — document workflow", () => {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
 
-    const first = yield* collect(yield* execute({ docPath: "README.md", stream }));
-    const second = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const first = yield* collect(yield* execute({ path: "README.md", stream }));
+    const second = yield* collect(yield* execute({ path: "README.md", stream }));
 
     expect(second).toBe(first);
     expect(second).toContain("ROOT_SHOWN");
@@ -1137,7 +1137,7 @@ describe("component-declared output — document workflow", () => {
     });
     yield* useFailingExec(1, "should not run");
 
-    const result = yield* collect(yield* execute({ docPath: "README.md", stream }));
+    const result = yield* collect(yield* execute({ path: "README.md", stream }));
 
     expect(result).toContain("must be a direct top-level");
 

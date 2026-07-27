@@ -716,7 +716,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -755,7 +755,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -795,7 +795,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       const stream = new InMemoryStream();
       const output = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -924,7 +924,7 @@ describe("Tier NS-F — Edge cases", () => {
       const stream = new InMemoryStream();
       yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -959,7 +959,7 @@ describe("Tier NS-F — Edge cases", () => {
       const stream = new InMemoryStream();
       const output1 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
@@ -967,7 +967,7 @@ describe("Tier NS-F — Edge cases", () => {
       // Replay — same stream, same output
       const output2 = yield* collect(
         yield* execute({
-          docPath: path.join(tmpDir, "doc.md"),
+          path: path.join(tmpDir, "doc.md"),
           stream,
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),

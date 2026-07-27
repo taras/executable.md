@@ -24,7 +24,7 @@ describe("Tier T5 — Binding environment", () => {
     // Should not throw — port is available in block 2
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -47,7 +47,7 @@ describe("Tier T5 — Binding environment", () => {
     // Should succeed — x is 2 in block 3 (shadowed by block 2)
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -65,7 +65,7 @@ describe("Tier T5 — Binding environment", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -83,7 +83,7 @@ describe("Tier T5 — Binding environment", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );
@@ -101,7 +101,7 @@ describe("Tier T5 — Binding environment", () => {
 
     const output = yield* collect(
       yield* execute({
-        docPath: "test.md",
+        path: "test.md",
         stream,
       }),
     );

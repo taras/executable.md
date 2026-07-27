@@ -58,6 +58,7 @@
     "npm:@preact/signals@^2.9.0": "2.10.0_preact@10.29.7__preact-render-to-string@6.7.0_preact-render-to-string@6.7.0__preact@10.29.7",
     "npm:@prefresh/vite@^2.4.8": "2.4.12_preact@10.29.7__preact-render-to-string@6.7.0_vite@7.3.6__@types+node@24.13.3__tsx@4.23.1_preact-render-to-string@6.7.0__preact@10.29.7",
     "npm:@remix-run/node-fetch-server@0.12": "0.12.0",
+    "npm:@standard-schema/spec@1": "1.1.0",
     "npm:@tailwindcss/vite@^4.1.12": "4.3.3_vite@7.3.6__@types+node@24.13.3__tsx@4.23.1_@types+node@24.13.3_tsx@4.23.1",
     "npm:@types/babel__core@^7.20.5": "7.20.5",
     "npm:@types/node@22": "22.19.15",
@@ -3239,11 +3240,13 @@
       },
       "packages/cli": {
         "dependencies": [
+          "npm:@standard-schema/spec@1",
           "npm:zod@^4.3.6"
         ],
         "packageJson": {
           "dependencies": [
             "npm:@effectionx/stream-helpers@0.8.3",
+            "npm:@standard-schema/spec@1",
             "npm:configliere@0.4",
             "npm:effection@4.1.0-alpha.10",
             "npm:zod@^4.3.6"

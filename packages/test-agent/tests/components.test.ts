@@ -75,7 +75,7 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
       yield* installTestAgentComponents({ workerCommand: WORKER });
       yield* installAgentComponents();
       const execution = yield* execute({
-        docPath: path.join(dir, "doc.md"),
+        path: path.join(dir, "doc.md"),
         stream: new InMemoryStream(),
       });
       const subscription = yield* execution.output;

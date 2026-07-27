@@ -198,7 +198,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
           },
         });
 
-        const execution = yield* execute({ docPath: scenario.doc.path, stream });
+        const execution = yield* execute({ path: scenario.doc.path, stream });
         yield* spawn(function* () {
           const result = yield* execution;
           if (result.ok) {
