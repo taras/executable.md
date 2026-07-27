@@ -155,7 +155,7 @@ describe("Tier RI — document inspection", () => {
     expect(failed).toBe(true);
   });
 
-  it("RI5: a non-markdown root is rejected", function* () {
+  it("RI5: a function-component root is rejected", function* () {
     yield* useStubFs({ "thing.ts": "export default function* () {}" });
     let failed = false;
     try {
@@ -164,5 +164,27 @@ describe("Tier RI — document inspection", () => {
       failed = true;
     }
     expect(failed).toBe(true);
+  });
+
+  it("RI6: inspection and execution agree on which roots are markdown", function* () {
+    // Execution parses any non-TypeScript root as markdown, so inspection
+    // must not require a `.md` suffix.
+    const names = ["README", "notes.markdown", "doc.md"];
+    yield* useStubFs(Object.fromEntries(names.map((name) => [name, GREETING])));
+
+    for (const name of names) {
+      const info = yield* inspectDocument({ path: name });
+      expect(info.inputs).toMatchObject({ required: ["name"] });
+
+      const execution = yield* execute({
+        path: name,
+        stream: new InMemoryStream(),
+        props: { name: "Ada" },
+      });
+      const output = yield* forEach(function* () {}, execution.output);
+      const result = yield* execution;
+      expect(result.ok).toBe(true);
+      expect(output).toContain("Hello, Ada!");
+    }
   });
 });

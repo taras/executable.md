@@ -33,7 +33,7 @@ import type {
 } from "./types.ts";
 import { parseJsonObject } from "./json.ts";
 import { compileInputSchema, validateProps } from "./validate.ts";
-import { parseMarkdownDefinition } from "./definition.ts";
+import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 import {
   expandSegments,
   expandBody,
@@ -100,7 +100,7 @@ function* durableImportComponent(
   )) as ImportResult;
 
   // Function component: .ts file — import() the module
-  if (result.path.endsWith(".ts")) {
+  if (isFunctionComponentPath(result.path)) {
     // Resolve to absolute path for dynamic import
     const currentDir = yield* ephemeral(cwd());
     const absolutePath = result.path.startsWith("/") ? result.path : `${currentDir}/${result.path}`;

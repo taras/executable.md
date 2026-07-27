@@ -71,6 +71,24 @@ const OPEN = [
   "",
 ].join("\n");
 
+const REFERENCED = [
+  "---",
+  "inputs:",
+  "  type: object",
+  "  properties:",
+  '    count: { $ref: "#/definitions/count" }',
+  "    counts:",
+  "      type: array",
+  '      items: { $ref: "#/definitions/count" }',
+  "  definitions:",
+  "    count: { type: number }",
+  "  additionalProperties: false",
+  "---",
+  "",
+  "count={props.count} counts={props.counts}",
+  "",
+].join("\n");
+
 const PLAIN = "PLAIN_MARKER\n";
 
 const MARKER = [
@@ -388,6 +406,45 @@ describe(
         return yield* runCli(["run", "plain.md", "--raw"], fixture).expect();
       });
       expect(stdout).toContain("PLAIN_MARKER");
+    });
+
+    it("PC19: a referenced scalar gets bindings, decoding, and a rendered value form", function* () {
+      const help = yield* useFixture({ "ref.md": REFERENCED }, function* (fixture) {
+        return yield* runCli(["run", "ref.md", "--help"], fixture).expect();
+      });
+      expect(help.stdout).toContain("--props-count <number>");
+      expect(help.stdout).toContain("--props-counts <number>...");
+      expect(help.stdout).toContain("Environment: XMD_PROPS_COUNT");
+
+      const { stdout } = yield* useFixture({ "ref.md": REFERENCED }, function* (fixture) {
+        return yield* runCli(
+          [
+            "run",
+            "ref.md",
+            "--raw",
+            "--props-count",
+            "12",
+            "--props-counts",
+            "1",
+            "--props-counts",
+            "2",
+          ],
+          fixture,
+        ).expect();
+      });
+      expect(stdout).toContain("count=12");
+      expect(stdout).toContain("counts=1, 2");
+    });
+
+    it("PC20: a structured-only document still documents the aggregate", function* () {
+      const { stdout } = yield* useFixture({ "nested.md": NESTED }, function* (fixture) {
+        return yield* runCli(["run", "nested.md", "--help"], fixture).expect();
+      });
+      expect(stdout).toContain("Properties declared by nested.md");
+      expect(stdout).toContain("--props <json>");
+      expect(stdout).toContain("Environment: XMD_PROPS");
+      // It declares only an object, so it generates no individual option.
+      expect(stdout).not.toContain("--props-user");
     });
 
     it("PC18: the default command form accepts properties", function* () {

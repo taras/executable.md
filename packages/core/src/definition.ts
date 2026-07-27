@@ -6,6 +6,15 @@ import { scanSegments } from "./scanner.ts";
 import matter from "gray-matter";
 
 /**
+ * Whether a path names a function component. Execution imports `.ts`
+ * roots as modules and parses everything else as Markdown, so inspection
+ * classifies a root the same way rather than requiring a `.md` suffix.
+ */
+export function isFunctionComponentPath(path: string): boolean {
+  return path.endsWith(".ts");
+}
+
+/**
  * Parse markdown source into a component definition. Execution and
  * inspection share this so their frontmatter and schema behavior cannot
  * drift: both compile the input schema, so a malformed schema fails the

@@ -165,6 +165,67 @@ describe("Tier PR — property source resolution", () => {
     expect(() => resolve({ aggregateCli: '"text"' })).toThrow(/must be a JSON object/);
   });
 
+  it("PR15: a referenced scalar generates bindings and decodes against its target", function* () {
+    for (const [keyword, pointer] of [
+      ["definitions", "#/definitions/count"],
+      ["$defs", "#/$defs/count"],
+    ]) {
+      const inputs = {
+        type: "object",
+        properties: {
+          count: { $ref: pointer },
+          counts: { type: "array", items: { $ref: pointer } },
+        },
+        [keyword]: { count: { type: "number" } },
+      };
+      const refBindings = buildBindings(inputs);
+      const count = refBindings.find((entry) => entry.property === "count");
+      expect(count?.option).toBe("--props-count");
+      expect(count?.env).toBe("XMD_PROPS_COUNT");
+      expect(count?.form).toBe("<number>");
+      const counts = refBindings.find((entry) => entry.property === "counts");
+      expect(counts?.array).toBe(true);
+      expect(counts?.form).toBe("<number>...");
+
+      const extraction = extractPropsArgs(
+        ["--props-count", "12", "--props-counts", "1", "--props-counts", "2"],
+        refBindings,
+      );
+      const props = resolveProps({
+        inputs,
+        bindings: refBindings,
+        individual: extraction.individual,
+        individualEnv: [],
+      });
+      // Decoding follows the referenced schema, not the bare `$ref`.
+      expect(props.count).toBe(12);
+      expect(props.counts).toEqual([1, 2]);
+    }
+  });
+
+  it("PR16: structured properties resolve through Configliere too", function* () {
+    const structured = resolve({
+      aggregateCli: '{"user":{"name":"cli"}}',
+      aggregateEnv: '{"user":{"name":"env"}}',
+    });
+    expect(structured.user).toEqual({ name: "cli" });
+
+    // An invalid higher-priority value does not fall through...
+    expect(() =>
+      resolve({ aggregateCli: '{"user":{"name":12}}', aggregateEnv: '{"user":{"name":"env"}}' }),
+    ).toThrow(/--props/);
+    // ...and an invalid lower-priority one is irrelevant.
+    expect(
+      resolve({ aggregateCli: '{"user":{"name":"cli"}}', aggregateEnv: '{"user":{"name":12}}' })
+        .user,
+    ).toEqual({ name: "cli" });
+  });
+
+  it("PR17: a structured diagnostic names the aggregate that supplied it", function* () {
+    expect(() => resolve({ aggregateEnv: '{"user":{"name":12}}' })).toThrow(/XMD_PROPS/);
+    expect(() => resolve({ aggregateCli: '{"user":{"name":12}}' })).toThrow(/--props/);
+  });
+
   it("PR14: extraction leaves every other argument alone", function* () {
     const extraction = extractPropsArgs(
       ["doc.md", "--raw", "--props-name", "Ada", "--verbose", "--", "--props-x"],

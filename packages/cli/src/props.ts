@@ -4,12 +4,7 @@
  * (specs/root-document-inputs-spec.md).
  *
  * Configliere owns precedence, provenance, and diagnostics. This module
- * supplies it with sources: it recovers the original text of individual
- * options from argv, because the parser's own option matching coerces
- * every value through `Number()` and would turn `--props-name 007` into
- * `7`. Recovered text is tagged so an individual `"12"` can be decoded
- * to a number while an aggregate `{"count":"12"}` stays an exact JSON
- * string.
+ * supplies it with sources.
  */
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { createContext, field, object } from "configliere";
@@ -18,57 +13,386 @@ import type { Json } from "@executablemd/durable-streams";
 import { z } from "zod";
 
 export interface Binding {
-  /** Property name exactly as the schema declares it. */
   property: string;
-  /** Generated command-line option, e.g. `--props-name`. */
   option: string;
-  /** Generated environment variable, e.g. `XMD_PROPS_NAME`. */
   env: string;
-  /** True when the option is a bare switch that takes no value. */
   boolean: boolean;
-  /** True when repeated options accumulate into an array. */
   array: boolean;
-  /** Rendered form of an accepted value, e.g. `<string>`. */
   form: string;
   required: boolean;
   description?: string;
   default?: unknown;
 }
 
-export interface PropsResolution {
-  props: Record<string, Json>;
-}
-
 export const AGGREGATE_OPTION = "--props";
 export const AGGREGATE_ENV = "XMD_PROPS";
-
-const TRANSPORT = Symbol("xmd.transport");
-
-interface Tagged {
-  [TRANSPORT]: "text" | "text-array";
-  value: string | string[];
-}
-
-function tagText(value: string): Tagged {
-  return { [TRANSPORT]: "text", value };
-}
-
-function tagTextArray(value: string[]): Tagged {
-  return { [TRANSPORT]: "text-array", value };
-}
-
-function tagOf(value: unknown): "text" | "text-array" | undefined {
-  if (typeof value === "object" && value !== null && TRANSPORT in value) {
-    return (value as Tagged)[TRANSPORT];
-  }
-  return undefined;
-}
 
 export class PropsError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PropsError";
   }
+}
+
+export function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return Object.fromEntries(Object.entries(value));
+}
+
+interface SchemaLike {
+  type?: unknown;
+  properties?: Record<string, unknown>;
+  items?: unknown;
+  required: string[];
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  union?: unknown[];
+  ref?: string;
+}
+
+function readSchema(value: unknown): SchemaLike {
+  const record = readRecord(value);
+  if (!record) {
+    return { required: [] };
+  }
+  const union = Array.isArray(record.anyOf)
+    ? record.anyOf
+    : Array.isArray(record.oneOf)
+      ? record.oneOf
+      : undefined;
+  return {
+    type: record.type,
+    properties: readRecord(record.properties),
+    items: record.items,
+    required: Array.isArray(record.required)
+      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    description: typeof record.description === "string" ? record.description : undefined,
+    default: record.default,
+    enum: Array.isArray(record.enum) ? record.enum : undefined,
+    union,
+    ref: typeof record.$ref === "string" ? record.$ref : undefined,
+  };
+}
+
+/**
+ * Follow a local reference to the subschema it names. Classification and
+ * help both need the referenced shape, and a `$ref` alone carries none of
+ * it. Both draft keywords appear because Ajv resolves either pointer.
+ */
+function deref(value: unknown, root: unknown, seen: Set<string> = new Set()): unknown {
+  const schema = readSchema(value);
+  const { ref } = schema;
+  if (!ref || !ref.startsWith("#/") || seen.has(ref)) {
+    return value;
+  }
+  seen.add(ref);
+  let target: unknown = root;
+  for (const rawSegment of ref.slice(2).split("/")) {
+    const segment = rawSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+    const record = readRecord(target);
+    if (!record) {
+      return value;
+    }
+    target = record[segment];
+  }
+  return target === undefined ? value : deref(target, root, seen);
+}
+
+const SCALAR_TYPES = new Set(["string", "number", "integer", "boolean", "null"]);
+
+function typeNames(schema: SchemaLike): string[] {
+  if (typeof schema.type === "string") {
+    return [schema.type];
+  }
+  if (Array.isArray(schema.type)) {
+    return schema.type.filter((entry): entry is string => typeof entry === "string");
+  }
+  return [];
+}
+
+/**
+ * Whether a property has a scalar command-line representation. Objects,
+ * nested arrays, and schemas whose type cannot be determined are reached
+ * through the aggregate sources instead, so the CLI never invents dotted
+ * options for nested structure.
+ */
+function isScalar(value: unknown, root: unknown): boolean {
+  const schema = readSchema(deref(value, root));
+  if (schema.enum) {
+    return true;
+  }
+  const names = typeNames(schema);
+  if (names.length > 0 && names.every((name) => SCALAR_TYPES.has(name))) {
+    return true;
+  }
+  if (schema.union) {
+    return schema.union.every((member) => isScalar(member, root));
+  }
+  return false;
+}
+
+function isScalarArray(value: unknown, root: unknown): boolean {
+  const schema = readSchema(deref(value, root));
+  return (
+    typeNames(schema).includes("array") &&
+    schema.items !== undefined &&
+    isScalar(schema.items, root)
+  );
+}
+
+function valueForm(value: unknown, root: unknown): string {
+  const schema = readSchema(deref(value, root));
+  if (schema.enum) {
+    return `<${schema.enum.join("|")}>`;
+  }
+  if (isScalarArray(value, root)) {
+    return `<${typeNames(readSchema(deref(schema.items, root))).join("|") || "value"}>...`;
+  }
+  const names = typeNames(schema);
+  if (names.length === 0 && schema.union) {
+    const members = schema.union.flatMap((member) => typeNames(readSchema(deref(member, root))));
+    return `<${members.join("|") || "value"}>`;
+  }
+  return `<${names.join("|") || "value"}>`;
+}
+
+/**
+ * Ajv enforces `additionalProperties`, so the schema handed to Zod is
+ * loosened: a strict Zod object would reject a nested unknown key before
+ * whole-object validation ever sees it, and the diagnostic would come
+ * from the wrong layer.
+ */
+function loosen(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(loosen);
+  }
+  const record = readRecord(value);
+  if (!record) {
+    return value;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    result[key] = key === "additionalProperties" && entry === false ? true : loosen(entry);
+  }
+  return result;
+}
+
+type JsonSchemaInput = Parameters<typeof z.fromJSONSchema>[0];
+
+function isJsonSchemaInput(value: unknown): value is JsonSchemaInput {
+  return typeof value === "boolean" || readRecord(value) !== undefined;
+}
+
+function isStandardSchema(value: unknown): value is StandardSchemaV1<unknown> {
+  if (typeof value !== "object" || value === null || !("~standard" in value)) {
+    return false;
+  }
+  const standard = value["~standard"];
+  return (
+    typeof standard === "object" &&
+    standard !== null &&
+    "validate" in standard &&
+    typeof standard.validate === "function"
+  );
+}
+
+function defType(value: object): string | undefined {
+  if (!("def" in value)) {
+    return undefined;
+  }
+  const { def } = value;
+  if (typeof def !== "object" || def === null || !("type" in def)) {
+    return undefined;
+  }
+  return typeof def.type === "string" ? def.type : undefined;
+}
+
+/**
+ * The element schema of an array property, taken from the converted root
+ * so a referenced item keeps the definitions it points at. An optional
+ * property arrives wrapped, and the array itself also answers `unwrap`,
+ * so the walk stops at the array rather than following it to the element.
+ */
+function elementOf(value: unknown): StandardSchemaV1<unknown> | undefined {
+  let current: unknown = value;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null) {
+      return undefined;
+    }
+    if (defType(current) === "array" && "element" in current) {
+      const { element } = current;
+      return isStandardSchema(element) ? element : undefined;
+    }
+    if (!("unwrap" in current)) {
+      return undefined;
+    }
+    const { unwrap } = current;
+    if (typeof unwrap !== "function") {
+      return undefined;
+    }
+    current = unwrap.call(current);
+  }
+  return undefined;
+}
+
+/**
+ * `fromJSONSchema` resolves `#/definitions/…` under draft-7 and `#/$defs/…`
+ * under draft-2020-12, while Ajv resolves either as a plain JSON pointer.
+ * Converting the whole root once keeps every local reference resolvable.
+ */
+function convertRoot(inputs: unknown): Record<string, StandardSchemaV1<unknown>> {
+  const loosened = loosen(inputs);
+  if (!isJsonSchemaInput(loosened)) {
+    throw new PropsError("the document's declared inputs must be an object schema");
+  }
+
+  let root: unknown;
+  try {
+    root = z.fromJSONSchema(loosened, { defaultTarget: "draft-7" });
+  } catch {
+    try {
+      root = z.fromJSONSchema(loosened, { defaultTarget: "draft-2020-12" });
+    } catch (error) {
+      throw new PropsError(`cannot read the document's declared inputs: ${describeError(error)}`);
+    }
+  }
+
+  if (typeof root !== "object" || root === null || !("shape" in root)) {
+    throw new PropsError("the document's declared inputs must be an object schema");
+  }
+  const shape = readRecord(root.shape);
+  if (!shape) {
+    throw new PropsError("the document's declared inputs must be an object schema");
+  }
+
+  const converted: Record<string, StandardSchemaV1<unknown>> = {};
+  for (const [property, entry] of Object.entries(shape)) {
+    if (isStandardSchema(entry)) {
+      converted[property] = entry;
+    }
+  }
+  return converted;
+}
+
+const TRANSPORT = Symbol("xmd.transport");
+
+interface TaggedText {
+  [TRANSPORT]: "text";
+  value: string;
+}
+
+interface TaggedTextArray {
+  [TRANSPORT]: "text-array";
+  value: string[];
+}
+
+function tagText(value: string): TaggedText {
+  return { [TRANSPORT]: "text", value };
+}
+
+function tagTextArray(value: string[]): TaggedTextArray {
+  return { [TRANSPORT]: "text-array", value };
+}
+
+function readTagged(value: unknown): TaggedText | TaggedTextArray | undefined {
+  if (typeof value !== "object" || value === null || !(TRANSPORT in value)) {
+    return undefined;
+  }
+  const tag = value[TRANSPORT];
+  if (!("value" in value)) {
+    return undefined;
+  }
+  const { value: carried } = value;
+  if (tag === "text" && typeof carried === "string") {
+    return { [TRANSPORT]: "text", value: carried };
+  }
+  if (tag === "text-array" && Array.isArray(carried)) {
+    return {
+      [TRANSPORT]: "text-array",
+      value: carried.filter((entry): entry is string => typeof entry === "string"),
+    };
+  }
+  return undefined;
+}
+
+function validate(
+  schema: StandardSchemaV1<unknown>,
+  input: unknown,
+): StandardSchemaV1.Result<unknown> {
+  const result = schema["~standard"].validate(input);
+  if (result instanceof Promise) {
+    throw new PropsError("asynchronous validation is not supported");
+  }
+  return result;
+}
+
+/**
+ * Decode transport text against a property's schema. The original string
+ * wins whenever it validates, so `007` stays a string for a string
+ * property and `12` stays a string for `string | number`; otherwise the
+ * JSON interpretation is used, which turns `12` into a number for a
+ * number-only property and `false` into a boolean.
+ */
+function decodeText(
+  native: StandardSchemaV1<unknown>,
+  text: string,
+): StandardSchemaV1.Result<unknown> {
+  const direct = validate(native, text);
+  if (!direct.issues) {
+    return { value: text };
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(text);
+  } catch {
+    return direct;
+  }
+  return validate(native, decoded);
+}
+
+/**
+ * Validate through Zod but keep the caller's value. Configliere stores
+ * whatever a Standard Schema returns, so returning Zod's output would
+ * hand Ajv a value with nested unknown keys stripped and nested defaults
+ * already applied. Only tagged transport text is transformed.
+ */
+function lossless(
+  native: StandardSchemaV1<unknown>,
+  item: StandardSchemaV1<unknown> | undefined,
+): StandardSchemaV1<unknown> {
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "xmd",
+      validate(input: unknown): StandardSchemaV1.Result<unknown> {
+        const tagged = readTagged(input);
+        if (tagged?.[TRANSPORT] === "text") {
+          return decodeText(native, tagged.value);
+        }
+        if (tagged?.[TRANSPORT] === "text-array") {
+          const values: unknown[] = [];
+          for (const text of tagged.value) {
+            const decoded = item ? decodeText(item, text) : { value: text };
+            if (decoded.issues) {
+              return decoded;
+            }
+            values.push(decoded.value);
+          }
+          return { value: values };
+        }
+        const result = validate(native, input);
+        return result.issues ? { issues: result.issues } : { value: input };
+      },
+    },
+  };
 }
 
 function kebab(name: string): string {
@@ -82,231 +406,33 @@ function constantCase(name: string): string {
   return kebab(name).replace(/-/g, "_").toUpperCase();
 }
 
-interface SchemaLike {
-  type?: unknown;
-  properties?: Record<string, SchemaLike>;
-  items?: SchemaLike;
-  required?: string[];
-  description?: string;
-  default?: unknown;
-  enum?: unknown[];
-  anyOf?: SchemaLike[];
-  oneOf?: SchemaLike[];
-  $ref?: string;
-}
-
-function asSchema(value: unknown): SchemaLike {
-  return typeof value === "object" && value !== null ? (value as SchemaLike) : {};
-}
-
-const SCALAR_TYPES = new Set(["string", "number", "integer", "boolean", "null"]);
-
-function typeNames(schema: SchemaLike): string[] {
-  const { type } = schema;
-  if (typeof type === "string") {
-    return [type];
-  }
-  if (Array.isArray(type)) {
-    return type.filter((entry): entry is string => typeof entry === "string");
-  }
-  return [];
-}
-
-/**
- * Whether a property has a scalar command-line representation. Objects,
- * nested arrays, and schemas whose type cannot be determined are reached
- * through the aggregate sources instead, so the CLI never invents dotted
- * options for nested structure.
- */
-function isScalar(schema: SchemaLike): boolean {
-  if (schema.enum) {
-    return true;
-  }
-  const names = typeNames(schema);
-  if (names.length > 0 && names.every((name) => SCALAR_TYPES.has(name))) {
-    return true;
-  }
-  const union = schema.anyOf ?? schema.oneOf;
-  if (union) {
-    return union.every((member) => isScalar(asSchema(member)));
-  }
-  return false;
-}
-
-function isScalarArray(schema: SchemaLike): boolean {
-  return typeNames(schema).includes("array") && !!schema.items && isScalar(asSchema(schema.items));
-}
-
-function valueForm(schema: SchemaLike): string {
-  if (schema.enum) {
-    return `<${schema.enum.join("|")}>`;
-  }
-  if (isScalarArray(schema)) {
-    return `<${typeNames(asSchema(schema.items)).join("|") || "value"}>...`;
-  }
-  const names = typeNames(schema);
-  const union = schema.anyOf ?? schema.oneOf;
-  if (names.length === 0 && union) {
-    return `<${union.flatMap((member) => typeNames(asSchema(member))).join("|") || "value"}>`;
-  }
-  return `<${names.join("|") || "value"}>`;
-}
-
-/**
- * Ajv enforces `additionalProperties`, so the schema handed to Zod is
- * loosened: a strict Zod object would reject a nested unknown key before
- * whole-object validation ever sees it, and the resulting diagnostic
- * would come from the wrong layer.
- */
-function loosen(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(loosen);
-  }
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-  const source = value as Record<string, unknown>;
-  const result: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(source)) {
-    if (key === "additionalProperties" && entry === false) {
-      result[key] = true;
-      continue;
-    }
-    result[key] = loosen(entry);
-  }
-  return result;
-}
-
-/**
- * `fromJSONSchema` resolves `#/definitions/...` under draft-7 and
- * `#/$defs/...` under draft-2020-12, while Ajv resolves either as a plain
- * JSON pointer. Converting the whole root once keeps every local
- * reference resolvable; the second attempt covers documents that use the
- * newer keyword.
- */
-function convertRoot(inputs: unknown): Record<string, StandardSchemaV1<unknown>> {
-  const loosened = loosen(inputs);
-  let root: unknown;
-  try {
-    root = z.fromJSONSchema(loosened as never, { defaultTarget: "draft-7" });
-  } catch {
-    try {
-      root = z.fromJSONSchema(loosened as never, { defaultTarget: "draft-2020-12" });
-    } catch (error) {
-      throw new PropsError(
-        `cannot read the document's declared inputs: ${(error as Error).message}`,
-      );
-    }
-  }
-  const shape = (root as { shape?: Record<string, StandardSchemaV1<unknown>> }).shape;
-  if (!shape) {
-    throw new PropsError("the document's declared inputs must be an object schema");
-  }
-  return shape;
-}
-
-function parseJsonScalar(text: string): unknown {
-  return JSON.parse(text);
-}
-
-/**
- * Decode transport text against a property's schema. The original string
- * wins whenever it validates, so `007` stays a string for a string
- * property and `12` stays a string for `string | number`; otherwise the
- * JSON interpretation is used, which is what turns `12` into a number for
- * a number-only property and `false` into a boolean.
- */
-function decodeText(
-  native: StandardSchemaV1<unknown>,
-  text: string,
-): StandardSchemaV1.Result<unknown> {
-  const direct = native["~standard"].validate(text);
-  if (direct instanceof Promise) {
-    throw new PropsError("asynchronous validation is not supported");
-  }
-  if (!direct.issues) {
-    return { value: text };
-  }
-  let decoded: unknown;
-  try {
-    decoded = parseJsonScalar(text);
-  } catch {
-    return direct;
-  }
-  const parsed = native["~standard"].validate(decoded);
-  if (parsed instanceof Promise) {
-    throw new PropsError("asynchronous validation is not supported");
-  }
-  return parsed;
-}
-
-/**
- * Validate through Zod but keep the caller's value. Configliere stores
- * whatever a Standard Schema returns, so returning Zod's output would
- * hand Ajv a value with nested unknown keys stripped and nested defaults
- * already applied. Only transport text is transformed.
- */
-function lossless(
-  native: StandardSchemaV1<unknown>,
-  item: StandardSchemaV1<unknown> | undefined,
-): StandardSchemaV1<unknown> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "xmd",
-      validate(input: unknown): StandardSchemaV1.Result<unknown> {
-        const tag = tagOf(input);
-        if (tag === "text") {
-          return decodeText(native, (input as Tagged).value as string);
-        }
-        if (tag === "text-array") {
-          const texts = (input as Tagged).value as string[];
-          const values: unknown[] = [];
-          for (const text of texts) {
-            const decoded = item ? decodeText(item, text) : { value: text };
-            if (decoded.issues) {
-              return decoded;
-            }
-            values.push(decoded.value);
-          }
-          return { value: values };
-        }
-        const result = native["~standard"].validate(input);
-        if (result instanceof Promise) {
-          throw new PropsError("asynchronous validation is not supported");
-        }
-        if (result.issues) {
-          return { issues: result.issues };
-        }
-        return { value: input };
-      },
-    },
-  };
+export function declaredProperties(inputs: unknown): string[] {
+  return Object.keys(readSchema(inputs).properties ?? {});
 }
 
 export function buildBindings(inputs: unknown): Binding[] {
-  const schema = asSchema(inputs);
-  const properties = schema.properties ?? {};
-  const required = new Set(schema.required ?? []);
+  const schema = readSchema(inputs);
+  const required = new Set(schema.required);
   const bindings: Binding[] = [];
 
-  for (const [property, raw] of Object.entries(properties)) {
-    const propertySchema = asSchema(raw);
-    const scalar = isScalar(propertySchema);
-    const scalarArray = isScalarArray(propertySchema);
+  for (const [property, raw] of Object.entries(schema.properties ?? {})) {
+    const scalar = isScalar(raw, inputs);
+    const scalarArray = isScalarArray(raw, inputs);
     if (!scalar && !scalarArray) {
       continue;
     }
+    const resolved = readSchema(deref(raw, inputs));
+    const names = typeNames(resolved);
     bindings.push({
       property,
       option: `--props-${kebab(property)}`,
       env: `XMD_PROPS_${constantCase(property)}`,
-      boolean: typeNames(propertySchema).length === 1 && typeNames(propertySchema)[0] === "boolean",
+      boolean: names.length === 1 && names[0] === "boolean",
       array: scalarArray,
-      form: valueForm(propertySchema),
+      form: valueForm(raw, inputs),
       required: required.has(property),
-      description: propertySchema.description,
-      default: propertySchema.default,
+      description: readSchema(raw).description ?? resolved.description,
+      default: readSchema(raw).default ?? resolved.default,
     });
   }
 
@@ -333,18 +459,17 @@ export function buildBindings(inputs: unknown): Binding[] {
 }
 
 export interface Extraction {
-  /** Raw text per individual option, in binding order. */
   individual: { binding: Binding; value: string | string[] }[];
-  /** Raw JSON text supplied through `--props`, when present. */
   aggregate?: string;
-  /** argv with every props token removed. */
   rest: string[];
 }
 
 /**
  * Remove `--props` and `--props-*` tokens from argv, keeping their
- * original text. Only the generated bindings are recognized, so this
- * stays a source adapter rather than a second argument parser.
+ * original text. Configliere's own option matching coerces every value
+ * through `Number()`, which would turn `--props-name 007` into `7`.
+ * Only the generated bindings are recognized, so this stays a source
+ * adapter rather than a second argument parser.
  */
 export function extractPropsArgs(args: string[], bindings: Binding[]): Extraction {
   const byOption = new Map(bindings.map((binding) => [binding.option, binding]));
@@ -433,11 +558,10 @@ export function extractPropsArgs(args: string[], bindings: Binding[]): Extractio
     if (!values) {
       continue;
     }
-    if (binding.array) {
-      individual.push({ binding, value: values });
-      continue;
-    }
-    individual.push({ binding, value: values[values.length - 1] });
+    individual.push({
+      binding,
+      value: binding.array ? values : values[values.length - 1],
+    });
   }
 
   return { individual, aggregate, rest };
@@ -448,21 +572,36 @@ function parseAggregate(source: string, text: string): Record<string, unknown> {
   try {
     value = JSON.parse(text);
   } catch (error) {
-    throw new PropsError(`${source} is not valid JSON: ${(error as Error).message}`);
+    throw new PropsError(`${source} is not valid JSON: ${describeError(error)}`);
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  const record = readRecord(value);
+  if (!record) {
     throw new PropsError(`${source} must be a JSON object`);
   }
-  return value as Record<string, unknown>;
+  return record;
 }
 
-export interface ResolveOptions {
-  inputs: unknown;
-  bindings: Binding[];
-  individual: { binding: Binding; value: string | string[] }[];
-  aggregateCli?: string;
-  aggregateEnv?: string;
-  individualEnv: { binding: Binding; value: string }[];
+function toJson(value: unknown, source: string): Json {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => toJson(entry, source));
+  }
+  const record = readRecord(value);
+  if (record) {
+    const result: Record<string, Json> = {};
+    for (const [key, entry] of Object.entries(record)) {
+      if (entry !== undefined) {
+        result[key] = toJson(entry, source);
+      }
+    }
+    return result;
+  }
+  throw new PropsError(`${source} supplied a value that is not JSON`);
 }
 
 interface Source {
@@ -472,27 +611,53 @@ interface Source {
 }
 
 interface FieldView {
-  sources?: Source[];
-  result: { ok: true; value: unknown } | { ok: false };
+  sources: Source[];
+  value?: unknown;
+  ok: boolean;
 }
 
-/**
- * Read the provenance Configliere records for a field. The info tree is
- * typed by the parser's value shape, which a dynamically built parser
- * cannot express, so the parts this module reads are narrowed here.
- */
+function readSources(value: unknown): Source[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const sources: Source[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    if (!("sourceName" in entry) || !("sourceType" in entry)) {
+      continue;
+    }
+    const { sourceName, sourceType } = entry;
+    if (typeof sourceName !== "string" || typeof sourceType !== "string") {
+      continue;
+    }
+    const issues = "issues" in entry && Array.isArray(entry.issues) ? entry.issues : undefined;
+    sources.push({ sourceName, sourceType, issues });
+  }
+  return sources;
+}
+
 function readField(info: unknown): FieldView | undefined {
   if (typeof info !== "object" || info === null || !("result" in info)) {
     return undefined;
   }
-  const { result, sources } = info as { result: unknown; sources?: unknown };
+  const { result } = info;
   if (typeof result !== "object" || result === null || !("ok" in result)) {
     return undefined;
   }
-  return {
-    sources: Array.isArray(sources) ? (sources as Source[]) : undefined,
-    result: result as FieldView["result"],
-  };
+  const sources = "sources" in info ? readSources(info.sources) : [];
+  const ok = result.ok === true;
+  return { sources, ok, value: ok && "value" in result ? result.value : undefined };
+}
+
+export interface ResolveOptions {
+  inputs: unknown;
+  bindings: Binding[];
+  individual: { binding: Binding; value: string | string[] }[];
+  aggregateCli?: string;
+  aggregateEnv?: string;
+  individualEnv: { binding: Binding; value: string }[];
 }
 
 /**
@@ -506,18 +671,19 @@ function readField(info: unknown): FieldView | undefined {
 export function resolveProps(options: ResolveOptions): Record<string, Json> {
   const { inputs, bindings, individual, aggregateCli, aggregateEnv, individualEnv } = options;
   const shape = convertRoot(inputs);
-  const schema = asSchema(inputs);
+  const schema = readSchema(inputs);
+  const properties = schema.properties ?? {};
+  const arrayBindings = new Map(bindings.map((binding) => [binding.property, binding]));
 
   const attrs: Record<string, Partial<Parser<unknown>>> = {};
-  for (const binding of bindings) {
-    const native = shape[binding.property];
+  for (const property of Object.keys(properties)) {
+    const native = shape[property];
     if (!native) {
       continue;
     }
-    const itemSchema = binding.array
-      ? convertItem(asSchema(asSchema(schema.properties?.[binding.property]).items))
-      : undefined;
-    attrs[binding.property] = { ...field(lossless(native, itemSchema)) };
+    const binding = arrayBindings.get(property);
+    const item = binding?.array ? elementOf(native) : undefined;
+    attrs[property] = { ...field(lossless(native, item)) };
   }
 
   const values: { name: string; value: unknown }[] = [];
@@ -540,23 +706,37 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
     values.push({ name: AGGREGATE_OPTION, value: parsed });
   }
   for (const entry of individual) {
-    const tagged = Array.isArray(entry.value) ? tagTextArray(entry.value) : tagText(entry.value);
     values.push({
       name: entry.binding.option,
-      value: { [entry.binding.property]: tagged },
+      value: {
+        [entry.binding.property]: Array.isArray(entry.value)
+          ? tagTextArray(entry.value)
+          : tagText(entry.value),
+      },
     });
   }
 
   const parser = object<Record<string, unknown>>(attrs);
   const info = parser.inspect(createContext({ args: [], values }));
-  const declared: Record<string, unknown> = {};
+  const props: Record<string, Json> = {};
 
-  for (const binding of bindings) {
-    const child = readField(info.attrs[binding.property]);
+  // Undeclared keys never reach a field, so they are merged first and
+  // then overwritten by anything a declared field resolved. Whole-object
+  // validation decides whether `additionalProperties` accepts them.
+  for (const aggregate of aggregates) {
+    for (const [key, value] of Object.entries(aggregate)) {
+      if (!(key in properties)) {
+        props[key] = toJson(value, AGGREGATE_OPTION);
+      }
+    }
+  }
+
+  for (const property of Object.keys(properties)) {
+    const child = readField(info.attrs[property]);
     if (!child) {
       continue;
     }
-    const supplied = (child.sources ?? []).filter(
+    const supplied = child.sources.filter(
       (source) => source.sourceType !== "none" && source.sourceType !== "default",
     );
     if (supplied.length === 0) {
@@ -570,35 +750,12 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
       const detail = highest.issues.map((issue) => issue.message).join("; ");
       throw new PropsError(`${highest.sourceName}: ${detail}`);
     }
-    if (child.result.ok) {
-      declared[binding.property] = child.result.value;
+    if (child.ok) {
+      props[property] = toJson(child.value, highest.sourceName);
     }
   }
 
-  // Undeclared keys never reach a field, so they are merged back in
-  // aggregate precedence order. Whole-object validation decides whether
-  // `additionalProperties` accepts them.
-  const props: Record<string, unknown> = {};
-  const declaredNames = new Set(Object.keys(asSchema(inputs).properties ?? {}));
-  for (const aggregate of aggregates) {
-    for (const [key, value] of Object.entries(aggregate)) {
-      if (!declaredNames.has(key)) {
-        props[key] = value;
-      }
-    }
-  }
-  for (const aggregate of aggregates) {
-    for (const [key, value] of Object.entries(aggregate)) {
-      if (declaredNames.has(key) && !(key in declared)) {
-        props[key] = value;
-      }
-    }
-  }
-  for (const [key, value] of Object.entries(declared)) {
-    props[key] = value;
-  }
-
-  return props as Record<string, Json>;
+  return props;
 }
 
 /**
@@ -633,14 +790,4 @@ export function formatProperties(documentPath: string, bindings: Binding[]): str
   lines.push(`      Environment: ${AGGREGATE_ENV}`);
 
   return lines.join("\n");
-}
-
-function convertItem(item: SchemaLike): StandardSchemaV1<unknown> | undefined {
-  try {
-    return z.fromJSONSchema(loosen(item) as never, {
-      defaultTarget: "draft-7",
-    }) as unknown as StandardSchemaV1<unknown>;
-  } catch {
-    return undefined;
-  }
 }

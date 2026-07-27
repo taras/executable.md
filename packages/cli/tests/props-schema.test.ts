@@ -9,10 +9,20 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { validateProps } from "@executablemd/core";
+import type { InputSchema } from "@executablemd/core";
 import { z } from "zod";
 
-function shapeOf(schema: unknown, target: "draft-7" | "draft-2020-12" = "draft-7") {
-  const root = z.fromJSONSchema(schema as never, { defaultTarget: target });
+type JsonSchemaInput = Parameters<typeof z.fromJSONSchema>[0];
+
+function isJsonSchemaInput(value: unknown): value is JsonSchemaInput {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function shapeOf(schema: InputSchema, target: "draft-7" | "draft-2020-12" = "draft-7") {
+  if (!isJsonSchemaInput(schema)) {
+    throw new Error("expected an object schema");
+  }
+  const root = z.fromJSONSchema(schema, { defaultTarget: target });
   const shape = (root as { shape?: Record<string, z.ZodType> }).shape;
   if (!shape) {
     throw new Error("expected an object schema");
@@ -20,7 +30,7 @@ function shapeOf(schema: unknown, target: "draft-7" | "draft-2020-12" = "draft-7
   return shape;
 }
 
-const SCALARS = {
+const SCALARS: InputSchema = {
   type: "object",
   properties: {
     text: { type: "string" },
@@ -86,18 +96,18 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
   });
 
   it("PS3: required and optional are the schema's, not Zod's", function* () {
-    const schema = {
+    const schema: InputSchema = {
       type: "object",
       properties: { a: { type: "string" }, b: { type: "string" } },
       required: ["a"],
       additionalProperties: false,
     };
-    expect(() => validateProps("x", {}, schema as never)).toThrow(/required property 'a'/);
-    expect(validateProps("x", { a: "1" }, schema as never)).toEqual({ a: "1" });
+    expect(() => validateProps("x", {}, schema)).toThrow(/required property 'a'/);
+    expect(validateProps("x", { a: "1" }, schema)).toEqual({ a: "1" });
   });
 
   it("PS4: local references resolve — draft-7 uses definitions", function* () {
-    const schema = {
+    const schema: InputSchema = {
       type: "object",
       properties: { user: { $ref: "#/definitions/user" } },
       definitions: {
@@ -106,26 +116,26 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
     };
     const shape = shapeOf(schema);
     expect(shape.user.safeParse({ name: "Ada" }).success).toBe(true);
-    expect(validateProps("x", { user: { name: "Ada" } }, schema as never)).toEqual({
+    expect(validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
       user: { name: "Ada" },
     });
   });
 
   it("PS5: $defs needs the 2020-12 target, while Ajv resolves either pointer", function* () {
-    const schema = {
+    const schema: InputSchema = {
       type: "object",
       properties: { user: { $ref: "#/$defs/user" } },
       $defs: { user: { type: "object", properties: { name: { type: "string" } } } },
     };
     expect(() => shapeOf(schema, "draft-7")).toThrow(/Reference not found/);
     expect(shapeOf(schema, "draft-2020-12").user.safeParse({ name: "Ada" }).success).toBe(true);
-    expect(validateProps("x", { user: { name: "Ada" } }, schema as never)).toEqual({
+    expect(validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
       user: { name: "Ada" },
     });
   });
 
   it("PS6: Zod would strip and default nested values, so its output is never kept", function* () {
-    const schema = {
+    const schema: InputSchema = {
       type: "object",
       properties: {
         user: {
@@ -143,7 +153,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
       data: { name: "Ada", role: "member" },
     });
     // ...whereas Ajv is the layer entitled to do so.
-    expect(validateProps("x", { user: { name: "Ada" } }, schema as never)).toEqual({
+    expect(validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
       user: { name: "Ada", role: "member" },
     });
   });
@@ -155,7 +165,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
       success: true,
       data: { a: "x", extra: 1 },
     });
-    expect(() => validateProps("x", { closed: { a: "y", extra: 1 } }, SCALARS as never)).toThrow(
+    expect(() => validateProps("x", { closed: { a: "y", extra: 1 } }, SCALARS)).toThrow(
       /must NOT have additional properties/,
     );
   });

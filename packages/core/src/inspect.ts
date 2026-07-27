@@ -2,7 +2,7 @@ import type { Operation } from "effection";
 import { readTextFile } from "@executablemd/runtime";
 
 import type { InputSchema } from "./types.ts";
-import { parseMarkdownDefinition } from "./definition.ts";
+import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 
 export interface InspectOptions {
   /** Path to the root markdown document, resolved from the contextual cwd. */
@@ -29,8 +29,8 @@ export interface DocumentInfo {
  */
 export function* inspectDocument(options: InspectOptions): Operation<DocumentInfo> {
   const { path } = options;
-  if (!path.endsWith(".md")) {
-    throw new Error(`Root document must be a markdown file, not a function component: ${path}`);
+  if (isFunctionComponentPath(path)) {
+    throw new Error("Root document must be a markdown file, not a function component");
   }
 
   // Reading through the contextual filesystem resolves a relative path

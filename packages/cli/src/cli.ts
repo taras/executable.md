@@ -49,6 +49,8 @@ import {
   AGGREGATE_ENV,
   AGGREGATE_OPTION,
   buildBindings,
+  declaredProperties,
+  describeError,
   extractPropsArgs,
   formatProperties,
   resolveProps,
@@ -486,6 +488,7 @@ interface PropsPhase {
   bindings: Binding[];
   extraction?: Extraction;
   inputs?: unknown;
+  declared?: string[];
   error?: string;
 }
 
@@ -533,9 +536,10 @@ function* preparePropsPhase(args: string[]): Operation<PropsPhase> {
       bindings,
       extraction,
       inputs: document.inputs,
+      declared: declaredProperties(document.inputs),
     };
   } catch (error) {
-    return { args, bindings: [], documentPath, error: (error as Error).message };
+    return { args, bindings: [], documentPath, error: describeError(error) };
   }
 }
 
@@ -558,7 +562,9 @@ function renderHelp(phase: PropsPhase): string {
   const help = xmd.parse({ args: [command, "--help"] });
   const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
 
-  if (!phase.documentPath || phase.bindings.length === 0) {
+  // A document declaring only structured properties generates no
+  // individual binding, but it still accepts the aggregate ones.
+  if (!phase.documentPath || !phase.declared?.length) {
     return base;
   }
   return `${base}\n\n${formatProperties(phase.documentPath, phase.bindings)}`;
@@ -592,7 +598,7 @@ function* resolveRunProps(
       }),
     };
   } catch (error) {
-    return { error: (error as Error).message };
+    return { error: describeError(error) };
   }
 }
 
