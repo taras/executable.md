@@ -2,7 +2,7 @@
 meta:
   componentName: OllamaProvider
 
-inputs:
+props:
   type: object
   properties:
     model:

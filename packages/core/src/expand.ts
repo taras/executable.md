@@ -638,7 +638,7 @@ function* expandComponent(
     ];
   }
 
-  // Validate props against declared inputs.
+  // Validate caller props against the component's declared props schema.
   // Strip the `slot` prop before validation — it is consumed by the
   // expansion engine for slot assignment, not forwarded to the child.
   let validatedProps: Record<string, Json>;
@@ -651,7 +651,7 @@ function* expandComponent(
     asBinding = binding.value;
 
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
-    validatedProps = validateProps(name, propsForValidation, definition.inputs);
+    validatedProps = validateProps(name, propsForValidation, definition.props);
   } catch (error) {
     return [yield* raise(propValidationErrorSegment(error, name))];
   }
@@ -857,7 +857,7 @@ function* expandFunctionComponent(
   // Validate props
   let validatedProps: Record<string, Json>;
   try {
-    validatedProps = validateProps(name, propsForValidation, definition.inputs);
+    validatedProps = validateProps(name, propsForValidation, definition.props);
   } catch (error) {
     return [yield* raise(propValidationErrorSegment(error, name))];
   }

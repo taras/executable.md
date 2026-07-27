@@ -393,7 +393,7 @@ calling task.
 ### Context
 
 The Sample component has three optional props: `prompt`, `model`,
-`params` — declared in the input schema but absent from its `required`
+`params` — declared in the props schema but absent from its `required`
 array. When such a prop has no `default` and is not provided, Ajv
 `useDefaults` leaves the key off the validated props, so it is absent
 from `env.values`. The variable is then undefined in the eval block
@@ -401,7 +401,7 @@ scope, causing `ReferenceError`.
 
 ### Decision
 
-All three props declare `default: ""` in the input schema. The eval block
+All three props declare `default: ""` in the props schema. The eval block
 converts empty strings to `undefined` for routing semantics:
 `model || undefined`, `params || undefined`.
 

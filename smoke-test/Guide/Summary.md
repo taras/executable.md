@@ -17,7 +17,7 @@ cat <<'TABLE'
 | silent modifier           | bash silent exec block                  |
 | Non-executable code       | yaml block (passthrough)                |
 | Markdown healing          | Unclosed bold before <Badge />          |
-| No-inputs component       | <Badge /> accepts zero props            |
+| No-props component        | <Badge /> accepts zero props            |
 | meta interpolation        | {meta.emoji} in Section and Note        |
 | props interpolation       | {props.title}, {props.message}, etc.    |
 | Props passthrough         | <PropDemo greeting="Hey" subject="w">  |

@@ -134,14 +134,14 @@ export interface CodeBlockResult {
 
 // Canonical draft-07 JSON Schema object (spec §5.1.1). Held as `JsonObject` so
 // it doubles as a stable `WeakMap` key for the compiled-validator cache.
-export type InputSchema = JsonObject;
+export type PropsSchema = JsonObject;
 
 export interface ComponentDefinition {
   kind: "markdown";
   name: string;
   path: string;
   meta: Record<string, unknown>;
-  inputs: InputSchema;
+  props: PropsSchema;
   bodySegments: Segment[];
 }
 
@@ -176,7 +176,7 @@ export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   path: string;
-  inputs: InputSchema;
+  props: PropsSchema;
   fn: FunctionComponent;
 }
 

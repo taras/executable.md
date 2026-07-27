@@ -2,12 +2,12 @@
 
 A component is a markdown file with a declared interface. The component's
 frontmatter defines its own metadata and the props it accepts
-via `inputs`. Here's the frontmatter from the Note component tested below:
+via `props`. Here's the frontmatter from the Note component tested below:
 
 ```yaml
 # components/Note.md frontmatter
 emoji: 📝
-inputs:
+props:
   type: object
   properties:
     level:
@@ -20,7 +20,7 @@ inputs:
 ```
 
 Components are invoked with JSX syntax. Props must match the declared
-inputs — undeclared props are rejected, required props must be provided,
+props — undeclared props are rejected, required props must be provided,
 and defaults fill in for omitted optional props. Components wrap caller
 content through the `<Content />` slot, the way the Section component
 around this text renders its children inside a headed section.

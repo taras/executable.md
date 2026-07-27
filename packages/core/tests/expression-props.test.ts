@@ -148,7 +148,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Display.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    data:",
@@ -189,7 +189,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Show.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    len:",
@@ -228,7 +228,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Check.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    active:",
@@ -267,7 +267,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Sum.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    total:",
@@ -307,7 +307,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Num.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    count:",
@@ -341,7 +341,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Greet.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    name:",
@@ -374,7 +374,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Show.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    data: {}",
@@ -409,7 +409,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Show.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    handler: {}",
@@ -447,7 +447,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Show.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    data: {}",
@@ -481,7 +481,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Show.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    x: {}",
@@ -513,7 +513,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Mixed.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    count:",
@@ -560,7 +560,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Typed.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    count:",
@@ -596,7 +596,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Typed.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    count:",
@@ -631,7 +631,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Layout.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties: {}",
           "  additionalProperties: false",
@@ -644,7 +644,7 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
         "components/Display.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    data:",
@@ -678,7 +678,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Show.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    count:",
@@ -721,7 +721,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Outer.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties: {}",
           "  additionalProperties: false",
@@ -734,7 +734,7 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
         "components/Inner.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    data:",
@@ -767,7 +767,7 @@ describe("Tier EP — Expression prop evaluation", () => {
       writeFiles(tmpDir, {
         "components/Parent.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties: {}",
           "  additionalProperties: false",
@@ -780,7 +780,7 @@ describe("Tier EP — Expression prop evaluation", () => {
         ].join("\n"),
         "components/Child.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties:",
           "    data:",

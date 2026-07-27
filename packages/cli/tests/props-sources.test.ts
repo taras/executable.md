@@ -1,5 +1,5 @@
 /**
- * Tier PR — source resolution (specs/root-document-inputs-spec.md).
+ * Tier PR — source resolution (specs/root-document-props-spec.md).
  *
  * Configliere owns precedence and provenance; these lock the behavior the
  * CLI relies on, including the two hazards that motivate the transport
@@ -11,7 +11,7 @@ import { expect } from "@effectionx/bdd/expect";
 import { buildBindings, extractPropsArgs, PropsError, resolveProps } from "../src/props.ts";
 import type { Binding } from "../src/props.ts";
 
-const INPUTS = {
+const PROPS_SCHEMA = {
   type: "object",
   properties: {
     name: { type: "string", description: "Person to greet" },
@@ -30,7 +30,7 @@ const INPUTS = {
   additionalProperties: false,
 };
 
-const bindings = buildBindings(INPUTS);
+const bindings = buildBindings(PROPS_SCHEMA);
 
 function bind(property: string): Binding {
   const binding = bindings.find((entry) => entry.property === property);
@@ -52,7 +52,7 @@ function resolve(options: {
     value,
   }));
   return resolveProps({
-    inputs: INPUTS,
+    propsSchema: PROPS_SCHEMA,
     bindings,
     individual: extraction.individual,
     aggregateCli: options.aggregateCli ?? extraction.aggregate,
@@ -170,7 +170,7 @@ describe("Tier PR — property source resolution", () => {
       ["definitions", "#/definitions/count"],
       ["$defs", "#/$defs/count"],
     ]) {
-      const inputs = {
+      const propsSchema = {
         type: "object",
         properties: {
           count: { $ref: pointer },
@@ -178,7 +178,7 @@ describe("Tier PR — property source resolution", () => {
         },
         [keyword]: { count: { type: "number" } },
       };
-      const refBindings = buildBindings(inputs);
+      const refBindings = buildBindings(propsSchema);
       const count = refBindings.find((entry) => entry.property === "count");
       expect(count?.option).toBe("--props-count");
       expect(count?.env).toBe("XMD_PROPS_COUNT");
@@ -192,7 +192,7 @@ describe("Tier PR — property source resolution", () => {
         refBindings,
       );
       const props = resolveProps({
-        inputs,
+        propsSchema,
         bindings: refBindings,
         individual: extraction.individual,
         individualEnv: [],
@@ -204,7 +204,7 @@ describe("Tier PR — property source resolution", () => {
   });
 
   it("PR18: only a scalar enum gets an individual binding", function* () {
-    const inputs = {
+    const propsSchema = {
       type: "object",
       properties: {
         mode: { enum: ["fast", "slow"] },
@@ -214,14 +214,14 @@ describe("Tier PR — property source resolution", () => {
       },
       additionalProperties: false,
     };
-    const enumBindings = buildBindings(inputs);
+    const enumBindings = buildBindings(propsSchema);
     expect(enumBindings.map((entry) => entry.property)).toEqual(["mode", "level"]);
     expect(enumBindings[0].form).toBe("<fast|slow>");
     expect(enumBindings[1].form).toBe("<1|2|null>");
 
     const extraction = extractPropsArgs(["--props-mode", "fast"], enumBindings);
     const props = resolveProps({
-      inputs,
+      propsSchema,
       bindings: enumBindings,
       individual: extraction.individual,
       aggregateCli: '{"shape":{"a":1},"pair":["b"]}',
@@ -233,15 +233,15 @@ describe("Tier PR — property source resolution", () => {
   });
 
   it("PR19: a structural enum keeps its source-aware diagnostics", function* () {
-    const inputs = {
+    const propsSchema = {
       type: "object",
       properties: { shape: { enum: [{ a: 1 }, { a: 2 }] } },
       additionalProperties: false,
     };
-    const enumBindings = buildBindings(inputs);
+    const enumBindings = buildBindings(propsSchema);
     const resolveEnum = (aggregateCli?: string, aggregateEnv?: string) =>
       resolveProps({
-        inputs,
+        propsSchema,
         bindings: enumBindings,
         individual: [],
         aggregateCli,
@@ -258,7 +258,7 @@ describe("Tier PR — property source resolution", () => {
     // Key order is not part of the comparison.
     expect(
       resolveProps({
-        inputs: { type: "object", properties: { pick: { enum: [{ a: 1, b: 2 }] } } },
+        propsSchema: { type: "object", properties: { pick: { enum: [{ a: 1, b: 2 }] } } },
         bindings: [],
         individual: [],
         aggregateCli: '{"pick":{"b":2,"a":1}}',

@@ -2,7 +2,7 @@
 meta:
   componentName: StubProvider
 
-inputs:
+props:
   type: object
   properties:
     model:

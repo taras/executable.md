@@ -1,8 +1,8 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import {
-  compileInputSchema,
-  InputSchemaError,
+  compilePropsSchema,
+  PropsSchemaError,
   PropValidationError,
   validateProps,
 } from "../src/validate.ts";
@@ -17,26 +17,26 @@ function closed(properties: Record<string, Json>, required?: string[]): Record<s
   };
 }
 
-describe("compileInputSchema — root-input contract", () => {
+describe("compilePropsSchema — root-props contract", () => {
   it("rejects a root schema that is not type: object", function* () {
-    expect(() => compileInputSchema({})).toThrow(InputSchemaError);
-    expect(() => compileInputSchema({ type: "array" })).toThrow('type: "object"');
+    expect(() => compilePropsSchema({})).toThrow(PropsSchemaError);
+    expect(() => compilePropsSchema({ type: "array" })).toThrow('type: "object"');
   });
 
   it("rejects reserved slot/as as declared properties", function* () {
-    expect(() => compileInputSchema(closed({ slot: { type: "string" } }))).toThrow("reserved");
-    expect(() => compileInputSchema(closed({ as: { type: "string" } }))).toThrow("reserved");
+    expect(() => compilePropsSchema(closed({ slot: { type: "string" } }))).toThrow("reserved");
+    expect(() => compilePropsSchema(closed({ as: { type: "string" } }))).toThrow("reserved");
   });
 
   it("rejects a malformed schema via Ajv meta-validation", function* () {
-    expect(() => compileInputSchema(closed({ n: { type: "not-a-type" } }))).toThrow(
-      InputSchemaError,
+    expect(() => compilePropsSchema(closed({ n: { type: "not-a-type" } }))).toThrow(
+      PropsSchemaError,
     );
   });
 
   it("rejects an async schema before compiling", function* () {
     expect(() =>
-      compileInputSchema({
+      compilePropsSchema({
         $async: true,
         type: "object",
         properties: {},
@@ -47,15 +47,15 @@ describe("compileInputSchema — root-input contract", () => {
 
   it("rejects a remote/unresolved $ref at compile time", function* () {
     expect(() =>
-      compileInputSchema(closed({ x: { $ref: "https://example.com/schema.json" } })),
-    ).toThrow(InputSchemaError);
+      compilePropsSchema(closed({ x: { $ref: "https://example.com/schema.json" } })),
+    ).toThrow(PropsSchemaError);
   });
 
   it("compiles duplicate $id schemas independently (addUsedSchema: false)", function* () {
     const a = { $id: "https://example.com/dup", ...closed({ a: { type: "string" } }) };
     const b = { $id: "https://example.com/dup", ...closed({ b: { type: "number" } }) };
-    expect(() => compileInputSchema(a)).not.toThrow();
-    expect(() => compileInputSchema(b)).not.toThrow();
+    expect(() => compilePropsSchema(a)).not.toThrow();
+    expect(() => compilePropsSchema(b)).not.toThrow();
   });
 });
 

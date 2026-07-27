@@ -18,7 +18,7 @@ export type {
   ParsedInfoString,
   CodeBlockContext,
   CodeBlockResult,
-  InputSchema,
+  PropsSchema,
   ComponentDefinition,
   ImportResult,
   ResolveResult,
@@ -96,10 +96,10 @@ export { collect } from "./src/collect.ts";
 
 export { validateBindingName } from "./src/expand.ts";
 export {
-  compileInputSchema,
+  compilePropsSchema,
   validateProps,
   PropValidationError,
-  InputSchemaError,
+  PropsSchemaError,
 } from "./src/validate.ts";
 export type { NormalizedIssue } from "./src/validate.ts";
 

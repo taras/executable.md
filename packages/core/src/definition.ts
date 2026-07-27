@@ -1,6 +1,6 @@
 import type { ComponentDefinition } from "./types.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { compileInputSchema } from "./validate.ts";
+import { compilePropsSchema } from "./validate.ts";
 import { scanSegments } from "./scanner.ts";
 
 import matter from "gray-matter";
@@ -17,7 +17,7 @@ export function isFunctionComponentPath(path: string): boolean {
 /**
  * Parse markdown source into a component definition. Execution and
  * inspection share this so their frontmatter and schema behavior cannot
- * drift: both compile the input schema, so a malformed schema fails the
+ * drift: both compile the props schema, so a malformed schema fails the
  * same way whether the document runs or is only described.
  */
 export function parseMarkdownDefinition(
@@ -26,8 +26,8 @@ export function parseMarkdownDefinition(
   content: string,
 ): ComponentDefinition {
   const parsed = matter(content);
-  const { meta, inputs } = parseFrontmatter(parsed.data);
-  compileInputSchema(inputs);
+  const { meta, props } = parseFrontmatter(parsed.data);
+  compilePropsSchema(props);
   // The markdown body is a verbatim suffix of the raw file, so the body start
   // is computed by length — never by content search, which could false-match
   // body text repeated inside frontmatter. The invariant check turns any
@@ -54,7 +54,7 @@ export function parseMarkdownDefinition(
     name,
     path,
     meta,
-    inputs,
+    props,
     bodySegments,
   };
 }

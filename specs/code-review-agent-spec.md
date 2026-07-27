@@ -172,7 +172,7 @@ Zero dependencies beyond Deno stdlib.
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     when:
@@ -198,7 +198,7 @@ if (fallback) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     heading:
@@ -222,7 +222,7 @@ return content.trim().length > 0
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     when:
@@ -251,7 +251,7 @@ const icon = severity === "error" ? "🔴" : "🟡";
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     system:
@@ -277,7 +277,7 @@ scope.around(Sample, function* ([context], next) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     marker:
@@ -331,7 +331,7 @@ return content;
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     model:
@@ -375,7 +375,7 @@ scope.around(Sample, function* ([context], next) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     model:
@@ -423,7 +423,7 @@ scope.around(Sample, function* ([context], next) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -474,7 +474,7 @@ if (ops[op](actual, value)) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -516,7 +516,7 @@ if (matches.length >= min) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -568,7 +568,7 @@ if (denCount >= minDenominator && numCount / denCount > threshold) {
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -647,7 +647,7 @@ still reports a low count, which the "why flagged" column states.
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -673,7 +673,7 @@ inputs:
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -703,7 +703,7 @@ const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(pr.meta.
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -736,7 +736,7 @@ const triggered = hasConfig && hasSource && pr.stats.totalFiles > minFiles;
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -772,7 +772,7 @@ const resolvedMessage = message.replace(
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -802,7 +802,7 @@ const triggered = touchesPkg && !mentionsDeps;
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -857,7 +857,7 @@ If none are obvious: "No obvious comments found."
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -911,7 +911,7 @@ inputs:
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -958,7 +958,7 @@ inputs:
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -987,7 +987,7 @@ inputs:
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -1032,7 +1032,7 @@ Zero eval blocks.
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:

@@ -16,7 +16,7 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
-import { compileInputSchema, validateProps } from "../src/validate.ts";
+import { compilePropsSchema, validateProps } from "../src/validate.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -31,7 +31,7 @@ function makeComponent(
   body: string,
   opts: {
     meta?: Record<string, unknown>;
-    inputs?: Record<string, any>;
+    props?: Record<string, any>;
   } = {},
 ): ComponentDefinition {
   return {
@@ -39,7 +39,7 @@ function makeComponent(
     name,
     path: `components/${name}.md`,
     meta: opts.meta ?? {},
-    inputs: opts.inputs ?? { type: "object", properties: {}, additionalProperties: false },
+    props: opts.props ?? { type: "object", properties: {}, additionalProperties: false },
     bodySegments: scanSegments(body),
   };
 }
@@ -121,7 +121,7 @@ function stubProvider(componentName: string): string {
     "---",
     "meta:",
     `  componentName: ${componentName}`,
-    "inputs:",
+    "props:",
     "  type: object",
     "  properties:",
     "    model:",
@@ -354,10 +354,10 @@ describe("Tier NS-B — Content substitution", () => {
   });
 
   it("NS-B8: slot prop stripped", function* () {
-    // Widget declares "title" as an input but NOT "slot"
+    // Widget declares "title" as a prop but NOT "slot"
     const layout = makeComponent("Layout", '<Content slot="main" />');
     const widget = makeComponent("Widget", "WIDGET:{props.title}", {
-      inputs: {
+      props: {
         type: "object",
         properties: { title: { type: "string" } },
         required: ["title"],
@@ -516,7 +516,7 @@ describe("Tier NS-C — Expansion integration", () => {
   it("NS-C5: props on slotted child", function* () {
     const layout = makeComponent("Layout", '<Content slot="main" />');
     const comp = makeComponent("Comp", "title={props.title}", {
-      inputs: {
+      props: {
         type: "object",
         properties: { title: { type: "string" } },
         required: ["title"],
@@ -622,10 +622,10 @@ describe("Tier NS-C — Expansion integration", () => {
 
 describe("Tier NS-D — slot prop reservation", () => {
   // deno-lint-ignore require-yield
-  it("NS-D1: slot in inputs frontmatter → error", function* () {
+  it("NS-D1: slot in props frontmatter → error", function* () {
     expect(() => {
-      const { inputs } = parseFrontmatter({
-        inputs: {
+      const { props } = parseFrontmatter({
+        props: {
           type: "object",
           properties: {
             slot: { type: "string" },
@@ -634,15 +634,15 @@ describe("Tier NS-D — slot prop reservation", () => {
           additionalProperties: false,
         },
       });
-      compileInputSchema(inputs);
+      compilePropsSchema(props);
     }).toThrow("reserved prop name");
   });
 
   it("NS-D2: slot not in child's validatedProps", function* () {
-    // Widget declares "title" input only — slot should be stripped before validation
+    // Widget declares "title" prop only — slot should be stripped before validation
     const layout = makeComponent("Layout", '<Content slot="main" />');
     const widget = makeComponent("Widget", "T:{props.title}", {
-      inputs: {
+      props: {
         type: "object",
         properties: { title: { type: "string" } },
         required: ["title"],
@@ -658,7 +658,7 @@ describe("Tier NS-D — slot prop reservation", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  it("NS-D3: Content slot prop not validated as input", function* () {
+  it("NS-D3: Content slot prop not validated as a declared prop", function* () {
     // Content is special-cased — slot on Content should not cause validation error
     const comp = makeComponent("Comp", '<Content slot="header" />\n<Content />');
     const header = makeComponent("Header", "H");
@@ -703,7 +703,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "components/Sample.md": sampleMd,
         "components/TestProvider.md": stubProvider("TestProvider"),
         "components/Header.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER-CONTENT",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER-CONTENT",
         "doc.md": [
           '<TestProvider model="test-model">',
           '<Sample model="test-model">',
@@ -729,7 +729,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
     }
   });
 
-  it("NS-E2: Sample component with slotted input — all content captured", function* () {
+  it("NS-E2: Sample component with slotted content — all content captured", function* () {
     const tmpDir = makeTempDir();
     try {
       const sampleMd = fs.readFileSync(
@@ -740,9 +740,9 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "components/Sample.md": sampleMd,
         "components/TestProvider.md": stubProvider("TestProvider"),
         "components/X.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nX-CONTENT",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nX-CONTENT",
         "components/Y.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nY-CONTENT",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nY-CONTENT",
         "doc.md": [
           '<TestProvider model="test-model">',
           '<Sample model="test-model">',
@@ -779,9 +779,9 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "components/Sample.md": sampleMd,
         "components/TestProvider.md": stubProvider("TestProvider"),
         "components/First.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nFIRST",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nFIRST",
         "components/Second.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nSECOND",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nSECOND",
         "doc.md": [
           '<TestProvider model="test-model">',
           '<Sample model="test-model">',
@@ -912,13 +912,13 @@ describe("Tier NS-F — Edge cases", () => {
       writeFiles(tmpDir, {
         "components/Layout.md": [
           "---",
-          "inputs: { type: object, properties: {}, additionalProperties: false }",
+          "props: { type: object, properties: {}, additionalProperties: false }",
           "---",
           '<Content slot="header" />',
           "<Content />",
         ].join("\n"),
         "components/Header.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER",
         "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
       });
       const stream = new InMemoryStream();
@@ -947,13 +947,13 @@ describe("Tier NS-F — Edge cases", () => {
       writeFiles(tmpDir, {
         "components/Layout.md": [
           "---",
-          "inputs: { type: object, properties: {}, additionalProperties: false }",
+          "props: { type: object, properties: {}, additionalProperties: false }",
           "---",
           '<Content slot="header" />',
           "<Content />",
         ].join("\n"),
         "components/Header.md":
-          "---\ninputs: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER",
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER",
         "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
       });
       const stream = new InMemoryStream();

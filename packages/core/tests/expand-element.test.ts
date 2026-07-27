@@ -14,7 +14,7 @@ function makeComponent(name: string, body: string): ComponentDefinition {
     name,
     path: `components/${name}.md`,
     meta: {},
-    inputs: { type: "object", properties: {}, additionalProperties: false },
+    props: { type: "object", properties: {}, additionalProperties: false },
     bodySegments: scanSegments(body),
   };
 }

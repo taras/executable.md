@@ -1,9 +1,9 @@
 import { Ajv } from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { parseJson } from "./json.ts";
-import type { InputSchema, Json } from "./types.ts";
+import type { Json, PropsSchema } from "./types.ts";
 
-const RESERVED_INPUT_NAMES = ["slot", "as"];
+const RESERVED_PROP_NAMES = ["slot", "as"];
 
 // `validateFormats: false` keeps `format` an annotation (no assertion, no extra
 // dependency). `useDefaults` mutates the validated value to fill defaults.
@@ -18,10 +18,10 @@ const ajv = new Ajv({
   validateFormats: false,
 });
 
-export class InputSchemaError extends Error {
+export class PropsSchemaError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "InputSchemaError";
+    this.name = "PropsSchemaError";
   }
 }
 
@@ -49,9 +49,9 @@ export class PropValidationError extends Error {
   }
 }
 
-const compiledCache = new WeakMap<InputSchema, ValidateFunction>();
+const compiledCache = new WeakMap<PropsSchema, ValidateFunction>();
 
-export function compileInputSchema(schema: InputSchema): ValidateFunction {
+export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
   const cached = compiledCache.get(schema);
   if (cached) {
     return cached;
@@ -62,20 +62,20 @@ export function compileInputSchema(schema: InputSchema): ValidateFunction {
   // returns a promise. Reject it before and after compiling so validation
   // stays synchronous within the Effection path.
   if (schema["$async"] === true) {
-    throw new InputSchemaError("asynchronous input schemas ($async: true) are not supported");
+    throw new PropsSchemaError("asynchronous props schemas ($async: true) are not supported");
   }
 
   let validate: ValidateFunction;
   try {
     validate = ajv.compile(schema);
   } catch (error) {
-    throw new InputSchemaError(
-      `invalid input schema: ${error instanceof Error ? error.message : String(error)}`,
+    throw new PropsSchemaError(
+      `invalid props schema: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
   if ("$async" in validate && validate.$async === true) {
-    throw new InputSchemaError("asynchronous input schemas are not supported");
+    throw new PropsSchemaError("asynchronous props schemas are not supported");
   }
 
   compiledCache.set(schema, validate);
@@ -87,9 +87,9 @@ export function compileInputSchema(schema: InputSchema): ValidateFunction {
 export function validateProps(
   componentName: string,
   callerProps: Record<string, Json>,
-  schema: InputSchema,
+  schema: PropsSchema,
 ): Record<string, Json> {
-  const validate = compileInputSchema(schema);
+  const validate = compilePropsSchema(schema);
   const clone = structuredClone(callerProps);
 
   if (!validate(clone)) {
@@ -99,9 +99,9 @@ export function validateProps(
   return clone;
 }
 
-function enforceRootContract(schema: InputSchema): void {
+function enforceRootContract(schema: PropsSchema): void {
   if (schema["type"] !== "object") {
-    throw new InputSchemaError('root input schema must declare type: "object"');
+    throw new PropsSchemaError('root props schema must declare type: "object"');
   }
 
   const properties = schema["properties"];
@@ -109,12 +109,12 @@ function enforceRootContract(schema: InputSchema): void {
     return;
   }
   if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
-    throw new InputSchemaError('input schema "properties" must be an object');
+    throw new PropsSchemaError('props schema "properties" must be an object');
   }
-  for (const reserved of RESERVED_INPUT_NAMES) {
+  for (const reserved of RESERVED_PROP_NAMES) {
     if (reserved in properties) {
-      throw new InputSchemaError(
-        `"${reserved}" is a reserved prop name and cannot be declared as a component input`,
+      throw new PropsSchemaError(
+        `"${reserved}" is a reserved prop name and cannot be declared as a component prop`,
       );
     }
   }

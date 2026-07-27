@@ -97,7 +97,7 @@ describe("Tier B — durable import", () => {
     expect(secondResult).toBe(firstResult);
   });
 
-  // B3: replay + runtime parsing — stored content parsed to same meta/inputs/segments
+  // B3: replay + runtime parsing — stored content parsed to same meta/props/segments
   it("B3: replay parses stored content to same result", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
@@ -530,7 +530,7 @@ describe("execute", () => {
         "---",
         "emoji: hi",
         "",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    name:",
@@ -608,7 +608,7 @@ describe("execute", () => {
       "README.md": '<Greeting name="Alice" />\n',
       "components/Greeting.md": [
         "---",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    name:",
@@ -704,7 +704,7 @@ describe("execute", () => {
       "README.md": "<Greeting />\n",
       "components/Greeting.md": [
         "---",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    name:",
@@ -734,7 +734,7 @@ describe("execute", () => {
       "README.md": ['<Greeting name="world" />', "", "```bash exec", "echo done", "```"].join("\n"),
       "components/Greeting.md": [
         "---",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    name:",
@@ -882,7 +882,7 @@ describe("execute", () => {
       ].join("\n"),
       "components/Greeting.md": [
         "---",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    name:",

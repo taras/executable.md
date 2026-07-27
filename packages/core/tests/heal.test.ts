@@ -14,7 +14,7 @@ function makeComponent(
   body: string,
   opts: {
     meta?: Record<string, unknown>;
-    inputs?: Record<string, any>;
+    props?: Record<string, any>;
   } = {},
 ): ComponentDefinition {
   return {
@@ -22,7 +22,7 @@ function makeComponent(
     name,
     path: `components/${name}.md`,
     meta: opts.meta ?? {},
-    inputs: opts.inputs ?? { type: "object", properties: {}, additionalProperties: false },
+    props: opts.props ?? { type: "object", properties: {}, additionalProperties: false },
     bodySegments: scanSegments(body),
   };
 }

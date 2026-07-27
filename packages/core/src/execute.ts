@@ -28,11 +28,11 @@ import type {
   ComponentDefinition,
   FunctionComponent,
   FunctionComponentDefinition,
-  InputSchema,
+  PropsSchema,
   ImportResult,
 } from "./types.ts";
 import { parseJsonObject } from "./json.ts";
-import { compileInputSchema, validateProps } from "./validate.ts";
+import { compilePropsSchema, validateProps } from "./validate.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 import {
   expandSegments,
@@ -116,18 +116,18 @@ function* durableImportComponent(
       );
     }
 
-    const inputsExport = "inputs" in mod ? mod.inputs : undefined;
-    const inputs: InputSchema =
-      inputsExport === undefined
+    const propsExport = "props" in mod ? mod.props : undefined;
+    const props: PropsSchema =
+      propsExport === undefined
         ? { type: "object", properties: {}, additionalProperties: false }
-        : parseJsonObject(inputsExport);
-    compileInputSchema(inputs);
+        : parseJsonObject(propsExport);
+    compilePropsSchema(props);
 
     return {
       kind: "function" as const,
       name,
       path: result.path,
-      inputs,
+      props,
       fn: defaultExport,
     };
   }
@@ -228,7 +228,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
-  const validatedProps = validateProps("__root__", props, root.inputs);
+  const validatedProps = validateProps("__root__", props, root.props);
 
   const rootEnv: EvalEnv = { values: { ...validatedProps } };
 

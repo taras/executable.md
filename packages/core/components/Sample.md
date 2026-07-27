@@ -2,7 +2,7 @@
 meta:
   componentName: Sample
 
-inputs:
+props:
   type: object
   properties:
     prompt:

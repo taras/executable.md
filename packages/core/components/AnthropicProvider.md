@@ -2,7 +2,7 @@
 meta:
   componentName: AnthropicProvider
 
-inputs:
+props:
   type: object
   properties:
     model:

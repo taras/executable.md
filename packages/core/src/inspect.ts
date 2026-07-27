@@ -1,7 +1,7 @@
 import type { Operation } from "effection";
 import { readTextFile } from "@executablemd/runtime";
 
-import type { InputSchema } from "./types.ts";
+import type { PropsSchema } from "./types.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 
 export interface InspectOptions {
@@ -13,11 +13,11 @@ export interface DocumentInfo {
   /** The path the document was read from. */
   path: string;
 
-  /** Frontmatter keys other than the reserved `inputs`. */
+  /** Frontmatter keys other than the reserved `props` and `required`. */
   meta: Record<string, unknown>;
 
-  /** The document's declared input schema. */
-  inputs: InputSchema;
+  /** The document's declared props schema. */
+  props: PropsSchema;
 }
 
 /**
@@ -38,5 +38,5 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
   const content = yield* readTextFile(path);
   const definition = parseMarkdownDefinition("__root__", path, content);
 
-  return { path, meta: definition.meta, inputs: definition.inputs };
+  return { path, meta: definition.meta, props: definition.props };
 }

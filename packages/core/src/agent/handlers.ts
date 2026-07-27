@@ -16,7 +16,7 @@ import { validateBindingName } from "../expand.ts";
 import { renderSegments } from "../render.ts";
 import { parseDuration } from "../modifiers/timeout.ts";
 import { validateProps, PropValidationError } from "../validate.ts";
-import type { ComponentElement, InputSchema, Segment } from "../types.ts";
+import type { ComponentElement, PropsSchema, Segment } from "../types.ts";
 import { Agent } from "./agent-api.ts";
 import type { PromptOptions, Session } from "./agent-api.ts";
 import { AgentProviders } from "./provider-api.ts";
@@ -27,7 +27,7 @@ import type { SerializedPromptFailure } from "./errors.ts";
 import { persistPrompt, promptFailureFromRecord } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
 
-const AGENT_PROVIDER_INPUTS: InputSchema = {
+const AGENT_PROVIDER_PROPS: PropsSchema = {
   type: "object",
   properties: {
     name: { type: "string" },
@@ -38,25 +38,25 @@ const AGENT_PROVIDER_INPUTS: InputSchema = {
   additionalProperties: false,
 };
 
-const NO_PROPS_INPUTS: InputSchema = {
+const NO_PROPS_SCHEMA: PropsSchema = {
   type: "object",
   properties: {},
   additionalProperties: false,
 };
 
-const AGENT_INPUTS: InputSchema = {
+const AGENT_PROPS: PropsSchema = {
   type: "object",
   properties: { name: { type: "string" } },
   additionalProperties: false,
 };
 
-const SESSION_INPUTS: InputSchema = {
+const SESSION_PROPS: PropsSchema = {
   type: "object",
   properties: { name: { type: "string" } },
   additionalProperties: false,
 };
 
-const PROMPT_INPUTS: InputSchema = {
+const PROMPT_PROPS: PropsSchema = {
   type: "object",
   properties: {
     text: { type: "string" },
@@ -80,7 +80,7 @@ function errorSegment(source: string, message: string): Segment {
 function parseLiteralProps(
   source: string,
   element: ComponentElement,
-  schema: InputSchema,
+  schema: PropsSchema,
 ): { props: Record<string, unknown> } | { error: Segment } {
   for (const name of Object.keys(element.expressions)) {
     if (name !== "as" && name !== "slot") {
@@ -157,7 +157,7 @@ export interface AgentHandlers {
 
 export function createAgentHandlers(): AgentHandlers {
   function* expandAgentProvider(element: ComponentElement): Operation<Segment[]> {
-    const parsed = parseLiteralProps("AgentProvider", element, AGENT_PROVIDER_INPUTS);
+    const parsed = parseLiteralProps("AgentProvider", element, AGENT_PROVIDER_PROPS);
     if ("error" in parsed) {
       return [parsed.error];
     }
@@ -193,7 +193,7 @@ export function createAgentHandlers(): AgentHandlers {
   }
 
   function* expandApproveAll(element: ComponentElement): Operation<Segment[]> {
-    const parsed = parseLiteralProps("ApproveAll", element, NO_PROPS_INPUTS);
+    const parsed = parseLiteralProps("ApproveAll", element, NO_PROPS_SCHEMA);
     if ("error" in parsed) {
       return [parsed.error];
     }
@@ -205,7 +205,7 @@ export function createAgentHandlers(): AgentHandlers {
   }
 
   function* expandAskPermission(element: ComponentElement): Operation<Segment[]> {
-    const parsed = parseLiteralProps("AskPermission", element, NO_PROPS_INPUTS);
+    const parsed = parseLiteralProps("AskPermission", element, NO_PROPS_SCHEMA);
     if ("error" in parsed) {
       return [parsed.error];
     }
@@ -217,7 +217,7 @@ export function createAgentHandlers(): AgentHandlers {
   }
 
   function* expandAgent(element: ComponentElement): Operation<Segment[]> {
-    const parsed = parseLiteralProps("Agent", element, AGENT_INPUTS);
+    const parsed = parseLiteralProps("Agent", element, AGENT_PROPS);
     if ("error" in parsed) {
       return [parsed.error];
     }
@@ -243,7 +243,7 @@ export function createAgentHandlers(): AgentHandlers {
   }
 
   function* expandSession(element: ComponentElement): Operation<Segment[]> {
-    const parsed = parseLiteralProps("Session", element, SESSION_INPUTS);
+    const parsed = parseLiteralProps("Session", element, SESSION_PROPS);
     if ("error" in parsed) {
       return [parsed.error];
     }
@@ -272,7 +272,7 @@ export function createAgentHandlers(): AgentHandlers {
   }
 
   function* expandPrompt(element: ComponentElement): Operation<Segment[]> {
-    const parsed = parseLiteralProps("Prompt", element, PROMPT_INPUTS);
+    const parsed = parseLiteralProps("Prompt", element, PROMPT_PROPS);
     if ("error" in parsed) {
       return [parsed.error];
     }

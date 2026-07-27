@@ -37,7 +37,7 @@ ls ./src
 ```md
 ---
 emoji: Hello
-inputs:
+props:
   type: object
   properties:
     name:

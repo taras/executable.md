@@ -1,5 +1,5 @@
 /**
- * Tier RP — root document properties (specs/root-document-inputs-spec.md).
+ * Tier RP — root document properties (specs/root-document-props-spec.md).
  *
  * The root receives props on the same contract as an imported component:
  * validated and defaulted before any body effect, then available through
@@ -16,7 +16,7 @@ import { inspectDocument } from "../src/inspect.ts";
 
 const GREETING = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    name:",
@@ -35,7 +35,7 @@ const GREETING = [
 
 const SIDE_EFFECT = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    name: { type: string }",
@@ -47,13 +47,13 @@ const SIDE_EFFECT = [
   "",
 ].join("\n");
 
-const NO_INPUTS = "PLAIN_MARKER\n";
+const NO_PROPS = "PLAIN_MARKER\n";
 
 const GREETING_CONCISE = [
   "---",
   "required: [name]",
   "",
-  "inputs:",
+  "props:",
   "  name:",
   "    type: string",
   "    description: Person to greet",
@@ -68,7 +68,7 @@ const GREETING_CONCISE = [
 
 const NESTED_CONCISE = [
   "---",
-  "inputs:",
+  "props:",
   "  server:",
   "    type: object",
   "    properties:",
@@ -129,8 +129,8 @@ describe("Tier RP — root document properties", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("RP6: a document without inputs keeps its existing behavior", function* () {
-    const { output, result } = yield* runDoc({ "plain.md": NO_INPUTS }, "plain.md");
+  it("RP6: a document without props keeps its existing behavior", function* () {
+    const { output, result } = yield* runDoc({ "plain.md": NO_PROPS }, "plain.md");
     expect(result.ok).toBe(true);
     expect(output).toContain("PLAIN_MARKER");
   });
@@ -141,7 +141,7 @@ describe("Tier RI — document inspection", () => {
     yield* useStubFs({ "hello.md": GREETING });
     const info = yield* inspectDocument({ path: "hello.md" });
     expect(info.path).toBe("hello.md");
-    expect(info.inputs).toMatchObject({
+    expect(info.props).toMatchObject({
       type: "object",
       required: ["name"],
       additionalProperties: false,
@@ -155,7 +155,7 @@ describe("Tier RI — document inspection", () => {
     yield* useStubFs({
       "doc.md": [
         "---",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    name: { type: string }",
@@ -168,18 +168,18 @@ describe("Tier RI — document inspection", () => {
       ].join("\n"),
     });
     const info = yield* inspectDocument({ path: "doc.md" });
-    expect(info.inputs).toMatchObject({ required: ["name"] });
+    expect(info.props).toMatchObject({ required: ["name"] });
   });
 
-  it("RI3: a document without inputs inspects to the empty schema", function* () {
-    yield* useStubFs({ "plain.md": NO_INPUTS });
+  it("RI3: a document without props inspects to the empty schema", function* () {
+    yield* useStubFs({ "plain.md": NO_PROPS });
     const info = yield* inspectDocument({ path: "plain.md" });
-    expect(info.inputs).toMatchObject({ type: "object", properties: {} });
+    expect(info.props).toMatchObject({ type: "object", properties: {} });
   });
 
   it("RI4: an invalid schema fails inspection just as it fails execution", function* () {
     yield* useStubFs({
-      "bad.md": ["---", "inputs:", "  type: array", "---", "", "body", ""].join("\n"),
+      "bad.md": ["---", "props:", "  type: array", "---", "", "body", ""].join("\n"),
     });
     let failed = false;
     try {
@@ -209,7 +209,7 @@ describe("Tier RI — document inspection", () => {
 
     for (const name of names) {
       const info = yield* inspectDocument({ path: name });
-      expect(info.inputs).toMatchObject({ required: ["name"] });
+      expect(info.props).toMatchObject({ required: ["name"] });
 
       const execution = yield* execute({
         path: name,
@@ -224,7 +224,7 @@ describe("Tier RI — document inspection", () => {
   });
 });
 
-describe("Tier RS — concise input declarations", () => {
+describe("Tier RS — concise props declarations", () => {
   it("RS1: a concise root receives props and applies defaults", function* () {
     const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
       name: "Ada",
@@ -283,7 +283,7 @@ describe("Tier RS — concise input declarations", () => {
   it("RS7: inspection returns the normalized schema", function* () {
     yield* useStubFs({ "hello.md": GREETING_CONCISE });
     const info = yield* inspectDocument({ path: "hello.md" });
-    expect(info.inputs).toMatchObject({
+    expect(info.props).toMatchObject({
       type: "object",
       required: ["name"],
       additionalProperties: false,

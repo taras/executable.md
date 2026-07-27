@@ -1,7 +1,7 @@
 ---
 emoji: "§"
 
-inputs:
+props:
   type: object
   properties:
     title:

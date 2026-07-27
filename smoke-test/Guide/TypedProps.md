@@ -1,6 +1,6 @@
-<Section title="Typed Inputs">
+<Section title="Typed Props">
 
-A component's `inputs` is a JSON Schema. Arrays declare their element type
+A component's `props` is a JSON Schema. Arrays declare their element type
 via `items`, object arrays declare each element's shape, and nested `default`
 values fill in recursively. Invalid data is rejected with a precise message,
 and `<AssertThrows>` turns that rejection into a passing test.

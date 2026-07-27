@@ -212,7 +212,7 @@ and execution record rather than depending on heuristic activation.
 ## Design test
 
 A design supports this direction when a reader can answer, from the document and
-its declared inputs:
+its declared props:
 
 1. Which agents exist, and what configures each one?
 2. What exact instructions and context does each invocation receive?

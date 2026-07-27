@@ -10,16 +10,16 @@ import { scanSegments } from "../src/scanner.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
-import { compileInputSchema } from "../src/validate.ts";
+import { compilePropsSchema } from "../src/validate.ts";
 import type { ComponentDefinition, EvalEnv, Json, Segment } from "../src/types.ts";
 
-function markdownComponent(name: string, inputs: Record<string, Json>): ComponentDefinition {
+function markdownComponent(name: string, props: Record<string, Json>): ComponentDefinition {
   return {
     kind: "markdown",
     name,
     path: `components/${name}.md`,
     meta: {},
-    inputs,
+    props,
     bodySegments: scanSegments("body"),
   };
 }
@@ -87,13 +87,41 @@ describe("prop-validation error segment", () => {
   });
 });
 
-describe("definition-loading rejects invalid input schemas", () => {
+// A full `inputs` schema parses — `inputs` lands in meta — so the failure
+// surfaces later, when a caller passes a prop the component does not declare.
+describe("`inputs` is not a compatibility alias for `props`", () => {
+  it("a component declaring `inputs` declares no props", function* () {
+    yield* useStubFs({
+      "README.md": '<Legacy name="world" />\n',
+      "Legacy.md": [
+        "---",
+        "inputs:",
+        "  type: object",
+        "  properties:",
+        "    name: { type: string }",
+        "  additionalProperties: false",
+        "---",
+        "Hello, {props.name}",
+        "",
+      ].join("\n"),
+    });
+    let message = "";
+    try {
+      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("Prop validation failed");
+  });
+});
+
+describe("definition-loading rejects invalid props schemas", () => {
   it("rejects an async schema at the Markdown load boundary", function* () {
     yield* useStubFs({
       "README.md": "<Bad />\n",
       "Bad.md": [
         "---",
-        "inputs:",
+        "props:",
         "  $async: true",
         "  type: object",
         "  properties: {}",
@@ -117,7 +145,7 @@ describe("definition-loading rejects invalid input schemas", () => {
       "README.md": "<Bad />\n",
       "Bad.md": [
         "---",
-        "inputs:",
+        "props:",
         "  type: object",
         "  properties:",
         "    slot: { type: string }",
@@ -136,10 +164,10 @@ describe("definition-loading rejects invalid input schemas", () => {
     expect(message).toContain("reserved");
   });
 
-  it("rejects a reserved name declared through an inputs map", function* () {
+  it("rejects a reserved name declared through a props map", function* () {
     yield* useStubFs({
       "README.md": "<Bad />\n",
-      "Bad.md": ["---", "inputs:", "  slot: { type: string }", "---", "body", ""].join("\n"),
+      "Bad.md": ["---", "props:", "  slot: { type: string }", "---", "body", ""].join("\n"),
     });
     let message = "";
     try {
@@ -155,22 +183,22 @@ describe("definition-loading rejects invalid input schemas", () => {
 
 describe("the root-object contract applies to the normalized schema", () => {
   it("reports a non-object root type", function* () {
-    const { inputs } = parseFrontmatter({ inputs: { type: "array", items: { type: "string" } } });
-    expect(() => compileInputSchema(inputs)).toThrow('type: "object"');
+    const { props } = parseFrontmatter({ props: { type: "array", items: { type: "string" } } });
+    expect(() => compilePropsSchema(props)).toThrow('type: "object"');
   });
 
   it("reports a missing root type behind a draft-07 dialect", function* () {
-    const { inputs } = parseFrontmatter({
-      inputs: { $schema: "http://json-schema.org/draft-07/schema#", properties: {} },
+    const { props } = parseFrontmatter({
+      props: { $schema: "http://json-schema.org/draft-07/schema#", properties: {} },
     });
-    expect(() => compileInputSchema(inputs)).toThrow('type: "object"');
+    expect(() => compilePropsSchema(props)).toThrow('type: "object"');
   });
 
-  it("compiles a normalized inputs map", function* () {
-    const { inputs } = parseFrontmatter({
+  it("compiles a normalized props map", function* () {
+    const { props } = parseFrontmatter({
       required: ["name"],
-      inputs: { name: { type: "string" } },
+      props: { name: { type: "string" } },
     });
-    expect(() => compileInputSchema(inputs)).not.toThrow();
+    expect(() => compilePropsSchema(props)).not.toThrow();
   });
 });
