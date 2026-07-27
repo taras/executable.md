@@ -224,13 +224,47 @@ describe("Tier PR — property source resolution", () => {
       inputs,
       bindings: enumBindings,
       individual: extraction.individual,
-      // A structured enum has no option, so it arrives through the aggregate.
       aggregateCli: '{"shape":{"a":1},"pair":["b"]}',
       individualEnv: [],
     });
     expect(props.mode).toBe("fast");
     expect(props.shape).toEqual({ a: 1 });
     expect(props.pair).toEqual(["b"]);
+  });
+
+  it("PR19: a structural enum keeps its source-aware diagnostics", function* () {
+    const inputs = {
+      type: "object",
+      properties: { shape: { enum: [{ a: 1 }, { a: 2 }] } },
+      additionalProperties: false,
+    };
+    const enumBindings = buildBindings(inputs);
+    const resolveEnum = (aggregateCli?: string, aggregateEnv?: string) =>
+      resolveProps({
+        inputs,
+        bindings: enumBindings,
+        individual: [],
+        aggregateCli,
+        aggregateEnv,
+        individualEnv: [],
+      });
+
+    expect(() => resolveEnum('{"shape":{"a":9}}')).toThrow(/^--props:/);
+    expect(() => resolveEnum(undefined, '{"shape":{"a":9}}')).toThrow(/^XMD_PROPS:/);
+    // An invalid higher-priority source does not fall through...
+    expect(() => resolveEnum('{"shape":{"a":9}}', '{"shape":{"a":1}}')).toThrow(/^--props:/);
+    // ...and an invalid lower-priority one is irrelevant.
+    expect(resolveEnum('{"shape":{"a":2}}', '{"shape":{"a":9}}').shape).toEqual({ a: 2 });
+    // Key order is not part of the comparison.
+    expect(
+      resolveProps({
+        inputs: { type: "object", properties: { pick: { enum: [{ a: 1, b: 2 }] } } },
+        bindings: [],
+        individual: [],
+        aggregateCli: '{"pick":{"b":2,"a":1}}',
+        individualEnv: [],
+      }).pick,
+    ).toEqual({ b: 2, a: 1 });
   });
 
   it("PR16: structured properties resolve through Configliere too", function* () {

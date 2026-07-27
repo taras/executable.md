@@ -149,17 +149,6 @@ function isScalar(value: unknown, root: unknown): boolean {
   return false;
 }
 
-/**
- * Whether a property's enum lists objects or arrays. Zod converts such an
- * enum into a union of literals compared by identity, so a structurally
- * equal value never matches and could never reach Ajv, which compares
- * enum members by value.
- */
-function hasStructuralEnum(value: unknown, root: unknown): boolean {
-  const schema = readSchema(deref(value, root));
-  return schema.enum !== undefined && !schema.enum.every(isJsonScalar);
-}
-
 function isScalarArray(value: unknown, root: unknown): boolean {
   const schema = readSchema(deref(value, root));
   return (
@@ -344,14 +333,54 @@ function readTagged(value: unknown): TaggedText | TaggedTextArray | undefined {
   return undefined;
 }
 
-/** Defers a property entirely to whole-object validation. */
-const anyValue: StandardSchemaV1<unknown> = {
-  "~standard": {
-    version: 1,
-    vendor: "xmd",
-    validate: (value: unknown) => ({ value }),
-  },
-};
+/**
+ * Zod converts an object- or array-valued enum into a union of literals
+ * compared by identity, so a structurally equal value never matches. Such
+ * a property is validated here instead, by value, as Ajv does.
+ *
+ * A stable encoding, so members differing only in key order compare equal.
+ */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonical).join(",")}]`;
+  }
+  const record = readRecord(value);
+  if (!record) {
+    return JSON.stringify(value) ?? "null";
+  }
+  const entries = Object.entries(record)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`);
+  return `{${entries.join(",")}}`;
+}
+
+/**
+ * Validate a structural enum by value rather than identity, matching how
+ * Ajv compares members, and report a mismatch through Configliere so the
+ * offending source is still named.
+ */
+function structuralEnum(members: unknown[]): StandardSchemaV1<unknown> {
+  const accepted = new Set(members.map(canonical));
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "xmd",
+      validate(value: unknown): StandardSchemaV1.Result<unknown> {
+        if (value === undefined || accepted.has(canonical(value))) {
+          return { value };
+        }
+        return {
+          issues: [
+            {
+              message: `Invalid input: expected one of ${members.map(canonical).join(", ")}`,
+            },
+          ],
+        };
+      },
+    },
+  };
+}
 
 function validate(
   schema: StandardSchemaV1<unknown>,
@@ -707,8 +736,9 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
 
   const attrs: Record<string, Partial<Parser<unknown>>> = {};
   for (const [property, declaration] of Object.entries(properties)) {
-    const structural = hasStructuralEnum(declaration, inputs);
-    const native = structural ? anyValue : shape[property];
+    const members = readSchema(deref(declaration, inputs)).enum;
+    const native =
+      members && !members.every(isJsonScalar) ? structuralEnum(members) : shape[property];
     if (!native) {
       continue;
     }
