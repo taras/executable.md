@@ -53,15 +53,20 @@ export interface ProbeCapableRuntime extends AcpRuntime {
   doctor(): Promise<AcpRuntimeDoctorReport>;
 }
 
-/** Context for the session-routing seam: the registry-dependent inputs. */
-export interface SessionRoutingContext {
+/** What `withSessionRoute` maps to a route: the registry-dependent inputs. */
+export interface SessionRouteContext {
   agentName: string;
   session: string | Session | undefined;
   /** Normalized contextual cwd. */
   cwd: string;
 }
 
-export interface AcpxProviderSeams {
+/**
+ * What the provider builds on. Each entry has a working default, so an
+ * embedder supplies only what it replaces: the ACPX runtime, session store,
+ * and agent registry, plus the hook that bounds registry-dependent work.
+ */
+export interface AcpxProviderDependencies {
   createRuntime?: (options: AcpRuntimeOptions) => ProbeCapableRuntime;
   sessionStore?: AcpSessionStore;
   agentRegistry?: AcpAgentRegistry;
@@ -72,7 +77,7 @@ export interface AcpxProviderSeams {
    * (no `scoped()`), so returned prompt resources belong to the
    * subscriber. The default invokes `op` directly.
    */
-  sessionRouting?: <T>(context: SessionRoutingContext, op: () => Operation<T>) => Operation<T>;
+  withSessionRoute?: <T>(context: SessionRouteContext, op: () => Operation<T>) => Operation<T>;
 }
 
 interface ManagedSession {
@@ -102,15 +107,15 @@ function toError(value: unknown): Error {
  * each with its own runtime, sessions, locks, and teardown — in sibling
  * scopes. Teardown registers in the calling scope.
  */
-export interface AcpxProviderState {
+export interface AcpxProvider {
   agent(name?: string): Operation<string>;
   session(option?: string | Session): Operation<Session>;
   promptStream(content: string, options?: PromptOptions): Stream<AgentPromptEvent, string>;
 }
 
-export function createAcpxProvider(seams?: AcpxProviderSeams): AgentProviderFactory {
+export function createAcpxProvider(dependencies?: AcpxProviderDependencies): AgentProviderFactory {
   return function* (providerOptions: AgentProviderOptions): Operation<void> {
-    const state = yield* useAcpxProviderState(providerOptions, seams);
+    const state = yield* useAcpxProvider(providerOptions, dependencies);
 
     yield* Agent.around(
       {
@@ -129,15 +134,17 @@ export function createAcpxProvider(seams?: AcpxProviderSeams): AgentProviderFact
   };
 }
 
-export function* useAcpxProviderState(
+export function* useAcpxProvider(
   providerOptions: AgentProviderOptions,
-  seams?: AcpxProviderSeams,
-): Operation<AcpxProviderState> {
-  const createRuntime = seams?.createRuntime ?? createAcpRuntime;
-  const store = seams?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
-  const registry = seams?.agentRegistry ?? createAgentRegistry();
-  const sessionRouting =
-    seams?.sessionRouting ?? (<T>(_c: SessionRoutingContext, op: () => Operation<T>) => op());
+  dependencies?: AcpxProviderDependencies,
+): Operation<AcpxProvider> {
+  const createRuntime = dependencies?.createRuntime ?? createAcpRuntime;
+  const store =
+    dependencies?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
+  const registry = dependencies?.agentRegistry ?? createAgentRegistry();
+  const withSessionRoute =
+    dependencies?.withSessionRoute ??
+    (<T>(_c: SessionRouteContext, op: () => Operation<T>) => op());
   const bridge = createPermissionBridge();
   const stateScope = yield* useScope();
   const turns = yield* useSerialQueues();
@@ -260,19 +267,19 @@ export function* useAcpxProviderState(
       *[Symbol.iterator]() {
         const agentName = yield* Agent.operations.agent(options?.agent);
         const callerCwd = resolve(yield* cwd());
-        const context: SessionRoutingContext = {
+        const context: SessionRouteContext = {
           agentName,
           session: options?.session,
           cwd: callerCwd,
         };
 
-        const prepared = yield* sessionRouting(context, () =>
+        const prepared = yield* withSessionRoute(context, () =>
           prepare(agentName, options?.session, callerCwd),
         );
 
         yield* turns.slot(prepared.sessionKey);
 
-        return yield* sessionRouting(context, function* () {
+        return yield* withSessionRoute(context, function* () {
           const entry = yield* ensureFromPrepared(agentName, prepared);
 
           const scope = yield* useScope();
@@ -375,10 +382,12 @@ export function* useAcpxProviderState(
     *session(option) {
       const agentName = yield* Agent.operations.agent();
       const callerCwd = resolve(yield* cwd());
-      const context: SessionRoutingContext = { agentName, session: option, cwd: callerCwd };
-      const prepared = yield* sessionRouting(context, () => prepare(agentName, option, callerCwd));
+      const context: SessionRouteContext = { agentName, session: option, cwd: callerCwd };
+      const prepared = yield* withSessionRoute(context, () =>
+        prepare(agentName, option, callerCwd),
+      );
       return yield* turns.withSlot(prepared.sessionKey, () =>
-        sessionRouting(context, function* () {
+        withSessionRoute(context, function* () {
           const entry = yield* ensureFromPrepared(agentName, prepared);
           return entry.session;
         }),

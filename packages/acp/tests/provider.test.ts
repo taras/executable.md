@@ -1,7 +1,7 @@
 /**
  * Tier AP — ACPX provider tests (specs/acp-client-spec.md §ACPX provider).
  *
- * Drives the provider through its seams with a scriptable fake runtime:
+ * Drives the provider through its dependencies with a scriptable fake runtime:
  * no agent process ever starts.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -10,9 +10,9 @@ import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent, Config } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
-import { createAcpxProvider, useAcpxProviderState } from "../src/provider.ts";
+import { createAcpxProvider, useAcpxProvider } from "../src/provider.ts";
 import { useSerialQueues } from "../src/serial-queue.ts";
-import type { AcpxProviderState } from "../src/provider.ts";
+import type { AcpxProvider } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
   createFakeRuntime,
@@ -418,7 +418,7 @@ describe("Tier AP — ACPX provider", () => {
         createRuntime: harness.create,
         sessionStore: makeStore(),
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
-        sessionRouting: (_context, op) => routeQueue.withSlot("route", op),
+        withSessionRoute: (_context, op) => routeQueue.withSlot("route", op),
       });
       yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
 
@@ -596,8 +596,8 @@ describe("Tier AP — ACPX provider", () => {
     const second = createFakeRuntime();
     yield* useFlatWorld(CWD);
 
-    function* installState(harness: FakeRuntimeHarness): Operation<AcpxProviderState> {
-      const state = yield* useAcpxProviderState(
+    function* installState(harness: FakeRuntimeHarness): Operation<AcpxProvider> {
+      const state = yield* useAcpxProvider(
         { defaultAgent: "codex", permissionMode: "deny-all" },
         {
           createRuntime: harness.create,
