@@ -165,7 +165,7 @@ describe("parseFrontmatter — concise inputs", () => {
     expect(parseFrontmatter(CONCISE).inputs).toEqual(FULL.inputs);
   });
 
-  it("B17: the concise and full spellings declare the same schema", function* () {
+  it("the concise and full spellings declare the same schema", function* () {
     expect(parseFrontmatter(CONCISE).inputs).toEqual(parseFrontmatter(FULL).inputs);
   });
 
@@ -192,12 +192,13 @@ describe("parseFrontmatter — concise inputs", () => {
     expect(inputs["properties"]).toEqual({ anything: true, impossible: false });
   });
 
-  it("B18: top-level required is not a meta value", function* () {
+  it("B17: top-level required enters the schema, not the metadata", function* () {
     const result = parseFrontmatter({
       title: "Greeting",
       required: ["name"],
       inputs: { name: { type: "string" } },
     });
+    expect(result.inputs["required"]).toEqual(["name"]);
     expect(result.meta).toEqual({ title: "Greeting" });
   });
 
@@ -214,7 +215,7 @@ describe("parseFrontmatter — concise inputs", () => {
     expect(frontmatter).toEqual({ required: ["name"], inputs: { name: { type: "string" } } });
   });
 
-  it("rejects required alongside a full schema", function* () {
+  it("B18: rejects top-level required alongside a full schema", function* () {
     expect(() =>
       parseFrontmatter({ required: ["name"], inputs: { type: "object", properties: {} } }),
     ).toThrow("alongside a full");

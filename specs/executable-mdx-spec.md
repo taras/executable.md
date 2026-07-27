@@ -1834,22 +1834,66 @@ function parseFrontmatter(raw: unknown): {
   return { meta, inputs };
 }
 
-/** `type` or `$schema` selects the full schema; anything else is a
- *  prop-name map that becomes the enclosing closed object. */
 function normalizeInputs(declared: Json | undefined, required: Json | undefined): InputSchema {
   if (declared === undefined) {
+    if (required !== undefined) {
+      throw new Error('frontmatter declares "required" without "inputs"');
+    }
     return { type: "object", properties: {}, additionalProperties: false };
   }
+
   const declaration = parseJsonObject(declared);
+
   if ("type" in declaration || "$schema" in declaration) {
-    return declaration; // `required` at the frontmatter root is an error here
+    if (required !== undefined) {
+      throw new Error('frontmatter declares "required" alongside a full "inputs" schema');
+    }
+    return checkDialect(declaration);
+  }
+
+  const properties: JsonObject = {};
+  for (const [name, definition] of Object.entries(declaration)) {
+    // Draft-07 schemas include the booleans `true` and `false`.
+    if (typeof definition !== "boolean" && !isPlainObject(definition)) {
+      throw new Error(`input "${name}" must declare a JSON Schema object or boolean`);
+    }
+    properties[name] = definition;
+  }
+
+  if (required === undefined) {
+    return { type: "object", properties, additionalProperties: false };
   }
   return {
     type: "object",
-    properties: declaration,
-    ...(required === undefined ? {} : { required }),
+    properties,
+    required: checkRequiredNames(required, properties),
     additionalProperties: false,
   };
+}
+
+function checkDialect(schema: JsonObject): InputSchema {
+  const dialect = schema.$schema;
+  if (dialect !== undefined && dialect !== "http://json-schema.org/draft-07/schema#") {
+    throw new Error(`inputs "$schema" must be draft-07, got ${JSON.stringify(dialect)}`);
+  }
+  return schema;
+}
+
+/** Every name must identify a declared property: the map is closed, so a
+ *  name it does not declare could never be supplied. */
+function checkRequiredNames(required: Json, properties: JsonObject): string[] {
+  if (!Array.isArray(required)) {
+    throw new Error('frontmatter "required" must be an array of input names');
+  }
+  for (const name of required) {
+    if (typeof name !== "string") {
+      throw new Error('frontmatter "required" must list input names as strings');
+    }
+    if (!(name in properties)) {
+      throw new Error(`frontmatter "required" names "${name}", which no input declares`);
+    }
+  }
+  return required;
 }
 
 /** A typed `meta` definition — an object with a `type` key. Used only to

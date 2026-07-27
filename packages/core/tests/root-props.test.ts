@@ -49,7 +49,6 @@ const SIDE_EFFECT = [
 
 const NO_INPUTS = "PLAIN_MARKER\n";
 
-/** The concise twin of GREETING — the same document, spelled as a map. */
 const GREETING_CONCISE = [
   "---",
   "required: [name]",
@@ -273,9 +272,12 @@ describe("Tier RS — concise input declarations", () => {
     expect(supplied.result.ok).toBe(true);
     expect(supplied.output).toContain("Hello, Ada!");
 
-    // The same closed schema rejects the caller that omits `name`.
+    // A component's prop failure is collected into the output rather than
+    // aborting the run, so the diagnostic is the observable, not the status.
     const omitted = yield* runPath("omitted.md");
-    expect(omitted.output).not.toContain("Hello, Ada!");
+    expect(omitted.output).toContain("Prop validation failed for <Greeting />");
+    expect(omitted.output).toContain("must have required property 'name'");
+    expect(omitted.output).not.toContain("Hello, ");
   });
 
   it("RS7: inspection returns the normalized schema", function* () {

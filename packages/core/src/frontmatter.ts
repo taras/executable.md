@@ -8,7 +8,6 @@ export interface ParsedFrontmatter {
 
 const DRAFT_07 = "http://json-schema.org/draft-07/schema#";
 
-/** The frontmatter keys that declare inputs. Everything else is meta. */
 const INPUT_KEYS = ["inputs", "required"];
 
 export function parseFrontmatter(raw: unknown): ParsedFrontmatter {
@@ -50,7 +49,6 @@ function parseInputSchema(root: JsonObject): InputSchema {
   return normalizeInputs(declaration, required);
 }
 
-/** Wraps a map of input names in the closed object schema it implies. */
 function normalizeInputs(declaration: JsonObject, required: Json | undefined): InputSchema {
   const properties: JsonObject = {};
   for (const [name, definition] of Object.entries(declaration)) {
