@@ -11,7 +11,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { timebox } from "@effectionx/timebox";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { spawn, each, type Operation } from "effection";
+import { ensure, spawn, each, type Operation } from "effection";
 import { exec } from "@effectionx/process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -119,25 +119,22 @@ describe("CLI journal integration", () => {
   it("CJ3: --journal writes parseable entries for the current run", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
-    try {
-      const result = yield* runCli([
-        "packages/core/tests/fixtures/streaming/simple.md",
-        `--journal=${journalPath}`,
-        "--raw",
-      ]);
-      expect(result.code).toBe(0);
-      expect(yield* exists(journalPath)).toBe(true);
+    const result = yield* runCli([
+      "packages/core/tests/fixtures/streaming/simple.md",
+      `--journal=${journalPath}`,
+      "--raw",
+    ]);
+    expect(result.code).toBe(0);
+    expect(yield* exists(journalPath)).toBe(true);
 
-      const events = yield* readJournal(journalPath);
-      expect(events.length).toBeGreaterThan(1);
-      expect(events[0]?.type).toBe("yield");
-      expect(events.at(-1)?.type).toBe("close");
-      expect(events.at(-1)?.coroutineId).toBe("root");
-      expect(events.at(-1)?.result?.status).toBe("ok");
-    } finally {
-      yield* rm(tmpDir, { recursive: true, force: true });
-    }
+    const events = yield* readJournal(journalPath);
+    expect(events.length).toBeGreaterThan(1);
+    expect(events[0]?.type).toBe("yield");
+    expect(events.at(-1)?.type).toBe("close");
+    expect(events.at(-1)?.coroutineId).toBe("root");
+    expect(events.at(-1)?.result?.status).toBe("ok");
   });
 
   it("CJ4: existing journal path is refused without executing the document", function* () {
@@ -146,24 +143,21 @@ describe("CLI journal integration", () => {
     const documentPath = path.join(tmpDir, "side-effect.md");
     const markerPath = path.join(tmpDir, "executed.txt");
     const existingContent = '{"type":"partial"';
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
-    try {
-      yield* writeTextFile(journalPath, existingContent);
-      yield* writeTextFile(
-        documentPath,
-        ["```bash exec", `printf ran > "${markerPath}"`, "```"].join("\n"),
-      );
+    yield* writeTextFile(journalPath, existingContent);
+    yield* writeTextFile(
+      documentPath,
+      ["```bash exec", `printf ran > "${markerPath}"`, "```"].join("\n"),
+    );
 
-      const result = yield* runCliResult([documentPath, `--journal=${journalPath}`, "--raw"]);
+    const result = yield* runCliResult([documentPath, `--journal=${journalPath}`, "--raw"]);
 
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain("Journal trace already exists");
-      expect(result.stdout).toBe("");
-      expect(yield* readTextFile(journalPath)).toBe(existingContent);
-      expect(yield* exists(markerPath)).toBe(false);
-    } finally {
-      yield* rm(tmpDir, { recursive: true, force: true });
-    }
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("Journal trace already exists");
+    expect(result.stdout).toBe("");
+    expect(yield* readTextFile(journalPath)).toBe(existingContent);
+    expect(yield* exists(markerPath)).toBe(false);
   });
 
   it("CJ5: separate trace paths produce fresh executions", function* () {
@@ -171,38 +165,32 @@ describe("CLI journal integration", () => {
     const documentPath = path.join(tmpDir, "document.md");
     const firstJournal = path.join(tmpDir, "first.jsonl");
     const secondJournal = path.join(tmpDir, "second.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
-    try {
-      yield* writeTextFile(documentPath, "Version one\n");
-      const firstRun = yield* runCli([documentPath, `--journal=${firstJournal}`, "--raw"]);
+    yield* writeTextFile(documentPath, "Version one\n");
+    const firstRun = yield* runCli([documentPath, `--journal=${firstJournal}`, "--raw"]);
 
-      yield* writeTextFile(documentPath, "Version two\n");
-      const secondRun = yield* runCli([documentPath, `--journal=${secondJournal}`, "--raw"]);
+    yield* writeTextFile(documentPath, "Version two\n");
+    const secondRun = yield* runCli([documentPath, `--journal=${secondJournal}`, "--raw"]);
 
-      expect(firstRun.stdout).toContain("Version one");
-      expect(secondRun.stdout).toContain("Version two");
-      expect((yield* readJournal(firstJournal)).at(-1)?.result?.status).toBe("ok");
-      expect((yield* readJournal(secondJournal)).at(-1)?.result?.status).toBe("ok");
-    } finally {
-      yield* rm(tmpDir, { recursive: true, force: true });
-    }
+    expect(firstRun.stdout).toContain("Version one");
+    expect(secondRun.stdout).toContain("Version two");
+    expect((yield* readJournal(firstJournal)).at(-1)?.result?.status).toBe("ok");
+    expect((yield* readJournal(secondJournal)).at(-1)?.result?.status).toBe("ok");
   });
 
   it("CJ6: journal writes exec entries", function* () {
     const tmpDir = makeTmpDir();
     const journalPath = path.join(tmpDir, "test.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
-    try {
-      const result = yield* runCli([
-        "packages/core/tests/fixtures/streaming/with-exec.md",
-        `--journal=${journalPath}`,
-      ]);
-      expect(result.code).toBe(0);
-      expect(
-        (yield* readJournal(journalPath)).some((event) => event.description?.type === "exec"),
-      ).toBe(true);
-    } finally {
-      yield* rm(tmpDir, { recursive: true, force: true });
-    }
+    const result = yield* runCli([
+      "packages/core/tests/fixtures/streaming/with-exec.md",
+      `--journal=${journalPath}`,
+    ]);
+    expect(result.code).toBe(0);
+    expect(
+      (yield* readJournal(journalPath)).some((event) => event.description?.type === "exec"),
+    ).toBe(true);
   });
 });

@@ -8,6 +8,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { ensure } from "effection";
 import type { Result, Stream } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -90,39 +91,37 @@ describe("agent + testing composition", () => {
 
     const dir = path.join(os.tmpdir(), `xmd-compose-${randomUUID()}`);
     yield* ensureDir(dir);
-    try {
-      const docPath = path.join(dir, "doc.md");
-      yield* writeTextFile(
-        docPath,
-        [
-          "<Testing>",
-          '<Test name="prompt works">',
-          '  <Prompt text="good" />',
-          "</Test>",
-          "</Testing>",
-          "",
-          '<Prompt text="bad" />',
-          "",
-        ].join("\n"),
-      );
-      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        next = yield* subscription.next();
-      }
-      const result: Result<string> = yield* execution;
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
-      expect(calls).toEqual(["good", "bad"]);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toBeInstanceOf(AggregateError);
-        if (result.error instanceof AggregateError) {
-          expect(result.error.message).toBe("1 agent prompt(s) failed");
-        }
+    const docPath = path.join(dir, "doc.md");
+    yield* writeTextFile(
+      docPath,
+      [
+        "<Testing>",
+        '<Test name="prompt works">',
+        '  <Prompt text="good" />',
+        "</Test>",
+        "</Testing>",
+        "",
+        '<Prompt text="bad" />',
+        "",
+      ].join("\n"),
+    );
+    const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+    const subscription = yield* execution.output;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      next = yield* subscription.next();
+    }
+    const result: Result<string> = yield* execution;
+
+    expect(calls).toEqual(["good", "bad"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(AggregateError);
+      if (result.error instanceof AggregateError) {
+        expect(result.error.message).toBe("1 agent prompt(s) failed");
       }
-    } finally {
-      yield* rm(dir, { recursive: true, force: true });
     }
   });
 });

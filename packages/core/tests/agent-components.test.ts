@@ -10,6 +10,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { ensure, scoped } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -140,7 +141,9 @@ function* runDoc(
 ): Operation<{ output: string; result: Result<string> }> {
   const dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`);
   yield* ensureDir(dir);
-  try {
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
     const execution = yield* execute({ path: docPath, stream });
@@ -151,9 +154,7 @@ function* runDoc(
     }
     const result = yield* execution;
     return { output: next.value, result };
-  } finally {
-    yield* rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 describe("Tier AC — agent components", () => {
