@@ -40,9 +40,8 @@ describe("Tier PA — public controller facade", () => {
     const controller = yield* useTestAgentController();
 
     expect(Object.keys(controller)).toEqual(["useScenario"]);
-    const reachedInto = controller as unknown as Record<string, unknown>;
-    expect(reachedInto.probeRoute).toBe(undefined);
-    expect(reachedInto.getScenarioRecord).toBe(undefined);
+    expect(Reflect.get(controller, "probeRoute")).toBe(undefined);
+    expect(Reflect.get(controller, "getScenarioRecord")).toBe(undefined);
   });
 
   it("PA2: a scenario carries its route and no record state", function* () {
@@ -54,9 +53,11 @@ describe("Tier PA — public controller facade", () => {
 
     expect(Object.keys(scenario)).toEqual(["route"]);
     expect(typeof scenario.route).toBe("string");
-    const reachedInto = scenario as unknown as Record<string, unknown>;
     for (const hidden of ["id", "journal", "failure", "fatal", "rootDir", "document"]) {
-      expect({ hidden, value: reachedInto[hidden] }).toEqual({ hidden, value: undefined });
+      expect({ hidden, value: Reflect.get(scenario, hidden) }).toEqual({
+        hidden,
+        value: undefined,
+      });
     }
   });
 
