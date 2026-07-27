@@ -24,7 +24,7 @@ import type { FileHandle } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import { inspect } from "node:util";
 import process from "node:process";
-import { program, object, field, cli, commands, type Mods } from "configliere";
+import { program, object, field, cli, commands } from "configliere";
 import { z } from "zod";
 import {
   AgentProviders,
@@ -45,10 +45,6 @@ import type { AgentFlags } from "./agent-config.ts";
 import { FileStream } from "./file-stream.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
-const defaults =
-  <T>(value: T) =>
-  (mods: Mods): Mods => ({ ...mods, default: value });
-
 const runConfig = object({
   docPath: {
     description: "markdown document to execute",
@@ -56,12 +52,12 @@ const runConfig = object({
   },
   componentDir: {
     description: "component search directory",
-    ...field(z.array(z.string()), defaults(["components", "."]), field.array()),
+    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
   verbose: {
     description: "log journal entries to stderr",
     aliases: ["-V"],
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
   journal: {
     description: "write a diagnostic JSONL trace (path must not exist)",
@@ -70,11 +66,11 @@ const runConfig = object({
   },
   raw: {
     description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
   agentProvider: {
     description: "agent provider for agent components",
-    ...field(z.string(), defaults("acpx")),
+    ...field(z.string(), field.default("acpx")),
   },
   defaultAgent: {
     description: "default agent name (overrides DEFAULT_AGENT_NAME)",
@@ -86,15 +82,15 @@ const runConfig = object({
   },
   approveAll: {
     description: "approve every agent permission request",
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
   approveReads: {
     description: "approve read and search agent permissions, ask for the rest (default)",
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
   denyAll: {
     description: "deny every agent permission request",
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
 });
 
@@ -105,12 +101,12 @@ const testConfig = object({
   },
   componentDir: {
     description: "component search directory",
-    ...field(z.array(z.string()), defaults(["components", "."]), field.array()),
+    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
   verbose: {
     description: "log journal entries to stderr",
     aliases: ["-V"],
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
   journal: {
     description: "write a diagnostic JSONL trace (path must not exist)",
@@ -119,7 +115,7 @@ const testConfig = object({
   },
   raw: {
     description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), defaults(false)),
+    ...field(z.boolean(), field.default(false)),
   },
 });
 
@@ -440,56 +436,66 @@ function* run(
 }
 
 await main(function* (args) {
-  const parser = xmd.createParser({ args });
+  const parsed = xmd.parse({ args });
 
-  switch (parser.type) {
-    case "help":
-      console.log(parser.print());
-      yield* exit(0);
+  if (!parsed.ok) {
+    console.error(parsed.error.message);
+    yield* exit(1);
+    return;
+  }
+
+  const { help, version, config: command } = parsed.value;
+
+  if (help) {
+    console.log(xmd.help({ args }));
+    yield* exit(0);
+    return;
+  }
+
+  if (version) {
+    console.log(version);
+    yield* exit(0);
+    return;
+  }
+
+  // A command intercepts `--help` in its own first argument position and
+  // hands back rendered text instead of a configuration.
+  if (command.help) {
+    console.log(command.text);
+    yield* exit(0);
+    return;
+  }
+
+  switch (command.name) {
+    case "run": {
+      const config = command.config;
+      yield* run(config, {
+        testing: false,
+        agent: {
+          agentProvider: config.agentProvider,
+          defaultAgent: config.defaultAgent,
+          timeout: findFlagText(args, "--timeout"),
+          approveAll: config.approveAll,
+          approveReads: config.approveReads,
+          denyAll: config.denyAll,
+        },
+      });
       break;
-    case "version":
-      console.log(parser.print());
-      yield* exit(0);
-      break;
-    case "main": {
-      const parsed = parser.parse();
-      if (!parsed.ok) {
-        console.error(parsed.error.message);
+    }
+    case "test": {
+      const agentFlag = findAgentOnlyFlag(args);
+      if (agentFlag) {
+        console.error(
+          `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to xmd run`,
+        );
         yield* exit(1);
         break;
       }
-      switch (parsed.value.name) {
-        case "run": {
-          const config = parsed.value.config;
-          yield* run(config, {
-            testing: false,
-            agent: {
-              agentProvider: config.agentProvider,
-              defaultAgent: config.defaultAgent,
-              timeout: findFlagText(args, "--timeout"),
-              approveAll: config.approveAll,
-              approveReads: config.approveReads,
-              denyAll: config.denyAll,
-            },
-          });
-          break;
-        }
-        case "test": {
-          const agentFlag = findAgentOnlyFlag(args);
-          if (agentFlag) {
-            console.error(
-              `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to xmd run`,
-            );
-            yield* exit(1);
-            break;
-          }
-          yield* run(parsed.value.config, { testing: true });
-          break;
-        }
-        case "test-agent":
-          yield* runTestAgentWorker({ connect: parsed.value.config.connect });
-          break;
-      }
+      yield* run(command.config, { testing: true });
+      break;
     }
+    case "test-agent":
+      yield* runTestAgentWorker({ connect: command.config.connect });
+      break;
   }
 });

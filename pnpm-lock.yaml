@@ -145,8 +145,8 @@ importers:
         specifier: workspace:*
         version: link:../testing
       configliere:
-        specifier: ^0.2.3
-        version: 0.2.4
+        specifier: ^0.4.0
+        version: 0.4.0
       effection:
         specifier: 4.1.0-alpha.10
         version: 4.1.0-alpha.10
@@ -1250,8 +1250,8 @@ packages:
     resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
     engines: {node: '>=22.12.0'}
 
-  configliere@0.2.4:
-    resolution: {integrity: sha512-xGvxseKlsySjwXzB9HXNHe0/eqA9nCUUEo1227tTnhiBjlUrlMTN7CgpO4ufK9+TW/823dhjfOLY83fYqOh/hA==}
+  configliere@0.4.0:
+    resolution: {integrity: sha512-4bxK3+L+FHr9Xm/d69Syvvpvkj7lj7a4zz3B+tchuohg5WKeudyBS+4Oob5Zdgoh8I7+n2lj0lfa8I6cUXfcEg==}
     engines: {node: '>= 16'}
 
   cross-spawn@7.0.6:
@@ -1726,9 +1726,6 @@ packages:
 
   trough@2.2.0:
     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
-
-  ts-case-convert@2.3.1:
-    resolution: {integrity: sha512-Y/HgigFuL6gqw7brjoRWdFDDUc1R5N7+yoxw2AAZ/9tL5bj0HfSFf008oHFNq2nEcCBF9a1nSeddRMTA9sOO7w==}
 
   tsx@4.21.0:
     resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
@@ -2429,10 +2426,9 @@ snapshots:
 
   commander@15.0.0: {}
 
-  configliere@0.2.4:
+  configliere@0.4.0:
     dependencies:
       '@standard-schema/spec': 1.1.0
-      ts-case-convert: 2.3.1
 
   cross-spawn@7.0.6:
     dependencies:
@@ -3116,8 +3112,6 @@ snapshots:
   tinypool@2.1.0: {}
 
   trough@2.2.0: {}
-
-  ts-case-convert@2.3.1: {}
 
   tsx@4.21.0:
     dependencies:

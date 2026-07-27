@@ -22,7 +22,7 @@
     "@effectionx/scope-eval": "npm:@effectionx/scope-eval@0.1.3",
     "@effectionx/stream-helpers": "npm:@effectionx/stream-helpers@0.8.3",
     "@effectionx/timebox": "npm:@effectionx/timebox@0.4.3",
-    "configliere": "npm:configliere@^0.2.3",
+    "configliere": "npm:configliere@^0.4.0",
     "expect": "npm:expect@^30",
     "@std/expect": "npm:expect@^30",
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
