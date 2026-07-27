@@ -507,7 +507,7 @@ re-run.
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -824,7 +824,7 @@ Per-category signal summaries embedded in existing policy documents.
 
 ````markdown
 ---
-inputs:
+props:
   type: object
   properties:
     groups:
@@ -852,7 +852,7 @@ Deterministic summary of diagnostics with doctor status.
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     diagnostics:
@@ -897,7 +897,7 @@ inputs:
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -934,7 +934,7 @@ Both perspectives are complementary.
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:
@@ -992,7 +992,7 @@ the raw diff.
 
 ```markdown
 ---
-inputs:
+props:
   type: object
   properties:
     pr:

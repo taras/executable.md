@@ -27,14 +27,14 @@ function makeComponent(
   name: string,
   body: string,
   meta: Record<string, unknown> = {},
-  inputs?: Json,
+  props?: Json,
 ): ComponentDefinition {
   return {
     kind: "markdown",
     name,
     path: `components/${name}.md`,
     meta,
-    inputs: (inputs as ComponentDefinition["inputs"]) ?? {
+    props: (props as ComponentDefinition["props"]) ?? {
       type: "object",
       properties: {},
       additionalProperties: false,

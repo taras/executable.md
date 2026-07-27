@@ -1,7 +1,7 @@
 /**
  * Root document properties — the bridge from a document's declared
- * `inputs` schema to command-line and environment configuration sources
- * (specs/root-document-inputs-spec.md).
+ * `props` schema to command-line and environment configuration sources
+ * (specs/root-document-props-spec.md).
  *
  * Configliere owns precedence, provenance, and diagnostics. This module
  * supplies it with sources.
@@ -258,10 +258,10 @@ function elementOf(value: unknown): StandardSchemaV1<unknown> | undefined {
  * under draft-2020-12, while Ajv resolves either as a plain JSON pointer.
  * Converting the whole root once keeps every local reference resolvable.
  */
-function convertRoot(inputs: unknown): Record<string, StandardSchemaV1<unknown>> {
-  const loosened = loosen(inputs);
+function convertRoot(propsSchema: unknown): Record<string, StandardSchemaV1<unknown>> {
+  const loosened = loosen(propsSchema);
   if (!isJsonSchemaInput(loosened)) {
-    throw new PropsError("the document's declared inputs must be an object schema");
+    throw new PropsError("the document's declared props must be an object schema");
   }
 
   let root: unknown;
@@ -271,16 +271,16 @@ function convertRoot(inputs: unknown): Record<string, StandardSchemaV1<unknown>>
     try {
       root = z.fromJSONSchema(loosened, { defaultTarget: "draft-2020-12" });
     } catch (error) {
-      throw new PropsError(`cannot read the document's declared inputs: ${describeError(error)}`);
+      throw new PropsError(`cannot read the document's declared props: ${describeError(error)}`);
     }
   }
 
   if (typeof root !== "object" || root === null || !("shape" in root)) {
-    throw new PropsError("the document's declared inputs must be an object schema");
+    throw new PropsError("the document's declared props must be an object schema");
   }
   const shape = readRecord(root.shape);
   if (!shape) {
-    throw new PropsError("the document's declared inputs must be an object schema");
+    throw new PropsError("the document's declared props must be an object schema");
   }
 
   const converted: Record<string, StandardSchemaV1<unknown>> = {};
@@ -465,22 +465,22 @@ function constantCase(name: string): string {
   return kebab(name).replace(/-/g, "_").toUpperCase();
 }
 
-export function declaredProperties(inputs: unknown): string[] {
-  return Object.keys(readSchema(inputs).properties ?? {});
+export function declaredProperties(propsSchema: unknown): string[] {
+  return Object.keys(readSchema(propsSchema).properties ?? {});
 }
 
-export function buildBindings(inputs: unknown): Binding[] {
-  const schema = readSchema(inputs);
+export function buildBindings(propsSchema: unknown): Binding[] {
+  const schema = readSchema(propsSchema);
   const required = new Set(schema.required);
   const bindings: Binding[] = [];
 
   for (const [property, raw] of Object.entries(schema.properties ?? {})) {
-    const scalar = isScalar(raw, inputs);
-    const scalarArray = isScalarArray(raw, inputs);
+    const scalar = isScalar(raw, propsSchema);
+    const scalarArray = isScalarArray(raw, propsSchema);
     if (!scalar && !scalarArray) {
       continue;
     }
-    const resolved = readSchema(deref(raw, inputs));
+    const resolved = readSchema(deref(raw, propsSchema));
     const names = typeNames(resolved);
     bindings.push({
       property,
@@ -488,7 +488,7 @@ export function buildBindings(inputs: unknown): Binding[] {
       env: `XMD_PROPS_${constantCase(property)}`,
       boolean: names.length === 1 && names[0] === "boolean",
       array: scalarArray,
-      form: valueForm(raw, inputs),
+      form: valueForm(raw, propsSchema),
       required: required.has(property),
       description: readSchema(raw).description ?? resolved.description,
       default: readSchema(raw).default ?? resolved.default,
@@ -711,7 +711,7 @@ function readField(info: unknown): FieldView | undefined {
 }
 
 export interface ResolveOptions {
-  inputs: unknown;
+  propsSchema: unknown;
   bindings: Binding[];
   individual: { binding: Binding; value: string | string[] }[];
   aggregateCli?: string;
@@ -728,15 +728,15 @@ export interface ResolveOptions {
  * that supplied the offending value.
  */
 export function resolveProps(options: ResolveOptions): Record<string, Json> {
-  const { inputs, bindings, individual, aggregateCli, aggregateEnv, individualEnv } = options;
-  const shape = convertRoot(inputs);
-  const schema = readSchema(inputs);
+  const { propsSchema, bindings, individual, aggregateCli, aggregateEnv, individualEnv } = options;
+  const shape = convertRoot(propsSchema);
+  const schema = readSchema(propsSchema);
   const properties = schema.properties ?? {};
   const arrayBindings = new Map(bindings.map((binding) => [binding.property, binding]));
 
   const attrs: Record<string, Partial<Parser<unknown>>> = {};
   for (const [property, declaration] of Object.entries(properties)) {
-    const members = readSchema(deref(declaration, inputs)).enum;
+    const members = readSchema(deref(declaration, propsSchema)).enum;
     const native =
       members && !members.every(isJsonScalar) ? structuralEnum(members) : shape[property];
     if (!native) {

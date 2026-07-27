@@ -11,7 +11,7 @@ const FEATURES: { title: string; body: string }[] = [
   {
     title: "Components",
     body:
-      'Invoke other markdown files with JSX-style tags like <Greeting name="world" />. Frontmatter declares meta and typed inputs; <Content /> slots wrap children.',
+      'Invoke other markdown files with JSX-style tags like <Greeting name="world" />. Frontmatter declares meta and typed props; <Content /> slots wrap children.',
   },
   {
     title: "Executable blocks",
@@ -54,7 +54,7 @@ ls ./src
 
 const GREETING_COMPONENT = `---
 emoji: Hello
-inputs:
+props:
   name:
     type: string
     required: true

@@ -24,7 +24,7 @@ function makeComponent(
   body: string,
   opts: {
     meta?: Record<string, unknown>;
-    inputs?: Record<string, any>;
+    props?: Record<string, any>;
   } = {},
 ): ComponentDefinition {
   return {
@@ -32,7 +32,7 @@ function makeComponent(
     name,
     path: `components/${name}.md`,
     meta: opts.meta ?? {},
-    inputs: opts.inputs ?? { type: "object", properties: {}, additionalProperties: false },
+    props: opts.props ?? { type: "object", properties: {}, additionalProperties: false },
     bodySegments: scanSegments(body),
   };
 }
@@ -194,7 +194,7 @@ describe("expansion", () => {
   // C9: Props interpolation
   it("C9: props interpolation — {props.name}", function* () {
     const comp = makeComponent("Greeting", "Hello, {props.name}!", {
-      inputs: {
+      props: {
         type: "object",
         properties: { name: { type: "string" } },
         required: ["name"],
@@ -248,7 +248,7 @@ describe("expansion", () => {
   // C16: Default applied
   it("C16: default applied — props.greeting resolves to default", function* () {
     const comp = makeComponent("Greeting", "{props.greeting}, world!", {
-      inputs: {
+      props: {
         type: "object",
         properties: { greeting: { type: "string", default: "Hello" } },
         additionalProperties: false,
@@ -260,8 +260,8 @@ describe("expansion", () => {
     expect(output).toBe("Hello, world!");
   });
 
-  // C20: No inputs, no props — valid
-  it("C20: no inputs, no props — valid", function* () {
+  // C20: No props, no props — valid
+  it("C20: no props, no props — valid", function* () {
     const comp = makeComponent("Badge", "badge");
     const ctx = { Badge: comp };
     const segments = scanSegments("<Badge />");
@@ -272,7 +272,7 @@ describe("expansion", () => {
   // C22: Optional with no default, not passed → empty string
   it("C22: optional with no default, not passed → empty in interpolation", function* () {
     const comp = makeComponent("Comp", "val:{props.opt}", {
-      inputs: {
+      props: {
         type: "object",
         properties: { opt: { type: "string" } },
         additionalProperties: false,
@@ -773,8 +773,8 @@ describe("validateProps", () => {
     expect(result["model"]).toBe("a");
   });
 
-  // C21: No inputs, some props → error
-  it("C21: no inputs, some props → PropValidationError", function* () {
+  // C21: No props, some props → error
+  it("C21: no props, some props → PropValidationError", function* () {
     expect(() => validateProps("Badge", { size: "lg" }, closed({}))).toThrow(PropValidationError);
   });
 
@@ -820,7 +820,7 @@ describe("function component content", () => {
       kind: "function",
       name: "Card",
       path: "components/Card.ts",
-      inputs: { type: "object", properties: {}, additionalProperties: false },
+      props: { type: "object", properties: {}, additionalProperties: false },
       *fn(_props) {
         const header = yield* ephemeral(useContent("header"));
         const body = yield* ephemeral(useContent());

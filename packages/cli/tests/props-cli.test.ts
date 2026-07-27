@@ -1,6 +1,6 @@
 /**
  * Tier PC — `xmd run` document properties end to end
- * (specs/root-document-inputs-spec.md).
+ * (specs/root-document-props-spec.md).
  *
  * Shells out with captured stdio so exit status and diagnostics are
  * asserted TTY-independently, and so environment sources are exercised
@@ -21,7 +21,7 @@ const CLI = path.resolve("packages/cli/src/cli.ts");
 
 const HELLO = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    name:",
@@ -44,7 +44,7 @@ const HELLO = [
 
 const NESTED = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    user:",
@@ -61,7 +61,7 @@ const NESTED = [
 
 const OPEN = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    name: { type: string }",
@@ -74,7 +74,7 @@ const OPEN = [
 
 const REFERENCED = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   '    count: { $ref: "#/definitions/count" }',
@@ -94,7 +94,7 @@ const PLAIN = "PLAIN_MARKER\n";
 
 const MARKER = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    name: { type: string }",
@@ -402,7 +402,7 @@ describe(
       expect(stderr).toContain("exclusive to xmd run");
     });
 
-    it("PC17: a document without inputs is unaffected", function* () {
+    it("PC17: a document without props is unaffected", function* () {
       const { stdout } = yield* useFixture({ "plain.md": PLAIN }, function* (fixture) {
         return yield* runCli(["run", "plain.md", "--raw"], fixture).expect();
       });

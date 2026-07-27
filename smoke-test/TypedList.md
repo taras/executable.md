@@ -1,5 +1,5 @@
 ---
-inputs:
+props:
   type: object
   properties:
     files:

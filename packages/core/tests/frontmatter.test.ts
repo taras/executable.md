@@ -3,14 +3,14 @@ import { expect } from "@effectionx/bdd/expect";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 
 describe("parseFrontmatter", () => {
-  // B4: Simple frontmatter (meta only, no inputs)
-  it("B4: simple frontmatter — meta keys except inputs", function* () {
+  // B4: Simple frontmatter (meta only, no props)
+  it("B4: simple frontmatter — meta keys except props", function* () {
     const result = parseFrontmatter({
       emoji: "wave",
       title: "Hello",
     });
     expect(result.meta).toEqual({ emoji: "wave", title: "Hello" });
-    expect(result.inputs).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect(result.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
   });
 
   // B5: Typed meta definitions
@@ -20,19 +20,19 @@ describe("parseFrontmatter", () => {
         model: { type: "string", enum: ["gpt-4", "claude-3"], default: "gpt-4" },
         temperature: { type: "number", default: 0.7 },
       },
-      inputs: { type: "object", properties: {}, additionalProperties: false },
+      props: { type: "object", properties: {}, additionalProperties: false },
     });
     expect(result.meta).toMatchObject({ model: "gpt-4", temperature: 0.7 });
   });
 
-  // B14: No inputs key — closed empty-object schema
-  it("B14: no inputs key — closed empty-object schema", function* () {
+  // B14: No props key — closed empty-object schema
+  it("B14: no props key — closed empty-object schema", function* () {
     const result = parseFrontmatter({ color: "blue" });
-    expect(result.inputs).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect(result.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
     expect(result.meta["color"]).toBe("blue");
   });
 
-  it("passes a declared input schema through verbatim", function* () {
+  it("passes a declared props schema through verbatim", function* () {
     const schema = {
       type: "object",
       properties: {
@@ -41,26 +41,26 @@ describe("parseFrontmatter", () => {
       required: ["files"],
       additionalProperties: false,
     };
-    const result = parseFrontmatter({ inputs: schema });
-    expect(result.inputs).toEqual(schema);
+    const result = parseFrontmatter({ props: schema });
+    expect(result.props).toEqual(schema);
   });
 
   it("accepts a draft-07 $schema dialect", function* () {
     const result = parseFrontmatter({
-      inputs: {
+      props: {
         $schema: "http://json-schema.org/draft-07/schema#",
         type: "object",
         properties: {},
         additionalProperties: false,
       },
     });
-    expect(result.inputs["$schema"]).toBe("http://json-schema.org/draft-07/schema#");
+    expect(result.props["$schema"]).toBe("http://json-schema.org/draft-07/schema#");
   });
 
   it("rejects a non-draft-07 $schema dialect", function* () {
     expect(() =>
       parseFrontmatter({
-        inputs: {
+        props: {
           $schema: "https://json-schema.org/draft/2020-12/schema",
           type: "object",
         },
@@ -68,12 +68,12 @@ describe("parseFrontmatter", () => {
     ).toThrow("draft-07");
   });
 
-  it("rejects a non-object inputs value", function* () {
-    expect(() => parseFrontmatter({ inputs: "not-a-schema" })).toThrow("JSON object");
+  it("rejects a non-object props value", function* () {
+    expect(() => parseFrontmatter({ props: "not-a-schema" })).toThrow("JSON object");
   });
 
-  it("rejects an array inputs value", function* () {
-    expect(() => parseFrontmatter({ inputs: [1, 2, 3] })).toThrow("JSON object");
+  it("rejects an array props value", function* () {
+    expect(() => parseFrontmatter({ props: [1, 2, 3] })).toThrow("JSON object");
   });
 
   it("rejects a non-object frontmatter root", function* () {
@@ -94,7 +94,7 @@ describe("parseFrontmatter", () => {
   });
 
   it("treats null/undefined frontmatter as empty", function* () {
-    expect(parseFrontmatter(null).inputs).toEqual({
+    expect(parseFrontmatter(null).props).toEqual({
       type: "object",
       properties: {},
       additionalProperties: false,
@@ -105,7 +105,7 @@ describe("parseFrontmatter", () => {
   it("meta with non-typed values under meta key", function* () {
     const result = parseFrontmatter({
       meta: { color: "blue", count: 42 },
-      inputs: { type: "object", properties: {}, additionalProperties: false },
+      props: { type: "object", properties: {}, additionalProperties: false },
     });
     expect(result.meta).toMatchObject({ color: "blue", count: 42 });
   });
@@ -114,20 +114,20 @@ describe("parseFrontmatter", () => {
 describe("parseFrontmatter — full-form classification", () => {
   it('a "type" key selects the full form', function* () {
     const schema = { type: "object", properties: { a: { type: "string" } } };
-    expect(parseFrontmatter({ inputs: schema }).inputs).toEqual(schema);
+    expect(parseFrontmatter({ props: schema }).props).toEqual(schema);
   });
 
   it('a "$schema" key selects the full form without a type', function* () {
     const schema = { $schema: "http://json-schema.org/draft-07/schema#", properties: {} };
     // Returned unchanged; the missing root type is the compiler's to report.
-    expect(parseFrontmatter({ inputs: schema }).inputs).toEqual(schema);
+    expect(parseFrontmatter({ props: schema }).props).toEqual(schema);
   });
 
   it("a malformed full declaration is not read as a property map", function* () {
     const schema = { type: "array", items: { type: "string" } };
-    const { inputs } = parseFrontmatter({ inputs: schema });
-    expect(inputs).toEqual(schema);
-    expect(inputs["properties"]).toBeUndefined();
+    const { props } = parseFrontmatter({ props: schema });
+    expect(props).toEqual(schema);
+    expect(props["properties"]).toBeUndefined();
   });
 
   it('the full form declares properties named "type" and "$schema"', function* () {
@@ -136,21 +136,21 @@ describe("parseFrontmatter — full-form classification", () => {
       properties: { type: { type: "string" }, $schema: { type: "string" } },
       additionalProperties: false,
     };
-    expect(parseFrontmatter({ inputs: schema }).inputs).toEqual(schema);
+    expect(parseFrontmatter({ props: schema }).props).toEqual(schema);
   });
 });
 
-describe("parseFrontmatter — concise inputs", () => {
+describe("parseFrontmatter — concise props", () => {
   const CONCISE = {
     required: ["name"],
-    inputs: {
+    props: {
       name: { type: "string" },
       loud: { type: "boolean", default: false },
     },
   };
 
   const FULL = {
-    inputs: {
+    props: {
       type: "object",
       properties: {
         name: { type: "string" },
@@ -161,26 +161,26 @@ describe("parseFrontmatter — concise inputs", () => {
     },
   };
 
-  it("B16: an inputs map normalizes to a closed object schema", function* () {
-    expect(parseFrontmatter(CONCISE).inputs).toEqual(FULL.inputs);
+  it("B16: an props map normalizes to a closed object schema", function* () {
+    expect(parseFrontmatter(CONCISE).props).toEqual(FULL.props);
   });
 
   it("the concise and full spellings declare the same schema", function* () {
-    expect(parseFrontmatter(CONCISE).inputs).toEqual(parseFrontmatter(FULL).inputs);
+    expect(parseFrontmatter(CONCISE).props).toEqual(parseFrontmatter(FULL).props);
   });
 
   it("omits required when the frontmatter declares none", function* () {
-    const { inputs } = parseFrontmatter({ inputs: { name: { type: "string" } } });
-    expect(inputs).toEqual({
+    const { props } = parseFrontmatter({ props: { name: { type: "string" } } });
+    expect(props).toEqual({
       type: "object",
       properties: { name: { type: "string" } },
       additionalProperties: false,
     });
-    expect("required" in inputs).toBe(false);
+    expect("required" in props).toBe(false);
   });
 
-  it("an empty inputs map is the empty closed schema", function* () {
-    expect(parseFrontmatter({ inputs: {} }).inputs).toEqual({
+  it("an empty props map is the empty closed schema", function* () {
+    expect(parseFrontmatter({ props: {} }).props).toEqual({
       type: "object",
       properties: {},
       additionalProperties: false,
@@ -188,64 +188,86 @@ describe("parseFrontmatter — concise inputs", () => {
   });
 
   it("accepts boolean property schemas", function* () {
-    const { inputs } = parseFrontmatter({ inputs: { anything: true, impossible: false } });
-    expect(inputs["properties"]).toEqual({ anything: true, impossible: false });
+    const { props } = parseFrontmatter({ props: { anything: true, impossible: false } });
+    expect(props["properties"]).toEqual({ anything: true, impossible: false });
   });
 
   it("B17: top-level required enters the schema, not the metadata", function* () {
     const result = parseFrontmatter({
       title: "Greeting",
       required: ["name"],
-      inputs: { name: { type: "string" } },
+      props: { name: { type: "string" } },
     });
-    expect(result.inputs["required"]).toEqual(["name"]);
+    expect(result.props["required"]).toEqual(["name"]);
     expect(result.meta).toEqual({ title: "Greeting" });
   });
 
   it("returns a fresh schema on every parse", function* () {
-    const first = parseFrontmatter(CONCISE).inputs;
-    const second = parseFrontmatter(CONCISE).inputs;
+    const first = parseFrontmatter(CONCISE).props;
+    const second = parseFrontmatter(CONCISE).props;
     expect(first).not.toBe(second);
     expect(first["properties"]).not.toBe(second["properties"]);
   });
 
   it("does not mutate the frontmatter it parsed", function* () {
-    const frontmatter = { required: ["name"], inputs: { name: { type: "string" } } };
+    const frontmatter = { required: ["name"], props: { name: { type: "string" } } };
     parseFrontmatter(frontmatter);
-    expect(frontmatter).toEqual({ required: ["name"], inputs: { name: { type: "string" } } });
+    expect(frontmatter).toEqual({ required: ["name"], props: { name: { type: "string" } } });
   });
 
   it("B18: rejects top-level required alongside a full schema", function* () {
     expect(() =>
-      parseFrontmatter({ required: ["name"], inputs: { type: "object", properties: {} } }),
+      parseFrontmatter({ required: ["name"], props: { type: "object", properties: {} } }),
     ).toThrow("alongside a full");
   });
 
-  it("rejects required without inputs", function* () {
-    expect(() => parseFrontmatter({ required: ["name"] })).toThrow('"required" without "inputs"');
+  it("rejects required without props", function* () {
+    expect(() => parseFrontmatter({ required: ["name"] })).toThrow('"required" without "props"');
   });
 
-  it("rejects a required name that no input declares", function* () {
+  // #177 renamed `inputs` to `props` with no compatibility alias. A document
+  // written against the old vocabulary is not a second spelling: `inputs` is an
+  // ordinary meta key, and the component is left declaring no props at all.
+  it("treats a full `inputs` schema as ordinary metadata, not a props declaration", function* () {
+    const declared = {
+      type: "object",
+      properties: { name: { type: "string" } },
+      additionalProperties: false,
+    };
+    const result = parseFrontmatter({ inputs: declared });
+    expect(result.meta["inputs"]).toEqual(declared);
+    expect(result.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
+  });
+
+  // `required` stays reserved, so the concise old spelling cannot degrade
+  // quietly the way the full one does — it fails during frontmatter parsing.
+  it("rejects a concise `inputs` map declared with a top-level `required`", function* () {
     expect(() =>
-      parseFrontmatter({ required: ["email"], inputs: { name: { type: "string" } } }),
+      parseFrontmatter({ inputs: { name: { type: "string" } }, required: ["name"] }),
+    ).toThrow('"required" without "props"');
+  });
+
+  it("rejects a required name that no prop declares", function* () {
+    expect(() =>
+      parseFrontmatter({ required: ["email"], props: { name: { type: "string" } } }),
     ).toThrow('names "email"');
   });
 
   it("rejects a required list that is not an array of strings", function* () {
-    expect(() => parseFrontmatter({ required: "name", inputs: { name: {} } })).toThrow(
+    expect(() => parseFrontmatter({ required: "name", props: { name: {} } })).toThrow(
       "must be an array",
     );
-    expect(() => parseFrontmatter({ required: [1], inputs: { name: {} } })).toThrow("as strings");
+    expect(() => parseFrontmatter({ required: [1], props: { name: {} } })).toThrow("as strings");
   });
 
   it("rejects a property definition that is not a schema", function* () {
-    expect(() => parseFrontmatter({ inputs: { name: "string" } })).toThrow(
+    expect(() => parseFrontmatter({ props: { name: "string" } })).toThrow(
       "JSON Schema object or boolean",
     );
-    expect(() => parseFrontmatter({ inputs: { name: ["string"] } })).toThrow(
+    expect(() => parseFrontmatter({ props: { name: ["string"] } })).toThrow(
       "JSON Schema object or boolean",
     );
-    expect(() => parseFrontmatter({ inputs: { name: null } })).toThrow(
+    expect(() => parseFrontmatter({ props: { name: null } })).toThrow(
       "JSON Schema object or boolean",
     );
   });

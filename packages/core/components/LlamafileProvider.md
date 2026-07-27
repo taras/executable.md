@@ -2,7 +2,7 @@
 meta:
   componentName: LlamafileProvider
 
-inputs:
+props:
   type: object
   properties:
     model:

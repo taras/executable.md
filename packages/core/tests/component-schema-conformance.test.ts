@@ -4,7 +4,7 @@ import matter from "gray-matter";
 import { readTextFile, walk } from "@effectionx/fs";
 import { forEach } from "@effectionx/stream-helpers";
 import { parseFrontmatter } from "../src/frontmatter.ts";
-import { compileInputSchema } from "../src/validate.ts";
+import { compilePropsSchema } from "../src/validate.ts";
 
 const ROOT = new URL("../../../", import.meta.url);
 const COMPONENT_DIRS = [
@@ -15,7 +15,7 @@ const COMPONENT_DIRS = [
 ];
 
 describe("component schema conformance", () => {
-  it("every markdown component's inputs schema parses and compiles", function* () {
+  it("every markdown component's props schema parses and compiles", function* () {
     const failures: string[] = [];
     let checked = 0;
 
@@ -32,8 +32,8 @@ describe("component schema conformance", () => {
           }
           checked++;
           try {
-            const { inputs } = parseFrontmatter(parsed.data);
-            compileInputSchema(inputs);
+            const { props } = parseFrontmatter(parsed.data);
+            compilePropsSchema(props);
           } catch (error) {
             failures.push(
               `${entry.path}: ${error instanceof Error ? error.message : String(error)}`,

@@ -38,10 +38,10 @@ echo "This output is journaled but not shown in the document"
 <Capture as="yamlBlock">
 ```yaml
 # This is just a code block — not executed
-inputs:
+props:
   name:
     type: string
 ```
 </Capture>
-<AssertEquals actual={yamlBlock} expected={"\n```yaml\n# This is just a code block — not executed\ninputs:\n  name:\n    type: string\n```"} />
+<AssertEquals actual={yamlBlock} expected={"\n```yaml\n# This is just a code block — not executed\nprops:\n  name:\n    type: string\n```"} />
 </Test>

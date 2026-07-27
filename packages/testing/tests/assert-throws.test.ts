@@ -9,7 +9,7 @@ import { failureOf, runDoc } from "./helpers.ts";
 
 const STRICT = [
   "---",
-  "inputs:",
+  "props:",
   "  type: object",
   "  properties:",
   "    n: { type: number }",

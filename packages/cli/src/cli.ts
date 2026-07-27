@@ -487,7 +487,7 @@ interface PropsPhase {
   documentPath?: string;
   bindings: Binding[];
   extraction?: Extraction;
-  inputs?: unknown;
+  propsSchema?: unknown;
   declared?: string[];
   error?: string;
 }
@@ -528,15 +528,15 @@ function* preparePropsPhase(args: string[]): Operation<PropsPhase> {
 
   try {
     const document = yield* inspectDocument({ path: documentPath });
-    const bindings = buildBindings(document.inputs);
+    const bindings = buildBindings(document.props);
     const extraction = extractPropsArgs(args, bindings);
     return {
       args: extraction.rest,
       documentPath,
       bindings,
       extraction,
-      inputs: document.inputs,
-      declared: declaredProperties(document.inputs),
+      propsSchema: document.props,
+      declared: declaredProperties(document.props),
     };
   } catch (error) {
     return { args, bindings: [], documentPath, error: describeError(error) };
@@ -573,7 +573,7 @@ function renderHelp(phase: PropsPhase): string {
 function* resolveRunProps(
   phase: PropsPhase,
 ): Operation<{ value?: Record<string, Json>; error?: string }> {
-  if (!phase.extraction || phase.inputs === undefined) {
+  if (!phase.extraction || phase.propsSchema === undefined) {
     return { value: {} };
   }
 
@@ -589,7 +589,7 @@ function* resolveRunProps(
 
     return {
       value: resolveProps({
-        inputs: phase.inputs,
+        propsSchema: phase.propsSchema,
         bindings: phase.bindings,
         individual: phase.extraction.individual,
         aggregateCli: phase.extraction.aggregate,

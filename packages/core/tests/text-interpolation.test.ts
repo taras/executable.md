@@ -17,7 +17,7 @@ import type { Operation } from "effection";
 import type {
   Segment,
   ComponentDefinition,
-  InputSchema,
+  PropsSchema,
   Json,
   CodeBlockResult,
 } from "../src/types.ts";
@@ -27,7 +27,7 @@ function makeComponent(
   body: string,
   opts: {
     meta?: Record<string, unknown>;
-    inputs?: InputSchema;
+    props?: PropsSchema;
   } = {},
 ): ComponentDefinition {
   return {
@@ -35,7 +35,7 @@ function makeComponent(
     name,
     path: `components/${name}.md`,
     meta: opts.meta ?? {},
-    inputs: opts.inputs ?? { type: "object", properties: {}, additionalProperties: false },
+    props: opts.props ?? { type: "object", properties: {}, additionalProperties: false },
     bodySegments: scanSegments(body),
   };
 }

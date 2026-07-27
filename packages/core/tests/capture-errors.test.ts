@@ -24,7 +24,7 @@ function component(name: string, body: string): ComponentDefinition {
     name,
     path: `${name}.md`,
     meta: {},
-    inputs: OPEN_SCHEMA,
+    props: OPEN_SCHEMA,
     bodySegments: scanSegments(body),
   };
 }
@@ -36,7 +36,7 @@ function echoComponent(name: string, slot?: string): FunctionComponentDefinition
     kind: "function",
     name,
     path: `${name}.ts`,
-    inputs: OPEN_SCHEMA,
+    props: OPEN_SCHEMA,
     *fn(_props) {
       return yield* ephemeral(useContent(slot));
     },

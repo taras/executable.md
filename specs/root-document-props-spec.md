@@ -1,15 +1,15 @@
-# Root Document Inputs
+# Root Document Props
 
 An executable Markdown document can declare the values it needs and receive
 them when it runs. The declaration is the same one imported components use
 (§5.1.1); `xmd run` turns its top-level properties into command-line and
-environment inputs.
+environment props.
 
 ```markdown
 ---
 required: [name]
 
-inputs:
+props:
   name:
     type: string
     description: Person to greet
@@ -33,7 +33,7 @@ $ xmd run hello.md --props-name Ada --props-loud
 Hello, Ada!
 ```
 
-Environment variables provide the same inputs:
+Environment variables provide the same props:
 
 ```console
 $ XMD_PROPS_NAME=Ada xmd run hello.md
@@ -75,7 +75,7 @@ standard kebab-case and upper-snake-case normalization:
 | `firstName` | `--props-first-name` | `XMD_PROPS_FIRST_NAME` |
 | `json` | `--props-json` | `XMD_PROPS_JSON` |
 
-The `props` namespace separates document inputs from `xmd run` options. A
+The `props` namespace separates document props from `xmd run` options. A
 collision between two normalized property names is a configuration failure.
 
 Values are parsed according to the property's schema. A boolean accepts a bare
@@ -229,11 +229,11 @@ non-zero status before document effects or output.
 ## Programmatic API
 
 `inspectDocument({ path })` loads the root Markdown definition and returns its
-input schema without executing the document:
+props schema without executing the document:
 
 ```typescript
 const description = yield* inspectDocument({ path: "hello.md" });
-const schema = description.inputs;
+const schema = description.props;
 ```
 
 Inspection resolves relative paths against the contextual working directory.
@@ -266,7 +266,7 @@ Its relevant options are:
 
 ## Command Scope
 
-Root document inputs belong to `xmd run`. `xmd test` does not accept
+Root document props belong to `xmd run`. `xmd test` does not accept
 `--props`, `--props-*`, `XMD_PROPS`, or `XMD_PROPS_*`.
 
 ## Essential Acceptance Tests
@@ -278,4 +278,4 @@ interpolation and eval bindings, and invalid props prevent body effects.
 CLI acceptance tests prove the individual and aggregate sources, precedence,
 boolean and array forms, invalid-source failure, document-specific help without
 execution, the document-first ordering rule, and unchanged behavior for a
-document without inputs.
+document without props.

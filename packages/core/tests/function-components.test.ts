@@ -55,12 +55,12 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  it("FC-async: rejects an async input schema at the function-component load boundary", function* () {
+  it("FC-async: rejects an async props schema at the function-component load boundary", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
         "components/Bad.ts": [
-          "export const inputs = {",
+          "export const props = {",
           "  $async: true,",
           '  type: "object",',
           "  properties: {},",
@@ -88,7 +88,7 @@ describe("Tier FC — Function components", () => {
     try {
       writeFiles(tmpDir, {
         "components/Bad.ts": [
-          "export const inputs = {",
+          "export const props = {",
           '  type: "object",',
           '  properties: { slot: { type: "string" } },',
           "  additionalProperties: false,",
@@ -110,12 +110,70 @@ describe("Tier FC — Function components", () => {
     }
   });
 
+  // #177 renamed the schema export from `inputs` to `props` with no alias.
+  // A module still exporting `inputs` declares nothing, so it inherits the
+  // default closed empty-object schema and accepts no props at all.
+  it("FC-alias: an `inputs` export declares no props and rejects one", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Legacy.ts": [
+          "export const inputs = {",
+          '  type: "object",',
+          '  properties: { name: { type: "string" } },',
+          "  additionalProperties: false,",
+          "};",
+          "export default function*(props) { return `name=${props.name}`; }",
+        ].join("\n"),
+        "doc.md": '<Legacy name="world" />',
+      });
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("name");
+      expect(output).not.toContain("name=world");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  it("FC-alias: the same component declared with `props` validates normally", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Modern.ts": [
+          "export const props = {",
+          '  type: "object",',
+          '  properties: { name: { type: "string" } },',
+          "  additionalProperties: false,",
+          "};",
+          "export default function*(props) { return `name=${props.name}`; }",
+        ].join("\n"),
+        "doc.md": '<Modern name="world" />',
+      });
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("name=world");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
   it("FC2: function component with props", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
         "components/Greet.ts": [
-          "export const inputs = {",
+          "export const props = {",
           '  type: "object",',
           '  properties: { name: { type: "string" } },',
           '  required: ["name"],',
@@ -178,7 +236,7 @@ describe("Tier FC — Function components", () => {
       writeFiles(tmpDir, {
         "components/Dual.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties: {}",
           "  additionalProperties: false",
@@ -237,7 +295,7 @@ describe("Tier FC — Function components", () => {
     try {
       writeFiles(tmpDir, {
         "components/Typed.ts": [
-          "export const inputs = {",
+          "export const props = {",
           '  type: "object",',
           '  properties: { count: { type: "number" } },',
           '  required: ["count"],',
@@ -269,7 +327,7 @@ describe("Tier FC — Function components", () => {
     try {
       writeFiles(tmpDir, {
         "components/Req.ts": [
-          "export const inputs = {",
+          "export const props = {",
           '  type: "object",',
           '  properties: { name: { type: "string" } },',
           '  required: ["name"],',
@@ -302,7 +360,7 @@ describe("Tier FC — Function components", () => {
       writeFiles(tmpDir, {
         "components/MdComp.md": [
           "---",
-          "inputs:",
+          "props:",
           "  type: object",
           "  properties: {}",
           "  additionalProperties: false",

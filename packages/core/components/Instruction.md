@@ -2,7 +2,7 @@
 meta:
   componentName: Instruction
 
-inputs:
+props:
   type: object
   properties:
     system:

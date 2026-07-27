@@ -30,7 +30,7 @@ function stubComponent(name: string): ComponentDefinition {
     name,
     path: `${name}.md`,
     meta: {},
-    inputs: { type: "object", properties: {}, additionalProperties: false },
+    props: { type: "object", properties: {}, additionalProperties: false },
     bodySegments: [],
   };
 }

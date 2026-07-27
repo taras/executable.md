@@ -3,7 +3,7 @@ import { CodeBlock } from "../../components/Code.tsx";
 
 const COMPONENT = `---
 emoji: Hello
-inputs:
+props:
   name:
     type: string
     required: true
@@ -20,14 +20,14 @@ export default define.page(function Components() {
     <>
       <h1 style="font-size:2rem;font-weight:800;">Components</h1>
       <p class="muted">
-        A component is a markdown file with frontmatter and declared inputs,
+        A component is a markdown file with frontmatter and declared props,
         invoked with a JSX-style tag. Documents stay valid, readable markdown
         everywhere.
       </p>
 
       <h2>Defining a component</h2>
       <p>
-        Frontmatter becomes <code>meta</code>. The <code>inputs</code>{" "}
+        Frontmatter becomes <code>meta</code>. The <code>props</code>{" "}
         block declares typed props. Text supports <code>{"{meta.key}"}</code>
         {" "}
         and <code>{"{props.key}"}</code> interpolation.

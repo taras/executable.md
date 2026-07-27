@@ -24,7 +24,7 @@ const META: Record<string, { title: string; desc: string }> = {
   "/docs/components": {
     title: "Components · executable.md docs",
     desc:
-      "Invoke markdown files as JSX-style components with typed inputs and slots.",
+      "Invoke markdown files as JSX-style components with typed props and slots.",
   },
   "/docs/exec-eval": {
     title: "Exec & Eval · executable.md docs",

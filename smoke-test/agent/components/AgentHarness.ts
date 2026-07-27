@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import * as os from "node:os";
 
-export const inputs = {
+export const props = {
   type: "object",
   properties: { scenario: { type: "string" } },
   required: ["scenario"],

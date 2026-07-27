@@ -2,7 +2,7 @@
 meta:
   componentName: InnerStubProvider
 
-inputs:
+props:
   type: object
   properties:
     model:

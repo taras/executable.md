@@ -1,5 +1,5 @@
 /**
- * Tier PS — the Zod adapter against Ajv (specs/root-document-inputs-spec.md).
+ * Tier PS — the Zod adapter against Ajv (specs/root-document-props-spec.md).
  *
  * `z.fromJSONSchema()` is semi-experimental, so the behavior the CLI
  * depends on is pinned here rather than assumed. Ajv remains authoritative
@@ -9,7 +9,7 @@
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { validateProps } from "@executablemd/core";
-import type { InputSchema } from "@executablemd/core";
+import type { PropsSchema } from "@executablemd/core";
 import { z } from "zod";
 
 type JsonSchemaInput = Parameters<typeof z.fromJSONSchema>[0];
@@ -23,7 +23,7 @@ function isSchemaShape(value: unknown): value is Record<string, z.ZodType> {
 }
 
 function shapeOf(
-  schema: InputSchema,
+  schema: PropsSchema,
   target: "draft-7" | "draft-2020-12" = "draft-7",
 ): Record<string, z.ZodType> {
   if (!isJsonSchemaInput(schema)) {
@@ -36,7 +36,7 @@ function shapeOf(
   return root.shape;
 }
 
-const SCALARS: InputSchema = {
+const SCALARS: PropsSchema = {
   type: "object",
   properties: {
     text: { type: "string" },
@@ -102,7 +102,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
   });
 
   it("PS3: required and optional are the schema's, not Zod's", function* () {
-    const schema: InputSchema = {
+    const schema: PropsSchema = {
       type: "object",
       properties: { a: { type: "string" }, b: { type: "string" } },
       required: ["a"],
@@ -113,7 +113,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
   });
 
   it("PS4: local references resolve — draft-7 uses definitions", function* () {
-    const schema: InputSchema = {
+    const schema: PropsSchema = {
       type: "object",
       properties: { user: { $ref: "#/definitions/user" } },
       definitions: {
@@ -128,7 +128,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
   });
 
   it("PS5: $defs needs the 2020-12 target, while Ajv resolves either pointer", function* () {
-    const schema: InputSchema = {
+    const schema: PropsSchema = {
       type: "object",
       properties: { user: { $ref: "#/$defs/user" } },
       $defs: { user: { type: "object", properties: { name: { type: "string" } } } },
@@ -141,7 +141,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
   });
 
   it("PS6: Zod would strip and default nested values, so its output is never kept", function* () {
-    const schema: InputSchema = {
+    const schema: PropsSchema = {
       type: "object",
       properties: {
         user: {

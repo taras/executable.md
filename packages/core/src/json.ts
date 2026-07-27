@@ -12,7 +12,7 @@ export function parseJson(value: unknown): Json {
 }
 
 // Never called on a whole module namespace — that carries the default
-// generator function, which is not JSON. Only the `inputs` export/value.
+// generator function, which is not JSON. Only the `props` export/value.
 export function parseJsonObject(value: unknown): JsonObject {
   const parsed = parseJson(value);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
