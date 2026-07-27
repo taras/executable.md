@@ -1,12 +1,12 @@
 /**
- * Per-boundary ACPX state for `<TestAgent>` (specs/test-agent-spec.md
- * §Scenario instances): the production provider state composed with an
- * in-memory session store and a dynamic registry whose resolve() embeds
- * the pending instance route into the worker command. Routing flows
- * through the provider's `withSessionRoute` hook: the route slot is
- * held only across the provider's registry-dependent work (preparation
- * and ensure/session validation + turn start), released while the
- * provider waits on the per-session queue and during turn consumption.
+ * The per-boundary provider for `<TestAgent>` (specs/test-agent-spec.md
+ * §Scenarios): the production ACPX provider composed with an in-memory
+ * session store and a dynamic registry whose resolve() embeds the pending
+ * scenario route into the worker command. Routing flows through the
+ * provider's `withSessionRoute` hook: the route slot is held only across the
+ * provider's registry-dependent work (preparation and ensure/session
+ * validation + turn start), released while the provider waits on the
+ * per-session queue and during turn consumption.
  */
 
 import type { Operation } from "effection";
@@ -18,10 +18,6 @@ import type {
 } from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
-
-export interface TestAgentAcpx {
-  state: AcpxProvider;
-}
 
 export function createMemorySessionStore(): AcpSessionStore {
   const records = new Map<string, AcpSessionRecord>();
@@ -36,17 +32,17 @@ export function createMemorySessionStore(): AcpSessionStore {
   };
 }
 
-export interface TestAgentAcpxOptions {
+export interface TestAgentProviderOptions {
   defaultAgent: string;
   agents: string[];
   workerCommand: string[];
   probeRoute: string;
-  /** Map a routing context to the instance route pinned for its work. */
-  routeFor(context: SessionRouteContext): string;
+  /** Map a routing context to the scenario route pinned for its work. */
+  resolveRoute(context: SessionRouteContext): string;
   dependencies?: AcpxProviderDependencies;
 }
 
-export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<TestAgentAcpx> {
+export function* useTestAgentProvider(options: TestAgentProviderOptions): Operation<AcpxProvider> {
   let pendingRoute: string | undefined;
   const routeSlot = yield* useRouteSlot();
 
@@ -63,17 +59,17 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
     },
   };
 
-  const state = yield* useAcpxProvider(
+  return yield* useAcpxProvider(
     { defaultAgent: options.defaultAgent, permissionMode: "deny-all" },
     {
       sessionStore: createMemorySessionStore(),
       agentRegistry: registry,
-      // withSlot bounds the route mutex to the seam's op without a scope
+      // withSlot bounds the route mutex to the hook's op without a scope
       // of its own — op's acquisitions (turn resources) belong to the
       // provider's subscriber scope and outlive the critical section.
       withSessionRoute: (context, op) =>
         routeSlot.withSlot(function* () {
-          pendingRoute = options.routeFor(context);
+          pendingRoute = options.resolveRoute(context);
           try {
             return yield* op();
           } finally {
@@ -85,6 +81,4 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
         : {}),
     },
   );
-
-  return { state };
 }

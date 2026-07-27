@@ -145,34 +145,57 @@ binding is a configuration error and never becomes an implicit capture. Repeated
 uses of one capture name must match the same text. Adjacent capture holes
 without literal text between them are rejected as ambiguous.
 
-## Scenario instances
+## Scenarios
 
 A scenario declaration is a blueprint, not a singleton runtime. Each resolved
-ACP session receives an isolated behavior-document instance and journal.
+ACP session receives an isolated scenario — its own behavior document and
+journal.
 
 Within one test, `(agent, logical session, cwd)` identifies one resumable
-instance. Repeated prompts to that session advance the same document. Different
+scenario. Repeated prompts to that session advance the same document. Different
 sessions and working directories have independent state.
 
-Each `<Test>` receives fresh ACPX state, document instances, and journals even
-when it uses the same scenario declaration and keys as another test. When
+Each `<Test>` receives a fresh provider, scenarios, and journals even when it
+uses the same scenario declaration and keys as another test. When
 `<TestAgent>` is used without an enclosing `<Test>`, its own scope is the
 isolation boundary.
 
-A scenario instance may remain suspended at a prompt matcher when its scope
-ends. Structured teardown halts and awaits the instance; it does not require the
-document to reach EOF and does not report unconsumed stages.
+A scenario may remain suspended at a prompt matcher when its scope ends.
+Structured teardown halts and awaits it; it does not require the document to
+reach EOF and does not report unconsumed stages.
 
 ## Controller and worker
 
 The controller owns:
 
 - scenario registration and resolution;
-- per-test ACPX configuration and state;
-- behavior-document instances and journals;
+- per-test ACPX configuration and provider;
+- the scenarios and their journals;
 - a virtual filesystem containing each behavior document and its permitted
   dependencies;
 - failures reported to the owning test.
+
+A harness acquires it with `useTestAgentController()` and registers scenarios
+through it. What it hands back is a route and nothing else — the journal, the
+turn failures, and the rest of a scenario's record stay inside the package:
+
+```ts
+interface TestAgentController {
+  useScenario(options: {
+    document: { path: string; source: string };
+    rootDir: string;
+  }): Operation<ScenarioHandle>;
+}
+
+interface ScenarioHandle {
+  route: string;
+}
+```
+
+`rootDir` is the permitted root for the behavior document's dependencies:
+Markdown reads resolve under it, and anything escaping it — lexically or
+through a symlink — is answered as missing. Ending the scope that acquired a
+scenario tears it down, as above.
 
 The public worker command is:
 
@@ -183,7 +206,7 @@ xmd test-agent --connect <opaque-controller-route>
 It appears in CLI help and operates only as a controller-launched worker. It
 does not accept a standalone behavior-document argument.
 
-The opaque route identifies the controller and the resolved scenario instance.
+The opaque route identifies the controller and the resolved scenario.
 This control-plane identity is established before ACPX starts the process
 because ACP does not carry Executable.md's logical session name. Public agent
 and session values remain unchanged; ACPX-facing route names are internal.
@@ -216,7 +239,7 @@ ACPX availability probe
   v
 test prompt
   | resolve agent + logical session + cwd
-  | allocate isolated scenario instance and opaque route
+  | allocate isolated scenario and opaque route
   | ensure ACPX session
   v
 xmd test-agent
@@ -243,7 +266,7 @@ test scope teardown
 ## Replay and journals
 
 Behavior journals are private to the test-agent controller and separate from the
-document-under-test journal. Each isolated scenario instance has one journal
+document-under-test journal. Each isolated scenario has one journal
 containing the matched prompt, captures, and completed stage transitions.
 
 Restart recovery covers crashes between completed turns; a crash inside a

@@ -17,7 +17,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
 import { useTestAgentController } from "../src/controller.ts";
-import type { TestAgentController } from "../src/controller.ts";
+import type { TestAgentControllerInternals } from "../src/controller.ts";
 import { useLineServer } from "../src/net.ts";
 import {
   createLineSplitter,
@@ -252,8 +252,8 @@ function* useGatedController(doc: { path: string; source: string }): Operation<G
 function* runScenario(
   source: string,
   body: (ctx: {
-    controller: TestAgentController;
-    instanceId: string;
+    controller: TestAgentControllerInternals;
+    scenarioId: string;
     worker: AcpClientHandle;
   }) => Operation<void>,
 ): Operation<void> {
@@ -263,13 +263,13 @@ function* runScenario(
     yield* writeTextFile(path.join(dir, "doc.md"), source);
     yield* scoped(function* () {
       const controller = yield* useTestAgentController();
-      const instance = yield* controller.useInstance({
-        doc: { path: "doc.md", source },
-        scenarioDir: dir,
+      const scenario = yield* controller.useScenario({
+        document: { path: "doc.md", source },
+        rootDir: dir,
       });
-      const worker = yield* useWorker(instance.route);
+      const worker = yield* useWorker(scenario.route);
       yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-      yield* body({ controller, instanceId: instance.id, worker });
+      yield* body({ controller, scenarioId: scenario.id, worker });
     });
   } finally {
     yield* rm(dir, { recursive: true, force: true });
@@ -284,14 +284,14 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       yield* writeTextFile(path.join(dir, "review.md"), BEHAVIOR);
       yield* scoped(function* () {
         const controller = yield* useTestAgentController();
-        const instance = yield* controller.useInstance({
-          doc: { path: "review.md", source: BEHAVIOR },
-          scenarioDir: dir,
+        const scenario = yield* controller.useScenario({
+          document: { path: "review.md", source: BEHAVIOR },
+          rootDir: dir,
         });
 
         let sessionId = "";
         yield* scoped(function* () {
-          const worker = yield* useWorker(instance.route);
+          const worker = yield* useWorker(scenario.route);
           const init = yield* worker.request("initialize", {
             protocolVersion: 1,
             clientCapabilities: {},
@@ -322,15 +322,15 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
           });
           expect(mismatch.error?.message).toContain("Summarize {review.subject}");
           expect(mismatch.error?.message).toContain("Do something else entirely");
-          expect(controller.instance(instance.id)?.failure?.kind).toBe("mismatch");
+          expect(controller.getScenarioRecord(scenario.id)?.failure?.kind).toBe("mismatch");
         });
         // The first worker is gone (killed between completed turns); its
         // stage-1 transition was acknowledged, so a fresh worker
         // rehydrates with the capture intact and stage 2 active.
-        expect(controller.instance(instance.id)?.journal.length).toBeGreaterThan(0);
+        expect(controller.getScenarioRecord(scenario.id)?.journal.length).toBeGreaterThan(0);
 
         yield* scoped(function* () {
-          const worker = yield* useWorker(instance.route);
+          const worker = yield* useWorker(scenario.route);
           yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
           const loaded = yield* worker.request("session/load", {
             sessionId,
@@ -385,15 +385,15 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       yield* writeTextFile(path.join(dir, "slow.md"), behavior);
       yield* scoped(function* () {
         const controller = yield* useTestAgentController();
-        const instance = yield* controller.useInstance({
-          doc: { path: "slow.md", source: behavior },
-          scenarioDir: dir,
+        const scenario = yield* controller.useScenario({
+          document: { path: "slow.md", source: behavior },
+          rootDir: dir,
         });
-        const worker = yield* useWorker(instance.route);
+        const worker = yield* useWorker(scenario.route);
         yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
         const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
         const sessionId = created.result?.sessionId;
-        const baseline = controller.instance(instance.id)!.journal.length;
+        const baseline = controller.getScenarioRecord(scenario.id)!.journal.length;
 
         const pending = yield* spawn(() =>
           worker.request("session/prompt", {
@@ -407,7 +407,7 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         expect(cancelled.result).toMatchObject({ stopReason: "cancelled" });
         // Nothing committed: the controller journal is exactly where it
         // was before the cancelled turn.
-        expect(controller.instance(instance.id)!.journal.length).toBe(baseline);
+        expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBe(baseline);
 
         // The rebuilt runtime re-enters stage 1 deterministically.
         const retried = yield* worker.request("session/prompt", {
@@ -416,7 +416,7 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         });
         expect(retried.result).toMatchObject({ stopReason: "end_turn" });
         expect(chunkText(worker.notifications)).toContain("slow reply");
-        expect(controller.instance(instance.id)!.journal.length).toBeGreaterThan(baseline);
+        expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBeGreaterThan(baseline);
 
         const second = yield* worker.request("session/prompt", {
           sessionId,
@@ -440,11 +440,11 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       yield* spawn(() =>
         scoped(function* () {
           const controller = yield* useTestAgentController();
-          const instance = yield* controller.useInstance({
-            doc: { path: "hi.md", source: '<WhenPrompt template="hi" />\n\nhello\n' },
-            scenarioDir: dir,
+          const scenario = yield* controller.useScenario({
+            document: { path: "hi.md", source: '<WhenPrompt template="hi" />\n\nhello\n' },
+            rootDir: dir,
           });
-          started.resolve(instance.route);
+          started.resolve(scenario.route);
           yield* stop.operation;
         }),
       );
@@ -533,7 +533,7 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
   it("TW6: a prompt mismatch is recorded on the controller before the ACP error", function* () {
     yield* runScenario(
       '<WhenPrompt template="hi" />\n\nhello\n',
-      function* ({ controller, instanceId, worker }) {
+      function* ({ controller, scenarioId, worker }) {
         yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
         const reply = yield* worker.request("session/prompt", {
           sessionId: "s",
@@ -542,7 +542,9 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         expect(reply.error).toBeDefined();
         // No sleep: the worker awaited the controller's record ack before it
         // surfaced the error, so the diagnostic is already present.
-        expect(controller.instance(instanceId)?.failure).toMatchObject({ kind: "mismatch" });
+        expect(controller.getScenarioRecord(scenarioId)?.failure).toMatchObject({
+          kind: "mismatch",
+        });
       },
     );
   });
@@ -550,7 +552,7 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
   it("TW7: an exhausted scenario is recorded before the ACP error", function* () {
     yield* runScenario(
       '<WhenPrompt template="hi" />\n\nhello\n',
-      function* ({ controller, instanceId, worker }) {
+      function* ({ controller, scenarioId, worker }) {
         yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
         const matched = yield* worker.request("session/prompt", {
           sessionId: "s",
@@ -562,7 +564,9 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
           prompt: [{ type: "text", text: "hi" }],
         });
         expect(reply.error).toBeDefined();
-        expect(controller.instance(instanceId)?.failure).toMatchObject({ kind: "exhausted" });
+        expect(controller.getScenarioRecord(scenarioId)?.failure).toMatchObject({
+          kind: "exhausted",
+        });
       },
     );
   });
@@ -576,14 +580,14 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       "```",
       "",
     ].join("\n");
-    yield* runScenario(behavior, function* ({ controller, instanceId, worker }) {
+    yield* runScenario(behavior, function* ({ controller, scenarioId, worker }) {
       yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
       const reply = yield* worker.request("session/prompt", {
         sessionId: "s",
         prompt: [{ type: "text", text: "go" }],
       });
       expect(reply.error).toBeDefined();
-      expect(controller.instance(instanceId)?.fatal).toBeDefined();
+      expect(controller.getScenarioRecord(scenarioId)?.fatal).toBeDefined();
     });
   });
 
@@ -598,10 +602,10 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       "hello",
       "",
     ].join("\n");
-    yield* runScenario(behavior, function* ({ controller, instanceId, worker }) {
+    yield* runScenario(behavior, function* ({ controller, scenarioId, worker }) {
       const reply = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
       expect(reply.error).toBeDefined();
-      expect(controller.instance(instanceId)?.fatal).toBeDefined();
+      expect(controller.getScenarioRecord(scenarioId)?.fatal).toBeDefined();
     });
   });
 
@@ -614,10 +618,10 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       "hello",
       "",
     ].join("\n");
-    yield* runScenario(behavior, function* ({ controller, instanceId, worker }) {
+    yield* runScenario(behavior, function* ({ controller, scenarioId, worker }) {
       const reply = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
       expect(reply.error).toBeDefined();
-      expect(controller.instance(instanceId)?.failure).toMatchObject({ kind: "config" });
+      expect(controller.getScenarioRecord(scenarioId)?.failure).toMatchObject({ kind: "config" });
     });
   });
 

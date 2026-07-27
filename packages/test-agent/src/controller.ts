@@ -4,10 +4,10 @@
  * scope. It serves behavior documents, Markdown dependencies (reads
  * restricted to Markdown files whose canonical path stays inside the
  * scenario root), and behavior journals to workers, and records journal
- * appends and turn-failure diagnostics per scenario instance.
+ * appends and turn-failure diagnostics per scenario.
  *
- * Each instance admits one worker connection at a time. Unregistering an
- * instance — or tearing the controller down — revokes and awaits its active
+ * Each scenario admits one worker connection at a time. Unregistering a
+ * scenario — or tearing the controller down — revokes and awaits its active
  * connection before discarding state, so a revoked worker can no longer
  * append, report failures, or read.
  */
@@ -26,38 +26,60 @@ import type { ControllerMessage, WorkerMessage } from "./protocol.ts";
 import { useLineServer } from "./net.ts";
 import type { LineSocket } from "./net.ts";
 
-export interface InstanceFailure {
+/** What a scenario gives its harness: where its worker connects. */
+export interface ScenarioHandle {
+  route: string;
+}
+
+export interface TestAgentController {
+  /**
+   * Register a scenario as a resource. Its finalizer removes it from the
+   * routing index, revokes and awaits any active worker, and clears its
+   * journal and diagnostics — so ending the scenario's scope tears it down.
+   */
+  useScenario(options: {
+    document: { path: string; source: string };
+    rootDir: string;
+  }): Operation<ScenarioHandle>;
+}
+
+/** How a turn failed. Recorded against the scenario, never published. */
+export interface ScenarioFailure {
   kind: "mismatch" | "exhausted" | "config";
   expected?: string;
   actual: string;
 }
 
-export interface ScenarioInstance {
+/**
+ * Everything the controller keeps for one scenario. The journal and the
+ * diagnostics are mutable and private to the package — a harness sees only the
+ * handle.
+ */
+export interface ScenarioRecord extends ScenarioHandle {
   id: string;
-  route: string;
   /** The real directory Markdown dependencies are served from. */
-  scenarioDir: string;
-  doc: { path: string; source: string };
+  rootDir: string;
+  document: { path: string; source: string };
   journal: DurableEvent[];
-  failure?: InstanceFailure;
+  failure?: ScenarioFailure;
   fatal?: string;
 }
 
-export interface TestAgentController {
+/**
+ * The controller as the package uses it: the public operations plus the probe
+ * route the provider registry needs and the record lookup the tests inspect.
+ */
+export interface TestAgentControllerInternals extends TestAgentController {
   probeRoute: string;
-  /**
-   * Register a scenario instance as a resource. Its finalizer removes it from
-   * the routing index, revokes and awaits any active worker, and clears its
-   * journal and diagnostics — so ending the instance's scope tears it down.
-   */
-  useInstance(config: {
-    doc: { path: string; source: string };
-    scenarioDir: string;
-  }): Operation<ScenarioInstance>;
-  instance(id: string): ScenarioInstance | undefined;
+  /** The record behind the handle — the journal and diagnostics included. */
+  useScenario(options: {
+    document: { path: string; source: string };
+    rootDir: string;
+  }): Operation<ScenarioRecord>;
+  getScenarioRecord(id: string): ScenarioRecord | undefined;
 }
 
-/** The single worker connection an instance currently admits. */
+/** The single worker connection a scenario currently admits. */
 interface ActiveConnection {
   revoke(): void;
   closed: Operation<void>;
@@ -73,49 +95,49 @@ function send(connection: LineSocket, message: ControllerMessage): void {
  * lexically is answered as missing rather than surfaced as an error, so
  * component fallback continues normally.
  */
-function scenarioPath(instance: ScenarioInstance, path: string): string | undefined {
+function scenarioPath(scenario: ScenarioRecord, path: string): string | undefined {
   const virtual = isAbsolute(path) ? relative("/", path) : path;
-  const real = resolve(instance.scenarioDir, virtual);
-  if (real !== instance.scenarioDir && !real.startsWith(instance.scenarioDir + sep)) {
+  const real = resolve(scenario.rootDir, virtual);
+  if (real !== scenario.rootDir && !real.startsWith(scenario.rootDir + sep)) {
     return undefined;
   }
   return real;
 }
 
-export function useTestAgentController(): Operation<TestAgentController> {
+export function useTestAgentController(): Operation<TestAgentControllerInternals> {
   return resource(function* (provide) {
     const token = randomUUID();
-    const instances = new Map<string, ScenarioInstance>();
+    const scenarios = new Map<string, ScenarioRecord>();
     const active = new Map<string, ActiveConnection>();
     const canonicalRoots = new Map<string, string>();
 
     // The canonical scenario root, resolving symlinks, memoized per
-    // instance. A dependency read/stat is served only when its canonical
+    // scenario. A dependency read/stat is served only when its canonical
     // path stays inside this root.
-    function* canonicalRoot(instance: ScenarioInstance): Operation<string> {
-      const cached = canonicalRoots.get(instance.id);
+    function* canonicalRoot(scenario: ScenarioRecord): Operation<string> {
+      const cached = canonicalRoots.get(scenario.id);
       if (cached !== undefined) {
         return cached;
       }
       let root: string;
       try {
-        root = yield* until(realpath(instance.scenarioDir));
+        root = yield* until(realpath(scenario.rootDir));
       } catch {
-        root = instance.scenarioDir;
+        root = scenario.rootDir;
       }
-      canonicalRoots.set(instance.id, root);
+      canonicalRoots.set(scenario.id, root);
       return root;
     }
 
     function* resolveContained(
-      instance: ScenarioInstance,
+      scenario: ScenarioRecord,
       path: string,
     ): Operation<string | undefined> {
-      const real = scenarioPath(instance, path);
+      const real = scenarioPath(scenario, path);
       if (real === undefined) {
         return undefined;
       }
-      const root = yield* canonicalRoot(instance);
+      const root = yield* canonicalRoot(scenario);
       let canonical: string;
       try {
         canonical = yield* until(realpath(real));
@@ -142,7 +164,7 @@ export function useTestAgentController(): Operation<TestAgentController> {
     }
 
     function* serve(connection: LineSocket, revoke: WithResolvers<void>): Operation<void> {
-      let attached: ScenarioInstance | "probe" | undefined;
+      let attached: ScenarioRecord | "probe" | undefined;
       for (const line of yield* each(connection.lines)) {
         const parsed = parseWorkerMessage(line);
         if (!parsed.ok) {
@@ -161,18 +183,18 @@ export function useTestAgentController(): Operation<TestAgentController> {
             attached = "probe";
             send(connection, { t: "config", mode: "probe" });
           } else {
-            const instance = instances.get(message.instance);
-            if (!instance) {
-              send(connection, { t: "error", message: `unknown instance "${message.instance}"` });
+            const scenario = scenarios.get(message.instance);
+            if (!scenario) {
+              send(connection, { t: "error", message: `unknown scenario "${message.instance}"` });
               connection.end();
               return;
             }
-            // One worker per instance: a second concurrent attach is
+            // One worker per scenario: a second concurrent attach is
             // refused so two workers never mutate the same journal.
-            if (active.has(instance.id)) {
+            if (active.has(scenario.id)) {
               send(connection, {
                 t: "error",
-                message: `instance "${instance.id}" already has an active connection`,
+                message: `scenario "${scenario.id}" already has an active connection`,
               });
               connection.end();
               return;
@@ -182,19 +204,19 @@ export function useTestAgentController(): Operation<TestAgentController> {
               revoke: revoke.resolve,
               closed: ended.operation,
             };
-            active.set(instance.id, registration);
+            active.set(scenario.id, registration);
             yield* ensure(() => {
-              if (active.get(instance.id) === registration) {
-                active.delete(instance.id);
+              if (active.get(scenario.id) === registration) {
+                active.delete(scenario.id);
               }
               ended.resolve();
             });
-            attached = instance;
+            attached = scenario;
             send(connection, {
               t: "config",
               mode: "scenario",
-              doc: instance.doc,
-              journal: instance.journal,
+              doc: scenario.document,
+              journal: scenario.journal,
             });
           }
           yield* each.next();
@@ -207,7 +229,7 @@ export function useTestAgentController(): Operation<TestAgentController> {
 
     function* handleMessage(
       connection: LineSocket,
-      attached: ScenarioInstance | "probe",
+      attached: ScenarioRecord | "probe",
       message: WorkerMessage,
     ): Operation<void> {
       if (attached === "probe") {
@@ -215,11 +237,11 @@ export function useTestAgentController(): Operation<TestAgentController> {
         connection.end();
         return;
       }
-      // A worker whose instance was unregistered mid-connection is cut off
+      // A worker whose scenario was unregistered mid-connection is cut off
       // here even before its socket finishes closing: nothing it sends
       // reaches the discarded journal, failure, or filesystem.
-      if (instances.get(attached.id) !== attached) {
-        send(connection, { t: "error", message: "instance is no longer registered" });
+      if (scenarios.get(attached.id) !== attached) {
+        send(connection, { t: "error", message: "scenario is no longer registered" });
         connection.end();
         return;
       }
@@ -275,7 +297,7 @@ export function useTestAgentController(): Operation<TestAgentController> {
           return;
         }
         case "turn-failure": {
-          const failure: InstanceFailure = { kind: message.kind, actual: message.actual };
+          const failure: ScenarioFailure = { kind: message.kind, actual: message.actual };
           if (message.expected !== undefined) {
             failure.expected = message.expected;
           }
@@ -302,29 +324,29 @@ export function useTestAgentController(): Operation<TestAgentController> {
     const server = yield* useLineServer("127.0.0.1", handleConnection);
     const port = server.port;
 
-    // A scenario instance is a resource: setup adds it to the routing index;
-    // its finalizer removes it from the index, revokes and awaits its active
+    // A scenario is a resource: setup adds it to the routing index; its
+    // finalizer removes it from the index, revokes and awaits its active
     // worker, and always clears its state. The index maps are lookups only —
-    // membership owns no lifecycle, so ending an instance's scope is the only
+    // membership owns no lifecycle, so ending a scenario's scope is the only
     // way it is torn down.
-    function useInstance(config: {
-      doc: { path: string; source: string };
-      scenarioDir: string;
-    }): Operation<ScenarioInstance> {
+    function useScenario(options: {
+      document: { path: string; source: string };
+      rootDir: string;
+    }): Operation<ScenarioRecord> {
       return resource(function* (provide) {
         const id = randomUUID();
-        const instance: ScenarioInstance = {
+        const scenario: ScenarioRecord = {
           id,
           route: formatRoute({ host: "127.0.0.1", port, token, instance: id }),
-          scenarioDir: resolve(config.scenarioDir),
-          doc: config.doc,
+          rootDir: resolve(options.rootDir),
+          document: options.document,
           journal: [],
         };
-        instances.set(id, instance);
+        scenarios.set(id, scenario);
         yield* ensure(function* () {
           // Remove from the routing index first so in-flight messages are
           // rejected and no new worker can attach.
-          instances.delete(id);
+          scenarios.delete(id);
           try {
             const registration = active.get(id);
             if (registration) {
@@ -333,21 +355,21 @@ export function useTestAgentController(): Operation<TestAgentController> {
             }
           } finally {
             // Always clear state — even if worker revocation failed.
-            instance.journal.length = 0;
-            instance.failure = undefined;
-            instance.fatal = undefined;
+            scenario.journal.length = 0;
+            scenario.failure = undefined;
+            scenario.fatal = undefined;
             canonicalRoots.delete(id);
           }
         });
-        yield* provide(instance);
+        yield* provide(scenario);
       });
     }
 
     yield* provide({
       probeRoute: formatRoute({ host: "127.0.0.1", port, token, instance: PROBE_INSTANCE }),
-      useInstance,
-      instance(id) {
-        return instances.get(id);
+      useScenario,
+      getScenarioRecord(id) {
+        return scenarios.get(id);
       },
     });
   });

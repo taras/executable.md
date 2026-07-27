@@ -14,7 +14,7 @@
  * paths alike. Outside a `<Test>`, the `<TestAgent>` scope itself is
  * the isolation boundary.
  *
- * Scenario instances are resources held by suspended tasks spawned into
+ * Scenario scenarios are resources held by suspended tasks spawned into
  * their boundary scope, so a boundary halt releases them. Because
  * acquiring one is an operation but the provider's route resolver is a
  * synchronous callback, every instance is provisioned by the `session`
@@ -28,46 +28,46 @@ import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { Agent, Component, evalScope, expandSegments } from "@executablemd/core";
 import type { ComponentElement, Segment, Session } from "@executablemd/core";
-import type { SessionRouteContext } from "@executablemd/acp";
+import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { useTestAgentController } from "./controller.ts";
-import type { ScenarioInstance, TestAgentController } from "./controller.ts";
-import { useTestAgentAcpx } from "./state.ts";
-import type { TestAgentAcpx } from "./state.ts";
+import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
+import { useTestAgentProvider } from "./provider.ts";
 
 export interface TestAgentComponentsOptions {
   /** Command segments that relaunch this xmd as `test-agent`. */
   workerCommand: string[];
 }
 
-interface Scenario {
+/** One `<TestAgent.Scenario>` mapping, before any worker exists. */
+interface ScenarioDeclaration {
   agent: string;
   sessionName: string;
-  scenarioDir: string;
-  doc: { path: string; source: string };
+  rootDir: string;
+  document: { path: string; source: string };
   duplicate: boolean;
 }
 
 /** A resolved session, with the agent that created it. */
 interface PinnedSession {
   agent: string;
-  instance: ScenarioInstance;
+  scenario: ScenarioHandle;
 }
 
 interface BoundaryState {
-  acpx: TestAgentAcpx;
-  /** Owns every instance resource provisioned for this boundary. */
+  provider: AcpxProvider;
+  /** Owns every scenario resource provisioned for this boundary. */
   boundaryScope: Scope;
-  instances: Map<string, ScenarioInstance>;
-  pending: Map<string, Operation<ScenarioInstance>>;
+  scenarios: Map<string, ScenarioHandle>;
+  pending: Map<string, Operation<ScenarioHandle>>;
   bySessionKey: Map<string, PinnedSession>;
 }
 
 interface TestAgentSession {
   defaultAgent: string;
-  controller: TestAgentController;
-  scenarios: Map<string, Scenario>;
+  controller: TestAgentControllerInternals;
+  declarations: Map<string, ScenarioDeclaration>;
   boundary(): Operation<BoundaryState>;
 }
 
@@ -77,14 +77,14 @@ function configError(source: string, message: string): Segment {
   return { type: "error", message: `<${source}> ${message}`, source };
 }
 
-function scenarioKey(agent: string, sessionName: string): string {
+function declarationKey(agent: string, sessionName: string): string {
   // JSON encoding keeps the key textual and collision-safe for any
   // agent/session values.
   return JSON.stringify([agent, sessionName]);
 }
 
-function instanceKeyFor(agent: string, sessionName: string | undefined, dir: string): string {
-  return JSON.stringify([scenarioKey(agent, sessionName ?? ""), dir]);
+function scenarioKey(agent: string, sessionName: string | undefined, dir: string): string {
+  return JSON.stringify([declarationKey(agent, sessionName ?? ""), dir]);
 }
 
 function describeMapping(agentName: string, sessionName: string | undefined): string {
@@ -132,28 +132,28 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
 
     return yield* scoped(function* () {
       const controller = yield* useTestAgentController();
-      const scenarios = new Map<string, Scenario>();
+      const declarations = new Map<string, ScenarioDeclaration>();
       const boundaries = new Map<EvalScope | "test-agent-scope", BoundaryState>();
 
-      function* resolveInstance(
+      function* resolveScenario(
         state: BoundaryState,
         agentName: string,
         sessionName: string | undefined,
         dir: string,
-      ): Operation<ScenarioInstance> {
-        const scenario = scenarios.get(scenarioKey(agentName, sessionName ?? ""));
-        if (!scenario) {
+      ): Operation<ScenarioHandle> {
+        const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
+        if (!declared) {
           throw new Error(
             `no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`,
           );
         }
-        if (scenario.duplicate) {
+        if (declared.duplicate) {
           throw new Error(
             `duplicate <TestAgent.Scenario> mappings for ${describeMapping(agentName, sessionName)}`,
           );
         }
-        const key = instanceKeyFor(agentName, sessionName, dir);
-        const existing = state.instances.get(key);
+        const key = scenarioKey(agentName, sessionName, dir);
+        const existing = state.scenarios.get(key);
         if (existing) {
           return existing;
         }
@@ -163,14 +163,14 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
         }
         // Publish the shared future before acquiring so concurrent
         // callers await this acquisition instead of starting their own.
-        const ready = withResolvers<ScenarioInstance>();
+        const ready = withResolvers<ScenarioHandle>();
         state.pending.set(key, ready.operation);
         yield* state.boundaryScope.spawn(function* () {
-          let instance: ScenarioInstance;
+          let scenario: ScenarioHandle;
           try {
-            instance = yield* controller.useInstance({
-              doc: scenario.doc,
-              scenarioDir: scenario.scenarioDir,
+            scenario = yield* controller.useScenario({
+              document: declared.document,
+              rootDir: declared.rootDir,
             });
           } catch (error) {
             // Nothing consumes this task's failure yet, so it is
@@ -179,9 +179,9 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
             ready.reject(error instanceof Error ? error : new Error(String(error)));
             return;
           }
-          state.instances.set(key, instance);
+          state.scenarios.set(key, scenario);
           state.pending.delete(key);
-          ready.resolve(instance);
+          ready.resolve(scenario);
           // Held, not caught: the future has settled, so a later
           // failure must reach the boundary scope to fail the test.
           yield* suspend();
@@ -190,36 +190,36 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
       }
 
       function* provisionState(): Operation<BoundaryState> {
-        // The maps exist before useTestAgentAcpx so the route resolver
+        // The maps exist before useTestAgentProvider so the route resolver
         // can close over them.
-        const instances = new Map<string, ScenarioInstance>();
+        const scenarios = new Map<string, ScenarioHandle>();
         const bySessionKey = new Map<string, PinnedSession>();
-        const routeFor = (context: SessionRouteContext): string => {
+        const resolveRoute = (context: SessionRouteContext): string => {
           if (typeof context.session === "object") {
             return resolvePinned(bySessionKey, context.session.sessionKey, context.agentName)
-              .instance.route;
+              .scenario.route;
           }
-          const instance = instances.get(
-            instanceKeyFor(context.agentName, context.session, context.cwd),
+          const scenario = scenarios.get(
+            scenarioKey(context.agentName, context.session, context.cwd),
           );
-          if (!instance) {
+          if (!scenario) {
             throw new Error(
               `no <TestAgent.Scenario> maps ${describeMapping(context.agentName, context.session)}`,
             );
           }
-          return instance.route;
+          return scenario.route;
         };
-        const acpx = yield* useTestAgentAcpx({
+        const provider = yield* useTestAgentProvider({
           defaultAgent,
           agents: [defaultAgent],
           workerCommand: options.workerCommand,
           probeRoute: controller.probeRoute,
-          routeFor,
+          resolveRoute,
         });
         return {
-          acpx,
+          provider,
           boundaryScope: yield* useScope(),
-          instances,
+          scenarios,
           pending: new Map(),
           bySessionKey,
         };
@@ -258,29 +258,29 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
         return yield* published.operation;
       }
 
-      const session: TestAgentSession = { defaultAgent, controller, scenarios, boundary };
+      const session: TestAgentSession = { defaultAgent, controller, declarations, boundary };
       yield* TestAgentCtx.set(session);
 
       yield* Agent.around(
         {
           *agent([name], _next) {
             const state = yield* boundary();
-            return yield* state.acpx.state.agent(name);
+            return yield* state.provider.agent(name);
           },
           *session([name], _next) {
             const state = yield* boundary();
             const agentName = yield* Agent.operations.agent();
             const dir = resolve(yield* contextualCwd());
-            const instance = yield* resolveInstance(state, agentName, name, dir);
+            const scenario = yield* resolveScenario(state, agentName, name, dir);
             // The provider's session() drives withSessionRoute itself;
-            // it maps this same context back to the instance route.
-            const resolved = yield* state.acpx.state.session(name);
-            state.bySessionKey.set(resolved.sessionKey, { agent: agentName, instance });
+            // it maps this same context back to the scenario route.
+            const resolved = yield* state.provider.session(name);
+            state.bySessionKey.set(resolved.sessionKey, { agent: agentName, scenario });
             return resolved;
           },
           *prompt([content, promptOptions], _next) {
             // Routing flows through the provider's withSessionRoute hook,
-            // whose resolver is synchronous — so the instance it will
+            // whose resolver is synchronous — so the scenario it will
             // look up is provisioned here, once the stream is subscribed.
             return {
               *[Symbol.iterator]() {
@@ -293,9 +293,9 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
                   resolvePinned(state.bySessionKey, pinned.sessionKey, agentName);
                 } else {
                   const dir = resolve(yield* contextualCwd());
-                  yield* resolveInstance(state, agentName, pinned, dir);
+                  yield* resolveScenario(state, agentName, pinned, dir);
                 }
-                const stream = state.acpx.state.promptStream(content, promptOptions);
+                const stream = state.provider.promptStream(content, promptOptions);
                 return yield* stream;
               },
             };
@@ -331,17 +331,17 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
     const source = yield* readTextFile(srcPath);
 
     const agentName = typeof agent === "string" ? agent : session.defaultAgent;
-    const key = scenarioKey(agentName, typeof sessionProp === "string" ? sessionProp : "");
-    const existing = session.scenarios.get(key);
+    const key = declarationKey(agentName, typeof sessionProp === "string" ? sessionProp : "");
+    const existing = session.declarations.get(key);
     if (existing) {
       existing.duplicate = true;
       return [];
     }
-    session.scenarios.set(key, {
+    session.declarations.set(key, {
       agent: agentName,
       sessionName: typeof sessionProp === "string" ? sessionProp : "",
-      scenarioDir: dirname(srcPath),
-      doc: { path: basename(srcPath), source },
+      rootDir: dirname(srcPath),
+      document: { path: basename(srcPath), source },
       duplicate: false,
     });
     return [];

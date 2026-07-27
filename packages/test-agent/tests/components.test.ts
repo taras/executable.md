@@ -136,7 +136,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
         '  <Test name="wrong prompt fails">',
         '    <Prompt text="wrong" />',
         "  </Test>",
-        '  <Test name="fresh instance passes">',
+        '  <Test name="fresh scenario passes">',
         '    <Prompt text="hi" as="reply" />',
         '    <AssertStringIncludes actual={reply} expected="hello there" />',
         "  </Test>",
@@ -285,7 +285,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
     expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
   });
 
-  it("TV7: different working directories get independent scenario instances", function* () {
+  it("TV7: different working directories get independent scenario scenarios", function* () {
     const cwdRef = { value: path.resolve("."), flipTo: os.tmpdir() };
     const run = yield* runDoc(
       {
@@ -311,7 +311,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
       { cwdRef },
     );
     // The same stage-1 prompt matched twice: the flipped cwd allocated a
-    // fresh instance instead of reusing (and exhausting) the first one.
+    // fresh scenario instead of reusing (and exhausting) the first one.
     expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
   });
 
@@ -374,7 +374,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
       "doc.md": [
         "<TestAgent>",
         '  <TestAgent.Scenario agent="test" session="review" src="./agents/two.md" />',
-        '  <Test name="pinned session advances one instance">',
+        '  <Test name="pinned session advances one scenario">',
         '    <Agent name="test">',
         '      <Session name="review">',
         '        <Prompt text="one" as="first" />',
@@ -389,7 +389,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
       ].join("\n"),
     });
     // Both prompts routed through the Session object pinned by <Session>
-    // to the same instance, so stage 2 matched after stage 1.
+    // to the same scenario, so stage 2 matched after stage 1.
     expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
   });
 

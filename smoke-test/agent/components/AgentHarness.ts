@@ -53,9 +53,9 @@ export default function* (props: Record<string, Json>): Operation<string> {
   const source = yield* readTextFile(scenarioPath);
   const home = yield* useTemporaryDirectory("xmd-smoke-home");
   const controller = yield* useTestAgentController();
-  const scenario = yield* controller.useInstance({
-    doc: { path: basename(scenarioPath), source },
-    scenarioDir: dirname(scenarioPath),
+  const scenario = yield* controller.useScenario({
+    document: { path: basename(scenarioPath), source },
+    rootDir: dirname(scenarioPath),
   });
 
   const parent = yield* env;
