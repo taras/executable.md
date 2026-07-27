@@ -3,23 +3,24 @@
  * §Scenario instances): the production provider state composed with an
  * in-memory session store and a dynamic registry whose resolve() embeds
  * the pending instance route into the worker command. Routing flows
- * through the provider's `sessionRouting` seam: the global route slot is
+ * through the provider's `withSessionRoute` hook: the route slot is
  * held only across the provider's registry-dependent work (preparation
  * and ensure/session validation + turn start), released while the
  * provider waits on the per-session queue and during turn consumption.
  */
 
 import type { Operation } from "effection";
-import { useAcpxProviderState, useSerialQueues } from "@executablemd/acp";
+import { useAcpxProvider } from "@executablemd/acp";
 import type {
-  AcpxProviderSeams,
-  AcpxProviderState,
-  SessionRoutingContext,
+  AcpxProvider,
+  AcpxProviderDependencies,
+  SessionRouteContext,
 } from "@executablemd/acp";
+import { useRouteSlot } from "./route-slot.ts";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
 export interface TestAgentAcpx {
-  state: AcpxProviderState;
+  state: AcpxProvider;
 }
 
 export function createMemorySessionStore(): AcpSessionStore {
@@ -41,13 +42,13 @@ export interface TestAgentAcpxOptions {
   workerCommand: string[];
   probeRoute: string;
   /** Map a routing context to the instance route pinned for its work. */
-  routeFor(context: SessionRoutingContext): string;
-  seams?: AcpxProviderSeams;
+  routeFor(context: SessionRouteContext): string;
+  dependencies?: AcpxProviderDependencies;
 }
 
 export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<TestAgentAcpx> {
   let pendingRoute: string | undefined;
-  const routeQueue = yield* useSerialQueues();
+  const routeSlot = yield* useRouteSlot();
 
   // ACPX tokenizes the command on whitespace with quote support, so
   // command segments containing spaces (e.g. a binary path) are quoted.
@@ -62,7 +63,7 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
     },
   };
 
-  const state = yield* useAcpxProviderState(
+  const state = yield* useAcpxProvider(
     { defaultAgent: options.defaultAgent, permissionMode: "deny-all" },
     {
       sessionStore: createMemorySessionStore(),
@@ -70,8 +71,8 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
       // withSlot bounds the route mutex to the seam's op without a scope
       // of its own — op's acquisitions (turn resources) belong to the
       // provider's subscriber scope and outlive the critical section.
-      sessionRouting: (context, op) =>
-        routeQueue.withSlot("route", function* () {
+      withSessionRoute: (context, op) =>
+        routeSlot.withSlot(function* () {
           pendingRoute = options.routeFor(context);
           try {
             return yield* op();
@@ -79,7 +80,9 @@ export function* useTestAgentAcpx(options: TestAgentAcpxOptions): Operation<Test
             pendingRoute = undefined;
           }
         }),
-      ...(options.seams?.createRuntime ? { createRuntime: options.seams.createRuntime } : {}),
+      ...(options.dependencies?.createRuntime
+        ? { createRuntime: options.dependencies.createRuntime }
+        : {}),
     },
   );
 

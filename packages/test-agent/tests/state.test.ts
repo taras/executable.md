@@ -1,6 +1,6 @@
 /**
  * Tier TS — per-boundary ACPX state tests (specs/test-agent-spec.md
- * §Scenario instances): the route seam pins the pending route for the
+ * §Scenario instances): withSessionRoute pins the pending route for the
  * provider's registry-dependent work and releases it otherwise.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -8,7 +8,7 @@ import { expect } from "@effectionx/bdd/expect";
 import { sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
-import type { SessionRoutingContext } from "@executablemd/acp";
+import type { SessionRouteContext } from "@executablemd/acp";
 import { useTestAgentAcpx } from "../src/state.ts";
 import { deriveSessionKey } from "../../acp/src/session-key.ts";
 import { createFakeRuntime, useFlatWorld } from "../../acp/tests/helpers.ts";
@@ -26,7 +26,7 @@ function* drainPrompt(): Operation<void> {
 }
 
 describe("Tier TS — test-agent ACPX state", () => {
-  it("TS1: the route seam pins the instance route for provider work; probe route otherwise", function* () {
+  it("TS1: withSessionRoute pins the instance route for provider work; probe route otherwise", function* () {
     const harness = createFakeRuntime();
     yield* useFlatWorld("/work");
     const acpx = yield* useTestAgentAcpx({
@@ -34,8 +34,8 @@ describe("Tier TS — test-agent ACPX state", () => {
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
       probeRoute: PROBE,
-      routeFor: (_context: SessionRoutingContext) => INST,
-      seams: { createRuntime: harness.create },
+      routeFor: (_context: SessionRouteContext) => INST,
+      dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(
       {
@@ -65,7 +65,7 @@ describe("Tier TS — test-agent ACPX state", () => {
     expect(registry.resolve("test")).toBe(`xmd test-agent --connect ${PROBE}`);
   });
 
-  it("TS2: the route seam is a bounded critical section, not held across turn consumption", function* () {
+  it("TS2: withSessionRoute is a bounded critical section, not held across turn consumption", function* () {
     const harness = createFakeRuntime();
     harness.script({ manual: true });
     yield* useFlatWorld("/work");
@@ -75,11 +75,11 @@ describe("Tier TS — test-agent ACPX state", () => {
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
       probeRoute: PROBE,
-      routeFor: (context: SessionRoutingContext) => {
+      routeFor: (context: SessionRouteContext) => {
         routes.push(String(context.session ?? "default"));
         return INST;
       },
-      seams: { createRuntime: harness.create },
+      dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(
       {
@@ -95,7 +95,7 @@ describe("Tier TS — test-agent ACPX state", () => {
 
     const task = yield* spawn(() => drainPrompt());
     yield* sleep(10);
-    // The turn has started (route seam entered twice: prepare +
+    // The turn has started (withSessionRoute entered twice: prepare +
     // ensure/start) and is now consuming — the route slot is free,
     // so the registry reads the probe fallback again.
     expect(routes.length).toBe(2);

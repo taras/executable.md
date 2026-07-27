@@ -7,16 +7,17 @@
  * runtime. Supply it directly to core's agent components through the
  * `rootProvider` option:
  * `installAgentComponents({ rootProvider: { factory: createAcpxProvider(), options } })`.
+ *
+ * A harness that needs several independent providers in sibling scopes uses
+ * `useAcpxProvider()` instead, which is the same operations without the Agent
+ * install. Everything else here — the permission bridge, session placement,
+ * turn consumption, and the queues serializing them — is implementation.
  */
 
-export { createAcpxProvider, useAcpxProviderState } from "./src/provider.ts";
-export { useSerialQueues } from "./src/serial-queue.ts";
-export type { SerialQueues } from "./src/serial-queue.ts";
-export type {
-  AcpxProviderSeams,
-  AcpxProviderState,
-  ProbeCapableRuntime,
-  SessionRoutingContext,
-} from "./src/provider.ts";
+export { createAcpxProvider } from "./src/provider.ts";
+export type { AcpxProviderDependencies, SessionRouteContext } from "./src/provider.ts";
 /** The agent ACPX selects when nothing else is configured. */
 export { DEFAULT_AGENT_NAME } from "acpx/runtime";
+
+export { useAcpxProvider } from "./src/provider.ts";
+export type { AcpxProvider, ProbeCapableRuntime } from "./src/provider.ts";

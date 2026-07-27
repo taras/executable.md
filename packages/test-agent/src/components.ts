@@ -28,7 +28,7 @@ import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { Agent, Component, evalScope, expandSegments } from "@executablemd/core";
 import type { ComponentElement, Segment, Session } from "@executablemd/core";
-import type { SessionRoutingContext } from "@executablemd/acp";
+import type { SessionRouteContext } from "@executablemd/acp";
 import { cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { useTestAgentController } from "./controller.ts";
@@ -194,7 +194,7 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
         // can close over them.
         const instances = new Map<string, ScenarioInstance>();
         const bySessionKey = new Map<string, PinnedSession>();
-        const routeFor = (context: SessionRoutingContext): string => {
+        const routeFor = (context: SessionRouteContext): string => {
           if (typeof context.session === "object") {
             return resolvePinned(bySessionKey, context.session.sessionKey, context.agentName)
               .instance.route;
@@ -272,14 +272,14 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
             const agentName = yield* Agent.operations.agent();
             const dir = resolve(yield* contextualCwd());
             const instance = yield* resolveInstance(state, agentName, name, dir);
-            // The provider's session() drives the route seam itself;
+            // The provider's session() drives withSessionRoute itself;
             // it maps this same context back to the instance route.
             const resolved = yield* state.acpx.state.session(name);
             state.bySessionKey.set(resolved.sessionKey, { agent: agentName, instance });
             return resolved;
           },
           *prompt([content, promptOptions], _next) {
-            // Routing flows through the provider's sessionRouting seam,
+            // Routing flows through the provider's withSessionRoute hook,
             // whose resolver is synchronous — so the instance it will
             // look up is provisioned here, once the stream is subscribed.
             return {

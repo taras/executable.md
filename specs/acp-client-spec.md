@@ -220,8 +220,8 @@ prompt failure.
 `@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.
 `createAcpxProvider()` returns an `AgentProviderFactory` supplied directly to
 `installAgentComponents({ rootProvider: { factory: createAcpxProvider(), options } })`;
-`useAcpxProviderState` exposes the same operations without the Agent install, so
-several independent provider states can run in sibling scopes. The provider owns
+`useAcpxProvider` exposes the same operations without the Agent install, so
+several independent providers can run in sibling scopes. The provider owns
 every resource it starts and creates the shared runtime lazily on first use with
 the contextual cwd and validated `timeout` — nothing spawns at install.
 
@@ -241,9 +241,10 @@ the contextual cwd and validated `timeout` — nothing spawns at install.
   partial text on failure). A completed turn with an absent stop reason is treated
   as `end_turn`; any other stop reason is a failure.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
-  different sessions run concurrently. The route seam (`sessionRouting`) bounds
-  registry-dependent work (preparation, ensure/start) and is not held across turn
-  consumption.
+  different sessions run concurrently. `withSessionRoute` — the hook an embedder
+  supplies through `AcpxProviderDependencies` — wraps registry-dependent work
+  (preparation, ensure/start) and is not held across turn consumption. The
+  queues that serialize this are internal to the package.
 - **Permissions.** ACPX permission requests are routed — keyed by the record's
   live ACP session id, refreshed on demand — to the in-flight prompt's scope and
   answered through `Agent.requestPermission`; an ambiguous or unknown request
