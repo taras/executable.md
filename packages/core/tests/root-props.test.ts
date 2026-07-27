@@ -49,12 +49,47 @@ const SIDE_EFFECT = [
 
 const NO_INPUTS = "PLAIN_MARKER\n";
 
-function* runDoc(files: Record<string, string>, path: string, props?: Record<string, Json>) {
-  yield* useStubFs(files);
+const GREETING_CONCISE = [
+  "---",
+  "required: [name]",
+  "",
+  "inputs:",
+  "  name:",
+  "    type: string",
+  "    description: Person to greet",
+  "  loud:",
+  "    type: boolean",
+  "    default: false",
+  "---",
+  "",
+  "Hello, {props.name}! loud={props.loud} bare={name}",
+  "",
+].join("\n");
+
+const NESTED_CONCISE = [
+  "---",
+  "inputs:",
+  "  server:",
+  "    type: object",
+  "    properties:",
+  "      port: { type: number, default: 8080 }",
+  "    default: {}",
+  "---",
+  "",
+  "port={props.server.port}",
+  "",
+].join("\n");
+
+function* runPath(path: string, props?: Record<string, Json>) {
   const execution = yield* execute({ path, stream: new InMemoryStream(), props });
   const output = yield* forEach(function* () {}, execution.output);
   const result = yield* execution;
   return { output, result };
+}
+
+function* runDoc(files: Record<string, string>, path: string, props?: Record<string, Json>) {
+  yield* useStubFs(files);
+  return yield* runPath(path, props);
 }
 
 describe("Tier RP — root document properties", () => {
@@ -186,5 +221,73 @@ describe("Tier RI — document inspection", () => {
       expect(result.ok).toBe(true);
       expect(output).toContain("Hello, Ada!");
     }
+  });
+});
+
+describe("Tier RS — concise input declarations", () => {
+  it("RS1: a concise root receives props and applies defaults", function* () {
+    const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
+      name: "Ada",
+    });
+    expect(result.ok).toBe(true);
+    expect(output).toContain("Hello, Ada!");
+    expect(output).toContain("loud=false");
+    expect(output).toContain("bare=Ada");
+  });
+
+  it("RS2: the concise and full spellings behave identically", function* () {
+    yield* useStubFs({ "concise.md": GREETING_CONCISE, "full.md": GREETING });
+    const concise = yield* runPath("concise.md", { name: "Ada", loud: true });
+    const full = yield* runPath("full.md", { name: "Ada", loud: true });
+    expect(concise.output).toBe(full.output);
+  });
+
+  it("RS3: a missing required property prevents every body effect", function* () {
+    const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {});
+    expect(result.ok).toBe(false);
+    expect(output).not.toContain("Hello");
+  });
+
+  it("RS4: the implicit closed object rejects an undeclared property", function* () {
+    const { result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
+      name: "Ada",
+      nope: 1,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("RS5: object defaults fill recursively", function* () {
+    const { output, result } = yield* runDoc({ "nested.md": NESTED_CONCISE }, "nested.md", {});
+    expect(result.ok).toBe(true);
+    expect(output).toContain("port=8080");
+  });
+
+  it("RS6: an imported concise component validates props like the root", function* () {
+    yield* useStubFs({
+      "supplied.md": '<Greeting name="Ada" />\n',
+      "omitted.md": "<Greeting />\n",
+      "Greeting.md": GREETING_CONCISE,
+    });
+    const supplied = yield* runPath("supplied.md");
+    expect(supplied.result.ok).toBe(true);
+    expect(supplied.output).toContain("Hello, Ada!");
+
+    // A component's prop failure is collected into the output rather than
+    // aborting the run, so the diagnostic is the observable, not the status.
+    const omitted = yield* runPath("omitted.md");
+    expect(omitted.output).toContain("Prop validation failed for <Greeting />");
+    expect(omitted.output).toContain("must have required property 'name'");
+    expect(omitted.output).not.toContain("Hello, ");
+  });
+
+  it("RS7: inspection returns the normalized schema", function* () {
+    yield* useStubFs({ "hello.md": GREETING_CONCISE });
+    const info = yield* inspectDocument({ path: "hello.md" });
+    expect(info.inputs).toMatchObject({
+      type: "object",
+      required: ["name"],
+      additionalProperties: false,
+    });
+    expect(info.meta).toEqual({});
   });
 });

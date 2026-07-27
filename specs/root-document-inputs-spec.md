@@ -1,27 +1,30 @@
 # Root Document Inputs
 
 An executable Markdown document can declare the values it needs and receive
-them when it runs. The declaration is the same draft-07 JSON Schema used by
-imported components; `xmd run` turns its top-level properties into command-line
-and environment inputs.
+them when it runs. The declaration is the same one imported components use
+(§5.1.1); `xmd run` turns its top-level properties into command-line and
+environment inputs.
 
 ```markdown
 ---
+required: [name]
+
 inputs:
-  type: object
-  properties:
-    name:
-      type: string
-      description: Person to greet
-    loud:
-      type: boolean
-      default: false
-  required: [name]
-  additionalProperties: false
+  name:
+    type: string
+    description: Person to greet
+  loud:
+    type: boolean
+    default: false
 ---
 
 Hello, {props.name}!
 ```
+
+The equivalent full draft-07 schema declares the same document and behaves
+identically; the map form only makes the enclosing closed object implicit.
+Sources are generated from the normalized schema, so both spellings produce
+the same options and variables.
 
 The document runs with individual values:
 
