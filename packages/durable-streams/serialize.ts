@@ -5,9 +5,41 @@
  * - Protocol Result ({ status: "ok" | "err" | "cancelled" })
  * - Effection Result ({ ok: true, value } | { ok: false, error })
  * - Error ↔ SerializedError
+ *
+ * `serializeDurableEvent` is the shared NDJSON representation: file
+ * persistence writes it, and gates that inspect the persisted form derive
+ * it from the same function.
  */
 
-import type { EffectionResult, Json, Result, SerializedError } from "./types.ts";
+import type { DurableEvent, EffectionResult, Json, Result, SerializedError } from "./types.ts";
+
+/**
+ * Render one durable event as its NDJSON record, terminating newline
+ * included.
+ *
+ * This is ordinary `JSON.stringify(event) + "\n"`. Field order follows the
+ * event object's own insertion order; nothing is sorted, normalized, or
+ * otherwise canonicalized. The value of sharing it is that file persistence
+ * and anything inspecting the persisted form cannot drift apart, not that
+ * the output is a canonical form of the event.
+ *
+ * Serialization fails when `JSON.stringify` throws — a circular structure or
+ * a `BigInt` — or when it does not return a string. Values that
+ * `JSON.stringify` silently coerces or drops are left alone: `undefined`,
+ * function and symbol members are omitted, non-finite numbers become `null`,
+ * and non-plain objects serialize through `toJSON`.
+ */
+export function serializeDurableEvent(event: DurableEvent): string {
+  const record = JSON.stringify(event);
+
+  // JSON.stringify returns undefined rather than throwing when the value
+  // itself has no JSON representation.
+  if (typeof record !== "string") {
+    throw new TypeError("serializeDurableEvent: event has no JSON representation");
+  }
+
+  return `${record}\n`;
+}
 
 /** Serialize an Error to a JSON-safe SerializedError. */
 export function serializeError(error: Error): SerializedError {

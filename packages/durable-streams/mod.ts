@@ -60,6 +60,7 @@ export {
   deserializeError,
   effectionToProtocol,
   protocolToEffection,
+  serializeDurableEvent,
   serializeError,
 } from "./serialize.ts";
 
