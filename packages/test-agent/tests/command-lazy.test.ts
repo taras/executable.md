@@ -19,8 +19,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
-
-const CLI = path.resolve("packages/cli/src/deno.ts");
+import { cliBase } from "@executablemd/test-support/launch";
 
 interface Asked {
   calls: string[][];
@@ -30,7 +29,7 @@ function* recordCommand(asked: Asked): Operation<void> {
   yield* API.Env.around({
     *command([args = []]) {
       asked.calls.push(args);
-      return ["deno", "run", "--allow-all", CLI, ...args];
+      return [...cliBase(), ...args];
     },
   });
 }

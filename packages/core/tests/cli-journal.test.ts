@@ -4,7 +4,7 @@
  * Exercises the full CLI pipeline as a subprocess — arg parsing,
  * stream consumption, middleware, and diagnostic journal output.
  *
- * Each test shells out to `deno run --allow-all packages/cli/src/deno.ts`
+ * Each test shells out to the CLI under the host runtime
  * and uses timebox to prevent hangs from blocking the test suite.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -16,9 +16,9 @@ import { exec } from "@effectionx/process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { cliCommand } from "@executablemd/test-support/launch";
 
-const CLI_CMD = "deno";
-const CLI_ARGS = ["run", "--allow-all", "packages/cli/src/deno.ts", "run"];
+const CLI_ARGS = ["run"];
 const TIMEOUT = 15_000;
 
 function makeTmpDir(): string {
@@ -37,8 +37,9 @@ interface CliResult {
  */
 function* runCliResult(args: string[]) {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const proc = yield* exec(CLI_CMD, {
-      arguments: [...CLI_ARGS, ...args],
+    const cli = cliCommand([...CLI_ARGS, ...args]);
+    const proc = yield* exec(cli.command, {
+      arguments: cli.arguments,
       env: process.env as Record<string, string>,
     });
 

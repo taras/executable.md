@@ -19,8 +19,8 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
+import { cliCommand } from "@executablemd/test-support/launch";
 
-const CLI = path.resolve("packages/cli/src/deno.ts");
 const TIMEOUT = 60_000;
 
 interface CliResult {
@@ -51,8 +51,9 @@ function* runCli(
   overrides: Record<string, string> = {},
 ): Operation<CliResult> {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const proc = yield* exec("deno", {
-      arguments: ["run", "--allow-all", CLI, ...args],
+    const cli = cliCommand(args);
+    const proc = yield* exec(cli.command, {
+      arguments: cli.arguments,
       cwd: fixture.dir,
       env: fixtureEnv(fixture.home, overrides),
     });

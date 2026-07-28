@@ -9,6 +9,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exec, type Exec } from "@effectionx/process";
+import { cliCommand } from "@executablemd/test-support/launch";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -16,8 +17,6 @@ import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
-
-const CLI = path.resolve("packages/cli/src/deno.ts");
 
 const HELLO = [
   "---",
@@ -146,8 +145,9 @@ function* useFixture<T>(
 }
 
 function runCli(args: string[], fixture: Fixture, overrides: Record<string, string> = {}): Exec {
-  return exec("deno", {
-    arguments: ["run", "--allow-all", CLI, ...args],
+  const cli = cliCommand(args);
+  return exec(cli.command, {
+    arguments: cli.arguments,
     cwd: fixture.dir,
     env: cliEnv(fixture.dir, overrides),
   });

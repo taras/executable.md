@@ -21,9 +21,9 @@ import { installTestingComponents, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
 import { useCommand } from "./command.ts";
+import { cliBase } from "@executablemd/test-support/launch";
 
-const CLI = path.resolve("packages/cli/src/deno.ts");
-const WORKER = ["deno", "run", "--allow-all", CLI];
+const WORKER = cliBase();
 
 interface Run {
   result: Result<string>;
