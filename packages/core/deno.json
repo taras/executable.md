@@ -6,6 +6,9 @@
   },
   "imports": {
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",
+    "@secretlint/core": "npm:@secretlint/core@13.0.4",
+    "@secretlint/secretlint-rule-preset-recommend": "npm:@secretlint/secretlint-rule-preset-recommend@13.0.4",
+    "@secretlint/types": "npm:@secretlint/types@13.0.4",
     "acorn": "npm:acorn@^8.16.0",
     "ajv": "npm:ajv@^8.17.1",
     "gray-matter": "npm:gray-matter@^4.0.3",

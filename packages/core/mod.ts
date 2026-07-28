@@ -139,3 +139,10 @@ export {
 // Shared execution config — contextual timeout (re-exported from runtime).
 export { Config, timeout } from "@executablemd/runtime";
 export type { ConfigApi } from "@executablemd/runtime";
+
+// Secret detection — the offline scanner and its safe findings.
+// The rules themselves stay internal: they are policy, not API.
+export { createSecretScanner } from "./src/secrets/scanner.ts";
+export type { SecretScanner } from "./src/secrets/scanner.ts";
+export { SecretDetectedError, SecretScannerError } from "./src/secrets/findings.ts";
+export type { SecretFinding } from "./src/secrets/findings.ts";
