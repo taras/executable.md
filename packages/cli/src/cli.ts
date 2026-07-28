@@ -416,15 +416,14 @@ function* run(
     return;
   }
 
-  // The successful result of a value root is the only thing on stdout, written
-  // as JSON without markdown normalization or terminal formatting.
+  // Written straight to stdout, so the result never passes through markdown
+  // normalization or terminal formatting.
   if (valueRoot) {
     process.stdout.write(`${JSON.stringify(result.value)}\n`);
   }
 }
 
 /**
- * Whether the document returns a declared value rather than rendered text.
  * A document that cannot be inspected — missing, malformed, or unreadable —
  * reports text, so execution produces the diagnostic rather than inspection.
  */

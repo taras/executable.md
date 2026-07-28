@@ -36,12 +36,10 @@ import { asText } from "./helpers.ts";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 interface Run {
-  /** The document's return value, when it completed successfully. */
   value?: Json;
-  /** Rendered body text — the observability channel. */
+  /** Rendered body text — the observability channel, never the result. */
   output: string;
   error?: string;
-  /** Shell commands the body ran, in order. */
   commands: string[];
 }
 
@@ -74,7 +72,6 @@ function* runExecution(options: {
   return { value: result.value, output, commands };
 }
 
-/** Run `doc.md` over a stubbed filesystem. */
 function run(files: Record<string, string>, stream?: DurableStream): Operation<Run> {
   return scoped(function* () {
     const commands: string[] = [];
@@ -116,7 +113,6 @@ function runFixture(files: Record<string, string>): Operation<Run> {
   });
 }
 
-/** A caller that captures a value and renders it as JSON. */
 const CAPTURING_ROOT = [
   '<Verdict as="verdict" />',
   "",
@@ -128,7 +124,6 @@ const CAPTURING_ROOT = [
   "",
 ].join("\n");
 
-/** A value component whose body computes the value it returns. */
 function valueComponent(declaration: string, expression: string): string {
   return [
     "---",

@@ -1,7 +1,3 @@
-/**
- * Shared helpers for core test suites.
- */
-
 import type { Json } from "../src/types.ts";
 
 /**

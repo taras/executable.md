@@ -1184,8 +1184,6 @@ function* expressionEnv(
   return evalEnv;
 }
 
-// Evaluates with env.values destructured into scope via new Function()
-// parameter injection.
 function evaluateIn(
   evalEnv: EvalEnv,
   expression: string,

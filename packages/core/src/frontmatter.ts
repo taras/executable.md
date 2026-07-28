@@ -4,7 +4,6 @@ import type { Json, JsonObject, PropsSchema, ReturnsSchema } from "./types.ts";
 export interface ParsedFrontmatter {
   meta: Record<string, unknown>;
   props: PropsSchema;
-  /** The declared return schema. Absent for a text component. */
   returns?: ReturnsSchema;
 }
 

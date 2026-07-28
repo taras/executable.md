@@ -146,8 +146,7 @@ export interface ComponentDefinition {
   path: string;
   meta: Record<string, unknown>;
   props: PropsSchema;
-  /** The declared return schema. Absent in text mode, where the component
-   *  returns its rendered markdown. */
+  /** Absent in text mode, where the component returns its rendered markdown. */
   returns?: ReturnsSchema;
   bodySegments: Segment[];
 }
@@ -186,7 +185,6 @@ export interface FunctionComponentDefinition {
   name: string;
   path: string;
   props: PropsSchema;
-  /** The declared return schema. Absent in text mode. */
   returns?: ReturnsSchema;
   fn: FunctionComponent;
 }

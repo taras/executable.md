@@ -4,7 +4,6 @@ import { readTextFile } from "@executablemd/runtime";
 import type { PropsSchema, ReturnsSchema } from "./types.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 
-/** The default schema of a document that declares no `returns`. */
 const TEXT_RETURN_SCHEMA: ReturnsSchema = { type: "string" };
 
 export interface InspectOptions {

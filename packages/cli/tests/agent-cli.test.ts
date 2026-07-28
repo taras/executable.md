@@ -46,7 +46,6 @@ function* useFixture<T>(
   });
 }
 
-/** Where a run executes and the isolated HOME it sees. */
 function env(fixture: Fixture): { cwd: string; env: Record<string, string> } {
   return { cwd: fixture.dir, env: { HOME: fixture.home } };
 }
