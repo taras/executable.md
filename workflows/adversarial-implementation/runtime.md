@@ -11,9 +11,8 @@ inputs:
 # Runtime and Isolation
 
 The run owns its worktree, artifact history, processes, and deterministic
-effects. It pins the source revision before discovery. A worktree isolates Git
-state from the user's checkout but is not a security boundary, and it is not
-created until implementor planning needs a stable repository filesystem.
+effects. It pins the source revision before creating the worktree. A worktree
+isolates Git state from the user's checkout but is not a security boundary.
 
 ## Target shape
 
@@ -26,9 +25,8 @@ created until implementor planning needs a stable repository filesystem.
     agentNetwork="deny"
     deterministicEffects={["git-objects", "github"]}
   >
-    <Content slot="discovery" />
     <Worktree retain="on-dirty-or-failure">
-      <Content slot="repository" />
+      <Content />
     </Worktree>
   </Sandbox>
 </RunHistory>
@@ -37,9 +35,9 @@ created until implementor planning needs a stable repository filesystem.
 
 - Resolve `base` to a source revision before planner discovery and record it in
   run history.
-- Keep handoffs and user decisions as restored run values during discovery.
-- Create a disposable worktree when implementor planning begins, using the
-  pinned revision rather than resolving the branch again.
+- Create a disposable worktree from that pinned revision before discovery.
+- Keep handoffs and user decisions as restored run values rather than transfer
+  files within the worktree.
 - Let `<Worktree>` set `Env.cwd` while it renders every child.
 - Give the planner read and search access.
 - Restrict implementor writes to worktree files.

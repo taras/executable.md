@@ -31,29 +31,29 @@ that an agent must choose to read. Root `props` supplies `request`, `base`,
 
 <RunHistory ref="refs/xmd/runs" base={props.base}>
   <Sandbox policy="supervised-implementation">
-    <Glob
-      include={["AGENTS.md", "**/AGENTS.md"]}
-      exclude={[".git/**", "**/node_modules/**"]}
-      as="instructionPaths"
-    />
-    <Capture as="instructions">
-      <InstructionFiles paths={instructionPaths} />
-    </Capture>
-    <PlannerHandoff
-      instructions={instructions}
-      planner={props.planner}
-      as="handoff"
-    >
-      {props.request}
-    </PlannerHandoff>
-    <UserGate
-      purpose="validate the planner handoff"
-      agent={props.planner}
-      as="handoffGate"
-    >
-      {handoff}
-    </UserGate>
     <Worktree>
+      <Glob
+        include={["AGENTS.md", "**/AGENTS.md"]}
+        exclude={[".git/**", "**/node_modules/**"]}
+        as="instructionPaths"
+      />
+      <Capture as="instructions">
+        <InstructionFiles paths={instructionPaths} />
+      </Capture>
+      <PlannerHandoff
+        instructions={instructions}
+        planner={props.planner}
+        as="handoff"
+      >
+        {props.request}
+      </PlannerHandoff>
+      <UserGate
+        purpose="validate the planner handoff"
+        agent={props.planner}
+        as="handoffGate"
+      >
+        {handoff}
+      </UserGate>
       <PlanConvergence handoff={handoff}
         handoffGate={handoffGate}
         instructions={instructions}
@@ -85,9 +85,9 @@ that an agent must choose to read. Root `props` supplies `request`, `base`,
   </Sandbox>
 </RunHistory>
 
-`RunHistory` resolves `props.base` to a source revision before discovery. The
-worktree is created only when implementor planning begins and uses that pinned
-revision even if the branch moves while discovery is in progress.
+`RunHistory` resolves `props.base` to a source revision before creating the
+worktree. Discovery through implementation review uses that pinned filesystem
+even if the branch moves while the run is in progress.
 
 ## Rendered data flow
 

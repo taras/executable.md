@@ -250,10 +250,9 @@ is written to the history.
 
 ### Experiment isolation
 
-The run resolves and records its source revision before discovery. Planner
-discovery and handoff validation do not create a worktree. A worktree is
-created from the pinned revision when implementor planning begins, so the
-implementation plan and later changes use the same filesystem even if the base
+The run resolves and records its source revision, then creates the worktree
+before discovery. Planner discovery, handoff validation, implementor planning,
+implementation, and review use the same pinned filesystem even if the base
 branch moves.
 
 A worktree isolates experimental Git state from the user's current checkout,
@@ -394,9 +393,9 @@ The exercise succeeds when:
 5. The planner returns a verdict with evidence, a focused revision prompt on
    failure, and explicit user decisions when needed.
 6. The loop reaches a user-authorized shared plan before implementation.
-7. Implementor planning creates the workflow-owned worktree from the source
-   revision pinned before discovery; implementation changes only that worktree
-   and records validation evidence.
+7. The run creates the workflow-owned worktree from its pinned source revision
+   before discovery; implementation changes only that worktree and records
+   validation evidence.
 8. The planner reviews the resulting pull request, and implementation and
    review repeat when the verdict fails.
 9. The user decides whether to accept the completed change.

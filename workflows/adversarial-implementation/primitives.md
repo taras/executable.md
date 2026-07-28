@@ -25,8 +25,8 @@ The workflow exposes these missing contracts:
    effect capabilities.
 4. `<Worktree>` reconciles a workspace from the source revision pinned by the
    run, supplies contextual working directory, sets `Env.cwd` while rendering
-   its children, and cleans up safely. This workflow invokes it when
-   implementor planning begins, not during discovery.
+   its children, and cleans up safely. This workflow keeps discovery,
+   implementor planning, implementation, and review in that same workspace.
 5. `<Glob>` evaluates explicit include and exclude patterns relative to
    `Env.cwd` and binds a deduplicated, deterministically ordered list of
    normalized relative paths. Its typed list output is a concrete use case for
