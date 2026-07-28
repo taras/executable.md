@@ -4,7 +4,7 @@ inputs:
   properties:
     handoff:
       type: string
-    handoffGate:
+    handoffCheckpoint:
       type: string
     instructions:
       type: string
@@ -14,14 +14,14 @@ inputs:
       type: string
   required:
     - handoff
-    - handoffGate
+    - handoffCheckpoint
     - instructions
     - planner
     - implementor
   additionalProperties: false
 ---
 
-# Plan Convergence
+# Planning
 
 The implementor and planner are equally capable of analysis. The implementor
 tests the handoff's theory; the planner tests the resulting plan. Evidence
@@ -45,7 +45,7 @@ resolves factual disagreement, while the user resolves material choices.
 ```
 </Capture>
 
-<Loop name="plan-convergence" max={5}>
+<Loop name="planning" max={5}>
   <Prompt
     agent={props.implementor}
     session="implementor"
@@ -62,7 +62,7 @@ resolves factual disagreement, while the user resolves material choices.
 
     User involvement record:
 
-    {props.handoffGate}
+    {props.handoffCheckpoint}
 
     Investigate the current working directory. Confirm, refute, or amend the
     implementation theory with evidence. Do not modify the repository. Return a
@@ -83,7 +83,7 @@ resolves factual disagreement, while the user resolves material choices.
 
         User involvement record:
 
-        {props.handoffGate}
+        {props.handoffCheckpoint}
 
         Implementation plan:
 
@@ -136,10 +136,10 @@ resolves factual disagreement, while the user resolves material choices.
     </Session>
   </Agent>
 
-  <UserGate
+  <UserCheckpoint
     purpose="resolve the plan review"
     agent={props.planner}
-    as="planGate"
+    as="planCheckpoint"
   >
     ## Implementation plan
 
@@ -154,7 +154,7 @@ resolves factual disagreement, while the user resolves material choices.
     Revision prompt:
 
     {verdict.revisionPrompt}
-  </UserGate>
+  </UserCheckpoint>
   <If condition={verdict.passed}>
     <Break />
     <Else>
@@ -169,7 +169,7 @@ resolves factual disagreement, while the user resolves material choices.
 
         User involvement record:
 
-        {planGate}
+        {planCheckpoint}
       </Prompt>
     </Else>
   </If>
@@ -188,6 +188,6 @@ resolves factual disagreement, while the user resolves material choices.
 </Output>
 
 The loop is bounded and reports why it stopped: passed, user stopped, failed,
-cancelled, or retry limit reached. `RunHistory` records every `plan`,
-`verdict`, and `planGate` version under its loop iteration; the component does
-not create handoff files.
+cancelled, or retry limit reached. The surrounding workflow records every
+`plan`, `verdict`, and `planCheckpoint` version under its loop iteration; the
+component does not create handoff files.

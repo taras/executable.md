@@ -12,7 +12,7 @@ inputs:
   additionalProperties: false
 ---
 
-# User Involvement Gate
+# User Checkpoint
 
 This authored component asks its supplied agent whether a transition contains a
 material choice. It obtains the user's answer when needed; it never resolves
@@ -68,7 +68,7 @@ that choice on the user's behalf.
 </Capture>
 
 <Agent name={props.agent}>
-  <Session name="user-gate">
+  <Session name="user-checkpoint">
     <Prompt as="candidate" throwOnError>
       Determine whether the user must be involved to {props.purpose}.
 

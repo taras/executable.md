@@ -10,13 +10,14 @@ inputs:
 
 # Runtime and Isolation
 
-The run owns its worktree, artifact history, processes, and deterministic
-effects. It pins the source revision before creating the worktree. A worktree
-isolates Git state from the user's checkout but is not a security boundary.
+The workflow's internal run owns its worktree, artifact history, processes, and
+deterministic effects. It pins the source revision before creating the
+worktree. A worktree isolates Git state from the user's checkout but is not a
+security boundary.
 
 ## Target shape
 
-<RunHistory ref="refs/xmd/runs" base={props.base}>
+<Workflow base={props.base} historyRef="refs/xmd/runs">
   <Sandbox
     readable={["repository"]}
     writable={["workspace"]}
@@ -29,7 +30,7 @@ isolates Git state from the user's checkout but is not a security boundary.
       <Content />
     </Worktree>
   </Sandbox>
-</RunHistory>
+</Workflow>
 
 ## Manual exercise
 
@@ -52,10 +53,11 @@ An enforceable sandbox becomes mandatory before implementation runs
 unattended. The manual exercise uses the narrowest host sandbox and permission
 policy already available.
 
-`<RunHistory>` automatically snapshots completed manual executions, completed
-loop iterations, terminal success, failure, and cancellation. It restores named
-captures when the next manual stage resumes. Authors do not repeat observed
-artifact paths or generate transfer files in an explicit checkpoint.
+`<Workflow>` automatically snapshots completed manual executions, completed
+loop iterations, terminal success, failure, and cancellation into the internal
+run's history. It restores named captures when the next manual stage resumes.
+Authors do not repeat observed artifact paths or generate transfer files in an
+explicit checkpoint.
 
 ## Loop interruption
 

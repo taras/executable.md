@@ -2,9 +2,9 @@
 inputs:
   type: object
   properties:
-    planResult:
+    plan:
       type: string
-    authorizationGate:
+    authorization:
       type: string
     instructions:
       type: string
@@ -13,15 +13,15 @@ inputs:
     implementor:
       type: string
   required:
-    - planResult
-    - authorizationGate
+    - plan
+    - authorization
     - instructions
     - planner
     - implementor
   additionalProperties: false
 ---
 
-# Implementation and Pull-Request Review
+# Implementation
 
 Implementation begins only after the user authorizes the converged plan. The
 implementor edits worktree files; deterministic operations own Git metadata and
@@ -89,7 +89,7 @@ remote effects.
 ```
 </Capture>
 
-<Loop name="implementation-review" max={5}>
+<Loop name="implementation" max={5}>
   <Agent name={props.implementor}>
     <Session name="implementor">
       <Prompt as="implementationCandidate" throwOnError>
@@ -99,11 +99,11 @@ remote effects.
 
         Authorized plan:
 
-        {props.planResult}
+        {props.plan}
 
         Authorization record:
 
-        {props.authorizationGate}
+        {props.authorization}
 
         Result contract:
 
@@ -173,11 +173,11 @@ remote effects.
 
         Authorized plan:
 
-        {props.planResult}
+        {props.plan}
 
         Authorization record:
 
-        {props.authorizationGate}
+        {props.authorization}
 
         Pull request:
 
@@ -240,14 +240,14 @@ remote effects.
     </If>
   </Each>
 
-  <UserGate
+  <UserCheckpoint
     purpose="resolve the pull-request review"
     agent={props.planner}
-    as="reviewGate"
+    as="reviewCheckpoint"
   >
     ## Authorized plan
 
-    {props.planResult}
+    {props.plan}
 
     ## Pull request
 
@@ -266,7 +266,7 @@ remote effects.
 
     {finding.description}
     </Each>
-  </UserGate>
+  </UserCheckpoint>
   <If condition={verdict.passed}>
     <Break />
     <Else>
@@ -281,14 +281,14 @@ remote effects.
 
         User involvement record:
 
-        {reviewGate}
+        {reviewCheckpoint}
       </Prompt>
     </Else>
   </If>
 </Loop>
 
 <Output>
-  # Implementation review result
+  # Implementation result
 
   ## Pull request
 
@@ -311,9 +311,9 @@ remote effects.
   </Each>
 </Output>
 
-`RunHistory` records each parsed implementation result, commit and pull-request
-handle, planner verdict, and user-gate result. Only implementation source files
-are written into the worktree.
+The surrounding workflow records each parsed implementation result, commit and
+pull-request handle, planner verdict, and user-checkpoint result. Only
+implementation source files are written into the worktree.
 
 ## Finding dispositions
 

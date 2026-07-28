@@ -34,11 +34,11 @@ useful opposition:
 The agents converge by exchanging evidence. Neither agent wins a disagreement
 by role or authority.
 
-An authored `<UserGate>` component asks its supplied agent whether the next
-transition contains a material choice. It involves the user when one exists or
-when the agent is unsure. The current workflow supplies the planner, but the
-component does not encode that role. It may determine that user involvement is
-unnecessary, but only the user resolves a material choice.
+An authored `<UserCheckpoint>` component asks its supplied agent whether the
+next transition contains a material choice. It involves the user when one
+exists or when the agent is unsure. The current workflow supplies the planner,
+but the component does not encode that role. It may determine that user
+involvement is unnecessary, but only the user resolves a material choice.
 
 ## Smallest complete path
 
@@ -232,7 +232,7 @@ required content directly into later prompts. A generated file is an optional
 export, not canonical run state. Reading such a file does not inherently save
 tokens because its contents still enter model context.
 
-`<RunHistory>` creates or resolves the stable run identity and installs it
+`<Workflow>` creates or resolves an internal run and installs its identity
 through a contextual Run API. Worktrees, decisions, pull requests, and issues
 consume that identity internally. The workflow author does not pass it through
 component props; the API exposes it only when authoring logic genuinely needs
@@ -376,10 +376,10 @@ managing implementation mechanics and focus on the design of the workflow.
 ## First exercise
 
 The first exercise uses this workflow to design its own initial automation.
-The user triggers each stage manually within a named run. `<RunHistory>`
-restores captured values and the workflow renders required content directly
-into later prompts. Generated artifacts do not appear in the repository or
-worktree unless the user explicitly exports them.
+The user triggers each stage manually within a named run. `<Workflow>` restores
+captured values and renders required content directly into later prompts.
+Generated artifacts do not appear in the repository or worktree unless the
+user explicitly exports them.
 
 The exercise succeeds when:
 
@@ -420,9 +420,10 @@ slice:
 4. Which repository reads, source writes, explicit exports, and path-requiring
    tool operations belong in the first `<File>` component, and how are writes
    constrained to the provided workspace?
-5. What assessment does `<UserGate>` require from its supplied agent, and how
-   does the lower-level `<Elicit>` runtime primitive present document-defined
-   options and bind a validated response without assuming decision policy?
+5. What assessment does `<UserCheckpoint>` require from its supplied agent, and
+   how does the lower-level `<Elicit>` runtime primitive present
+   document-defined options and bind a validated response without assuming
+   decision policy?
 6. How do `<Parse>` and `<SafeParse>` bind validated JSON values and report
    syntax and schema errors without conflating them with component output?
 7. What `<Loop>`, nested `<If><Else>`, and `<Break>` semantics repeat plan,

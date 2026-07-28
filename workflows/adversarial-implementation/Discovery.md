@@ -12,7 +12,7 @@ inputs:
   additionalProperties: false
 ---
 
-# Planner Handoff
+# Discovery
 
 The workflow enters through design discovery or a bounded deferred issue.
 Discovery includes a user-planner interview. A sufficiently specified deferred

@@ -22,14 +22,14 @@ does not yet provide the required primitive.
 
 Each invoked component renders its result through its `<Output>` region. The
 caller's `as` prop captures that result and passes it explicitly to the next
-component. `<RunHistory>` persists captured results and restores them when a
-later manual stage resumes. Generated handoffs are prompt content, not files
-that an agent must choose to read. Root `props` supplies `request`, `base`,
-`planner`, and `implementor`.
+component. `<Workflow>` creates an internal run, persists its captured results,
+and restores them when a later manual stage resumes. Generated handoffs are
+prompt content, not files that an agent must choose to read. Root `props`
+supplies `request`, `base`, `planner`, and `implementor`.
 
 ## Complete flow
 
-<RunHistory ref="refs/xmd/runs" base={props.base}>
+<Workflow base={props.base} historyRef="refs/xmd/runs">
   <Sandbox policy="supervised-implementation">
     <Worktree>
       <Glob
@@ -40,76 +40,76 @@ that an agent must choose to read. Root `props` supplies `request`, `base`,
       <Capture as="instructions">
         <InstructionFiles paths={instructionPaths} />
       </Capture>
-      <PlannerHandoff
+      <Discovery
         instructions={instructions}
         planner={props.planner}
         as="handoff"
       >
         {props.request}
-      </PlannerHandoff>
-      <UserGate
+      </Discovery>
+      <UserCheckpoint
         purpose="validate the planner handoff"
         agent={props.planner}
-        as="handoffGate"
+        as="handoffCheckpoint"
       >
         {handoff}
-      </UserGate>
-      <PlanConvergence handoff={handoff}
-        handoffGate={handoffGate}
+      </UserCheckpoint>
+      <Planning handoff={handoff}
+        handoffCheckpoint={handoffCheckpoint}
         instructions={instructions}
         planner={props.planner}
         implementor={props.implementor}
-        as="planResult" />
-      <UserGate
+        as="plan" />
+      <UserCheckpoint
         purpose="authorize implementation"
         agent={props.planner}
-        as="authorizationGate"
+        as="authorization"
       >
-        {planResult}
-      </UserGate>
-      <ImplementationReview planResult={planResult}
-        authorizationGate={authorizationGate}
+        {plan}
+      </UserCheckpoint>
+      <Implementation plan={plan}
+        authorization={authorization}
         instructions={instructions}
         planner={props.planner}
         implementor={props.implementor}
-        as="implementationReviewResult" />
-      <UserGate
+        as="implementationResult" />
+      <UserCheckpoint
         purpose="accept the completed change"
         agent={props.planner}
-        as="acceptanceGate"
+        as="acceptance"
       >
-        {implementationReviewResult}
-      </UserGate>
-      <Output>{acceptanceGate}</Output>
+        {implementationResult}
+      </UserCheckpoint>
+      <Output>{acceptance}</Output>
     </Worktree>
   </Sandbox>
-</RunHistory>
+</Workflow>
 
-`RunHistory` resolves `props.base` to a source revision before creating the
-worktree. Discovery through implementation review uses that pinned filesystem
-even if the branch moves while the run is in progress.
+`Workflow` resolves `props.base` to a source revision before creating the
+worktree. Its internal run keeps discovery through implementation on that
+pinned filesystem even if the branch moves while execution is in progress.
 
 ## Rendered data flow
 
-| Captured value               | Produced by               | Consumed by                                                |
-| ---------------------------- | ------------------------- | ---------------------------------------------------------- |
-| `instructionPaths`           | `Glob`                    | `InstructionFiles`                                         |
-| `instructions`               | `InstructionFiles` capture | every agent prompt                                         |
-| `handoff`                    | `PlannerHandoff`          | handoff `UserGate`, `PlanConvergence`                       |
-| `handoffGate`                | handoff `UserGate`        | `PlanConvergence`                                          |
-| `planResult`                 | `PlanConvergence`         | authorization `UserGate`, `ImplementationReview`           |
-| `authorizationGate`          | authorization `UserGate`  | `ImplementationReview`                                     |
-| `implementationReviewResult` | `ImplementationReview`    | acceptance `UserGate`                                      |
-| `acceptanceGate`             | acceptance `UserGate`     | workflow output, automatic `RunHistory` snapshot            |
+| Captured value         | Produced by                | Consumed by                                         |
+| ---------------------- | -------------------------- | --------------------------------------------------- |
+| `instructionPaths`     | `Glob`                      | `InstructionFiles`                                  |
+| `instructions`         | `InstructionFiles` capture | every agent prompt                                  |
+| `handoff`              | `Discovery`                 | handoff `UserCheckpoint`, `Planning`                |
+| `handoffCheckpoint`    | handoff `UserCheckpoint`    | `Planning`                                          |
+| `plan`                 | `Planning`                  | authorization `UserCheckpoint`, `Implementation` |
+| `authorization`        | authorization checkpoint   | `Implementation`                                   |
+| `implementationResult` | `Implementation`            | acceptance `UserCheckpoint`                         |
+| `acceptance`           | acceptance checkpoint      | workflow output, automatic history snapshot         |
 
 ## Details
 
 - [Runtime and isolation](./runtime.md)
 - [Instruction materialization](./InstructionFiles.md)
-- [Planner handoff](./PlannerHandoff.md)
-- [User involvement gate](./UserGate.md)
-- [Plan convergence](./PlanConvergence.md)
-- [Implementation and review](./ImplementationReview.md)
+- [Discovery](./Discovery.md)
+- [User checkpoint](./UserCheckpoint.md)
+- [Planning](./Planning.md)
+- [Implementation](./Implementation.md)
 - [Artifacts and structured results](./artifacts.md)
 - [Primitive inventory](./primitives.md)
 
