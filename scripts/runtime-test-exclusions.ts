@@ -14,11 +14,8 @@
  */
 
 export interface RuntimeExclusion {
-  /** Repository-relative path, as `listTestFiles` reports it. */
   path: string;
-  /** Why this file cannot run under this runtime. */
   reason: string;
-  /** Where the exclusion is argued. */
   issue: string;
 }
 

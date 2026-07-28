@@ -6,7 +6,6 @@ import { exclusions } from "../runtime-test-exclusions.ts";
 
 interface Runner {
   command: string;
-  /** Arguments before the file list. */
   prefix: string[];
 }
 

@@ -1,12 +1,12 @@
 /**
  * The runtime scope is derived, so nothing here asserts which files run. These
- * cover the two things that can silently shrink coverage instead: discovery
- * drifting, and an exclusion outliving its reason.
+ * cover discovery drift and malformed exclusions. Whether an exclusion is still
+ * necessary is not something they can determine — see the manifest.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
-import { listTestFiles } from "../lib/test-files.ts";
+import { listTestFiles, relativeWithin } from "../lib/test-files.ts";
 import { exclusions } from "../runtime-test-exclusions.ts";
 import { exitCode } from "../lib/runtime-tests.ts";
 
@@ -20,6 +20,8 @@ describe("test discovery", () => {
     expect(files).toEqual([...files].sort());
     for (const file of files) {
       expect(file.startsWith("/")).toBe(false);
+      // A Windows drive letter is absolute too, and would otherwise slip past.
+      expect(file).not.toMatch(/^[A-Za-z]:/);
       expect(file).toContain("/tests/");
       expect(file.endsWith(".test.ts")).toBe(true);
     }
@@ -36,6 +38,32 @@ describe("test discovery", () => {
   it("leaves the deliberately malformed fixtures out", function* () {
     const files = yield* listTestFiles(ROOT);
     expect(files.some((file) => file.includes("/fixtures/"))).toBe(false);
+  });
+});
+
+describe("path normalization", () => {
+  it("relativizes a POSIX path", function* () {
+    expect(
+      relativeWithin("/repo/packages/core/tests/", "/repo/packages/core/tests/a.test.ts"),
+    ).toBe("a.test.ts");
+  });
+
+  it("relativizes a Windows path against the base @effectionx/fs reports", function* () {
+    // toPath() yields C:/repo/... while walk() yields C:\repo\...; comparing a
+    // URL pathname instead would leave the result absolute.
+    expect(
+      relativeWithin("C:/repo/packages/core/tests", "C:\\repo\\packages\\core\\tests\\a.test.ts"),
+    ).toBe("a.test.ts");
+  });
+
+  it("keeps nested directories", function* () {
+    expect(relativeWithin("/repo/tests/", "/repo/tests/deep/b.test.ts")).toBe("deep/b.test.ts");
+  });
+
+  it("refuses an entry outside the walked directory", function* () {
+    expect(() => relativeWithin("/repo/tests/", "/elsewhere/c.test.ts")).toThrow();
+    // A sibling sharing the prefix is still outside it.
+    expect(() => relativeWithin("/repo/tests/", "/repo/tests-extra/d.test.ts")).toThrow();
   });
 });
 

@@ -15,14 +15,16 @@ always run all four checks before committing:
 Do not commit if any check fails. Fix the issue first, then re-run all four.
 
 Each command derives its own scope, so a new package under `packages/` — and a
-new test file anywhere — is covered without editing anything here:
+new test file under any member's `tests/` — is covered without editing anything
+here:
 
 - `check`, `test`, and `check:jsr` follow the `packages/*` workspace glob in the
   root `deno.json`. Its `exclude` list holds the paths that must stay
   unchecked — currently the deliberately-malformed `scripts/tests/fixtures`.
 - `test:node` and `test:bun` derive the same corpus through
-  `scripts/lib/test-files.ts`, which walks each workspace member's `tests`
-  directory. A new `*.test.ts` runs under all three runtimes by default.
+  `scripts/lib/test-files.ts`, which walks `tests/` beneath each workspace
+  member plus `scripts/tests/` — that boundary, and nothing else. A new
+  `*.test.ts` there runs under all three runtimes by default.
 - `scripts/runtime-test-exclusions.ts` is the one place a test opts out of a
   runtime. Every entry carries a reason and an issue, and
   `scripts/tests/runtime-exclusions.test.ts` checks that each names a file
