@@ -146,3 +146,5 @@ export { createSecretScanner } from "./src/secrets/scanner.ts";
 export type { SecretScanner } from "./src/secrets/scanner.ts";
 export { SecretDetectedError, SecretScannerError } from "./src/secrets/findings.ts";
 export type { SecretFinding } from "./src/secrets/findings.ts";
+export { scanFiles } from "./src/secrets/files.ts";
+export type { FileSecretFinding } from "./src/secrets/files.ts";
