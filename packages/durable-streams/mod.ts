@@ -31,6 +31,10 @@ export type { YieldEntry } from "./replay-index.ts";
 export type { DurableStream } from "./stream.ts";
 export { InMemoryStream } from "./stream.ts";
 
+// Pre-persistence gate — runs before an event reaches its backend
+export { guardDurableStream } from "./guard.ts";
+export type { DurableEventGate } from "./guard.ts";
+
 // HTTP-backed stream adapter
 export { useHttpDurableStream } from "./http-stream.ts";
 export type { HttpDurableStreamHandle, HttpDurableStreamOptions } from "./http-stream.ts";
