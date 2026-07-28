@@ -1,0 +1,223 @@
+/**
+ * The XMD-owned rules, and the contracts their thresholds encode.
+ *
+ * These rules exist because the recommended preset misses generic bearer
+ * values, credential-bearing field names, and OpenAI keys without the
+ * `T3BlbkFJ` marker. Their boundaries are load-bearing: too loose and
+ * default-on detection blocks fixtures, too tight and it misses credentials.
+ * Each threshold is tested at its exact edge rather than somewhere near it.
+ *
+ * Every canary is assembled at run time — a literal one is rejected by
+ * GitHub's push protection — and none comes from the environment.
+ */
+
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { createSecretScanner } from "../src/secrets/scanner.ts";
+import {
+  isPlaceholder,
+  looksLikeSecret,
+  MIN_DISTINCT_CHARACTERS,
+  MIN_SECRET_LENGTH,
+} from "../src/secrets/rules.ts";
+
+const A = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const OPAQUE = A.slice(0, 32);
+
+/** Credentials the preset does not catch — the reason these rules exist. */
+const CANARIES: Record<string, string> = {
+  bearerHeader: `Authorization: Bearer ${A.slice(0, 40)}`,
+  bearerJwt:
+    "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+  openaiPlain: `sk-${A.slice(0, 48)}`,
+  openaiProject: `sk-proj-${A.slice(0, 48)}`,
+};
+
+/** The same credential field, in every spelling a journal actually carries. */
+const FIELD_FORMS: Record<string, string> = {
+  camelCase: `{"apiKey":"${OPAQUE}"}`,
+  snake_case: `api_key=${OPAQUE}`,
+  "kebab-case": `api-key: ${OPAQUE}`,
+  spaced: `API KEY = ${OPAQUE}`,
+  accessTokenCamel: `{"accessToken":"${OPAQUE}"}`,
+  refreshTokenSnake: `refresh_token=${OPAQUE}`,
+  clientSecretKebab: `client-secret: ${OPAQUE}`,
+  sessionTokenSpaced: `session token = ${OPAQUE}`,
+  authorizationField: `{"authorization":"${OPAQUE}"}`,
+  passwordField: `{"password":"${OPAQUE}"}`,
+  // A UUID is ordinary journal content on its own — and slice 1 proves a bare
+  // one produces no finding. Inside a session-token field it is a credential,
+  // because that is exactly the shape many session tokens take. The field
+  // name is what changes the reading.
+  uuidSessionToken: '{"sessionToken":"550e8400-e29b-41d4-a716-446655440000"}',
+};
+
+/** Content a journal is legitimately full of. */
+const INNOCENT: Record<string, string> = {
+  placeholderKey: '{"apiKey":"your-api-key-here"}',
+  placeholderEnv: '{"authorization":"Bearer ${GITHUB_TOKEN}"}',
+  placeholderShellEnv: "api_key=$GITHUB_TOKEN",
+  placeholderRedacted: '{"password":"<redacted>"}',
+  placeholderMask: '{"accessToken":"********"}',
+  placeholderTemplate: '{"apiKey":"{{ api_key }}"}',
+  shortPassword: '{"password":"changeme"}',
+  emptyToken: '{"accessToken":""}',
+  documentationValue: '{"apiKey":"example-key-for-documentation"}',
+  bareUuid: '{"id":"550e8400-e29b-41d4-a716-446655440000"}',
+};
+
+describe("XMD credential rules", () => {
+  for (const [name, content] of Object.entries(CANARIES)) {
+    it(`rejects ${name}`, function* () {
+      expect((yield* createSecretScanner().scan(content)).length).toBeGreaterThan(0);
+    });
+  }
+
+  for (const [name, content] of Object.entries(FIELD_FORMS)) {
+    it(`rejects a credential field written as ${name}`, function* () {
+      expect((yield* createSecretScanner().scan(content)).length).toBeGreaterThan(0);
+    });
+  }
+
+  for (const [name, content] of Object.entries(INNOCENT)) {
+    it(`leaves ${name} alone`, function* () {
+      expect(yield* createSecretScanner().scan(content)).toEqual([]);
+    });
+  }
+
+  it("never puts the matched value in a finding", function* () {
+    const scanner = createSecretScanner();
+
+    for (const content of [...Object.values(CANARIES), ...Object.values(FIELD_FORMS)]) {
+      const serialized = JSON.stringify(yield* scanner.scan(content));
+      for (const chunk of content.match(/[A-Za-z0-9_.-]{16,}/g) ?? []) {
+        expect(serialized).not.toContain(chunk);
+      }
+    }
+  });
+});
+
+describe("scanning what persistence actually writes", () => {
+  it("rejects a credential inside a root import_component event", function* () {
+    // The root import journals the document source, so a credential written
+    // into the document arrives at the gate through two levels of JSON
+    // encoding: `{"apiKey":"…"}` in the file becomes `{\"apiKey\":\"…\"}` in
+    // the serialized event. A rule that only accepts bare quotes stops working
+    // exactly here — at the first event of every run.
+    const source = `# Config\n\n\`\`\`json\n{"apiKey": "${OPAQUE}"}\n\`\`\`\n`;
+    const event: DurableEvent = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: "__root__" },
+      result: { status: "ok", value: { path: "README.md", content: source } },
+    };
+
+    const record = serializeDurableEvent(event);
+    expect(record).toContain('\\"apiKey\\"');
+
+    const findings = yield* createSecretScanner().scan(record);
+
+    expect(findings.length).toBeGreaterThan(0);
+    expect(JSON.stringify(findings)).not.toContain(OPAQUE);
+  });
+
+  it("leaves a clean import_component event alone", function* () {
+    const event: DurableEvent = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: "__root__" },
+      result: {
+        status: "ok",
+        value: { path: "README.md", content: '# Doc\n\n{"apiKey": "your-api-key-here"}\n' },
+      },
+    };
+
+    expect(yield* createSecretScanner().scan(serializeDurableEvent(event))).toEqual([]);
+  });
+});
+
+describe("looksLikeSecret boundaries", () => {
+  // Each fixture varies exactly one property and holds the other two clear of
+  // their thresholds, so a failure names which contract broke.
+  const MIXED_16 = "aB1cD2eF3gH4iJ5k";
+
+  // deno-lint-ignore require-yield
+  it("takes the exact minimum length and rejects one character less", function* () {
+    expect(MIXED_16).toHaveLength(MIN_SECRET_LENGTH);
+    expect(looksLikeSecret(MIXED_16)).toBe(true);
+    expect(looksLikeSecret(MIXED_16.slice(0, MIN_SECRET_LENGTH - 1))).toBe(false);
+  });
+
+  // deno-lint-ignore require-yield
+  it("takes the exact minimum distinct-character count and rejects one less", function* () {
+    const atMinimum = "aB1cD2eF".repeat(3);
+    const belowMinimum = "aB1cD2e".repeat(4).slice(0, 24);
+
+    expect(new Set(atMinimum).size).toBe(MIN_DISTINCT_CHARACTERS);
+    expect(new Set(belowMinimum).size).toBe(MIN_DISTINCT_CHARACTERS - 1);
+    expect(atMinimum.length).toBeGreaterThanOrEqual(MIN_SECRET_LENGTH);
+    expect(belowMinimum.length).toBeGreaterThanOrEqual(MIN_SECRET_LENGTH);
+    expect(looksLikeSecret(atMinimum)).toBe(true);
+    expect(looksLikeSecret(belowMinimum)).toBe(false);
+  });
+
+  // deno-lint-ignore require-yield
+  it("needs more than one character class", function* () {
+    // 20 distinct lowercase letters: long and varied, but one class only.
+    expect(looksLikeSecret("abcdefghijklmnopqrst")).toBe(false);
+    expect(looksLikeSecret("abcdefghijklmnopqrs1")).toBe(true);
+  });
+});
+
+describe("placeholder recognition", () => {
+  const PLACEHOLDERS = [
+    "your-api-key-here",
+    "example-key-for-documentation",
+    "changeme",
+    "test-token-value",
+    "${GITHUB_TOKEN}",
+    "$GITHUB_TOKEN",
+    "<redacted>",
+    "{{ api_key }}",
+    "xxxxxxxxxxxxxxxx",
+    "****************",
+    "----------------",
+    "none",
+  ];
+
+  for (const value of PLACEHOLDERS) {
+    // deno-lint-ignore require-yield
+    it(`treats ${value} as a placeholder`, function* () {
+      expect(isPlaceholder(value)).toBe(true);
+      expect(looksLikeSecret(value)).toBe(false);
+    });
+  }
+
+  /**
+   * The correction that matters: recognizing these words *anywhere* in a value
+   * let a real credential through as soon as it happened to contain one.
+   */
+  const SECRETS_CONTAINING_PLACEHOLDER_WORDS = [
+    `sk-live-test-${A.slice(0, 24)}`,
+    `Xy9testAb3Kd8Qm2Zp7Lw`,
+    `${A.slice(0, 16)}SAMPLE${A.slice(20, 32)}`,
+    `dummyK3f9Qz2Lm8Xp4Rw7`,
+    `${A.slice(0, 20)}-example`,
+  ];
+
+  for (const value of SECRETS_CONTAINING_PLACEHOLDER_WORDS) {
+    // deno-lint-ignore require-yield
+    it(`still rejects a secret-like value containing a placeholder word`, function* () {
+      expect(isPlaceholder(value)).toBe(false);
+      expect(looksLikeSecret(value)).toBe(true);
+    });
+  }
+
+  it("rejects a credential field whose value merely mentions test", function* () {
+    const findings = yield* createSecretScanner().scan(`{"apiKey":"Xy9testAb3Kd8Qm2Zp7Lw"}`);
+
+    expect(findings.length).toBeGreaterThan(0);
+  });
+});
