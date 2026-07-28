@@ -12,9 +12,26 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 
+const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+
+/**
+ * A fixture project, not a bare directory. A component here is imported by
+ * absolute file URL, so Node and Bun resolve it the way they resolve any
+ * file: the nearest package.json decides its module type, and bare
+ * specifiers resolve through the nearest node_modules. Under the system
+ * temp dir there is neither, so the component would load as CommonJS and
+ * fail to find `@executablemd/core`. Deno needs neither, because its import
+ * map is process-wide.
+ *
+ * `cleanup` unlinks the node_modules symlink rather than following it.
+ */
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "fc-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fc-test-"));
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
+  fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir");
+  return dir;
 }
 
 function writeFiles(dir: string, files: Record<string, string>): void {

@@ -1,20 +1,21 @@
 /**
  * Tier T2 — Eval block compilation tests (spec §11).
  *
- * Tests the data: URI module compilation system (compileBlock) and
- * verifies that compiled generators can interact with Effection APIs,
- * write to env, and propagate errors correctly.
+ * Tests the module compilation system (compileBlock) and verifies that
+ * compiled generators can interact with Effection APIs, write to env, and
+ * propagate errors correctly.
  *
- * After the Deno migration, compileBlock is async (returns Operation)
- * and generates data: URI modules instead of using node:vm.
+ * These assertions are about compileBlock, not about a particular compiler,
+ * so they install the temp-file one: it is the only implementation that
+ * loads on all three runtimes.
  */
 import { describe, it, beforeAll } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import { compileBlock } from "../src/eval-context.ts";
-import { useDenoCompiler } from "../src/deno-compiler.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 
 describe("Tier T2 — VM context and compiled generator", () => {
-  beforeAll(() => useDenoCompiler());
+  beforeAll(() => useTempFileCompiler());
   // T17: Compiled generator can yield* Effection globals from imports
   it("T17: compiled generator can use Effection globals from sandbox", function* () {
     const fn = yield* compileBlock("yield* sleep(0);", []);
@@ -102,7 +103,7 @@ describe("Tier T2 — VM context and compiled generator", () => {
 });
 
 describe("compileBlock edge cases", () => {
-  beforeAll(() => useDenoCompiler());
+  beforeAll(() => useTempFileCompiler());
   it("throws on syntax error in code", function* () {
     let threw = false;
     try {

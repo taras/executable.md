@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { findFreePort } from "@executablemd/runtime";
 import { compileBlock } from "../src/eval-context.ts";
-import { useDenoCompiler } from "../src/deno-compiler.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import * as fs from "node:fs";
@@ -86,7 +86,7 @@ describe("Tier R — findFreePort", () => {
 });
 
 describe("Tier R — Eval module globals", () => {
-  beforeAll(() => useDenoCompiler());
+  beforeAll(() => useTempFileCompiler());
   // R6: when is accessible via generated module imports
   it("R6: when is accessible in eval sandbox", function* () {
     // Verify that a compiled block can reference 'when' — it's imported
