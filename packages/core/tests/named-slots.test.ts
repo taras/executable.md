@@ -6,7 +6,8 @@
  * boundary scanner confirmation.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -692,6 +693,7 @@ describe("Tier NS-D — slot prop reservation", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-E — renderChildren interaction", () => {
+  beforeAll(() => useTempFileCompiler());
   it("NS-E1: renderChildren includes all slots", function* () {
     const tmpDir = makeTempDir();
     try {

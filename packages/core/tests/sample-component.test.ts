@@ -12,7 +12,8 @@
  * Uses stub providers (Sample.around middleware) to intercept Sample Api
  * calls and return canned responses for testing.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
@@ -100,6 +101,7 @@ function stubProvider(componentName: string): string {
 }
 
 describe("Tier SC — Sample component", () => {
+  beforeAll(() => useTempFileCompiler());
   // SC1: Self-closing with prompt — prompt sent to Sample Api
   it("SC1: self-closing with prompt — response in output", function* () {
     const tmpDir = makeTempDir();
@@ -452,6 +454,7 @@ describe("Tier SC — Sample component", () => {
 });
 
 describe("Tier EO — eval output() function", () => {
+  beforeAll(() => useTempFileCompiler());
   // EO1: output() sets eval block output
   it("EO1: output() produces eval block output", function* () {
     const stream = new InMemoryStream();
@@ -558,6 +561,7 @@ describe("Tier EO — eval output() function", () => {
 });
 
 describe("Tier RC — renderChildren and render closures", () => {
+  beforeAll(() => useTempFileCompiler());
   // RC1: renderChildren() returns empty string for self-closing component
   it("RC1: renderChildren returns empty for self-closing component", function* () {
     const stream = new InMemoryStream();
@@ -741,6 +745,7 @@ describe("Tier RC — renderChildren and render closures", () => {
 });
 
 describe("Tier IN — Instruction component", () => {
+  beforeAll(() => useTempFileCompiler());
   // IN1: Instruction enriches Sample context with instructions
   it("IN1: Instruction enriches Sample context", function* () {
     const tmpDir = makeTempDir();
@@ -911,6 +916,7 @@ describe("Tier IN — Instruction component", () => {
 });
 
 describe("Tier AG — Agent component pattern", () => {
+  beforeAll(() => useTempFileCompiler());
   // AG1: Agent component installs instruction middleware + Content
   it("AG1: agent component with instruction middleware", function* () {
     const tmpDir = makeTempDir();

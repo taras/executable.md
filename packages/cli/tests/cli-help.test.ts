@@ -13,7 +13,7 @@ import { exec, type Exec } from "@effectionx/process";
 import process from "node:process";
 import * as path from "node:path";
 
-const CLI = path.resolve("packages/cli/src/cli.ts");
+const CLI = path.resolve("packages/cli/src/deno.ts");
 
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};

@@ -11,7 +11,8 @@
  * 4. <children /> expand with server available
  * 5. Component scope closes → daemon terminated
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
@@ -120,6 +121,7 @@ describe(
   "Tier S — Provider component pattern",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeAll(() => useTempFileCompiler());
     // S1: Full provider golden run
     // eval → daemon → when → children → cleanup
     it("S1: full provider golden run — children rendered after daemon ready", function* () {

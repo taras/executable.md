@@ -1,18 +1,22 @@
 /**
- * Temp-file eval block compiler middleware for Node and Bun.
+ * Temp-file eval block compiler.
  *
  * Compiles eval block source into generator functions by writing
  * temporary .ts files to `.xmd-eval/` and dynamically importing them.
  * Bun handles .ts natively; Node requires tsx.
  *
- * Standard imports (Effection, executable.md APIs) are captured in the middleware
- * closure — they are not part of the Compiler API interface.
+ * Standard imports (Effection, executable.md APIs) are captured in the
+ * closure — they are not part of the `API.Env.compile` interface.
  *
- * Installed automatically by `execute` when running on Node or Bun.
+ * Nothing installs this implicitly: `execute` installs no compiler. The Node
+ * entrypoint calls `compileTempFile` from its own `API.Env.compile` provider,
+ * and a programmatic caller that wants only a compiler installs
+ * `useTempFileCompiler()`.
  */
 
 import { call } from "effection";
 import type { Operation } from "effection";
+import type { EvalBlock } from "@executablemd/runtime";
 import { API } from "@executablemd/runtime";
 // STANDARD_IMPORTS below resolve at runtime from generated eval modules;
 // without these static anchors, `deno compile --exclude-unused-npm` prunes
@@ -38,47 +42,56 @@ const STANDARD_IMPORTS = [
 const EVAL_DIR = ".xmd-eval";
 
 /**
- * Install the temp-file compiler as middleware on the current scope.
+ * Compile one eval block by writing `.xmd-eval/<uuid>.ts` and importing it.
  *
- * Works on Node (via tsx) and Bun (native .ts support).
- * Writes each compiled module to `.xmd-eval/<uuid>.ts`, imports it,
- * captures the default export, and deletes the file.
+ * Every host can load a file, which is what makes this the portable one;
+ * Node's tsx loader in particular rejects the data: URI alternative.
  */
-export function* useTempFileCompiler(): Operation<void> {
-  // Ensure the eval directory exists
+export function* compileTempFile(
+  source: string,
+  options?: { imports: string[] },
+): Operation<EvalBlock> {
   yield* call(() => mkdir(EVAL_DIR, { recursive: true }));
 
-  yield* API.Compiler.around({
-    *compile([source, options], next) {
-      void next; // terminal middleware — does not delegate
+  const userImports = options?.imports ?? [];
+  const allImports = [...STANDARD_IMPORTS, ...userImports];
 
-      const userImports = options?.imports ?? [];
-      const allImports = [...STANDARD_IMPORTS, ...userImports];
+  const importLines = allImports.join("\n");
 
-      const importLines = allImports.join("\n");
+  const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
 
-      const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
+  const tmpPath = resolve(EVAL_DIR, `${randomUUID()}.ts`);
 
-      const tmpPath = resolve(EVAL_DIR, `${randomUUID()}.ts`);
+  yield* call(() => writeFile(tmpPath, moduleSource, "utf-8"));
+  try {
+    const fileUrl = new URL(`file://${tmpPath}`).href;
+    const mod: { default: EvalBlock } = yield* call(() => import(fileUrl));
 
-      yield* call(() => writeFile(tmpPath, moduleSource, "utf-8"));
-      try {
-        const fileUrl = new URL(`file://${tmpPath}`).href;
-        const mod: {
-          default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
-        } = yield* call(() => import(fileUrl));
+    if (typeof mod.default !== "function") {
+      throw new Error(
+        `compileTempFile: expected default export to be a generator function, got ${typeof mod.default}`,
+      );
+    }
 
-        if (typeof mod.default !== "function") {
-          throw new Error(
-            `useTempFileCompiler: expected default export to be a generator function, got ${typeof mod.default}`,
-          );
-        }
+    return mod.default;
+  } finally {
+    unlink(tmpPath).catch(() => {});
+  }
+}
 
-        return mod.default;
-      } finally {
-        // Clean up temp file — don't await, fire and forget
-        unlink(tmpPath).catch(() => {});
-      }
+/**
+ * Install the temp-file compiler as the base provider on the current scope.
+ *
+ * `at: "min"` puts it beneath ordinary middleware, so a policy installed
+ * later can inspect a block and delegate here.
+ */
+export function* useTempFileCompiler(): Operation<void> {
+  yield* API.Env.around(
+    {
+      *compile([source, options]) {
+        return yield* compileTempFile(source, options);
+      },
     },
-  });
+    { at: "min" },
+  );
 }

@@ -1,4 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";
 import type { Operation, Result } from "effection";
@@ -73,6 +74,7 @@ function* runSmokeSession(options: ExecuteOptions): Operation<SmokeSession> {
 }
 
 describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeAll(() => useTempFileCompiler());
   it("smoke document passes its embedded tests live and on replay", function* () {
     const stream = new InMemoryStream();
     const options: ExecuteOptions = {

@@ -165,17 +165,15 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     dependencies[name] = `file:${fromFileUrl(new URL(`${member.dir}/npm`, repoRoot))}`;
   }
 
-  // Entry points come from deno.json exports; a package.json `bin` marks its
-  // main export as an executable rather than a library entry.
+  // Library entry points come from deno.json exports. An executable comes from
+  // package.json `bin`, which names the entrypoint for the runtime the npm
+  // package runs under — not the one deno.json exports for JSR.
   const exportsMap = normalizeExports(denoJson.exports);
-  const binNames = Object.keys(packageJson.bin ?? {});
+  const binEntries = Object.entries(packageJson.bin ?? {});
+  const binNames = binEntries.map(([name]) => name);
   const entryPoints: Array<{ name: string; path: string; kind?: "bin" }> = [];
-  for (const binName of binNames) {
-    const mainPath = exportsMap["."];
-    if (!mainPath) {
-      throw new Error(`package "${denoJson.name}" declares bin "${binName}" but has no "." export`);
-    }
-    entryPoints.push({ kind: "bin", name: binName, path: mainPath });
+  for (const [binName, binPath] of binEntries) {
+    entryPoints.push({ kind: "bin", name: binName, path: binPath });
   }
   for (const [subpath, path] of Object.entries(exportsMap)) {
     if (subpath === "." && binNames.length > 0) {
@@ -237,9 +235,8 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     isolatedImports[name] = `npm:${name}@^${siblingVer}`;
     isolatedImports[`${name}/`] = `npm:${name}@^${siblingVer}/`;
   }
-  // Preserve the manifest fields alongside the rewritten imports: packages/cli/src/cli.ts
-  // imports its own deno.json for `version`, so replacing the copy with a bare
-  // import map makes that property vanish from the JSON module's type.
+  // The CLI imports its own deno.json for `version`, so replacing the copy with
+  // a bare import map would make that property vanish from the JSON module's type.
   yield* writeTextFile(
     join(srcCopy, "deno.json"),
     JSON.stringify(

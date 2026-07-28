@@ -33,9 +33,12 @@
  *   used together for component resolution and replay guards.
  * - **Fetch** — HTTP has distinct timeout/body/abort semantics. Merging
  *   with Fs or Process would blur cancellation boundaries.
- * - **Env** — synchronous host metadata (env vars, platform). Kept as a
- *   context-api despite being sync because tests use `.around()` to mock
- *   platform/env for deterministic replay testing.
+ * - **Env** — the host itself: metadata (env vars, platform) plus the two
+ *   capabilities only the entrypoint can supply, `command` (how to re-invoke
+ *   this xmd) and `compile` (how this host loads a generated module). Tests
+ *   use `.around()` to mock platform/env for deterministic replay; an
+ *   entrypoint installs its `command` and `compile` with `{ at: "min" }` so
+ *   ordinary middleware can wrap them.
  *
  * ## Middleware
  *
@@ -155,17 +158,19 @@ interface FetchHandler {
   ): Operation<RuntimeFetchResponse>;
 }
 
+/**
+ * A compiled eval block accepts the document binding environment and returns
+ * an Operation. Current compilers implement it with generated `function*`
+ * modules, but callers do not depend on that representation.
+ */
+export type EvalBlock = (env: Record<string, unknown>) => Operation<unknown>;
+
 interface EnvHandler {
   cwd(): Operation<string>;
   env(name: string): Operation<string | undefined>;
   platform(): Operation<{ os: string; arch: string }>;
-}
-
-interface CompilerHandler {
-  compile(
-    source: string,
-    options?: { imports: string[] },
-  ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>>;
+  command(args?: string[]): Operation<string[]>;
+  compile(source: string, options?: { imports: string[] }): Operation<EvalBlock>;
 }
 
 export const API: {
@@ -173,7 +178,6 @@ export const API: {
   Fs: Api<FsHandler>;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
-  Compiler: Api<CompilerHandler>;
 } = {
   /**
    * Subprocess execution.
@@ -339,23 +343,30 @@ export const API: {
         arch: process.arch,
       };
     },
-  }),
 
-  /**
-   * Block compilation.
-   *
-   * Default handler throws — platform-specific middleware must be
-   * installed via `yield* API.Compiler.around(...)` before use.
-   * See `packages/core/src/deno-compiler.ts` for the Deno implementation.
-   */
-  Compiler: createApi("runtime.compiler", {
+    /**
+     * The default cannot be derived. `process.execPath` names the executable
+     * but not how it was launched — `deno run --allow-all <entry>` and
+     * `node <entry>` are not recoverable from "deno" or "node", and a
+     * compiled binary takes no entry script at all. Only the entrypoint that
+     * started this process knows.
+     */
     // deno-lint-ignore require-yield
-    *compile(
-      _source: string,
-      _options?: { imports: string[] },
-    ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
+    *command(_args?: string[]): Operation<string[]> {
       throw new Error(
-        "compiler not installed — install platform-specific middleware via API.Compiler.around()",
+        "xmd command not installed — a runtime-named entrypoint must install it via API.Env.around()",
+      );
+    },
+
+    /**
+     * Compiling an eval block means loading a module the way this host
+     * loads modules, so the implementation belongs with the entrypoint that
+     * knows the host — beside `command`, installed in the same call.
+     */
+    // deno-lint-ignore require-yield
+    *compile(_source: string, _options?: { imports: string[] }): Operation<EvalBlock> {
+      throw new Error(
+        "compiler not installed — install platform-specific middleware via API.Env.around()",
       );
     },
   }),
@@ -377,4 +388,6 @@ export const cwd: typeof API.Env.operations.cwd = API.Env.operations.cwd;
 
 export const platform: typeof API.Env.operations.platform = API.Env.operations.platform;
 
-export const compile: typeof API.Compiler.operations.compile = API.Compiler.operations.compile;
+export const command: typeof API.Env.operations.command = API.Env.operations.command;
+
+export const compile: typeof API.Env.operations.compile = API.Env.operations.compile;

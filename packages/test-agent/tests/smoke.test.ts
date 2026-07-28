@@ -18,9 +18,10 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
+import { useCommand } from "./command.ts";
 
 const DOC = path.resolve("smoke-test/test-agent/README.md");
-const CLI = path.resolve("packages/cli/src/cli.ts");
+const CLI = path.resolve("packages/cli/src/deno.ts");
 const TIMEOUT = 120_000;
 
 interface CliResult {
@@ -75,13 +76,14 @@ function* runCli(args: string[]): Operation<CliResult> {
 
 function* runSmoke(
   stream: InMemoryStream,
-  workerCommand: string[],
+  xmd: string[],
 ): Operation<{ result: Result<string>; output: string; results: readonly TestResult[] }> {
   // The scope closes before the assertions run, so the provider and its
   // workers finish teardown and the completion settles.
   return yield* scoped(function* () {
     const testing = yield* useTesting();
-    yield* installTestAgentComponents({ workerCommand });
+    yield* useCommand(xmd);
+    yield* installTestAgentComponents();
     yield* installAgentComponents();
     const execution = yield* execute({ path: DOC, stream });
     const subscription = yield* execution.output;
@@ -107,7 +109,7 @@ describe("Tier TG — test-agent smoke", { sanitizeOps: false, sanitizeResources
   it("TG2: replay repeats the completed journal without contacting ACPX", function* () {
     const stream = new InMemoryStream();
 
-    const live = yield* runSmoke(stream, ["deno", "run", "--allow-all", CLI, "test-agent"]);
+    const live = yield* runSmoke(stream, ["deno", "run", "--allow-all", CLI]);
     expect(live.results.map((entry) => entry.status)).toEqual(["pass"]);
     expect(live.result.ok).toBe(true);
     expect(live.output).not.toContain("ERROR");

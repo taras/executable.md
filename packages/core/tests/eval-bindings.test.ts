@@ -4,7 +4,8 @@
  * Tests cross-block binding sharing, shadowing, empty blocks,
  * undeclared references, and syntax errors.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
@@ -12,6 +13,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Tier T5 — Binding environment", () => {
+  beforeAll(() => useTempFileCompiler());
   // T38: Block 2 reads binding exported by Block 1 via env preamble
   it("T38: block 2 reads binding from block 1", function* () {
     const stream = new InMemoryStream();

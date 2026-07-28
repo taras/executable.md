@@ -198,7 +198,9 @@ Each invocation requires a new path. If the path already exists, `xmd` exits wit
 - `packages/core/src/scanner.ts` - boundary scanner for components and executable fences.
 - `packages/core/src/` - component expansion, eval/exec handling, modifiers, and sampling helpers.
 - `packages/core/components/` - reusable provider and demo components.
-- `packages/cli/src/cli.ts` - the `xmd` command.
+- `packages/cli/src/cli.ts` - the `xmd` command, runtime-neutral.
+- `packages/cli/src/{deno,node,bun,compiled}.ts` - entrypoints; each installs the
+  host adapters that command and compiler resolution need.
 - `packages/core/examples/hello-world.md` - end-to-end example.
 - `specs/executable-mdx-spec.md` - design and behavior spec.
 

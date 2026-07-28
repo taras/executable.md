@@ -22,8 +22,6 @@ import {
 import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
-import { useDenoCompiler } from "./deno-compiler.ts";
-import { useTempFileCompiler } from "./temp-file-compiler.ts";
 import type {
   ComponentDefinition,
   FunctionComponent,
@@ -386,13 +384,10 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
     // handle exists, any failure closes output (with whatever rendered so
     // far) and resolves Err — completion never throws.
     try {
-      // Install platform-appropriate compiler middleware
-      // deno-lint-ignore no-explicit-any
-      if (typeof (globalThis as any).Deno !== "undefined") {
-        yield* useDenoCompiler();
-      } else {
-        yield* useTempFileCompiler();
-      }
+      // No compiler is installed here. Which one suits the host is the
+      // entrypoint's decision, and installing one from inside this task would
+      // shadow whatever the caller installed outside it. A document with no
+      // eval blocks never reaches API.Env.compile at all.
 
       // DocumentOutput → channel bridge (innermost middleware — output flows
       // through caller-installed normalize/terminal middleware first, then here).

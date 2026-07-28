@@ -6,7 +6,8 @@
  *
  * Uses InMemoryStream for journaling and API.Fs/API.Process middleware for I/O stubs.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
@@ -14,6 +15,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Tier T4 — eval factory and journal integration", () => {
+  beforeAll(() => useTempFileCompiler());
   // T31: Golden run — journal entry written with serializable exports
   it("T31: golden run — journal records eval entry", function* () {
     const stream = new InMemoryStream();

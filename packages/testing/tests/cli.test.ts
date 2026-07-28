@@ -1,7 +1,7 @@
 /**
  * CLI integration tests for `xmd test` and `xmd run` (specs/testing-spec.md).
  *
- * Shells out to `deno run --allow-all packages/cli/src/cli.ts` with piped stdio, so
+ * Shells out to `deno run --allow-all packages/cli/src/deno.ts` with piped stdio, so
  * exit codes and report output are asserted TTY-independently.
  */
 import { describe, it } from "@effectionx/bdd/node";
@@ -33,7 +33,7 @@ function cliEnv(): Record<string, string> {
 function* runCli(args: string[]): Operation<CliResult> {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
     const proc = yield* exec("deno", {
-      arguments: ["run", "--allow-all", "packages/cli/src/cli.ts", ...args],
+      arguments: ["run", "--allow-all", "packages/cli/src/deno.ts", ...args],
       env: cliEnv(),
     });
 

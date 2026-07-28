@@ -132,8 +132,8 @@ run them in order. The controller fills in its route and the checkout's absolute
 CLI source path:
 
 ```sh
-acpx --agent "deno run --allow-all '<abs>/packages/cli/src/cli.ts' test-agent --connect <route>" exec "Review packages/core at revision abc123"
-acpx --agent "deno run --allow-all '<abs>/packages/cli/src/cli.ts' test-agent --connect <route>" exec "Summarize packages/core"
+acpx --agent "deno run --allow-all '<abs>/packages/cli/src/deno.ts' test-agent --connect <route>" exec "Review packages/core at revision abc123"
+acpx --agent "deno run --allow-all '<abs>/packages/cli/src/deno.ts' test-agent --connect <route>" exec "Summarize packages/core"
 ```
 
 If an appropriate `xmd` binary is already on your `PATH`, its equivalent agent

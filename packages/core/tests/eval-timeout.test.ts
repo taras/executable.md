@@ -3,7 +3,8 @@
  *
  * Tests timeout behavior and duration parsing.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { parseDuration } from "../src/modifiers/timeout.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -12,6 +13,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Tier T7 — timeout modifier", () => {
+  beforeAll(() => useTempFileCompiler());
   // T49: Block completing before timeout → success
   it("T49: block completes before timeout → success", function* () {
     const stream = new InMemoryStream();

@@ -1,4 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -181,6 +182,7 @@ describe("Tier Each — native iteration directive", () => {
 });
 
 describe("Tier Each — eval in the loop body", () => {
+  beforeAll(() => useTempFileCompiler());
   it("E18: a body eval block reads the current item binding", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({

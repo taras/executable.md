@@ -55,6 +55,11 @@ covered without editing anything here:
     (`scripts/oxlint-rules/`), which autofixes with `oxlint --fix`.
 11. Prefer expanding Executable.md capabilities over using JavaScript; Do not
     use JavaScript in MD without verifying with the user or planner agent.
+12. Use contextual APIs for environment-specific behavior in production code.
+    Shared production modules must not access host-specific APIs or detect the
+    active runtime. Runtime-named entrypoints and adapters install
+    host-specific behavior — `packages/cli/src/{deno,node,bun,compiled}.ts` are
+    the CLI's.
 
 ## Writing Guide
 

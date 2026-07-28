@@ -3,10 +3,13 @@
   "version": "0.6.0",
   "description": "The xmd command-line interface for executable.md.",
   "bin": {
-    "xmd": "./src/cli.ts"
+    "xmd": "./src/node.ts"
   },
   "type": "module",
-  "exports": "./src/cli.ts",
+  "exports": {
+    "bun": "./src/bun.ts",
+    "default": "./src/node.ts"
+  },
   "dependencies": {
     "@effectionx/stream-helpers": "0.8.3",
     "@executablemd/acp": "workspace:*",
