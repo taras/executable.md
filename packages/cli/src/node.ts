@@ -26,9 +26,6 @@ await main(function* (args) {
   yield* API.Env.around(
     {
       *command([xmdArgs = []]) {
-        // A worker inheriting the parent's --inspect would exit immediately on
-        // the debug port the parent already holds. Every other execArgv entry
-        // carries across: a loader the parent needs, the child needs too.
         const execArgv = process.execArgv.filter((option) => !option.startsWith("--inspect"));
         return [process.execPath, ...execArgv, ENTRYPOINT, ...xmdArgs];
       },

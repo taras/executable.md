@@ -23,11 +23,9 @@ import { installTestAgentComponents } from "../src/components.ts";
 const CLI = path.resolve("packages/cli/src/deno.ts");
 
 interface Asked {
-  /** Arguments each `command(...)` call received, in order. */
   calls: string[][];
 }
 
-/** Records what `command` was asked for and answers with a real invocation. */
 function* recordCommand(asked: Asked): Operation<void> {
   yield* API.Env.around({
     *command([args = []]) {
@@ -37,7 +35,6 @@ function* recordCommand(asked: Asked): Operation<void> {
   });
 }
 
-/** An adapter that fails if anything asks for the command. */
 function* refuseCommand(): Operation<void> {
   yield* API.Env.around({
     // deno-lint-ignore require-yield
@@ -118,7 +115,6 @@ describe(
   },
 );
 
-/** XL3 needs a behavior document alongside the root, so it builds its own fixture. */
 function* runDocWithScenario(
   doc: string,
   asked: Asked,

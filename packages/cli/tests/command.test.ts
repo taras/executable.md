@@ -51,7 +51,6 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
       { at: "min" },
     );
     expect(yield* command(["test-agent"])).toEqual(["stub-xmd", "test-agent"]);
-    // The base invocation carries no subcommand.
     expect(yield* command()).toEqual(["stub-xmd"]);
   });
 
