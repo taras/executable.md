@@ -9,10 +9,10 @@ well enough to exercise the workflow and discover which Executable.md
 capabilities it needs. It does not define an implemented runtime contract.
 
 The compact workflow map and its stage-level details live in
-[the adversarial implementation workflow directory](../workflows/adversarial-implementation/workflow.md).
+[the adversarial implementation workflow directory](../workflows/adversarial-implementation/start.md).
 
 The executable sketch is organized around a compact
-[workflow](../workflows/adversarial-implementation/workflow.md), with stage and
+[entry document](../workflows/adversarial-implementation/start.md), with stage and
 runtime details in adjacent Markdown files.
 
 ## Purpose

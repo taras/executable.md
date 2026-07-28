@@ -15,10 +15,10 @@ inputs:
 - **Status:** Executable design sketch
 - **Execution:** Manual, one stage at a time
 
-This file is the complete workflow map. The linked files define the prompts,
-artifacts, permissions, and deterministic effects used by each stage. Its
-component markup is the intended executable form even where the current runtime
-does not yet provide the required primitive.
+This entry document is the complete workflow map. The linked files define the
+prompts, artifacts, permissions, and deterministic effects used by each stage.
+Its component markup is the intended executable form even where the current
+runtime does not yet provide the required primitive.
 
 Each invoked component renders its result through its `<Output>` region. The
 caller's `as` prop captures that result and passes it explicitly to the next
