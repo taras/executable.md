@@ -1,10 +1,3 @@
-/**
- * Launch the xmd CLI under whichever runtime is running the tests.
- *
- * Detecting the runtime here is what this package is for: it is the
- * host-adapter boundary for tests (AGENTS.md rule 12).
- */
-
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";

@@ -20,7 +20,7 @@ import process from "node:process";
 import { API, command } from "@executablemd/runtime";
 import { cliCommand } from "@executablemd/test-support/launch";
 
-/** Inherit the environment so the child resolves the same Deno install. */
+/** Inherit PATH so the Node launcher can resolve tsx. */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
