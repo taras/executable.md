@@ -10,9 +10,9 @@
  * description, outputs belong in the result.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it } from "@executablemd/test-support/bdd";
 import { run } from "effection";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import {
   type DurableEvent,
   InMemoryStream,

@@ -5,8 +5,8 @@
  * even where no entrypoint installed a command adapter. These suites install a
  * deliberately throwing adapter and assert what does and does not reach it.
  */
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";

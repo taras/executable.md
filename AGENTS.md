@@ -59,7 +59,10 @@ covered without editing anything here:
     Shared production modules must not access host-specific APIs or detect the
     active runtime. Runtime-named entrypoints and adapters install
     host-specific behavior — `packages/cli/src/{deno,node,bun,compiled}.ts` are
-    the CLI's.
+    the CLI's. `packages/test-support` is the same boundary for tests: it
+    detects the active runtime to drive `@std/testing/bdd`, `node:test`, or
+    `bun:test` from one BDD surface, and is exempt from this rule. The Oxlint
+    rule tracked by issue #156 carries the same path exemption.
 
 ## Writing Guide
 

@@ -2,8 +2,8 @@
  * Tier TP — controller/worker protocol tests (specs/test-agent-spec.md
  * §Controller and worker).
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import {
   createLineSplitter,
   encodeMessage,

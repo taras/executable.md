@@ -7,8 +7,8 @@
  * never reached a trailing `--help`, so `xmd run --help` exited 1 with
  * `path: Invalid input: expected string, received undefined`.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { exec, type Exec } from "@effectionx/process";
 import process from "node:process";
 import * as path from "node:path";

@@ -4,8 +4,8 @@
  * Tests per-segment emission through the document stream returned by
  * execute, and blockId stability across per-segment expansion calls.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { createBlockCounter } from "../src/expand.ts";

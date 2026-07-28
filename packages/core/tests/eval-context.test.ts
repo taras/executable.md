@@ -13,8 +13,8 @@
  * so they install the temp-file one: it is the only implementation that
  * loads on all three runtimes.
  */
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { compileBlock } from "../src/eval-context.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 

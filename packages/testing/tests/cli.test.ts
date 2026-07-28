@@ -4,8 +4,8 @@
  * Shells out to `deno run --allow-all packages/cli/src/deno.ts` with piped stdio, so
  * exit codes and report output are asserted TTY-independently.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { timebox } from "@effectionx/timebox";
 import { spawn, each } from "effection";
 import type { Operation } from "effection";

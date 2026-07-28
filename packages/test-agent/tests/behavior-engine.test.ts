@@ -5,8 +5,8 @@
  * Proves stage advancement, capture exposure, mismatch retention, and
  * reaching a second stage through EOF.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, spawn } from "effection";
 import type { Operation, Subscription } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";

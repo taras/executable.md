@@ -3,8 +3,8 @@
  * §Scenario instances): withSessionRoute pins the pending route for the
  * provider's registry-dependent work and releases it otherwise.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";

@@ -8,8 +8,8 @@
  * commands — so availability fails fast and the failure text identifies
  * which value was selected.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { timebox } from "@effectionx/timebox";
 import { ensure, scoped, spawn, each } from "effection";
 import type { Operation } from "effection";

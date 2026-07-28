@@ -3,8 +3,8 @@
  * slot is exclusive and granted in arrival order, and a holder that fails or
  * halts still advances the queue rather than stranding the route.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { sleep, spawn } from "effection";
 import { useRouteSlot } from "../src/route-slot.ts";
 

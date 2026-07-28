@@ -1,5 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";

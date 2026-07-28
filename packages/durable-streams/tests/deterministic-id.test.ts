@@ -6,8 +6,8 @@
  * and that the structured concurrency combinators produce consistent IDs.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import {
   type DurableEvent,
   InMemoryStream,

@@ -8,8 +8,8 @@
  * not reachable from behavior-document surface, so each is invoked directly
  * in a scope with the profile installed.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { compile, cwd, env, exec, fetch, glob, readTextFile, stat } from "@executablemd/runtime";
 import { useTempFileCompiler } from "@executablemd/core";

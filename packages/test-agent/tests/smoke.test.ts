@@ -5,8 +5,8 @@
  * in process to replay a completed journal — the CLI never loads an
  * existing journal, so replay cannot be exercised through it.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { each, scoped, spawn } from "effection";
 import type { Operation, Result } from "effection";
 import { timebox } from "@effectionx/timebox";

@@ -81,7 +81,8 @@ Updated before completion of every phase and committed at the end of each phase.
   URL resolution issues.
 - **Consequences:** Added to deno.json imports.
 - **Update:** Tests now use the Node.js test runner (`node --test`) with
-  `@effectionx/bdd` for describe/it/beforeEach and `expect` for assertions.
+  `@executablemd/test-support` for describe/it/beforeEach and `expect` for
+  assertions.
 
 ## DEC-005: Sequential workflows only in initial scope
 

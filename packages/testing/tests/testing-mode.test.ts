@@ -1,6 +1,6 @@
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { sleep } from "effection";
 import { API } from "@executablemd/runtime";
 import { useFailingExec } from "@executablemd/runtime/test";

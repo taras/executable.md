@@ -6,8 +6,8 @@
  * for whole-object validation; these compare the two only where the
  * adapter has to agree with it.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { validateProps } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import { z } from "zod";

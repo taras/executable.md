@@ -31,7 +31,7 @@
       },
       "devDependencies": {
         "@durable-streams/server": "^0.3.8",
-        "@effectionx/bdd": "workspace:*",
+        "@executablemd/test-support": "workspace:*",
         "@types/node": "^22.0.0",
         "expect": "^30.0.0",
         "oxfmt": "^0.41.0",
@@ -142,9 +142,11 @@
       },
     },
     "packages/test-support": {
-      "name": "@effectionx/bdd",
+      "name": "@executablemd/test-support",
       "version": "0.0.0",
       "dependencies": {
+        "@effectionx/test-adapter": "0.7.4",
+        "effection": "4.1.0-alpha.10",
         "expect": "^30.0.0",
       },
     },
@@ -179,8 +181,6 @@
     "@durable-streams/server": ["@durable-streams/server@0.3.8", "", { "dependencies": { "@durable-streams/client": "0.2.6", "@durable-streams/state": "0.3.1", "@neophi/sieve-cache": "^1.0.0", "lmdb": "^3.3.0" } }, "sha512-Pg9kV0Jn5qL9PyPMSLYkyuodH1uymEFGsRLNb/9REvH3RW/CTFPndn1Qvb/X6r3ChbVV8poEHOjrDgI6l0ZiHQ=="],
 
     "@durable-streams/state": ["@durable-streams/state@0.3.1", "", { "dependencies": { "@durable-streams/client": "0.2.6", "@standard-schema/spec": "^1.0.0" }, "peerDependencies": { "@tanstack/db": ">=0.6.0 <1.0.0" }, "optionalPeers": ["@tanstack/db"], "bin": { "intent": "bin/intent.js" } }, "sha512-HYhw520Bfl9+L3MJgWpzLQjByP5y/uNNasOqSSFfyWhFxZeaKHM6Go2P79YFfTJPmXh4ZHEh1jOgIfrumqT6hA=="],
-
-    "@effectionx/bdd": ["@effectionx/bdd@workspace:packages/test-support"],
 
     "@effectionx/context-api": ["@effectionx/context-api@0.6.0", "", { "dependencies": { "@effectionx/middleware": "0.1.1" }, "peerDependencies": { "effection": "^3 || ^4" } }, "sha512-t004qvlkJDMB6EhHP1lOQ97PeIn90m7cv4+wsRPnx4YBem+pJzTL+Sm1KWbKMjMeFJz4oqllUWuBJZsCi+nuTw=="],
 
@@ -271,6 +271,8 @@
     "@executablemd/runtime": ["@executablemd/runtime@workspace:packages/runtime"],
 
     "@executablemd/test-agent": ["@executablemd/test-agent@workspace:packages/test-agent"],
+
+    "@executablemd/test-support": ["@executablemd/test-support@workspace:packages/test-support"],
 
     "@executablemd/testing": ["@executablemd/testing@workspace:packages/testing"],
 

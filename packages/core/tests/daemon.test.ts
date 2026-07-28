@@ -4,8 +4,8 @@
  * Verifies daemonFactory satisfies ModifierFactory, ignores next,
  * and composes correctly in the modifier chain.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { daemonFactory } from "../src/modifiers/daemon.ts";
 import { combine } from "@effectionx/middleware";

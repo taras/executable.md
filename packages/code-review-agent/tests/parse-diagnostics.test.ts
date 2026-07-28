@@ -2,8 +2,8 @@
  * Tests for parseDiagnostics — Oxlint JSON output parser.
  * Covers PD1-PD8 from the oxlint-sensor-spec.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { parseDiagnostics } from "../src/parse-diagnostics.ts";
 import type { DoctorResult, OxlintDiagnostic, PR } from "../src/types.ts";
 

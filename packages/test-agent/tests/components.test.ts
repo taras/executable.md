@@ -5,9 +5,9 @@
  * clean suspension at teardown — driven through the component surface
  * with real workers.
  */
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";

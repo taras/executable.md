@@ -6,8 +6,8 @@
  * handler — the connection closes on input EOF and its scope teardown halts the
  * in-flight op, so nothing is stranded.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { serveAcp } from "../src/worker/acp-server.ts";

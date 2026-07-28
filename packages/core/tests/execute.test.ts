@@ -8,8 +8,8 @@
  *   Golden run — InMemoryStream() (empty) + useStubFs(files) → assert output + journal
  *   Replay    — reuse same InMemoryStream (has events) + useNoIO() → zero I/O
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";

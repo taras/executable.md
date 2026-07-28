@@ -6,8 +6,8 @@
  * provider factories — no subprocess, no real provider. CLI precedence is
  * not established here; it is asserted at the CLI boundary.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";

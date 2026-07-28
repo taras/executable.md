@@ -6,8 +6,8 @@
  * boundary: it stores whatever a Standard Schema returns, and it selects
  * the last valid source rather than the highest-priority supplied one.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { buildBindings, extractPropsArgs, PropsError, resolveProps } from "../src/props.ts";
 import type { Binding } from "../src/props.ts";
 

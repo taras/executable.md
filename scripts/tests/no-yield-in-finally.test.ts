@@ -1,8 +1,8 @@
 /**
  * Rule tests for `local/no-yield-in-finally` (scripts/oxlint-rules).
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { violations } from "./oxlint.ts";
 

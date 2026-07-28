@@ -7,8 +7,8 @@
  * resolve a workspace package's subpath export in CI, where `bun install` runs
  * without pnpm's node_modules links.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { AssertionError as NodeAssertionError } from "node:assert/strict";
 import {
   assert,

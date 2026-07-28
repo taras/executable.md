@@ -18,8 +18,8 @@
       "@executablemd/durable-streams": ["./packages/durable-streams/mod.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
       "@executablemd/testing": ["./packages/testing/mod.ts"],
-      "@effectionx/bdd/node": ["./packages/test-support/bdd.ts"],
-      "@effectionx/bdd/expect": ["./packages/test-support/expect.ts"]
+      "@executablemd/test-support/bdd": ["./packages/test-support/bdd.ts"],
+      "@executablemd/test-support/expect": ["./packages/test-support/expect.ts"]
     }
   },
   "include": [

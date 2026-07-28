@@ -1,6 +1,6 @@
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation, Subscription } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";

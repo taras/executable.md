@@ -1,5 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { healSegment } from "../src/heal.ts";
 import { scanSegments } from "../src/scanner.ts";

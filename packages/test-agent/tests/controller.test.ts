@@ -5,8 +5,8 @@
  * failure marks, scenario isolation, connection revocation on unregister,
  * and teardown.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";
