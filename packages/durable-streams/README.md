@@ -527,6 +527,30 @@ class PostgresStream implements DurableStream {
 }
 ```
 
+### Serializing an event
+
+`serializeDurableEvent` is the shared NDJSON record — the one file persistence
+writes and the one anything inspecting the persisted form reads. It is ordinary
+`JSON.stringify(event) + "\n"`: one line, terminating newline included, fields in
+the event object's own insertion order. Nothing is sorted, normalized, or
+otherwise canonicalized; sharing the function is what keeps writer and reader
+from drifting apart, not any canonical form of the output.
+
+```typescript
+import { serializeDurableEvent } from "@effectionx/durable-streams";
+
+const record = serializeDurableEvent(event); // '{"type":"yield",…}\n'
+```
+
+It fails when `JSON.stringify` throws — a circular structure or a `BigInt` — or
+when it does not return a string. Values `JSON.stringify` silently coerces or
+drops are left alone: `undefined`, function and symbol members are omitted, and
+non-finite numbers become `null`.
+
+Structured backends keep their own transport encoding. This function defines the
+representation used by file persistence and by anything that inspects the
+persisted form.
+
 ---
 
 ## Long-running workflows

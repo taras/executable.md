@@ -830,6 +830,21 @@ faithfully represent the `DurableEvent` type. The encoding must preserve:
 - Result (status, value, error as applicable)
 - Append order (events must be readable in the order they were written)
 
+The reference NDJSON encoding is `serializeDurableEvent(event)`:
+`JSON.stringify(event) + "\n"` — one record per line, terminating newline
+included, fields in the event object's own insertion order with no sorting or
+canonicalization. File persistence writes it, and a pre-persistence gate that
+inspects the persisted representation derives it from the same function, so the
+two cannot drift apart.
+
+Serialization fails when `JSON.stringify` throws — a circular structure or a
+`BigInt` — or when it does not return a string. Values `JSON.stringify` silently
+coerces or drops are not rejected: `undefined`, function and symbol members are
+omitted, and non-finite numbers become `null`.
+
+Structured backends such as HTTP retain their own transport encoding; this
+function defines the NDJSON representation, not a requirement on every backend.
+
 ### 11.3 Stream consistency
 
 > **INVARIANT (Append-Only):** Events are only appended, never updated

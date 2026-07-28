@@ -1,6 +1,7 @@
 import { until } from "effection";
 import type { Operation } from "effection";
 import { appendFile } from "node:fs/promises";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableStream, DurableEvent } from "@executablemd/durable-streams";
 
 function cloneEvent(event: DurableEvent): DurableEvent {
@@ -26,7 +27,7 @@ export class FileStream implements DurableStream {
   *append(event: DurableEvent): Operation<void> {
     const cloned = cloneEvent(event);
 
-    yield* until(appendFile(this.filePath, JSON.stringify(cloned) + "\n"));
+    yield* until(appendFile(this.filePath, serializeDurableEvent(cloned)));
     this.events.push(cloned);
     this.onAppend?.(cloneEvent(cloned));
   }
