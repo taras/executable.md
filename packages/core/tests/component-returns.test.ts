@@ -326,7 +326,6 @@ describe("Tier RV — component return values", () => {
         const output = asText(result.value ?? "");
         expect(output).toContain("Return validation failed for <Verdict />");
         expect(output).toContain("is not JSON");
-        // Nothing was bound, so the caller's interpolation finds no value.
         expect(output).toContain("captured: {shown}");
       });
     }

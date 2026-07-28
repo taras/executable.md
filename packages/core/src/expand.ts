@@ -613,10 +613,6 @@ function* expandComponent(
 
   const definition = imported;
 
-  // Structural preflight (spec §6.9, §6.10): validate <Output> and <Return>
-  // against the component's own source AST before any part of its body
-  // executes. A structurally invalid component runs no eval, exec, Capture,
-  // nested components, or other side effects.
   const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
   if (placementError) {
     return [yield* raise(placementError)];
@@ -670,8 +666,6 @@ function* expandComponent(
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
 
-  // A value component has no rendered form, so a caller that does not capture
-  // it asked for nothing. Refuse before the body runs (spec §6.10).
   if (definition.returns !== undefined && asBinding === undefined) {
     return [
       yield* raise({
@@ -948,8 +942,6 @@ function* expandFunctionComponent(
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
 
-  // A value component renders nothing, so a caller that does not capture it
-  // asked for nothing. Refuse before the function runs (spec §6.10).
   const returns = definition.returns;
   if (returns !== undefined && asBinding === undefined) {
     return [
@@ -1014,8 +1006,6 @@ function* expandFunctionComponent(
           }),
         ];
       }
-      // A value component's return crosses the JSON boundary and its schema
-      // before the caller ever sees it; a text component binds its rendering.
       parentEnv.values[asBinding] =
         returns === undefined ? asText(output) : validateReturnValue(name, output, returns);
       return [];
@@ -1209,8 +1199,6 @@ function evaluateIn(
  */
 const SLOT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 
-// Props and return failures carry the same normalized issues, so both reach
-// the document as a segment that names the component and keeps its issues.
 function schemaValidationErrorSegment(error: unknown, name: string): ErrorSegment {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SchemaValidationError) {
