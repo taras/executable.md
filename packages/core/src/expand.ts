@@ -612,6 +612,20 @@ function* expandComponent(
     return [yield* raise(placementError)];
   }
 
+  // `as` names a binding, so it is rejected on the expression itself rather
+  // than on a resolved value. Evaluating it first would make the outcome
+  // depend on the host: a bare identifier that happens to name a global
+  // resolves on one runtime and throws ReferenceError on another.
+  if ("as" in expressions) {
+    return [
+      yield* raise({
+        type: "error",
+        message: `Prop "as" on <${name} /> must be a string literal.`,
+        source: name,
+      }),
+    ];
+  }
+
   // Resolve eval expression props against env.values using the shared
   // VM context. This must happen before validation so that resolved
   // values can be type-checked. See spec §5.1 (expression prop evaluation).
@@ -623,16 +637,6 @@ function* expandComponent(
       yield* raise({
         type: "error",
         message: error instanceof Error ? error.message : String(error),
-        source: name,
-      }),
-    ];
-  }
-
-  if ("as" in expressions) {
-    return [
-      yield* raise({
-        type: "error",
-        message: `Prop "as" on <${name} /> must be a string literal.`,
         source: name,
       }),
     ];

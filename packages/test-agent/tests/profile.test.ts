@@ -12,7 +12,7 @@ import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
 import type { Operation } from "effection";
 import { compile, cwd, env, exec, fetch, glob, readTextFile, stat } from "@executablemd/runtime";
-import { useDenoCompiler } from "@executablemd/core";
+import { useTempFileCompiler } from "@executablemd/core";
 import { installWorkerProfile } from "../src/worker/profile.ts";
 import type { WorkerFilesystem } from "../src/worker/profile.ts";
 
@@ -88,7 +88,7 @@ describe("Tier WP — worker profile", () => {
     // compiler (production order), and a base compiler sits underneath so the
     // inline-eval passthrough reaches a real compiler, not the stub.
     yield* installWorkerProfile(fs);
-    yield* useDenoCompiler();
+    yield* useTempFileCompiler();
     expect(yield* denied(() => compile("return 1;", { imports: ["m"] }))).toContain(
       "static imports are not allowed",
     );
