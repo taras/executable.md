@@ -8,6 +8,7 @@ import { execute } from "@executablemd/core";
 import type { ExecuteOptions } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import type { TestResult } from "../src/test-api.ts";
+import type { Json } from "@executablemd/core";
 
 const EMBEDDED_TESTS = [
   "Root frontmatter interpolates into the heading",
@@ -57,10 +58,13 @@ const EMBEDDED_TESTS = [
   "Instruction sets the provider system prompt",
   "Exec output is journaled with the run timestamp",
   "Output regions render only the selected region",
+  "A text component returns its rendered markdown",
+  "A value component binds its validated value and renders nothing",
+  "The caller renders whatever presentation it wants from the value",
 ];
 
 interface SmokeSession {
-  result: Result<string>;
+  result: Result<Json>;
   results: readonly TestResult[];
 }
 

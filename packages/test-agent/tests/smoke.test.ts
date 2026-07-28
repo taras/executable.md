@@ -20,6 +20,7 @@ import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
 import { useCommand } from "./command.ts";
 import { cliBase, cliCommand } from "@executablemd/test-support/launch";
+import type { Json } from "@executablemd/core";
 
 const DOC = path.resolve("smoke-test/test-agent/README.md");
 const TIMEOUT = 120_000;
@@ -78,7 +79,7 @@ function* runCli(args: string[]): Operation<CliResult> {
 function* runSmoke(
   stream: InMemoryStream,
   xmd: string[],
-): Operation<{ result: Result<string>; output: string; results: readonly TestResult[] }> {
+): Operation<{ result: Result<Json>; output: string; results: readonly TestResult[] }> {
   // The scope closes before the assertions run, so the provider and its
   // workers finish teardown and the completion settles.
   return yield* scoped(function* () {

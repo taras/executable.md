@@ -11,6 +11,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 
 describe("Tier T5 — Binding environment", () => {
   beforeAll(() => useTempFileCompiler());
@@ -24,11 +25,13 @@ describe("Tier T5 — Binding environment", () => {
     yield* useEchoExec();
 
     // Should not throw — port is available in block 2
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     // Eval blocks produce no rendered output (only text between blocks remains)
@@ -47,11 +50,13 @@ describe("Tier T5 — Binding environment", () => {
     yield* useEchoExec();
 
     // Should succeed — x is 2 in block 3 (shadowed by block 2)
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output).not.toContain("ERROR");
@@ -65,11 +70,13 @@ describe("Tier T5 — Binding environment", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output).toBe("");
@@ -83,11 +90,13 @@ describe("Tier T5 — Binding environment", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output).toContain("ERROR");
@@ -101,11 +110,13 @@ describe("Tier T5 — Binding environment", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output).toContain("ERROR");

@@ -11,6 +11,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 
 describe("Tier T10 — eval-scope hierarchy", () => {
   beforeAll(() => useTempFileCompiler());
@@ -22,11 +23,13 @@ describe("Tier T10 — eval-scope hierarchy", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     // Both blocks should execute without error
@@ -44,11 +47,13 @@ describe("Tier T10 — eval-scope hierarchy", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     // Exec output should be present

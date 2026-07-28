@@ -21,6 +21,7 @@ import { Component } from "../component-api.ts";
 import { Execution } from "../execute.ts";
 import type { DocumentExecution, ExecuteOptions } from "../execute.ts";
 import { createReplayStream } from "../replay-stream.ts";
+import type { Json } from "../types.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
 import { AgentInternal } from "./internal.ts";
@@ -142,10 +143,10 @@ function* bridgeRootProvider(
   next: (options: ExecuteOptions) => Operation<DocumentExecution>,
 ): Operation<DocumentExecution> {
   const channel = createReplayStream<string, string>();
-  const completion = withResolvers<Result<string>>();
+  const completion = withResolvers<Result<Json>>();
 
   yield* spawn(function* () {
-    let docResult: Result<string> | undefined;
+    let docResult: Result<Json> | undefined;
     let teardown: Error | undefined;
     let outputClosed = false;
     let emitted = "";
@@ -205,7 +206,7 @@ function* bridgeRootProvider(
  */
 function decorateCompletion(
   inner: DocumentExecution,
-  decorate: (result: Result<string>) => Result<string>,
+  decorate: (result: Result<Json>) => Result<Json>,
 ): DocumentExecution {
   return {
     output: inner.output,
@@ -226,10 +227,10 @@ function decorateCompletion(
  * rather than nested.
  */
 function combineCompletion(
-  docResult: Result<string>,
+  docResult: Result<Json>,
   failures: SequencedFailure[],
   teardown: Error | undefined,
-): Result<string> {
+): Result<Json> {
   const promptErrors = [...failures]
     .sort((a, b) => a.sequence - b.sequence)
     .map((failure) => failure.error);

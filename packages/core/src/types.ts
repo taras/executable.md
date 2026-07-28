@@ -136,12 +136,19 @@ export interface CodeBlockResult {
 // it doubles as a stable `WeakMap` key for the compiled-validator cache.
 export type PropsSchema = JsonObject;
 
+// A draft-07 JSON Schema object describing a component's return value. Unlike
+// `PropsSchema` its root may describe any JSON value kind, not only an object.
+export type ReturnsSchema = JsonObject;
+
 export interface ComponentDefinition {
   kind: "markdown";
   name: string;
   path: string;
   meta: Record<string, unknown>;
   props: PropsSchema;
+  /** The declared return schema. Absent in text mode, where the component
+   *  returns its rendered markdown. */
+  returns?: ReturnsSchema;
   bodySegments: Segment[];
 }
 
@@ -152,7 +159,9 @@ export interface ImportResult extends Record<string, Json> {
 
 /**
  * A TypeScript function component — a generator function that receives
- * validated props directly and returns rendered output as a string.
+ * validated props directly. A text component returns its rendered output as a
+ * string; a component declaring `export const returns` returns the JSON value
+ * validated against that schema.
  *
  * Children are available via `useContent()` on the Effection scope:
  * ```ts
@@ -165,7 +174,7 @@ export interface ImportResult extends Record<string, Json> {
  * ```
  */
 export interface FunctionComponent {
-  (props: Record<string, Json>): Workflow<string>;
+  (props: Record<string, Json>): Workflow<Json>;
 }
 
 /**
@@ -177,6 +186,8 @@ export interface FunctionComponentDefinition {
   name: string;
   path: string;
   props: PropsSchema;
+  /** The declared return schema. Absent in text mode. */
+  returns?: ReturnsSchema;
   fn: FunctionComponent;
 }
 

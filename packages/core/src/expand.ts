@@ -27,6 +27,7 @@ import type {
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
+  ReturnsSchema,
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
@@ -42,7 +43,7 @@ import {
 import { DocumentationError } from "./errors.ts";
 import { useEvalScope, unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { PropValidationError, validateProps } from "./validate.ts";
+import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
@@ -213,6 +214,15 @@ export function* expandSegments(
           // dynamically scanned <Output> (e.g. render(markdown) content) —
           // diagnose it defensively per the ambient policy.
           result.push(yield* raise(misplacedOutputError()));
+          break;
+        }
+
+        if (segment.name === "Return") {
+          // Definition-owned <Return> is consumed by value-body expansion
+          // before it reaches here. Reaching this branch means a projected,
+          // dynamically scanned, or misplaced <Return> — diagnose it rather
+          // than resolving a component named Return.
+          result.push(yield* raise(misplacedReturnError(segment)));
           break;
         }
 
@@ -603,11 +613,11 @@ function* expandComponent(
 
   const definition = imported;
 
-  // Structural preflight (spec §6.9): validate <Output> placement against the
-  // component's own source AST before any part of its body executes. A
-  // structurally invalid component runs no eval, exec, Capture, nested
-  // components, or other side effects.
-  const placementError = validateOutputPlacement(definition.bodySegments);
+  // Structural preflight (spec §6.9, §6.10): validate <Output> and <Return>
+  // against the component's own source AST before any part of its body
+  // executes. A structurally invalid component runs no eval, exec, Capture,
+  // nested components, or other side effects.
+  const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
   if (placementError) {
     return [yield* raise(placementError)];
   }
@@ -657,7 +667,21 @@ function* expandComponent(
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = validateProps(name, propsForValidation, definition.props);
   } catch (error) {
-    return [yield* raise(propValidationErrorSegment(error, name))];
+    return [yield* raise(schemaValidationErrorSegment(error, name))];
+  }
+
+  // A value component has no rendered form, so a caller that does not capture
+  // it asked for nothing. Refuse before the body runs (spec §6.10).
+  if (definition.returns !== undefined && asBinding === undefined) {
+    return [
+      yield* raise({
+        type: "error",
+        message:
+          `<${name} /> declares \`returns\`, so it renders nothing and must be invoked ` +
+          `with \`as\`: <${name} as="binding" />.`,
+        source: name,
+      }),
+    ];
   }
 
   // Capture the caller's eval environment before creating the component's
@@ -760,6 +784,52 @@ function* expandComponent(
 
   componentEnv.values.render = (markdown: string) => renderInCallerScope(scanSegments(markdown));
 
+  const returns = definition.returns;
+  if (returns !== undefined) {
+    let value: Json;
+    try {
+      value = yield* scoped(function* () {
+        yield* provideEnv(componentEnv);
+        if (childEvalScope) {
+          yield* provideEvalScope(childEvalScope);
+        }
+        return yield* expandValueBody(
+          name,
+          returns,
+          definition.bodySegments,
+          children,
+          definition.meta,
+          validatedProps,
+          newHideSet,
+          counter,
+          callerEvalEnv ?? undefined,
+        );
+      });
+    } catch (error) {
+      // Body fail-fast propagates unchanged; a return-value failure is the
+      // component's own diagnostic and follows the caller's policy.
+      if (error instanceof DocumentationError) {
+        throw error;
+      }
+      return [yield* raise(schemaValidationErrorSegment(error, name))];
+    }
+
+    // Bind only after the component's scoped environment unwinds, so the
+    // value reaches the caller's environment and never the component's own.
+    const parentEnv = yield* env;
+    if (!parentEnv || asBinding === undefined) {
+      return [
+        yield* raise({
+          type: "error",
+          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+          source: name,
+        }),
+      ];
+    }
+    parentEnv.values[asBinding] = value;
+    return [];
+  }
+
   const expanded = yield* scoped(function* () {
     yield* provideEnv(componentEnv);
     if (childEvalScope) {
@@ -801,6 +871,18 @@ function* expandComponent(
   }
 
   return expanded;
+}
+
+// Without `returns`, a function component's rendering is its return value, so
+// anything else is a contract violation rather than something to stringify.
+function asText(output: Json): string {
+  if (typeof output !== "string") {
+    throw new Error(
+      `returned a non-string (${output === null ? "null" : typeof output}). ` +
+        "A component renders text unless it declares `returns`.",
+    );
+  }
+  return output;
 }
 
 /**
@@ -863,7 +945,22 @@ function* expandFunctionComponent(
   try {
     validatedProps = validateProps(name, propsForValidation, definition.props);
   } catch (error) {
-    return [yield* raise(propValidationErrorSegment(error, name))];
+    return [yield* raise(schemaValidationErrorSegment(error, name))];
+  }
+
+  // A value component renders nothing, so a caller that does not capture it
+  // asked for nothing. Refuse before the function runs (spec §6.10).
+  const returns = definition.returns;
+  if (returns !== undefined && asBinding === undefined) {
+    return [
+      yield* raise({
+        type: "error",
+        message:
+          `<${name} /> declares \`returns\`, so it renders nothing and must be invoked ` +
+          `with \`as\`: <${name} as="binding" />.`,
+        source: name,
+      }),
+    ];
   }
 
   const slots = partitionBySlot(children);
@@ -917,15 +1014,23 @@ function* expandFunctionComponent(
           }),
         ];
       }
-      parentEnv.values[asBinding] = output;
+      // A value component's return crosses the JSON boundary and its schema
+      // before the caller ever sees it; a text component binds its rendering.
+      parentEnv.values[asBinding] =
+        returns === undefined ? asText(output) : validateReturnValue(name, output, returns);
       return [];
     }
-    return [{ type: "text", content: output }];
+    return [{ type: "text", content: asText(output) }];
   } catch (error) {
     // A DocumentationError from a content-rendering path (useContent) is
     // fail-fast — propagate it unchanged.
     if (error instanceof DocumentationError) {
       throw error;
+    }
+    // A return that failed its schema already names the component and carries
+    // its issues; wrapping it would bury both.
+    if (error instanceof SchemaValidationError) {
+      return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
     return [
       yield* raise({
@@ -989,7 +1094,7 @@ function isModuleBindingName(name: string): boolean {
  * they are evaluated as JavaScript using `new Function()` with
  * `env.values` destructured into scope.
  *
- * Errors are thrown (not ErrorSegments), consistent with PropValidationError.
+ * Errors are thrown (not ErrorSegments), consistent with prop validation.
  *
  * Uses `new Function()` instead of `node:vm` — Deno's permission model
  * provides the security boundary. The expression text comes from the
@@ -1009,6 +1114,54 @@ function* resolveExpressionProps(
     return resolved;
   }
 
+  const evalEnv = yield* expressionEnv(componentName, Object.keys(expressions), explicitEnv);
+
+  for (const [propName, expression] of Object.entries(expressions)) {
+    const result = evaluateIn(evalEnv, expression, componentName, propName);
+
+    if (typeof result === "function" || typeof result === "undefined") {
+      throw new Error(
+        `Expression prop "${propName}" on <${componentName} /> evaluated ` +
+          `to a non-serializable value (${typeof result}). Props must be ` +
+          `JSON-serializable.`,
+      );
+    }
+
+    try {
+      resolved[propName] = parseJson(JSON.parse(JSON.stringify(result)));
+    } catch {
+      throw new Error(
+        `Expression prop "${propName}" on <${componentName} /> evaluated ` +
+          `to a non-serializable value (${typeof result}). Props must be ` +
+          `JSON-serializable.`,
+      );
+    }
+  }
+
+  return resolved;
+}
+
+/**
+ * Evaluate a single expression and return its raw result. Callers that need
+ * JSON decide how to cross that boundary: props normalize through
+ * `JSON.stringify`, while a `<Return>` value is parsed strictly so a value
+ * that could not survive replay is rejected rather than quietly rewritten.
+ */
+function* evaluateExpression(
+  expression: string,
+  componentName: string,
+  propName: string,
+  explicitEnv?: EvalEnv,
+): Operation<unknown> {
+  const evalEnv = yield* expressionEnv(componentName, [propName], explicitEnv);
+  return evaluateIn(evalEnv, expression, componentName, propName);
+}
+
+function* expressionEnv(
+  componentName: string,
+  names: string[],
+  explicitEnv?: EvalEnv,
+): Operation<EvalEnv> {
   const contextEnv = yield* env;
 
   // For projected children (substituted via <Content />), merge the
@@ -1022,56 +1175,34 @@ function* resolveExpressionProps(
       : (contextEnv ?? explicitEnv);
 
   if (!evalEnv) {
-    const names = Object.keys(expressions).join(", ");
     throw new Error(
-      `Expression props (${names}) on <${componentName} /> cannot be ` +
+      `Expression props (${names.join(", ")}) on <${componentName} /> cannot be ` +
         `resolved: no eval context available. Expression props require ` +
         `a preceding eval block that defines the referenced bindings.`,
     );
   }
+  return evalEnv;
+}
 
+// Evaluates with env.values destructured into scope via new Function()
+// parameter injection.
+function evaluateIn(
+  evalEnv: EvalEnv,
+  expression: string,
+  componentName: string,
+  propName: string,
+): unknown {
   const envKeys = Object.keys(evalEnv.values);
-  const envValues = envKeys.map((k) => evalEnv.values[k]);
-
-  for (const [propName, expression] of Object.entries(expressions)) {
-    try {
-      // Evaluate expression with env.values destructured into scope
-      // via new Function() parameter injection.
-      const fn = new Function(...envKeys, `return (${expression})`);
-      const result = fn(...envValues);
-
-      if (typeof result === "function" || typeof result === "undefined") {
-        throw new Error(
-          `Expression prop "${propName}" on <${componentName} /> evaluated ` +
-            `to a non-serializable value (${typeof result}). Props must be ` +
-            `JSON-serializable.`,
-        );
-      }
-
-      let serialized: Json;
-      try {
-        serialized = JSON.parse(JSON.stringify(result)) as Json;
-      } catch {
-        throw new Error(
-          `Expression prop "${propName}" on <${componentName} /> evaluated ` +
-            `to a non-serializable value (${typeof result}). Props must be ` +
-            `JSON-serializable.`,
-        );
-      }
-
-      resolved[propName] = serialized;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("non-serializable")) {
-        throw error;
-      }
-      throw new Error(
-        `Failed to evaluate expression prop "${propName}={${expression}}" ` +
-          `on <${componentName} />: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  const envValues = envKeys.map((key) => evalEnv.values[key]);
+  try {
+    const fn = new Function(...envKeys, `return (${expression})`);
+    return fn(...envValues);
+  } catch (error) {
+    throw new Error(
+      `Failed to evaluate expression prop "${propName}={${expression}}" ` +
+        `on <${componentName} />: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-
-  return resolved;
 }
 
 /**
@@ -1080,9 +1211,11 @@ function* resolveExpressionProps(
  */
 const SLOT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 
-function propValidationErrorSegment(error: unknown, name: string): ErrorSegment {
+// Props and return failures carry the same normalized issues, so both reach
+// the document as a segment that names the component and keeps its issues.
+function schemaValidationErrorSegment(error: unknown, name: string): ErrorSegment {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof PropValidationError) {
+  if (error instanceof SchemaValidationError) {
     return {
       type: "error",
       message,
@@ -1296,6 +1429,17 @@ function misplacedOutputError(): ErrorSegment {
   };
 }
 
+function misplacedReturnError(segment: ComponentElement): ErrorSegment {
+  return {
+    type: "error",
+    message:
+      `${previewReturn(segment)} must be a direct top-level child of the document or ` +
+      "component whose `returns` declaration it satisfies. <Return> is reserved: it " +
+      "never resolves a component, and content a caller projects cannot declare one.",
+    source: "Return",
+  };
+}
+
 function previewOutput(segment: ComponentElement): string {
   const text = segment.children
     .filter((child): child is TextSegment => child.type === "text")
@@ -1348,6 +1492,149 @@ export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment |
       `<Output>. Misplaced <Output> found:\n${list}`,
     source: "Output",
   };
+}
+
+export function isTopLevelReturn(segment: Segment): segment is ComponentElement {
+  return segment.type === "component" && segment.name === "Return";
+}
+
+function previewReturn(segment: ComponentElement): string {
+  if ("value" in segment.expressions) {
+    return `<Return value={${segment.expressions.value}} />`;
+  }
+  if ("value" in segment.props) {
+    return `<Return value=${JSON.stringify(segment.props.value)} />`;
+  }
+  return "<Return />";
+}
+
+function structureError(source: string, headline: string, violations: string[]): ErrorSegment {
+  const list = violations.map((entry) => `  - ${entry}`).join("\n");
+  return { type: "error", message: `${headline}\n${list}`, source };
+}
+
+function collectReturns(bodySegments: Segment[]): {
+  topLevel: ComponentElement[];
+  nested: string[];
+} {
+  const topLevel: ComponentElement[] = [];
+  const nested: string[] = [];
+
+  const walk = (segments: Segment[], depth: number): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component") {
+        continue;
+      }
+      if (segment.name === "Return") {
+        if (depth === 0) {
+          topLevel.push(segment);
+        } else {
+          nested.push(`${previewReturn(segment)} is not a direct top-level child`);
+        }
+      }
+      walk(segment.children, depth + 1);
+    }
+  };
+
+  walk(bodySegments, 0);
+  return { topLevel, nested };
+}
+
+function returnElementViolations(segment: ComponentElement): string[] {
+  const violations: string[] = [];
+  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
+  const extra = names.filter((name) => name !== "value");
+  if (extra.length > 0) {
+    violations.push(`${previewReturn(segment)} accepts only a "value" prop, got "${extra[0]}"`);
+  }
+  if (!names.includes("value")) {
+    violations.push(`${previewReturn(segment)} requires a "value" prop`);
+  }
+  if (segment.children.length > 0) {
+    violations.push(`${previewReturn(segment)} takes no children`);
+  }
+  return violations;
+}
+
+function textModeReturnError(bodySegments: Segment[]): ErrorSegment | undefined {
+  const { topLevel, nested } = collectReturns(bodySegments);
+  if (topLevel.length === 0 && nested.length === 0) {
+    return undefined;
+  }
+  const found = [...topLevel.map(previewReturn), ...nested];
+  return structureError(
+    "Return",
+    "<Return> requires a document or component that declares `returns`. Declare a " +
+      "return schema, or remove <Return>. Found:",
+    found,
+  );
+}
+
+function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefined {
+  const violations: string[] = [];
+
+  const walkOutput = (segments: Segment[]): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component") {
+        continue;
+      }
+      if (segment.name === "Output") {
+        violations.push(`${previewOutput(segment)} — <Output> and \`returns\` are exclusive`);
+      }
+      walkOutput(segment.children);
+    }
+  };
+  walkOutput(bodySegments);
+
+  const { topLevel, nested } = collectReturns(bodySegments);
+  violations.push(...nested);
+
+  if (topLevel.length === 0) {
+    violations.push("no direct top-level <Return>");
+  }
+  for (const duplicate of topLevel.slice(1)) {
+    violations.push(`${previewReturn(duplicate)} is a duplicate declaration`);
+  }
+  for (const declaration of topLevel) {
+    violations.push(...returnElementViolations(declaration));
+  }
+
+  if (violations.length === 0) {
+    return undefined;
+  }
+  return structureError(
+    "Return",
+    "A component that declares `returns` renders nothing and produces exactly one " +
+      "value through a direct top-level <Return>. Problems found:",
+    violations,
+  );
+}
+
+/**
+ * Structural preflight for a body's output and return contract (spec §6.9,
+ * §6.10). Runs against the body's own source AST, before `<Content />`
+ * substitution, so projected content can neither introduce nor satisfy a
+ * declaration. Every violation is combined into a single ErrorSegment, and a
+ * body whose structure is invalid runs no eval, exec, `<Capture>`, or nested
+ * component.
+ */
+export function validateBodyStructure(
+  bodySegments: Segment[],
+  returns: ReturnsSchema | undefined,
+): ErrorSegment | undefined {
+  if (returns !== undefined) {
+    return valueModeStructureError(bodySegments);
+  }
+  const outputError = validateOutputPlacement(bodySegments);
+  const returnError = textModeReturnError(bodySegments);
+  if (outputError && returnError) {
+    return {
+      type: "error",
+      message: `${outputError.message}\n\n${returnError.message}`,
+      source: "Return",
+    };
+  }
+  return outputError ?? returnError;
 }
 
 function validateOutputProps(segment: ComponentElement): ErrorSegment | undefined {
@@ -1465,4 +1752,92 @@ export function* expandBody(
   }
 
   return output;
+}
+
+/**
+ * Run documentation for its side effects and discard what it renders. The
+ * throwing raise policy makes the first error stop the body immediately.
+ */
+function runDocumentation(
+  segments: Segment[],
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<Segment[]> {
+  return scoped(function* () {
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *raise([error], _next) {
+          throw new DocumentationError(error);
+        },
+      },
+      { at: "min" },
+    );
+    return yield* expandSegments(segments, meta, props, hideSet, counter);
+  });
+}
+
+/**
+ * Produce the value a `<Return>` selects. A literal `value` is already JSON; an
+ * expression is evaluated raw, at this position in the body, and crosses the
+ * JSON boundary during validation.
+ */
+export function* resolveReturnValue(
+  componentName: string,
+  returns: ReturnsSchema,
+  segment: ComponentElement,
+): Operation<Json> {
+  const raw =
+    "value" in segment.expressions
+      ? yield* evaluateExpression(
+          segment.expressions.value,
+          componentName,
+          "value",
+          segment.projectedEnv,
+        )
+      : segment.props.value;
+  return validateReturnValue(componentName, raw, returns);
+}
+
+/**
+ * Expand the body of a value component (spec §6.10) and return its validated
+ * value. Everything except the definition-owned `<Return>` is documentation:
+ * it executes in document order under fail-fast, and what it renders is
+ * discarded. `<Return>` selects the value at its own position — it does not end
+ * the body, so documentation after it still runs.
+ *
+ * The value is returned rather than bound, so the caller owns the binding
+ * boundary and the value never enters the component's own environment.
+ */
+function* expandValueBody(
+  componentName: string,
+  returns: ReturnsSchema,
+  bodySegments: Segment[],
+  children: Segment[],
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  callerEnv: EvalEnv | undefined,
+): Operation<Json> {
+  const slots = partitionBySlot(children);
+  const state: SubstitutionState = { errorsEmitted: false };
+  const project = makeProjectFn(callerEnv);
+  let produced: { value: Json } | undefined;
+
+  for (const segment of bodySegments) {
+    if (isTopLevelReturn(segment)) {
+      produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
+      continue;
+    }
+    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state);
+    yield* runDocumentation(docSegments, meta, props, hideSet, counter);
+  }
+
+  if (!produced) {
+    throw new Error(`<${componentName} /> declares \`returns\` but produced no <Return> value.`);
+  }
+  return produced.value;
 }

@@ -16,6 +16,7 @@ import { compileBlock } from "../src/eval-context.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -152,11 +153,13 @@ describe("Tier R — findFreePort in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // Eval block ran without error, exec block produced output
@@ -189,11 +192,13 @@ describe("Tier R — findFreePort in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // If the port was in use, the daemon would error and we'd see it
@@ -224,19 +229,23 @@ describe("Tier R — findFreePort in eval blocks", () => {
 
       const stream = new InMemoryStream();
       // Golden run
-      const output1 = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output1 = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // Replay — durableEval returns stored port, findFreePort not invoked
-      const output2 = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output2 = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // Both runs produce the same port (replayed from journal)
@@ -280,11 +289,13 @@ describe("Tier R — when in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // when() converged after 3 retries, block completed
@@ -319,11 +330,13 @@ describe("Tier R — when in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // when() retried and converged, binding is available
@@ -352,11 +365,13 @@ describe("Tier R — when in eval blocks", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            path: path.join(tmpDir, "doc.md"),
+            stream,
+          }),
+        ),
       );
 
       // when() timed out — the error should appear in output

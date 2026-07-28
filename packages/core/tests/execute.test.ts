@@ -17,6 +17,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import type { Operation } from "effection";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 
 function* useStubExec(): Operation<void> {
   yield* API.Process.around({
@@ -79,19 +80,23 @@ describe("Tier B — durable import", () => {
     yield* useStubExec();
 
     // Golden run
-    const firstResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const firstResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Replay — middleware is in scope but durable stream replays from journal
-    const secondResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const secondResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(secondResult).toBe(firstResult);
@@ -105,18 +110,22 @@ describe("Tier B — durable import", () => {
     });
     yield* useStubExec();
 
-    const firstResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const firstResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
-    const secondResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const secondResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(secondResult).toBe(firstResult);
@@ -129,11 +138,13 @@ describe("Tier B — durable import", () => {
     yield* useStubFs({ "README.md": "<Missing />\n" });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("ERROR");
@@ -177,11 +188,13 @@ describe("Tier B — durable import", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("Click me");
@@ -212,11 +225,13 @@ describe("Tier B — durable import", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("Banner from root");
@@ -232,11 +247,13 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("hello");
@@ -260,19 +277,23 @@ describe("Tier D — code execution and modifiers", () => {
     yield* useStubExec();
 
     // Golden run
-    const firstResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const firstResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Replay — middleware in scope, durable stream replays from journal
-    const secondResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const secondResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(secondResult).toBe(firstResult);
@@ -285,11 +306,13 @@ describe("Tier D — code execution and modifiers", () => {
     yield* useStubFs({ "README.md": ["```bash exec", "failing-command", "```"].join("\n") });
     yield* useFailingExec(1, "command not found");
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result.includes("ERROR") || result.includes("failed")).toBeTruthy();
@@ -342,11 +365,13 @@ describe("Tier D — code execution and modifiers", () => {
       },
     });
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("hello");
@@ -369,11 +394,13 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Output should be empty (silent suppresses)
@@ -394,19 +421,23 @@ describe("Tier D — code execution and modifiers", () => {
     yield* useStubExec();
 
     // Golden
-    const firstResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const firstResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Replay — durable stream replays from journal
-    const secondResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const secondResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(secondResult).toBe(firstResult);
@@ -421,11 +452,13 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("ERROR");
@@ -440,11 +473,13 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Without exec/eval, code block is passive text — preserved as-is
@@ -460,22 +495,24 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-        modifiers: {
-          uppercase: (_params) => (_args, next) =>
-            (function* () {
-              const inner = yield* next();
-              return {
-                output: inner.output.toUpperCase(),
-                exitCode: inner.exitCode,
-                stderr: inner.stderr,
-              };
-            })(),
-        },
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+          modifiers: {
+            uppercase: (_params) => (_args, next) =>
+              (function* () {
+                const inner = yield* next();
+                return {
+                  output: inner.output.toUpperCase(),
+                  exitCode: inner.exitCode,
+                  stderr: inner.stderr,
+                };
+              })(),
+          },
+        }),
+      ),
     );
 
     expect(result).toContain("HELLO");
@@ -544,11 +581,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Check output contains expected content
@@ -583,19 +622,23 @@ describe("execute", () => {
     yield* useStubExec();
 
     // First run — golden
-    const firstResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const firstResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Replay — durable stream replays from journal, middleware not invoked
-    const secondResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const secondResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(secondResult).toBe(firstResult);
@@ -622,11 +665,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("Hello, Alice!");
@@ -641,11 +686,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Should contain error about undeclared prop
@@ -663,11 +710,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Output should NOT contain the exec result
@@ -687,11 +736,13 @@ describe("execute", () => {
     yield* useStubFs({ "README.md": "# Hello World\n\nThis is a test.\n" });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toBe("# Hello World\n\nThis is a test.\n");
@@ -718,11 +769,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("Hello, world!");
@@ -785,11 +838,13 @@ describe("execute", () => {
     // Reset tracking — on resume, exec should be called live
     execCalled = false;
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream: partialStream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream: partialStream,
+        }),
+      ),
     );
 
     expect(result).toContain("Hello, world!");
@@ -822,11 +877,13 @@ describe("execute", () => {
 
     const newStream = new InMemoryStream();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream: newStream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream: newStream,
+        }),
+      ),
     );
 
     expect(result).toContain("Header content");
@@ -842,11 +899,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // The **bold should be healed (closed) before component expansion.
@@ -897,22 +956,26 @@ describe("execute", () => {
     yield* useStubExec();
 
     // Golden run
-    const firstResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const firstResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     // Record journal size
     const goldenEventCount = stream.snapshot().length;
 
     // Replay — durable stream replays from journal
-    const secondResult = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const secondResult = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(secondResult).toBe(firstResult);
@@ -934,11 +997,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("HEADER");
@@ -962,11 +1027,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("before");
@@ -990,11 +1057,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
     );
 
     expect(result).toContain("BEFORE");

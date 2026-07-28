@@ -270,4 +270,57 @@ describe("parseFrontmatter — concise props", () => {
       "JSON Schema object or boolean",
     );
   });
+
+  it("leaves `returns` absent when nothing declares it", function* () {
+    const result = parseFrontmatter({ title: "Review" });
+    expect(result.returns).toBeUndefined();
+    expect(result.meta).toEqual({ title: "Review" });
+  });
+
+  it("keeps `returns` out of meta", function* () {
+    const result = parseFrontmatter({ title: "Review", returns: { type: "string" } });
+    expect(result.meta).toEqual({ title: "Review" });
+    expect(result.returns).toEqual({ type: "string" });
+  });
+
+  it("takes a full `returns` schema verbatim", function* () {
+    const declared = { type: "array", items: { type: "string" } };
+    expect(parseFrontmatter({ returns: declared }).returns).toEqual(declared);
+  });
+
+  it("normalizes the object-return shorthand with every property required", function* () {
+    const result = parseFrontmatter({
+      returns: { passed: { type: "boolean" }, summary: { type: "string" } },
+    });
+    expect(result.returns).toEqual({
+      type: "object",
+      properties: { passed: { type: "boolean" }, summary: { type: "string" } },
+      required: ["passed", "summary"],
+      additionalProperties: false,
+    });
+  });
+
+  it("rejects a `returns` dialect other than draft-07", function* () {
+    expect(() =>
+      parseFrontmatter({ returns: { $schema: "https://json-schema.org/draft/2020-12/schema" } }),
+    ).toThrow("must be draft-07");
+  });
+
+  it("rejects a `returns` declaration that is not an object", function* () {
+    expect(() => parseFrontmatter({ returns: "string" })).toThrow(
+      '"returns" must declare a JSON Schema object',
+    );
+    expect(() => parseFrontmatter({ returns: true })).toThrow(
+      '"returns" must declare a JSON Schema object',
+    );
+    expect(() => parseFrontmatter({ returns: [{ type: "string" }] })).toThrow(
+      '"returns" must declare a JSON Schema object',
+    );
+  });
+
+  it("rejects a shorthand property that is not a schema", function* () {
+    expect(() => parseFrontmatter({ returns: { passed: "boolean" } })).toThrow(
+      'returns property "passed" must declare a JSON Schema object or boolean',
+    );
+  });
 });
