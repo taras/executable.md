@@ -574,9 +574,16 @@ export interface XmdOptions {
 }
 
 /**
- * Run the CLI. Every host-specific decision — how this xmd is invoked and
- * which compiler suits the runtime — is supplied by the entrypoint that calls
- * this, so nothing here inspects the host.
+ * Run the CLI.
+ *
+ * Three host-specific decisions are supplied by the entrypoint that calls
+ * this: how this xmd is re-invoked, which compiler suits the runtime, and
+ * therefore whether the runtime needs detecting at all. None of them is made
+ * here.
+ *
+ * This module still reaches the host directly for terminal and journal I/O —
+ * `process.stdout` and `node:fs/promises`. Routing those through contextual
+ * APIs is #156.
  */
 export function* runXmd(args: string[], options: XmdOptions): Operation<void> {
   const helpRequest = takeHelpFlag(args);

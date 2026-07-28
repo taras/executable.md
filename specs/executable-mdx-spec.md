@@ -983,12 +983,40 @@ function serializeExports(
 }
 ```
 
-### 4.2 Module compilation via data: URI
+### 4.2 Module compilation
 
-Eval blocks are compiled into `data:` URI TypeScript modules and
-dynamically imported (`compileBlock` in `src/eval-context.ts`,
-delegating to the platform compiler middleware). Eval blocks can use
-standard `import` statements, resolved through Deno's import map.
+Eval blocks are compiled into TypeScript modules and dynamically imported
+(`compileBlock` in `src/eval-context.ts`, delegating to the compiler
+middleware installed on `API.Compiler`). Eval blocks can use standard
+`import` statements, resolved through the host's module resolution.
+
+#### Who installs a compiler
+
+Compilation is a capability the caller provides. `execute()` neither detects
+the runtime nor installs a compiler, and installing one from inside its
+spawned task would shadow whatever the caller installed outside it.
+
+- A document with **no eval blocks** never reaches `API.Compiler`, and runs
+  with no compiler middleware installed.
+- A document **with eval blocks** requires the caller to have installed
+  middleware via `API.Compiler.around()`. With none installed, the default
+  handler fails with `compiler not installed — install platform-specific
+  middleware via API.Compiler.around()`. It does not guess.
+- A compiler the caller installs is the one used. `execute()` does not
+  replace or wrap it.
+
+The CLI satisfies this from its runtime-named entrypoints (§9.6). Two
+implementations ship, and neither is locked to the runtime its name once
+suggested:
+
+| Middleware | Mechanism | Hosts |
+| --- | --- | --- |
+| `useDataUriCompiler()` | imports a `data:` URI; touches no disk | Deno, Bun, the compiled binary |
+| `useTempFileCompiler()` | writes `.xmd-eval/<uuid>.ts` and imports `file://` | any host, and the only one Node's tsx loader accepts |
+
+An entrypoint installs whichever its host can load. Where the two disagree —
+Node's tsx loader rejects `data:` URI imports — that is a property of the
+loader, not of the eval block.
 
 #### Standard imports
 
@@ -1188,7 +1216,7 @@ run but are absent from the diagnostic trace.
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
 | `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`) — §5.5 |
-| `src/eval-context.ts` | `compileBlock()` (data: URI) |
+| `src/eval-context.ts` | `compileBlock()` — delegates to the installed `API.Compiler` middleware |
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `useContent()` — content slot access for function components |
@@ -3354,9 +3382,48 @@ export function* useTerminalOutput(): Operation<void> {
 
 **File:** `packages/cli/src/cli.ts` (separate `cli` workspace package)
 
-`cli.ts` detects nothing about the host. A runtime-named entrypoint
-(`deno.ts`, `node.ts`, `bun.ts`, `compiled.ts`) installs the `API.Env.command`
-adapter and the compiler middleware, then calls `runXmd`.
+`cli.ts` makes no host-specific decision about **how this xmd is re-invoked,
+which compiler to install, or which runtime it is on**. A runtime-named
+entrypoint — `deno.ts`, `node.ts`, `bun.ts`, `compiled.ts` — supplies all
+three and then calls `runXmd`. `cli.ts` still reaches the host directly for
+terminal and journal I/O (`process.stdout`, `node:fs/promises`); routing those
+through contextual APIs is separate work.
+
+#### The xmd command (`API.Env.command`)
+
+```typescript
+command(args?: string[]): Operation<string[]>
+```
+
+Returns the **complete invocation** of the currently running xmd, with `args`
+appended — something directly executable, not a prefix for the caller to
+extend. `command()` with no arguments returns the base invocation.
+
+Argument placement belongs to the adapter, because it differs per host:
+
+| Entrypoint | `command(args)` |
+| --- | --- |
+| `deno.ts` | `[execPath, "run", "--allow-all", entry, ...args]` |
+| `node.ts` | `[execPath, ...execArgv-minus-inspect, entry, ...args]` |
+| `bun.ts` | `[execPath, entry, ...args]` |
+| `compiled.ts` | `[execPath, ...args]` |
+
+**There is no inferred default.** With no adapter installed the operation
+fails with `xmd command not installed — a runtime-named entrypoint must
+install it via API.Env.around()`. It cannot be derived: `process.execPath`
+names the executable but not how it was launched — `deno run --allow-all
+<entry>` is not recoverable from `deno` — and a compiled binary has no entry
+script at all.
+
+`entry` is absolute, taken from each entry module's own `import.meta.url`
+rather than `process.argv[1]`. A relaunched worker is spawned with the
+document's working directory, not the CLI's, so a relative path would not
+resolve there.
+
+**Resolution is lazy.** `command` is requested when `<TestAgent>` provisions a
+provider — once per isolation boundary — and never when the components are
+installed. A document that does not use `<TestAgent>` therefore runs to
+completion even where no adapter has been installed at all.
 
 The CLI installs output middleware (transforms only — no channel wiring
 needed), calls `execute` to get a `DocumentExecution`, consumes
@@ -3877,6 +3944,14 @@ visible warning blocks, collect into a separate error report).
 | H6 | Distinct modules per block | Each `compileBlock` call produces a separate module — no shared state between blocks |
 | H7 | `data:` URI encoding | Module source with special characters is correctly URI-encoded |
 | H8 | User imports hoisted | User `import` declarations from eval block source appear in generated module |
+
+### Tier CB — Compiler boundary (`compiler-boundary`)
+
+| # | Test | Verify |
+|---|------|--------|
+| CB1 | No eval blocks, no compiler | A document with no eval blocks executes with no `API.Compiler` middleware installed |
+| CB2 | Eval block, no compiler | An eval block with no middleware installed fails with `compiler not installed — install platform-specific middleware via API.Compiler.around()` |
+| CB3 | Caller's compiler wins | A compiler installed before `execute()` receives the block source; `execute()` neither replaces nor shadows it |
 
 ### Tier I — Middleware conformance (eval modifiers)
 
