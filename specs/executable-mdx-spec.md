@@ -3352,6 +3352,14 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `modifiers?` — custom modifier factories registered alongside the
   built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
 
+Journal policy lives outside `execute`. A host that must inspect or refuse
+events before they persist passes a stream it has already wrapped with
+`guardDurableStream(stream, gate)` from `@executablemd/durable-streams`.
+Wrapping before `execute` is what covers the complete live journal, starting
+with the root component import. The gate cannot rewrite an event, and a
+rejection stops that one event — the run may still journal the failure it
+causes. See the durable-streams README for the full contract.
+
 `inspectDocument({ path })` loads and validates the root definition and returns
 what it declares — without executing the document or creating a journal:
 

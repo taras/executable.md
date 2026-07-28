@@ -8,6 +8,7 @@ const NAV: { href: string; label: string }[] = [
   { href: "/docs/exec-eval", label: "Exec & Eval" },
   { href: "/docs/providers", label: "LLM providers" },
   { href: "/docs/agents", label: "Coding agents" },
+  { href: "/docs/journal", label: "Journal gates" },
   { href: "/docs/reference", label: "Reference" },
 ];
 
