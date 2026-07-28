@@ -20,7 +20,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
 
-const CLI = path.resolve("packages/cli/src/cli.ts");
+const CLI = path.resolve("packages/cli/src/deno.ts");
 const TIMEOUT = 60_000;
 
 interface CliResult {

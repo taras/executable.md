@@ -4,7 +4,8 @@
  * Tests that eval scopes are properly scoped to components and
  * that child/parent scope relationships work correctly.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
@@ -12,6 +13,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Tier T10 — eval-scope hierarchy", () => {
+  beforeAll(() => useTempFileCompiler());
   // T61: Document with eval blocks — scope created per document
   it("T61: eval blocks run within document scope", function* () {
     const stream = new InMemoryStream();

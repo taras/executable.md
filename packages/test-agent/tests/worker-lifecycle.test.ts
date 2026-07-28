@@ -26,7 +26,7 @@ import {
   parseWorkerMessage,
 } from "../src/protocol.ts";
 
-const CLI = path.resolve("packages/cli/src/cli.ts");
+const CLI = path.resolve("packages/cli/src/deno.ts");
 const BEHAVIOR = [
   "<WhenPrompt",
   '  as="review"',

@@ -5,7 +5,8 @@
  * parseExpressionValue changes, and integration with expansion/validation.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { parseExpressionValue, scanSegments } from "../src/scanner.ts";
 import { execute } from "../src/execute.ts";
@@ -142,6 +143,7 @@ describe("Tier ES — parseExpressionValue", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier EP — Expression prop evaluation", () => {
+  beforeAll(() => useTempFileCompiler());
   it("EP1: bare identifier resolves from env", function* () {
     const tmpDir = makeTempDir();
     try {

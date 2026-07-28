@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 
-const CLI = path.resolve("packages/cli/src/cli.ts");
+const CLI = path.resolve("packages/cli/src/deno.ts");
 
 const HELLO = [
   "---",

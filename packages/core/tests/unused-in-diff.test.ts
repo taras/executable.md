@@ -1,4 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { readTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
@@ -46,6 +47,7 @@ function* render(lines: AddedLine[], construct: string): Operation<string> {
 }
 
 describe("UnusedInDiff", () => {
+  beforeAll(() => useTempFileCompiler());
   it("renders the disclosure with symbol, location, count and reason", function* () {
     const output = yield* render([added("core/src/a.ts", 24, "type Orphan = string;")], "type");
 

@@ -11,7 +11,7 @@
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
  */
 
-import { main, exit, spawn, each, createSignal, until, type Operation } from "effection";
+import { exit, spawn, each, createSignal, until, type Operation } from "effection";
 import {
   InMemoryStream,
   type DurableEvent,
@@ -22,7 +22,6 @@ import {
 import { forEach } from "@effectionx/stream-helpers";
 import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import { basename, extname } from "node:path";
 import { inspect } from "node:util";
 import process from "node:process";
 import { program, object, field, cli, commands } from "configliere";
@@ -212,50 +211,6 @@ function* createJournalFile(filePath: string): Operation<void> {
   yield* until(handle.close());
 }
 
-/**
- * The CLI entry script to hand back to a relaunched runtime. Deno and
- * Node both report the module they started as `process.argv[1]`: the
- * source `cli.ts` under `deno run`, the generated bin under npm. Only
- * the compiled binary carries no entry script, and it never asks.
- */
-function cliEntrypoint(): string {
-  const entrypoint = process.argv[1];
-  if (!entrypoint) {
-    throw new Error(
-      "cannot start the test-agent worker: this xmd was launched without a CLI entry script, so there is nothing for the worker process to run",
-    );
-  }
-  return entrypoint;
-}
-
-/**
- * A worker inheriting the parent's `--inspect` would exit immediately on
- * the debug port the parent already holds, so those options do not carry
- * across the relaunch. Everything else the parent runs under does.
- */
-function workerExecArgv(): string[] {
-  return process.execArgv.filter((option) => !option.startsWith("--inspect"));
-}
-
-/**
- * The command that relaunches this xmd as a test-agent worker. Three
- * builds reach this: the compiled binary invokes itself, the Deno source
- * CLI reconstructs `deno run`, and the npm package reconstructs `node`.
- * `process.execPath` names the running executable under both runtimes —
- * `Deno.execPath()` exists in neither the Node build nor Node itself.
- */
-function resolveWorkerCommand(): string[] {
-  const execPath = process.execPath;
-  const runtime = basename(execPath, extname(execPath));
-  if (runtime === "deno") {
-    return [execPath, "run", "--allow-all", cliEntrypoint(), "test-agent"];
-  }
-  if (runtime === "node") {
-    return [execPath, ...workerExecArgv(), cliEntrypoint(), "test-agent"];
-  }
-  return [execPath, "test-agent"];
-}
-
 const AGENT_ONLY_FLAGS = [
   "--agent-provider",
   "--default-agent",
@@ -344,9 +299,16 @@ function* run(
     journal: string | undefined;
     raw: boolean;
   },
-  mode: { testing: boolean; agent?: AgentFlags; props?: Record<string, Json> },
+  mode: {
+    testing: boolean;
+    agent?: AgentFlags;
+    props?: Record<string, Json>;
+    useCompiler(): Operation<void>;
+  },
 ): Operation<void> {
   const { path: rootPath, componentDir, verbose, journal, raw } = config;
+
+  yield* mode.useCompiler();
 
   // Every CLI invocation starts from an empty stream. --journal writes
   // current-run diagnostics only; existing traces are never loaded.
@@ -397,7 +359,7 @@ function* run(
     yield* useTesting({ verbose });
     // TestAgent installs before the agent components so its <Prompt>
     // interceptor runs first.
-    yield* installTestAgentComponents({ workerCommand: resolveWorkerCommand() });
+    yield* installTestAgentComponents();
     yield* installAgentComponents();
   } else {
     yield* installTestingComponents({ verbose });
@@ -602,7 +564,21 @@ function* resolveRunProps(
   }
 }
 
-await main(function* (args) {
+export interface XmdOptions {
+  /**
+   * Installs the eval compiler for this host. The entrypoint chooses which
+   * one; this module chooses where, because the position in the middleware
+   * chain is a property of the command, not of the runtime.
+   */
+  useCompiler(): Operation<void>;
+}
+
+/**
+ * Run the CLI. Every host-specific decision — how this xmd is invoked and
+ * which compiler suits the runtime — is supplied by the entrypoint that calls
+ * this, so nothing here inspects the host.
+ */
+export function* runXmd(args: string[], options: XmdOptions): Operation<void> {
   const helpRequest = takeHelpFlag(args);
   const propsPhase = yield* preparePropsPhase(helpRequest.args);
 
@@ -651,6 +627,7 @@ await main(function* (args) {
       }
       yield* run(config, {
         testing: false,
+        useCompiler: options.useCompiler,
         props: props.value,
         agent: {
           agentProvider: config.agentProvider,
@@ -680,11 +657,14 @@ await main(function* (args) {
         yield* exit(1);
         break;
       }
-      yield* run(command.config, { testing: true });
+      yield* run(command.config, { testing: true, useCompiler: options.useCompiler });
       break;
     }
     case "test-agent":
-      yield* runTestAgentWorker({ connect: command.config.connect });
+      yield* runTestAgentWorker({
+        connect: command.config.connect,
+        useCompiler: options.useCompiler,
+      });
       break;
   }
-});
+}

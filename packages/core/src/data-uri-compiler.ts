@@ -1,15 +1,17 @@
 /**
- * Deno-specific eval block compiler middleware.
+ * data: URI eval block compiler middleware.
  *
- * Compiles eval block source into generator functions via data: URIs.
+ * Compiles eval block source into generator functions by importing a data:
+ * URI, which leaves nothing on disk. Deno and Bun load one; Node's tsx loader
+ * rejects it, so the Node entrypoint installs the temp-file compiler instead.
  * Standard imports (Effection, executable.md APIs) are captured in the middleware
  * closure — they are not part of the Compiler API interface.
  *
- * Install via `yield* useDenoCompiler()` inside a document execution
+ * Install via `yield* useDataUriCompiler()` inside a document execution
  * scope before any eval blocks are processed.
  */
 
-import { call } from "effection";
+import { until } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
 // STANDARD_IMPORTS below resolve at runtime from generated eval modules;
@@ -31,12 +33,11 @@ const STANDARD_IMPORTS = [
 ];
 
 /**
- * Install the Deno data: URI compiler as middleware on the current scope.
+ * Install the data: URI compiler as middleware on the current scope.
  *
- * Must be called inside an Effection scope (e.g., inside `execute`'s
- * spawned task) before any eval blocks execute.
+ * Must be called inside an Effection scope before any eval blocks execute.
  */
-export function* useDenoCompiler(): Operation<void> {
+export function* useDataUriCompiler(): Operation<void> {
   yield* API.Compiler.around({
     *compile([source, options], next) {
       void next; // terminal middleware — does not delegate
@@ -51,11 +52,11 @@ export function* useDenoCompiler(): Operation<void> {
       const dataUri = `data:application/typescript,${encodeURIComponent(moduleSource)}`;
       const mod: {
         default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
-      } = yield* call(() => import(dataUri));
+      } = yield* until(import(dataUri));
 
       if (typeof mod.default !== "function") {
         throw new Error(
-          `useDenoCompiler: expected default export to be a generator function, got ${typeof mod.default}`,
+          `useDataUriCompiler: expected default export to be a generator function, got ${typeof mod.default}`,
         );
       }
 

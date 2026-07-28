@@ -29,16 +29,11 @@ import type { EvalScope } from "@effectionx/scope-eval";
 import { Agent, Component, evalScope, expandSegments } from "@executablemd/core";
 import type { ComponentElement, Segment, Session } from "@executablemd/core";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
-import { cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
+import { command, cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
 import { useTestAgentProvider } from "./provider.ts";
-
-export interface TestAgentComponentsOptions {
-  /** Command segments that relaunch this xmd as `test-agent`. */
-  workerCommand: string[];
-}
 
 /** One `<TestAgent.Scenario>` mapping, before any worker exists. */
 interface ScenarioDeclaration {
@@ -114,7 +109,7 @@ function resolvePinned(
   return pinned;
 }
 
-export function* installTestAgentComponents(options: TestAgentComponentsOptions): Operation<void> {
+export function* installTestAgentComponents(): Operation<void> {
   function* expandTestAgent(element: ComponentElement): Operation<Segment[]> {
     if (!(yield* Test.operations.sessionActive)) {
       return [
@@ -209,10 +204,14 @@ export function* installTestAgentComponents(options: TestAgentComponentsOptions)
           }
           return scenario.route;
         };
+        // Asked for here, not at install time: a document with no
+        // <TestAgent> never needs a worker, and must run even where no
+        // entrypoint installed a command adapter.
+        const workerCommand = yield* command(["test-agent"]);
         const provider = yield* useTestAgentProvider({
           defaultAgent,
           agents: [defaultAgent],
-          workerCommand: options.workerCommand,
+          workerCommand,
           probeRoute: controller.probeRoute,
           resolveRoute,
         });

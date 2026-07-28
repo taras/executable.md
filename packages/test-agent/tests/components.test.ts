@@ -5,7 +5,8 @@
  * clean suspension at teardown — driven through the component surface
  * with real workers.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@effectionx/bdd/expect";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
@@ -19,9 +20,10 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { installTestingComponents, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
+import { useCommand } from "./command.ts";
 
-const CLI = path.resolve("packages/cli/src/cli.ts");
-const WORKER = ["deno", "run", "--allow-all", CLI, "test-agent"];
+const CLI = path.resolve("packages/cli/src/deno.ts");
+const WORKER = ["deno", "run", "--allow-all", CLI];
 
 interface Run {
   result: Result<string>;
@@ -74,7 +76,8 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
       } else {
         testing = yield* useTesting();
       }
-      yield* installTestAgentComponents({ workerCommand: WORKER });
+      yield* useCommand(WORKER);
+      yield* installTestAgentComponents();
       yield* installAgentComponents();
       const execution = yield* execute({
         path: path.join(dir, "doc.md"),
@@ -97,6 +100,7 @@ const TWO_STAGES =
   '<WhenPrompt template="one" />\n\nfirst\n\n<WhenPrompt template="two" />\n\nsecond\n';
 
 describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeAll(() => useTempFileCompiler());
   it("TV1: <TestAgent> outside an active testing session is a configuration error", function* () {
     const run = yield* runDoc(
       { "doc.md": "<TestAgent>\nbody\n</TestAgent>\n" },

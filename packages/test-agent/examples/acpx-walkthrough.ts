@@ -22,7 +22,7 @@ await main(function* () {
 
   // ACPX reparses the agent string, so the absolute path is single-quoted to
   // survive a checkout path containing spaces.
-  const cli = resolve(rootDir, "../../../packages/cli/src/cli.ts");
+  const cli = resolve(rootDir, "../../../packages/cli/src/deno.ts");
   const agent = `deno run --allow-all '${cli}' test-agent --connect ${scenario.route}`;
   console.log("Controller ready. Drive the worker with ACPX in another terminal:\n");
   console.log(

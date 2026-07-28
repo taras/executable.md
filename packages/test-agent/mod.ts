@@ -42,5 +42,4 @@ export function* useTestAgentController(): Operation<TestAgentController> {
 }
 
 export { installTestAgentComponents } from "./src/components.ts";
-export type { TestAgentComponentsOptions } from "./src/components.ts";
 export { runTestAgentWorker } from "./src/worker/run.ts";

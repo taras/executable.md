@@ -1,4 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@effectionx/bdd/expect";
 import { sleep } from "effection";
 import { API } from "@executablemd/runtime";
@@ -8,6 +9,7 @@ import { createTestHandlers } from "../src/handlers.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 
 describe("testing mode", () => {
+  beforeAll(() => useTempFileCompiler());
   it("skips <Test> entirely during regular execution", function* () {
     const execCalls: string[] = [];
     yield* API.Process.around({

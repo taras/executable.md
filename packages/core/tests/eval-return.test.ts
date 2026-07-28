@@ -5,7 +5,8 @@
  * that value becomes the block's rendered output. output() takes
  * precedence over return. Null/undefined returns produce no output.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
@@ -13,6 +14,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 
 describe("Eval block return value", () => {
+  beforeAll(() => useTempFileCompiler());
   // ER1: return string → rendered output
   it("ER1: return string → rendered output", function* () {
     const stream = new InMemoryStream();

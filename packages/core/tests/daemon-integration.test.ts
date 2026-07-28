@@ -14,7 +14,8 @@
  * - output shape (empty output from daemon blocks)
  * - error propagation via component-scoped daemon + children
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { race, sleep } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -42,6 +43,7 @@ function writeFiles(dir: string, files: Record<string, string>): void {
 }
 
 describe("Tier Q — Daemon integration", () => {
+  beforeAll(() => useTempFileCompiler());
   // Q4/Q5: daemon forked into eval scope, process cleaned up on completion
   // Verified by: execute completes without hanging (daemon terminated),
   // and the daemon block produces no output.

@@ -7,7 +7,8 @@
  * Note: In v1, persist delegates directly to next() — actual
  * resource retention via evalScope.eval() is deferred to v2.
  */
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@effectionx/bdd/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
@@ -17,6 +18,7 @@ import { unbox } from "effection";
 import type { Result } from "effection";
 
 describe("Tier T6 — persist modifier", () => {
+  beforeAll(() => useTempFileCompiler());
   // T43: eval without persist → block completes normally
   it("T43: eval without persist → block completes", function* () {
     const stream = new InMemoryStream();

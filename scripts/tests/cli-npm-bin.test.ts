@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const PKG_DIR = "packages/cli";
 const OUT_DIR = path.join(ROOT, PKG_DIR, "npm");
-const BIN = path.join(OUT_DIR, "esm/src/cli.js");
+const BIN = path.join(OUT_DIR, "esm/src/node.js");
 const DOC = path.join(ROOT, "smoke-test/test-agent/README.md");
 
 /** npm install and a full dnt type-check dominate this; the run itself is quick. */

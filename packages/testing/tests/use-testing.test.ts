@@ -1,4 +1,5 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@effectionx/bdd/expect";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation, Subscription } from "effection";
@@ -23,6 +24,7 @@ function* drain(
 }
 
 describe("useTesting composition", () => {
+  beforeAll(() => useTempFileCompiler());
   it("composes around core execute and returns session results", function* () {
     const outcome = yield* scoped(function* () {
       yield* useStubFs({

@@ -1008,7 +1008,7 @@ barrel (`packages/core/mod.ts`); `findFreePort` comes from `@executablemd/runtim
 (and is also re-exported by `packages/core/mod.ts`).
 
 The exact list lives in the `STANDARD_IMPORTS` constant, which both
-compilers share (`src/deno-compiler.ts`, `src/temp-file-compiler.ts`).
+compilers share (`src/data-uri-compiler.ts`, `src/temp-file-compiler.ts`).
 
 #### `findFreePort`
 
@@ -1189,7 +1189,7 @@ run but are absent from the diagnostic trace.
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
 | `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`) — §5.5 |
 | `src/eval-context.ts` | `compileBlock()` (data: URI) |
-| `src/deno-compiler.ts` | `useDenoCompiler()` — data: URI compiler middleware for Deno; owns `STANDARD_IMPORTS` |
+| `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `useContent()` — content slot access for function components |
 | `packages/test-support/bdd.ts` | Deno-native BDD shim — wraps `@std/testing/bdd` with Effection test adapter |
@@ -1205,7 +1205,8 @@ run but are absent from the diagnostic trace.
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
-| `packages/cli/src/cli.ts` | CLI entrypoint (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
+| `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
+| `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs its `API.Env.command` adapter and compiler, then calls `runXmd` |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -3352,6 +3353,10 @@ export function* useTerminalOutput(): Operation<void> {
 ### 9.6 Host wiring
 
 **File:** `packages/cli/src/cli.ts` (separate `cli` workspace package)
+
+`cli.ts` detects nothing about the host. A runtime-named entrypoint
+(`deno.ts`, `node.ts`, `bun.ts`, `compiled.ts`) installs the `API.Env.command`
+adapter and the compiler middleware, then calls `runXmd`.
 
 The CLI installs output middleware (transforms only — no channel wiring
 needed), calls `execute` to get a `DocumentExecution`, consumes

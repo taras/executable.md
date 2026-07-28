@@ -145,6 +145,7 @@ describe("Tier R — Eval module globals", () => {
 });
 
 describe("Tier R — findFreePort in eval blocks", () => {
+  beforeAll(() => useTempFileCompiler());
   // R1 (integration): findFreePort accessible and returns a port inside eval
   it("R1: findFreePort in eval block returns a port number", function* () {
     const tmpDir = makeTempDir();
@@ -266,6 +267,7 @@ describe("Tier R — findFreePort in eval blocks", () => {
 });
 
 describe("Tier R — when in eval blocks", () => {
+  beforeAll(() => useTempFileCompiler());
   // R4: when accessible in eval block — retries until condition met
   it("R4: when accessible in eval block — converges on condition", function* () {
     const tmpDir = makeTempDir();

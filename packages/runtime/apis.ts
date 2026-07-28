@@ -33,9 +33,10 @@
  *   used together for component resolution and replay guards.
  * - **Fetch** — HTTP has distinct timeout/body/abort semantics. Merging
  *   with Fs or Process would blur cancellation boundaries.
- * - **Env** — synchronous host metadata (env vars, platform). Kept as a
- *   context-api despite being sync because tests use `.around()` to mock
- *   platform/env for deterministic replay testing.
+ * - **Env** — host metadata (env vars, platform) plus `command`, the
+ *   invocation of this xmd. Kept as a context-api because tests use
+ *   `.around()` to mock platform/env for deterministic replay testing, and
+ *   because only a runtime-named entrypoint can supply `command`.
  *
  * ## Middleware
  *
@@ -159,6 +160,7 @@ interface EnvHandler {
   cwd(): Operation<string>;
   env(name: string): Operation<string | undefined>;
   platform(): Operation<{ os: string; arch: string }>;
+  command(args?: string[]): Operation<string[]>;
 }
 
 interface CompilerHandler {
@@ -339,6 +341,20 @@ export const API: {
         arch: process.arch,
       };
     },
+
+    /**
+     * The default cannot be derived. `process.execPath` names the executable
+     * but not how it was launched — `deno run --allow-all <entry>` and
+     * `node <entry>` are not recoverable from "deno" or "node", and a
+     * compiled binary takes no entry script at all. Only the entrypoint that
+     * started this process knows.
+     */
+    // deno-lint-ignore require-yield
+    *command(_args?: string[]): Operation<string[]> {
+      throw new Error(
+        "xmd command not installed — a runtime-named entrypoint must install it via API.Env.around()",
+      );
+    },
   }),
 
   /**
@@ -346,7 +362,7 @@ export const API: {
    *
    * Default handler throws — platform-specific middleware must be
    * installed via `yield* API.Compiler.around(...)` before use.
-   * See `packages/core/src/deno-compiler.ts` for the Deno implementation.
+   * See `packages/core/src/data-uri-compiler.ts` and `temp-file-compiler.ts`.
    */
   Compiler: createApi("runtime.compiler", {
     // deno-lint-ignore require-yield
@@ -376,5 +392,7 @@ export const env: typeof API.Env.operations.env = API.Env.operations.env;
 export const cwd: typeof API.Env.operations.cwd = API.Env.operations.cwd;
 
 export const platform: typeof API.Env.operations.platform = API.Env.operations.platform;
+
+export const command: typeof API.Env.operations.command = API.Env.operations.command;
 
 export const compile: typeof API.Compiler.operations.compile = API.Compiler.operations.compile;

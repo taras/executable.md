@@ -1,10 +1,12 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@effectionx/bdd/expect";
 import { AssertionError } from "node:assert/strict";
 import { TestFailureError } from "../src/test-api.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 
 describe("assertion components", () => {
+  beforeAll(() => useTempFileCompiler());
   it("passing assertions in testing mode emit diagnostics", function* () {
     const run = yield* runDoc(
       {
