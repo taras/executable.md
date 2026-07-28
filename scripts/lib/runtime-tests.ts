@@ -9,9 +9,17 @@ interface Runner {
   prefix: string[];
 }
 
+/**
+ * Bun caps each test at 5s by default, which Deno and Node do not. Suites that
+ * spawn a CLI or a worker carry their own timeboxes up to 180s, and the cap
+ * preempts them — so it is raised past the longest, leaving each suite's own
+ * timeout in charge.
+ */
+const BUN_TEST_TIMEOUT_MS = 300_000;
+
 export const RUNNERS: Record<string, Runner> = {
   node: { command: "tsx", prefix: ["--tsconfig", "tsconfig.node.json", "--test"] },
-  bun: { command: "bun", prefix: ["test"] },
+  bun: { command: "bun", prefix: ["test", `--timeout=${BUN_TEST_TIMEOUT_MS}`] },
 };
 
 /**
