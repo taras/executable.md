@@ -553,6 +553,54 @@ persisted form.
 
 ---
 
+## Pre-persistence gates
+
+`guardDurableStream` wraps a stream so a host-supplied check runs before each
+live event reaches its backend:
+
+```typescript
+import { guardDurableStream } from "@effectionx/durable-streams";
+
+const guarded = guardDurableStream(stream, function* (event) {
+  if (yield* containsCredential(event)) {
+    throw new Error("refusing to journal a credential");
+  }
+});
+```
+
+The gate returns nothing and receives a *copy* of the event, so it can inspect or
+reject but never rewrite: whatever it does to the object it was handed, the
+backend still receives the event the effect produced. And the backend append is a
+statement after the gate rather than a continuation handed to it — so there is
+nothing a gate can invoke twice, and one durable yield still produces at most one
+journal event.
+
+What counts as grounds for rejection is the host's policy. This package supplies
+the boundary, not the rules.
+
+- **Success** — the original event goes to the underlying stream exactly once.
+  `append()` resolves only after both the gate and the backend succeed, so
+  persist-before-resume is unchanged.
+- **Failure or cancellation** — the backend is never invoked, and the failure
+  propagates to the durable effect that produced the event.
+- **Replay** — `readAll()` delegates straight through, so restoring a journal
+  never re-runs the gate.
+
+Wrap the stream before execution begins to cover the complete live journal: the
+root component import, every yield, every child close, and the root close.
+
+### Rejection is per event
+
+A gate rejects the event it was given, not the run. That event never reaches the
+backend, but the resulting failure may lead the workflow to append a later
+`Close` event with an `err` result — and that close crosses the gate on its own
+and may be admitted.
+
+A rejected append therefore does not imply an empty backend. Assert the absence
+of the offending event, not that nothing was written.
+
+---
+
 ## Long-running workflows
 
 For workflows that process unbounded streams, journals grow without limit. The `durableEach` + Continue-As-New pattern bounds this growth: after N iterations, the workflow signals for a fresh start with the current cursor position as its seed. This is a planned feature — in the meantime, `durableEach` is appropriate for bounded batches where journal size is not a constraint.
