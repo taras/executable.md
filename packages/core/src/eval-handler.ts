@@ -44,8 +44,6 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         // Merge incoming bindings snapshot into env before execution
         Object.assign(evalEnv.values, bindings);
 
-        // Compile the eval block via data: URI module import.
-        // Compiling loads a module, so it is itself an operation.
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
 
         if (persist) {

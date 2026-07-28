@@ -990,6 +990,24 @@ Eval blocks are compiled into TypeScript modules and dynamically imported
 Eval blocks can use standard `import` statements, resolved through the host's
 module resolution.
 
+#### The compiler contract
+
+```typescript
+type EvalBlock = (
+  env: Record<string, unknown>,
+) => Operation<unknown>;
+
+compile(
+  source: string,
+  options?: { imports: string[] },
+): Operation<EvalBlock>;
+```
+
+A compiled block accepts the document binding environment and returns an
+Operation, which the caller runs with `yield*`. Current compilers implement it
+with generated `function*` modules, but callers do not depend on that
+representation.
+
 #### Who installs a compiler
 
 Compiling a block means loading a module the way this host loads modules, so
