@@ -1,8 +1,8 @@
 /**
  * Tier SK — session identity tests (specs/acp-client-spec.md §Session).
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { API } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {

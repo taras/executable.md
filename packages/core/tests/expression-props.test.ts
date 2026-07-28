@@ -5,9 +5,9 @@
  * parseExpressionValue changes, and integration with expansion/validation.
  */
 
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { parseExpressionValue, scanSegments } from "../src/scanner.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";

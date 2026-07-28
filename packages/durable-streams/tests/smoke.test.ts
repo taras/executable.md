@@ -2,8 +2,8 @@
  * Smoke test to verify project scaffolding works.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream, ReplayIndex } from "../mod.ts";
 import type { DurableEvent } from "../mod.ts";
 

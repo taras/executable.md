@@ -1,13 +1,15 @@
 {
-  "name": "@effectionx/bdd",
+  "name": "@executablemd/test-support",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    "./node": "./bdd.ts",
+    "./bdd": "./bdd.ts",
     "./expect": "./expect.ts"
   },
   "dependencies": {
+    "@effectionx/test-adapter": "0.7.4",
+    "effection": "4.1.0-alpha.10",
     "expect": "^30.0.0"
   }
 }

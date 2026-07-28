@@ -5,8 +5,8 @@
  * aborts, and unknown option ids. Promise adaptation exists only at
  * the simulated ACPX callback boundary.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import {
   createScope,
   ensure,

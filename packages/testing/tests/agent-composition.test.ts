@@ -5,8 +5,8 @@
  * outside a passing <Test> must still surface as the agent aggregate.
  * Lives in the testing package because core cannot depend on testing.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensure } from "effection";
 import type { Result, Stream } from "effection";

@@ -6,9 +6,9 @@
  * boundary scanner confirmation.
  */
 
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { partitionBySlot, stripSlotProp } from "../src/expand.ts";

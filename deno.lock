@@ -3339,6 +3339,8 @@
       "packages/test-support": {
         "packageJson": {
           "dependencies": [
+            "npm:@effectionx/test-adapter@0.7.4",
+            "npm:effection@4.1.0-alpha.10",
             "npm:expect@30"
           ]
         }

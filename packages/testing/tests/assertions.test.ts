@@ -1,6 +1,6 @@
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { AssertionError } from "node:assert/strict";
 import { TestFailureError } from "../src/test-api.ts";
 import { failureOf, runDoc } from "./helpers.ts";

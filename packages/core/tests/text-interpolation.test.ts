@@ -5,8 +5,8 @@
  * the eval binding environment (env.values), matching the test plan
  * from the text-interpolation spec §9.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";

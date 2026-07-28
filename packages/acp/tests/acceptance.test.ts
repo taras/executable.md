@@ -3,8 +3,8 @@
  * `rootProvider` seam drives the full Agent → session → prompt → teardown
  * lifecycle. Fake ACPX runtime, no subprocess.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";

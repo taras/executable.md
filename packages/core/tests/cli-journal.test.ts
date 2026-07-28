@@ -7,8 +7,8 @@
  * Each test shells out to `deno run --allow-all packages/cli/src/deno.ts`
  * and uses timebox to prevent hangs from blocking the test suite.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { timebox } from "@effectionx/timebox";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, spawn, each, type Operation } from "effection";

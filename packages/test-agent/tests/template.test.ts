@@ -2,8 +2,8 @@
  * Tier TT — WhenPrompt template tests (specs/test-agent-spec.md
  * §WhenPrompt templates).
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { matchPrompt, parseTemplate } from "../src/template.ts";
 import type { ParsedTemplate } from "../src/template.ts";
 

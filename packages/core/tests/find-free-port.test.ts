@@ -4,8 +4,8 @@
  * Verifies findFreePort returns a usable port and that VM sandbox
  * globals are accessible — both standalone and inside eval blocks.
  */
-import { describe, it, beforeAll } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { race } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";

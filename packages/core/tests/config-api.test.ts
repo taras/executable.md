@@ -6,8 +6,8 @@
  * no timeout of its own. Imported through @executablemd/core to exercise
  * the core re-export.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { Config, timeout } from "@executablemd/core";
 import { exec, fetch } from "@executablemd/runtime";

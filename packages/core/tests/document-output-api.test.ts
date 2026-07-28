@@ -6,8 +6,8 @@
  * scope.around semantics: first-installed runs first (outermost).
  * Its next() delegates to the second-installed, and so on to the core.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { createChannel } from "effection";
 import { DocumentOutput } from "../src/api.ts";
 import { subscribe } from "../src/subscribe.ts";

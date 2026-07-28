@@ -80,8 +80,9 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Rationale:** JSR is the standard for Deno dependencies. Avoids uncached
   URL resolution issues.
 - **Consequences:** Added to deno.json imports.
-- **Update:** Tests now use the Node.js test runner (`node --test`) with
-  `@effectionx/bdd` for describe/it/beforeEach and `expect` for assertions.
+- **Update:** Tests run under Deno, Node, and Bun. `@executablemd/test-support`
+  supplies BDD integration (describe/it/beforeEach) and assertions, binding each
+  runtime's own test runner to a single test surface.
 
 ## DEC-005: Sequential workflows only in initial scope
 

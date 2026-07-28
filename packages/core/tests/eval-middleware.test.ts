@@ -4,8 +4,8 @@
  * Verifies that evalFactory, persistFactory, and timeoutFactory
  * satisfy the ModifierFactory type and compose correctly via combine().
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { evalFactory } from "../src/eval-handler.ts";
 import { persistFactory } from "../src/modifiers/persist.ts";
 import { timeoutFactory } from "../src/modifiers/timeout.ts";

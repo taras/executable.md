@@ -10,9 +10,9 @@
  * middleware via Api.around(), then yield*s into durableRun.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it } from "@executablemd/test-support/bdd";
 import { call, run, useScope } from "effection";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import {
   ContinuePastCloseDivergenceError,
   Divergence,

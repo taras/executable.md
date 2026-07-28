@@ -5,8 +5,8 @@
  * merely absent from the published types, and the scenario a harness holds is
  * still torn down with the scope that acquired it.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { connect } from "node:net";

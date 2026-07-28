@@ -12,8 +12,8 @@
  * API, then red for a reason the branch cannot fix. This is also the only
  * coverage of the local-sibling build mode.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";

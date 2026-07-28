@@ -5,8 +5,8 @@
  * cancellation safety in both directions and output-before-terminal
  * ordering in collectTurn().
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { createChannel, race, sleep, spawn } from "effection";
 import { collectTurn, createTurnBridge } from "../src/worker/bridge.ts";
 import type { BridgeEvent } from "../src/worker/bridge.ts";

@@ -6,8 +6,8 @@
  * asserted TTY-independently, and so environment sources are exercised
  * the way a user supplies them.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { exec, type Exec } from "@effectionx/process";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped } from "effection";

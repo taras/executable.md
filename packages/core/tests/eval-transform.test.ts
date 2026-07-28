@@ -7,8 +7,8 @@
  * - Source map and sourceURL generation
  * - Execution mode detection (generator, async, sync)
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { transformBlock, isJson, serializeExports } from "../src/eval-transform.ts";
 
 describe("Tier T1 — Source transform", () => {

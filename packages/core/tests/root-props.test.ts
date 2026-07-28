@@ -5,8 +5,8 @@
  * validated and defaulted before any body effect, then available through
  * `{props.name}`, bare binding interpolation, and eval blocks.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";

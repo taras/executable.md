@@ -5,8 +5,8 @@
  * rendered text, mismatch diagnostics, and restart-between-turns with
  * session/load rehydration.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { createSignal, each, ensure, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation, WithResolvers } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";

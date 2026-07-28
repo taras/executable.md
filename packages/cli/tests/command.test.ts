@@ -6,8 +6,8 @@
  * per-host argument order lives inside each entrypoint's own middleware and is
  * proven by that relaunch succeeding, not by inspecting an array.
  */
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
 import { exec } from "@effectionx/process";

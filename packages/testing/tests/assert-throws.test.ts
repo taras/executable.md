@@ -1,6 +1,6 @@
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it } from "@executablemd/test-support/bdd";
 import { scoped } from "effection";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import { AssertionError } from "node:assert/strict";
 import { Component } from "@executablemd/core";
 import type { ComponentElement } from "@executablemd/core";

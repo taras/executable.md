@@ -9,9 +9,9 @@
  * Tests are runtime no-ops — they only validate at compile time.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
+import { describe, it } from "@executablemd/test-support/bdd";
 import type { Operation } from "effection";
-import { expect } from "@effectionx/bdd/expect";
+import { expect } from "@executablemd/test-support/expect";
 import type { DurableEffect, EffectionResult, Resolve, Workflow } from "../types.ts";
 
 function testDurableEffect<T>(value: T): DurableEffect<T> {

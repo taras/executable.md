@@ -7,8 +7,8 @@
  * No Effection dependency — pure data structure.
  */
 
-import { describe, it } from "@effectionx/bdd/node";
-import { expect } from "@effectionx/bdd/expect";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
 import { ReplayIndex } from "../replay-index.ts";
 import type { DurableEvent, Json } from "../types.ts";
 
