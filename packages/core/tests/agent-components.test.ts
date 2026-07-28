@@ -23,6 +23,7 @@ import { AgentPromptError } from "../src/agent/errors.ts";
 import { readCompletedPrompts } from "../src/agent/journal.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
+import type { Json } from "@executablemd/core";
 
 interface StubResponse {
   status?: "completed" | "failed" | "cancelled";
@@ -138,7 +139,7 @@ function* installStub(stub: Stub): Operation<void> {
 function* runDoc(
   doc: string,
   stream: InMemoryStream,
-): Operation<{ output: string; result: Result<string> }> {
+): Operation<{ output: string; result: Result<Json> }> {
   const dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {

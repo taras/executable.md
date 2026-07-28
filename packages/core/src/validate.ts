@@ -1,7 +1,7 @@
 import { Ajv } from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
-import { parseJson } from "./json.ts";
-import type { Json, PropsSchema } from "./types.ts";
+import { JsonParseError, parseJson } from "./json.ts";
+import type { Json, PropsSchema, ReturnsSchema } from "./types.ts";
 
 const RESERVED_PROP_NAMES = ["slot", "as"];
 
@@ -25,6 +25,13 @@ export class PropsSchemaError extends Error {
   }
 }
 
+export class ReturnSchemaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReturnSchemaError";
+  }
+}
+
 export interface NormalizedIssue {
   instancePath: string;
   schemaPath: string;
@@ -33,23 +40,50 @@ export interface NormalizedIssue {
   message: string;
 }
 
-export class PropValidationError extends Error {
+/**
+ * A value that failed its declared schema, carrying the component it belongs
+ * to and the normalized issues. Props and returns raise distinct subclasses so
+ * a diagnostic names the contract it broke, while segment conversion reads the
+ * shape once.
+ */
+export class SchemaValidationError extends Error {
   componentName: string;
   errors: string[];
   issues: NormalizedIssue[];
 
-  constructor(componentName: string, ajvErrors: ErrorObject[]) {
-    const issues = ajvErrors.map(normalizeIssue);
+  constructor(componentName: string, headline: string, issues: NormalizedIssue[]) {
     const messages = issues.map((issue) => readableMessage(issue));
-    super(`Prop validation failed for <${componentName} />:\n  - ${messages.join("\n  - ")}`);
-    this.name = "PropValidationError";
+    super(`${headline}\n  - ${messages.join("\n  - ")}`);
+    this.name = "SchemaValidationError";
     this.componentName = componentName;
     this.errors = messages;
     this.issues = issues;
   }
 }
 
+export class PropValidationError extends SchemaValidationError {
+  constructor(componentName: string, ajvErrors: ErrorObject[]) {
+    super(
+      componentName,
+      `Prop validation failed for <${componentName} />:`,
+      ajvErrors.map(normalizeIssue),
+    );
+    this.name = "PropValidationError";
+  }
+}
+
+export class ReturnValidationError extends SchemaValidationError {
+  constructor(componentName: string, issues: NormalizedIssue[]) {
+    super(componentName, `Return validation failed for <${componentName} />:`, issues);
+    this.name = "ReturnValidationError";
+  }
+}
+
+// Props and returns enforce different root contracts, so each keeps its own
+// cache. A shared one would let a schema first compiled as a return hand
+// `compilePropsSchema` a validator that never met the object-root contract.
 const compiledCache = new WeakMap<PropsSchema, ValidateFunction>();
+const compiledReturnsCache = new WeakMap<ReturnsSchema, ValidateFunction>();
 
 export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
   const cached = compiledCache.get(schema);
@@ -80,6 +114,78 @@ export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
 
   compiledCache.set(schema, validate);
   return validate;
+}
+
+/**
+ * Compile a return schema. A return value is any JSON value, so the schema
+ * root carries no object contract — only the same asynchronous-schema
+ * rejection that keeps validation synchronous within the Effection path.
+ */
+export function compileReturnsSchema(schema: ReturnsSchema): ValidateFunction {
+  const cached = compiledReturnsCache.get(schema);
+  if (cached) {
+    return cached;
+  }
+
+  if (schema["$async"] === true) {
+    throw new ReturnSchemaError("asynchronous return schemas ($async: true) are not supported");
+  }
+
+  let validate: ValidateFunction;
+  try {
+    validate = ajv.compile(schema);
+  } catch (error) {
+    throw new ReturnSchemaError(
+      `invalid return schema: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if ("$async" in validate && validate.$async === true) {
+    throw new ReturnSchemaError("asynchronous return schemas are not supported");
+  }
+
+  compiledReturnsCache.set(schema, validate);
+  return validate;
+}
+
+/**
+ * Validate a produced return value at the component boundary and return the
+ * validated JSON.
+ *
+ * The value crosses the JSON boundary first: `parseJson` rejects everything
+ * that could not survive capture and replay, and yields a clone. Ajv validates
+ * — and fills defaults into — that clone, so the producer's own object is
+ * never mutated and only JSON reaches the caller.
+ */
+export function validateReturnValue(
+  componentName: string,
+  value: unknown,
+  schema: ReturnsSchema,
+): Json {
+  let json: Json;
+  try {
+    json = parseJson(value);
+  } catch (error) {
+    if (error instanceof JsonParseError) {
+      throw new ReturnValidationError(componentName, [
+        {
+          instancePath: "",
+          schemaPath: "",
+          keyword: "json",
+          params: {},
+          message: `is not JSON: ${error.message}`,
+        },
+      ]);
+    }
+    throw error;
+  }
+
+  const validate = compileReturnsSchema(schema);
+  if (!validate(json)) {
+    throw new ReturnValidationError(componentName, (validate.errors ?? []).map(normalizeIssue));
+  }
+
+  return json;
 }
 
 // Validates against a clone, not `callerProps` — Ajv's `useDefaults` mutates

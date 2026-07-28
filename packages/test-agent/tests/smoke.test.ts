@@ -7,78 +7,28 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { each, scoped, spawn } from "effection";
+import { scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { timebox } from "@effectionx/timebox";
-import { exec } from "@effectionx/process";
 import * as path from "node:path";
-import process from "node:process";
 import { execute, installAgentComponents } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
 import { useCommand } from "./command.ts";
-import { cliBase, cliCommand } from "@executablemd/test-support/launch";
+import { cliBase, runCli } from "@executablemd/test-support/launch";
+import type { Json } from "@executablemd/core";
 
 const DOC = path.resolve("smoke-test/test-agent/README.md");
-const TIMEOUT = 120_000;
 
-interface CliResult {
-  code: number | undefined;
-  stdout: string;
-  stderr: string;
-}
-
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") {
-      env[key] = value;
-    }
-  }
-  return env;
-}
-
-function* runCli(args: string[]): Operation<CliResult> {
-  const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const cli = cliCommand(args);
-    const proc = yield* exec(cli.command, {
-      arguments: cli.arguments,
-      env: cliEnv(),
-    });
-
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    const readStdout = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stdout)) {
-        stdoutChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-    const readStderr = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stderr)) {
-        stderrChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-
-    const status = yield* proc.join();
-    yield* readStdout;
-    yield* readStderr;
-
-    return { code: status.code, stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
-  });
-  if (result.timeout) {
-    throw new Error("CLI subprocess timed out");
-  }
-  return result.value;
-}
+// The fixture relaunches xmd as a worker, so the run keeps this process's
+// working directory and its whole environment.
+const RUN = { inheritEnv: true, timeout: 120_000 };
 
 function* runSmoke(
   stream: InMemoryStream,
   xmd: string[],
-): Operation<{ result: Result<string>; output: string; results: readonly TestResult[] }> {
+): Operation<{ result: Result<Json>; output: string; results: readonly TestResult[] }> {
   // The scope closes before the assertions run, so the provider and its
   // workers finish teardown and the completion settles.
   return yield* scoped(function* () {
@@ -100,7 +50,7 @@ function* runSmoke(
 
 describe("Tier TG — test-agent smoke", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("TG1: `xmd test` runs the fixture through the real ACPX runtime and worker", function* () {
-    const cli = yield* runCli(["test", DOC]);
+    const cli = yield* runCli(["test", DOC], RUN).join();
     expect(cli.code).toBe(0);
     expect(cli.stdout).toContain("The review of **packages/core** at `abc123` passed.");
     expect(cli.stdout).toContain("The review of **packages/core** passed.");

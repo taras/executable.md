@@ -27,6 +27,7 @@ import {
   installAskPermission,
 } from "../src/agent/permission.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
+import type { Json } from "@executablemd/core";
 
 /** A provider factory that records the options it is handed. */
 function recordingFactory(seen: AgentProviderOptions[]): AgentProviderFactory {
@@ -60,7 +61,7 @@ function recordingFactory(seen: AgentProviderOptions[]): AgentProviderFactory {
 function* runDoc(
   doc: string,
   install: () => Operation<void>,
-): Operation<{ output: string; result: Result<string> }> {
+): Operation<{ output: string; result: Result<Json> }> {
   const dir = path.join(os.tmpdir(), `xmd-ag-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {

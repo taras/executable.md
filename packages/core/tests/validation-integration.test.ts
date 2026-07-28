@@ -9,6 +9,7 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { compilePropsSchema } from "../src/validate.ts";
 import type { ComponentDefinition, EvalEnv, Json, Segment } from "../src/types.ts";
@@ -107,7 +108,9 @@ describe("`inputs` is not a compatibility alias for `props`", () => {
     });
     let message = "";
     try {
-      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
+      message = asText(
+        yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() })),
+      );
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -133,7 +136,9 @@ describe("definition-loading rejects invalid props schemas", () => {
     });
     let message = "";
     try {
-      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
+      message = asText(
+        yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() })),
+      );
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -157,7 +162,9 @@ describe("definition-loading rejects invalid props schemas", () => {
     });
     let message = "";
     try {
-      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
+      message = asText(
+        yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() })),
+      );
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -171,7 +178,9 @@ describe("definition-loading rejects invalid props schemas", () => {
     });
     let message = "";
     try {
-      message = yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() }));
+      message = asText(
+        yield* collect(yield* execute({ path: "README.md", stream: new InMemoryStream() })),
+      );
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }

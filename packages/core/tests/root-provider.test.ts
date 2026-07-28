@@ -22,6 +22,7 @@ import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agen
 import { AgentPromptError } from "../src/agent/errors.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
+import type { Json } from "@executablemd/core";
 
 interface ProviderState {
   activeDuringPrompt: boolean;
@@ -120,7 +121,7 @@ function stubStream(
   };
 }
 
-function* runDoc(doc: string): Operation<{ output: string; result: Result<string> }> {
+function* runDoc(doc: string): Operation<{ output: string; result: Result<Json> }> {
   const dir = path.join(os.tmpdir(), `xmd-rp-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {

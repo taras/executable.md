@@ -15,6 +15,27 @@ const SLOT = `<Card title="Notes">
   Anything here becomes the card's children.
 </Card>`;
 
+const VALUE_COMPONENT = `---
+returns:
+  passed: { type: boolean }
+  summary: { type: string }
+---
+
+\`\`\`js eval
+const verdict = { passed: true, summary: "no findings" };
+\`\`\`
+
+<Return value={verdict} />`;
+
+const VALUE_CAPTURE = `<Review as="review" />
+
+<Show when={review.passed}>
+Review passed: {review.summary}
+</Show>`;
+
+const VALUE_ROOT = `$ xmd run review.md
+{"passed":true,"summary":"no findings"}`;
+
 export default define.page(function Components() {
   return (
     <>
@@ -52,6 +73,29 @@ export default define.page(function Components() {
         (<code>slot="left"</code>) place children into specific regions.
       </p>
       <CodeBlock>{SLOT}</CodeBlock>
+
+      <h2>Returning values</h2>
+      <p>
+        A component returns one thing. Without{" "}
+        <code>returns</code>, that is its rendered Markdown — the component
+        above renders text, and <code>as</code> binds that text as a string. A
+        {" "}
+        <code>returns</code>{" "}
+        declaration makes it a value component instead: it renders nothing, must
+        be invoked with{" "}
+        <code>as</code>, and binds the JSON value its single top-level{" "}
+        <code>&lt;Return /&gt;</code> produces, validated against the schema.
+      </p>
+      <CodeBlock filename="components/Review.md">{VALUE_COMPONENT}</CodeBlock>
+      <p>The caller renders whatever presentation it wants from the value.</p>
+      <CodeBlock>{VALUE_CAPTURE}</CodeBlock>
+      <p>
+        A root document uses the same two modes without the capture. Running a
+        root that declares <code>returns</code>{" "}
+        prints only its validated value as JSON; body output moves to stderr
+        under <code>--verbose</code>.
+      </p>
+      <CodeBlock>{VALUE_ROOT}</CodeBlock>
 
       <h2>How it renders</h2>
       <ul>

@@ -22,11 +22,12 @@ import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
 import { useCommand } from "./command.ts";
 import { cliBase } from "@executablemd/test-support/launch";
+import type { Json } from "@executablemd/core";
 
 const WORKER = cliBase();
 
 interface Run {
-  result: Result<string>;
+  result: Result<Json>;
   output: string;
   results: readonly TestResult[];
 }

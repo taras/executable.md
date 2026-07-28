@@ -8,15 +8,13 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exec, type Exec } from "@effectionx/process";
-import { cliCommand } from "@executablemd/test-support/launch";
+import { runCli } from "@executablemd/test-support/launch";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import process from "node:process";
 
 const HELLO = [
   "---",
@@ -109,25 +107,6 @@ interface Fixture {
   dir: string;
 }
 
-function cliEnv(dir: string, overrides: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of [
-    "PATH",
-    "HOME",
-    "DENO_DIR",
-    "DENO_INSTALL_ROOT",
-    "XDG_CACHE_HOME",
-    "TMPDIR",
-  ]) {
-    const value = process.env[name];
-    if (typeof value === "string") {
-      env[name] = value;
-    }
-  }
-  void dir;
-  return { ...env, ...overrides };
-}
-
 function* useFixture<T>(
   files: Record<string, string>,
   body: (fixture: Fixture) => Operation<T>,
@@ -144,15 +123,6 @@ function* useFixture<T>(
   });
 }
 
-function runCli(args: string[], fixture: Fixture, overrides: Record<string, string> = {}): Exec {
-  const cli = cliCommand(args);
-  return exec(cli.command, {
-    arguments: cli.arguments,
-    cwd: fixture.dir,
-    env: cliEnv(fixture.dir, overrides),
-  });
-}
-
 describe(
   "Tier PC — xmd run document properties",
   {
@@ -164,7 +134,7 @@ describe(
       const { stdout } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
         return yield* runCli(
           ["run", "hello.md", "--raw", "--props-name", "Ada", "--props-loud", "--props-count", "3"],
-          fixture,
+          { cwd: fixture.dir },
         ).expect();
       });
       expect(stdout).toContain("Hello, Ada!");
@@ -174,8 +144,11 @@ describe(
 
     it("PC2: individual environment variables supply properties", function* () {
       const { stdout } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["run", "hello.md", "--raw"], fixture, {
-          XMD_PROPS_NAME: "Ada",
+        return yield* runCli(["run", "hello.md", "--raw"], {
+          cwd: fixture.dir,
+          env: {
+            XMD_PROPS_NAME: "Ada",
+          },
         }).expect();
       });
       expect(stdout).toContain("Hello, Ada!");
@@ -183,17 +156,19 @@ describe(
 
     it("PC3: aggregate JSON supplies properties from either source", function* () {
       const fromCli = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(
-          ["run", "hello.md", "--raw", "--props", '{"name":"Ada","count":7}'],
-          fixture,
-        ).expect();
+        return yield* runCli(["run", "hello.md", "--raw", "--props", '{"name":"Ada","count":7}'], {
+          cwd: fixture.dir,
+        }).expect();
       });
       expect(fromCli.stdout).toContain("Hello, Ada!");
       expect(fromCli.stdout).toContain("count=7");
 
       const fromEnv = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["run", "hello.md", "--raw"], fixture, {
-          XMD_PROPS: '{"name":"Env","count":9}',
+        return yield* runCli(["run", "hello.md", "--raw"], {
+          cwd: fixture.dir,
+          env: {
+            XMD_PROPS: '{"name":"Env","count":9}',
+          },
         }).expect();
       });
       expect(fromEnv.stdout).toContain("Hello, Env!");
@@ -212,8 +187,10 @@ describe(
             "--props-name",
             "ind-cli",
           ],
-          fixture,
-          { XMD_PROPS_NAME: "ind-env", XMD_PROPS: '{"name":"agg-env","tags":["t"]}' },
+          {
+            cwd: fixture.dir,
+            env: { XMD_PROPS_NAME: "ind-env", XMD_PROPS: '{"name":"agg-env","tags":["t"]}' },
+          },
         ).expect();
       });
       expect(stdout).toContain("Hello, ind-cli!");
@@ -228,8 +205,7 @@ describe(
         function* (fixture) {
           return yield* runCli(
             ["run", "hello.md", "--raw", "--props-name", "x", "--props-count", "nope"],
-            fixture,
-            { XMD_PROPS_COUNT: "5" },
+            { cwd: fixture.dir, env: { XMD_PROPS_COUNT: "5" } },
           ).join();
         },
       );
@@ -240,26 +216,24 @@ describe(
 
     it("PC6: booleans accept bare and explicit forms, never a negated one", function* () {
       const bare = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(
-          ["run", "hello.md", "--raw", "--props-name", "x", "--props-loud"],
-          fixture,
-        ).expect();
+        return yield* runCli(["run", "hello.md", "--raw", "--props-name", "x", "--props-loud"], {
+          cwd: fixture.dir,
+        }).expect();
       });
       expect(bare.stdout).toContain("loud=true");
 
       const explicit = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
         return yield* runCli(
           ["run", "hello.md", "--raw", "--props-name", "x", "--props-loud=false"],
-          fixture,
+          { cwd: fixture.dir },
         ).expect();
       });
       expect(explicit.stdout).toContain("loud=false");
 
       const negated = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(
-          ["run", "hello.md", "--raw", "--props-name", "x", "--no-props-loud"],
-          fixture,
-        ).join();
+        return yield* runCli(["run", "hello.md", "--raw", "--props-name", "x", "--no-props-loud"], {
+          cwd: fixture.dir,
+        }).join();
       });
       expect(negated.code).toBe(1);
       expect(negated.stderr).toContain("no negated form");
@@ -279,14 +253,17 @@ describe(
             "--props-tags",
             "b",
           ],
-          fixture,
+          { cwd: fixture.dir },
         ).expect();
       });
       expect(repeated.stdout).toContain("tags=a, b");
 
       const fromEnv = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["run", "hello.md", "--raw", "--props-name", "x"], fixture, {
-          XMD_PROPS_TAGS: '["alpha","beta"]',
+        return yield* runCli(["run", "hello.md", "--raw", "--props-name", "x"], {
+          cwd: fixture.dir,
+          env: {
+            XMD_PROPS_TAGS: '["alpha","beta"]',
+          },
         }).expect();
       });
       expect(fromEnv.stdout).toContain("tags=alpha, beta");
@@ -294,15 +271,16 @@ describe(
 
     it("PC8: text keeps its exact value while aggregate JSON keeps its exact type", function* () {
       const padded = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["run", "hello.md", "--raw", "--props-name", "007"], fixture).expect();
+        return yield* runCli(["run", "hello.md", "--raw", "--props-name", "007"], {
+          cwd: fixture.dir,
+        }).expect();
       });
       expect(padded.stdout).toContain("Hello, 007!");
 
       const typed = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(
-          ["run", "hello.md", "--raw", "--props", '{"name":"x","count":"12"}'],
-          fixture,
-        ).join();
+        return yield* runCli(["run", "hello.md", "--raw", "--props", '{"name":"x","count":"12"}'], {
+          cwd: fixture.dir,
+        }).join();
       });
       expect(typed.code).toBe(1);
       expect(typed.stderr).toContain("--props");
@@ -310,7 +288,7 @@ describe(
 
     it("PC9: a missing required property fails before any document effect", function* () {
       const { code, stdout } = yield* useFixture({ "doc.md": MARKER }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--raw"], fixture).join();
+        return yield* runCli(["run", "doc.md", "--raw"], { cwd: fixture.dir }).join();
       });
       expect(code).toBe(1);
       expect(stdout).not.toContain("SIDE_EFFECT_MARKER");
@@ -320,7 +298,7 @@ describe(
       const nested = yield* useFixture({ "nested.md": NESTED }, function* (fixture) {
         return yield* runCli(
           ["run", "nested.md", "--raw", "--props", '{"user":{"name":"Ada","extra":true}}'],
-          fixture,
+          { cwd: fixture.dir },
         ).join();
       });
       expect(nested.code).toBe(1);
@@ -329,7 +307,7 @@ describe(
       const open = yield* useFixture({ "open.md": OPEN }, function* (fixture) {
         return yield* runCli(
           ["run", "open.md", "--raw", "--props", '{"name":"Ada","extra":true}'],
-          fixture,
+          { cwd: fixture.dir },
         ).expect();
       });
       expect(open.stdout).toContain("name=Ada");
@@ -337,7 +315,9 @@ describe(
 
     it("PC11: an unknown individual option names the aggregate as the way in", function* () {
       const { code, stderr } = yield* useFixture({ "open.md": OPEN }, function* (fixture) {
-        return yield* runCli(["run", "open.md", "--raw", "--props-extra", "1"], fixture).join();
+        return yield* runCli(["run", "open.md", "--raw", "--props-extra", "1"], {
+          cwd: fixture.dir,
+        }).join();
       });
       expect(code).toBe(1);
       expect(stderr).toContain("--props-extra");
@@ -351,7 +331,7 @@ describe(
         ["hello.md", "--help"],
       ]) {
         const { stdout } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-          return yield* runCli(args, fixture).expect();
+          return yield* runCli(args, { cwd: fixture.dir }).expect();
         });
         expect(stdout).toContain("Properties declared by hello.md");
         expect(stdout).toContain("--props-name <string>");
@@ -366,8 +346,11 @@ describe(
 
     it("PC13: help reports no current values and runs no document", function* () {
       const { stdout } = yield* useFixture({ "doc.md": MARKER }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--help"], fixture, {
-          XMD_PROPS_NAME: "SHOULD_NOT_APPEAR",
+        return yield* runCli(["run", "doc.md", "--help"], {
+          cwd: fixture.dir,
+          env: {
+            XMD_PROPS_NAME: "SHOULD_NOT_APPEAR",
+          },
         }).expect();
       });
       expect(stdout).not.toContain("SIDE_EFFECT_MARKER");
@@ -376,19 +359,21 @@ describe(
 
     it("PC14: help without a document, and a document without properties, show no section", function* () {
       const generic = yield* useFixture({ "plain.md": PLAIN }, function* (fixture) {
-        return yield* runCli(["run", "--help"], fixture).expect();
+        return yield* runCli(["run", "--help"], { cwd: fixture.dir }).expect();
       });
       expect(generic.stdout).not.toContain("Properties declared by");
 
       const plain = yield* useFixture({ "plain.md": PLAIN }, function* (fixture) {
-        return yield* runCli(["run", "plain.md", "--help"], fixture).expect();
+        return yield* runCli(["run", "plain.md", "--help"], { cwd: fixture.dir }).expect();
       });
       expect(plain.stdout).not.toContain("Properties declared by");
     });
 
     it("PC15: document-derived options must follow the document", function* () {
       const { code, stderr } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["run", "--props-name", "Ada", "hello.md"], fixture).join();
+        return yield* runCli(["run", "--props-name", "Ada", "hello.md"], {
+          cwd: fixture.dir,
+        }).join();
       });
       expect(code).toBe(1);
       expect(stderr).toContain("follow the document");
@@ -396,7 +381,9 @@ describe(
 
     it("PC16: xmd test does not accept document properties", function* () {
       const { code, stderr } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["test", "hello.md", "--props-name", "Ada"], fixture).join();
+        return yield* runCli(["test", "hello.md", "--props-name", "Ada"], {
+          cwd: fixture.dir,
+        }).join();
       });
       expect(code).toBe(1);
       expect(stderr).toContain("exclusive to xmd run");
@@ -404,14 +391,14 @@ describe(
 
     it("PC17: a document without props is unaffected", function* () {
       const { stdout } = yield* useFixture({ "plain.md": PLAIN }, function* (fixture) {
-        return yield* runCli(["run", "plain.md", "--raw"], fixture).expect();
+        return yield* runCli(["run", "plain.md", "--raw"], { cwd: fixture.dir }).expect();
       });
       expect(stdout).toContain("PLAIN_MARKER");
     });
 
     it("PC19: a referenced scalar gets bindings, decoding, and a rendered value form", function* () {
       const help = yield* useFixture({ "ref.md": REFERENCED }, function* (fixture) {
-        return yield* runCli(["run", "ref.md", "--help"], fixture).expect();
+        return yield* runCli(["run", "ref.md", "--help"], { cwd: fixture.dir }).expect();
       });
       expect(help.stdout).toContain("--props-count <number>");
       expect(help.stdout).toContain("--props-counts <number>...");
@@ -430,7 +417,7 @@ describe(
             "--props-counts",
             "2",
           ],
-          fixture,
+          { cwd: fixture.dir },
         ).expect();
       });
       expect(stdout).toContain("count=12");
@@ -439,7 +426,7 @@ describe(
 
     it("PC20: a structured-only document still documents the aggregate", function* () {
       const { stdout } = yield* useFixture({ "nested.md": NESTED }, function* (fixture) {
-        return yield* runCli(["run", "nested.md", "--help"], fixture).expect();
+        return yield* runCli(["run", "nested.md", "--help"], { cwd: fixture.dir }).expect();
       });
       expect(stdout).toContain("Properties declared by nested.md");
       expect(stdout).toContain("--props <json>");
@@ -450,7 +437,9 @@ describe(
 
     it("PC18: the default command form accepts properties", function* () {
       const { stdout } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
-        return yield* runCli(["hello.md", "--raw", "--props-name", "Ada"], fixture).expect();
+        return yield* runCli(["hello.md", "--raw", "--props-name", "Ada"], {
+          cwd: fixture.dir,
+        }).expect();
       });
       expect(stdout).toContain("Hello, Ada!");
     });

@@ -364,6 +364,10 @@ function* run(
     yield* installAgentStack(mode.agent);
   }
 
+  // `xmd test` reports on stdout, so the JSON result contract is `xmd run`'s
+  // alone. Reading the mode costs no document effects.
+  const valueRoot = !mode.testing && (yield* readsValue(rootPath));
+
   const execution = yield* execute({
     path: rootPath,
     stream,
@@ -372,16 +376,24 @@ function* run(
   });
 
   // Consume the output stream with forEach.
+  // A value root reserves stdout for its result: its rendered body is
+  // observability, shown on stderr under --verbose and dropped otherwise.
   // Interactive TTY: write each chunk as it arrives.
   // Piped: collect and write the full output at the end.
   const fullOutput = yield* forEach(function* (chunk: string) {
+    if (valueRoot) {
+      if (verbose) {
+        process.stderr.write(chunk);
+      }
+      return;
+    }
     if (process.stdout.isTTY) {
       process.stdout.write(chunk);
     }
   }, execution.output);
 
   // When piped (not TTY), write the full output at the end.
-  if (!process.stdout.isTTY) {
+  if (!valueRoot && !process.stdout.isTTY) {
     process.stdout.write(fullOutput);
   }
 
@@ -401,6 +413,26 @@ function* run(
       console.error(result.error.message);
     }
     yield* exit(1);
+    return;
+  }
+
+  // Written straight to stdout, so the result never passes through markdown
+  // normalization or terminal formatting.
+  if (valueRoot) {
+    process.stdout.write(`${JSON.stringify(result.value)}\n`);
+  }
+}
+
+/**
+ * A document that cannot be inspected — missing, malformed, or unreadable —
+ * reports text, so execution produces the diagnostic rather than inspection.
+ */
+function* readsValue(rootPath: string): Operation<boolean> {
+  try {
+    const description = yield* inspectDocument({ path: rootPath });
+    return description.returnMode === "value";
+  } catch {
+    return false;
   }
 }
 

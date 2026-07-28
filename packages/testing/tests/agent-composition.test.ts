@@ -17,6 +17,7 @@ import * as os from "node:os";
 import { Agent, execute, installAgentComponents } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
 import { installTestingComponents } from "../mod.ts";
+import type { Json } from "@executablemd/core";
 
 function stubStream(
   content: string,
@@ -113,7 +114,7 @@ describe("agent + testing composition", () => {
     while (!next.done) {
       next = yield* subscription.next();
     }
-    const result: Result<string> = yield* execution;
+    const result: Result<Json> = yield* execution;
 
     expect(calls).toEqual(["good", "bad"]);
     expect(result.ok).toBe(false);

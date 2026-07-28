@@ -77,6 +77,13 @@ jobs:
             --component-dir packages/core/components \
             --raw
 
+      # The guide documents this command and its output; running it keeps the
+      # value-root contract executable rather than described.
+      - name: Smoke test a value root's JSON result
+        run: |
+          test "$(./dist/xmd run smoke-test/value-root.md)" = \
+            '{"passed":true,"summary":"no findings"}'
+
       # Covers the compiled binary relaunching itself as `xmd test-agent`,
       # which the source-mode worker command never exercises.
       - name: Smoke test the compiled binary as a test agent

@@ -1,18 +1,69 @@
 import { parseJsonObject } from "./json.ts";
-import type { Json, JsonObject, PropsSchema } from "./types.ts";
+import type { Json, JsonObject, PropsSchema, ReturnsSchema } from "./types.ts";
 
 export interface ParsedFrontmatter {
   meta: Record<string, unknown>;
   props: PropsSchema;
+  returns?: ReturnsSchema;
 }
 
 const DRAFT_07 = "http://json-schema.org/draft-07/schema#";
 
-const PROPS_KEYS = ["props", "required"];
+const RESERVED_KEYS = ["props", "required", "returns"];
 
 export function parseFrontmatter(raw: unknown): ParsedFrontmatter {
   const root: JsonObject = raw === null || raw === undefined ? {} : parseJsonObject(raw);
-  return { meta: parseMeta(root), props: parsePropsSchema(root) };
+  const declaredReturns = root["returns"];
+  const parsed: ParsedFrontmatter = { meta: parseMeta(root), props: parsePropsSchema(root) };
+  if (declaredReturns !== undefined) {
+    parsed.returns = parseReturnsDeclaration(declaredReturns);
+  }
+  return parsed;
+}
+
+/**
+ * Parse a `returns` declaration into a return schema. Markdown frontmatter
+ * and a function component's `export const returns` share this, so the two
+ * declaration sites cannot drift.
+ *
+ * The declaration is an object: either a draft-07 schema (marked by `type` or
+ * `$schema`) or the concise object-return shorthand, a map of property names
+ * to subschemas. Every shorthand property is required — a component that
+ * returns an optional property declares the full schema instead.
+ */
+export function parseReturnsDeclaration(value: unknown): ReturnsSchema {
+  let declaration: JsonObject;
+  try {
+    declaration = parseJsonObject(value);
+  } catch (error) {
+    throw new Error(
+      `"returns" must declare a JSON Schema object: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if ("type" in declaration || "$schema" in declaration) {
+    const dialect = declaration["$schema"];
+    if (dialect !== undefined && dialect !== DRAFT_07) {
+      throw new Error(
+        `returns "$schema" must be draft-07 (${DRAFT_07}), got ${JSON.stringify(dialect)}`,
+      );
+    }
+    return declaration;
+  }
+
+  const properties: JsonObject = {};
+  for (const [name, definition] of Object.entries(declaration)) {
+    if (!isPropertySchema(definition)) {
+      throw new Error(`returns property "${name}" must declare a JSON Schema object or boolean`);
+    }
+    properties[name] = definition;
+  }
+  return {
+    type: "object",
+    properties,
+    required: Object.keys(properties),
+    additionalProperties: false,
+  };
 }
 
 function parsePropsSchema(root: JsonObject): PropsSchema {
@@ -100,7 +151,7 @@ function parseMeta(root: JsonObject): Record<string, unknown> {
     return meta;
   }
   for (const [key, value] of Object.entries(root)) {
-    if (!PROPS_KEYS.includes(key)) {
+    if (!RESERVED_KEYS.includes(key)) {
       meta[key] = value;
     }
   }

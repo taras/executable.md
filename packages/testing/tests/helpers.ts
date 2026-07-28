@@ -17,13 +17,14 @@ import { installHandlers, installTestingComponents } from "../src/components.ts"
 import type { TestHandlers } from "../src/handlers.ts";
 import { Test } from "../src/test-api.ts";
 import type { BoundaryOutcome, TestResult } from "../src/test-api.ts";
+import type { Json } from "@executablemd/core";
 
 export interface DocRun {
   /** Chunks received while streaming. */
   chunks: string[];
   /** The output stream's close value. */
   output: string;
-  completion: Result<string>;
+  completion: Result<Json>;
   /** Results delegated past the session/component collectors. */
   results: TestResult[];
   boundaries: BoundaryOutcome[];

@@ -10,77 +10,13 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { timebox } from "@effectionx/timebox";
-import { ensure, scoped, spawn, each } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { exec } from "@effectionx/process";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import process from "node:process";
-import { cliCommand } from "@executablemd/test-support/launch";
-
-const TIMEOUT = 60_000;
-
-interface CliResult {
-  code: number | undefined;
-  stdout: string;
-  stderr: string;
-}
-
-/**
- * The environment a fixture run gets: an isolated HOME so ACPX never
- * reads or writes the developer's configuration or session store, plus
- * the cache variables Deno needs to run without re-downloading.
- */
-function fixtureEnv(home: string, overrides: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = { HOME: home };
-  for (const name of ["PATH", "DENO_DIR", "DENO_INSTALL_ROOT", "XDG_CACHE_HOME", "TMPDIR"]) {
-    const value = process.env[name];
-    if (typeof value === "string") {
-      env[name] = value;
-    }
-  }
-  return { ...env, ...overrides };
-}
-
-function* runCli(
-  args: string[],
-  fixture: { dir: string; home: string },
-  overrides: Record<string, string> = {},
-): Operation<CliResult> {
-  const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const cli = cliCommand(args);
-    const proc = yield* exec(cli.command, {
-      arguments: cli.arguments,
-      cwd: fixture.dir,
-      env: fixtureEnv(fixture.home, overrides),
-    });
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    const readStdout = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stdout)) {
-        stdoutChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-    const readStderr = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stderr)) {
-        stderrChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-    const status = yield* proc.join();
-    yield* readStdout;
-    yield* readStderr;
-    return { code: status.code, stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
-  });
-  if (result.timeout) {
-    throw new Error("CLI subprocess timed out");
-  }
-  return result.value;
-}
+import { runCli } from "@executablemd/test-support/launch";
 
 interface Fixture {
   dir: string;
@@ -110,6 +46,10 @@ function* useFixture<T>(
   });
 }
 
+function env(fixture: Fixture): { cwd: string; env: Record<string, string> } {
+  return { cwd: fixture.dir, env: { HOME: fixture.home } };
+}
+
 const AGENT_DOC = [
   "BEFORE_MARKER",
   "",
@@ -135,7 +75,10 @@ const PLAIN_DOC = "PLAIN_MARKER\n\nNo agent here.\n";
 describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("CA1: an unknown --agent-provider fails before the document executes", function* () {
     const result = yield* useFixture({ "doc.md": AGENT_DOC }, function* (fixture) {
-      return yield* runCli(["run", "doc.md", "--agent-provider", "bogus", "--raw"], fixture);
+      return yield* runCli(
+        ["run", "doc.md", "--agent-provider", "bogus", "--raw"],
+        env(fixture),
+      ).join();
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('Unknown agent provider "bogus"');
@@ -145,7 +88,10 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
 
   it("CA2: mutually exclusive permission flags fail before the document executes", function* () {
     const result = yield* useFixture({ "doc.md": AGENT_DOC }, function* (fixture) {
-      return yield* runCli(["run", "doc.md", "--approve-all", "--deny-all", "--raw"], fixture);
+      return yield* runCli(
+        ["run", "doc.md", "--approve-all", "--deny-all", "--raw"],
+        env(fixture),
+      ).join();
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("mutually exclusive");
@@ -154,7 +100,7 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
 
   it("CA3: a document that never uses an agent runs with default flags", function* () {
     const result = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-      return yield* runCli(["run", "doc.md", "--raw"], fixture);
+      return yield* runCli(["run", "doc.md", "--raw"], env(fixture)).join();
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("PLAIN_MARKER");
@@ -167,7 +113,7 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
     const rejected = ["1e3", "0x10", ".5", "+1", "Infinity", "NaN", "12seconds", "0", "-1"];
     for (const value of rejected) {
       const result = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--timeout", value, "--raw"], fixture);
+        return yield* runCli(["run", "doc.md", "--timeout", value, "--raw"], env(fixture)).join();
       });
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("--timeout");
@@ -176,14 +122,14 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
 
     for (const value of ["30", "0.5"]) {
       const result = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--timeout", value, "--raw"], fixture);
+        return yield* runCli(["run", "doc.md", "--timeout", value, "--raw"], env(fixture)).join();
       });
       expect(result.code).toBe(0);
       expect(result.stdout).toContain("PLAIN_MARKER");
     }
 
     const equalsForm = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-      return yield* runCli(["run", "doc.md", "--timeout=1e3", "--raw"], fixture);
+      return yield* runCli(["run", "doc.md", "--timeout=1e3", "--raw"], env(fixture)).join();
     });
     expect(equalsForm.code).toBe(1);
     expect(equalsForm.stderr).toContain("--timeout");
@@ -191,9 +137,10 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
 
   it("CA5: the default agent resolves environment, then flag, with the flag winning", function* () {
     const fromEnv = yield* useFixture({ "doc.md": AGENT_DOC }, function* (fixture) {
-      return yield* runCli(["run", "doc.md", "--raw"], fixture, {
-        DEFAULT_AGENT_NAME: "xmd-env-only-agent",
-      });
+      return yield* runCli(["run", "doc.md", "--raw"], {
+        cwd: fixture.dir,
+        env: { HOME: fixture.home, DEFAULT_AGENT_NAME: "xmd-env-only-agent" },
+      }).join();
     });
     expect(fromEnv.code).toBe(1);
     expect(fromEnv.stderr).toContain('agent "xmd-env-only-agent" is unavailable');
@@ -201,18 +148,17 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
     const fromFlag = yield* useFixture({ "doc.md": AGENT_DOC }, function* (fixture) {
       return yield* runCli(
         ["run", "doc.md", "--default-agent", "xmd-flag-only-agent", "--raw"],
-        fixture,
-      );
+        env(fixture),
+      ).join();
     });
     expect(fromFlag.code).toBe(1);
     expect(fromFlag.stderr).toContain('agent "xmd-flag-only-agent" is unavailable');
 
     const both = yield* useFixture({ "doc.md": AGENT_DOC }, function* (fixture) {
-      return yield* runCli(
-        ["run", "doc.md", "--default-agent", "xmd-flag-wins-agent", "--raw"],
-        fixture,
-        { DEFAULT_AGENT_NAME: "xmd-env-loses-agent" },
-      );
+      return yield* runCli(["run", "doc.md", "--default-agent", "xmd-flag-wins-agent", "--raw"], {
+        cwd: fixture.dir,
+        env: { HOME: fixture.home, DEFAULT_AGENT_NAME: "xmd-env-loses-agent" },
+      }).join();
     });
     expect(both.code).toBe(1);
     expect(both.stderr).toContain('agent "xmd-flag-wins-agent" is unavailable');
@@ -225,8 +171,8 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
       const result = yield* useFixture({ "doc.md": doc }, function* (fixture) {
         return yield* runCli(
           ["run", "doc.md", "--default-agent", "xmd-nonexistent-agent", "--raw"],
-          fixture,
-        );
+          env(fixture),
+        ).join();
       });
       expect(result.code).toBe(1);
       expect(result.stderr).toContain('agent "xmd-nonexistent-agent" is unavailable');
@@ -247,7 +193,7 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
     ];
     for (const option of options) {
       const result = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-        return yield* runCli(["test", "doc.md", ...option.args, "--raw"], fixture);
+        return yield* runCli(["test", "doc.md", ...option.args, "--raw"], env(fixture)).join();
       });
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("unrecognized option for xmd test");

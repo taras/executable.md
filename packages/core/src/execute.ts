@@ -26,19 +26,26 @@ import type {
   ComponentDefinition,
   FunctionComponent,
   FunctionComponentDefinition,
+  JsonObject,
   PropsSchema,
+  ReturnsSchema,
   ImportResult,
 } from "./types.ts";
 import { parseJsonObject } from "./json.ts";
-import { compilePropsSchema, validateProps } from "./validate.ts";
+import { compilePropsSchema, compileReturnsSchema, validateProps } from "./validate.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
+import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
   expandSegments,
   expandBody,
   bodyHasOutput,
-  validateOutputPlacement,
+  isTopLevelReturn,
+  resolveReturnValue,
+  validateBodyStructure,
   createBlockCounter,
 } from "./expand.ts";
+import type { BlockCounter } from "./expand.ts";
+import { DocumentationError } from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
@@ -121,13 +128,21 @@ function* durableImportComponent(
         : parseJsonObject(propsExport);
     compilePropsSchema(props);
 
-    return {
-      kind: "function" as const,
+    const definition: FunctionComponentDefinition = {
+      kind: "function",
       name,
       path: result.path,
       props,
       fn: defaultExport,
     };
+
+    if ("returns" in mod && mod.returns !== undefined) {
+      const returns = parseReturnsDeclaration(mod.returns);
+      compileReturnsSchema(returns);
+      definition.returns = returns;
+    }
+
+    return definition;
   }
 
   // Markdown component: parse at runtime — deterministic from content
@@ -215,7 +230,72 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
     return { output: "", exitCode: 0, stderr: "" };
   })();
 
-function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
+/**
+ * What a document run produces. `output` is rendered body text — the
+ * observability channel — and `value` is the document's return value: the same
+ * rendered text for a text root, the validated JSON for a value root. The pair
+ * is journaled together so replay restores both; only `value` is public.
+ */
+interface DocumentResult extends JsonObject {
+  output: string;
+  value: Json;
+}
+
+/**
+ * Run a value root (spec §5.4). Its body executes completely under fail-fast,
+ * so no diagnostic can pass for a result, while rendered text still reaches the
+ * output stream as observability. `<Return>` selects the value at its position
+ * and the body continues past it.
+ */
+function* runValueRoot(
+  root: ComponentDefinition,
+  returns: ReturnsSchema,
+  validatedProps: Record<string, Json>,
+  counter: BlockCounter,
+): Operation<DocumentResult> {
+  const chunks: string[] = [];
+  let produced: { value: Json } | undefined;
+
+  yield* scoped(function* () {
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *raise([error], _next) {
+          throw new DocumentationError(error);
+        },
+      },
+      { at: "min" },
+    );
+
+    for (const segment of root.bodySegments) {
+      if (isTopLevelReturn(segment)) {
+        produced = { value: yield* resolveReturnValue("__root__", returns, segment) };
+        continue;
+      }
+      const expanded = yield* expandSegments(
+        [segment],
+        root.meta,
+        validatedProps,
+        new Set(),
+        counter,
+      );
+      for (const resolved of expanded) {
+        const text = renderSegment(resolved);
+        if (text) {
+          yield* ephemeral(DocumentOutput.operations.output(text));
+          chunks.push(text);
+        }
+      }
+    }
+  });
+
+  if (!produced) {
+    throw new Error("The root document declares `returns` but produced no <Return> value.");
+  }
+  return { output: chunks.join(""), value: produced.value };
+}
+
+function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the document path. The
   // ephemeral() wrapper bridges typing only — the import inside remains a
@@ -239,16 +319,24 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
   // around the entire loop so all segments share it. Resources spawned by
   // `persist` blocks are retained in the eval scope until expansion
   // completes, then torn down.
-  const scopedExpansion: Operation<string> = scoped(function* () {
+  const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
-    // Structural preflight (spec §6.9): a root with misplaced <Output>
-    // executes no body side effects; the aggregate diagnostic renders as a
-    // comment (root policy is "collect").
-    const placementError = validateOutputPlacement(root.bodySegments);
-    if (placementError) {
-      const text = renderSegment(placementError);
+    // Structural preflight (spec §6.9, §6.10): a structurally invalid root
+    // executes no body side effects. A text root renders the aggregate
+    // diagnostic as a comment (root policy is "collect"); a value root has no
+    // rendered result to fall back on, so the diagnostic fails the execution.
+    const structureError = validateBodyStructure(root.bodySegments, root.returns);
+    if (structureError) {
+      if (root.returns !== undefined) {
+        throw new Error(structureError.message);
+      }
+      const text = renderSegment(structureError);
       yield* ephemeral(DocumentOutput.operations.output(text));
-      return text;
+      return { output: text, value: text };
+    }
+
+    if (root.returns !== undefined) {
+      return yield* runValueRoot(root, root.returns, validatedProps, counter);
     }
 
     // A root declaring top-level <Output> buffers completely (spec §5.4):
@@ -270,7 +358,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
       if (text) {
         yield* ephemeral(DocumentOutput.operations.output(text));
       }
-      return text;
+      return { output: text, value: text };
     }
 
     // Per-root-segment emission loop for roots without <Output> (spec §5.4).
@@ -298,7 +386,8 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
       }
     }
 
-    return chunks.join("");
+    const text = chunks.join("");
+    return { output: text, value: text };
   });
 
   return yield* ephemeral(scopedExpansion);
@@ -307,15 +396,18 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<string> {
 /**
  * A running document execution.
  *
- * `yield* execution` waits for completion and returns a `Result<string>`:
- * `Ok(output)` on success, `Err(error)` on document, infrastructure, or
- * policy failure. Completion never throws once the handle exists.
+ * `yield* execution` waits for completion and returns a `Result<Json>`:
+ * `Ok(value)` on success, `Err(error)` on document, infrastructure, or
+ * policy failure. Completion never throws once the handle exists. The
+ * successful value is the document's return value — its rendered Markdown for
+ * a text root, the validated JSON for a root declaring `returns` (§5.4).
  *
  * `execution.output` is a `Stream<string, string>` for consuming chunks as
- * they arrive. The close value is the complete rendered output — or the
- * partial output rendered before a failure.
+ * they arrive. It carries rendered body text for both kinds of root — for a
+ * value root it is observability, never the result. The close value is the
+ * complete rendered output, or the partial output rendered before a failure.
  */
-export interface DocumentExecution extends Operation<Result<string>> {
+export interface DocumentExecution extends Operation<Result<Json>> {
   /** Stream of output chunks. Close value is the full (or partial) output. */
   output: Stream<string, string>;
 }
@@ -324,7 +416,7 @@ export interface DocumentExecution extends Operation<Result<string>> {
  * Execute a markdown document as a durable workflow.
  *
  * Returns a `DocumentExecution` — an operation you can `yield*` for the
- * completion `Result<string>`, with a `.output` stream for chunk-by-chunk
+ * completion `Result<Json>`, with a `.output` stream for chunk-by-chunk
  * consumption. Once the handle exists, completion never throws: every
  * later failure — document, infrastructure, or policy middleware — closes
  * `output` (with the complete or partial rendered text) and resolves
@@ -374,7 +466,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
   // close value, so subscription readiness before first emission is never
   // required (spec §9; see replay-stream.ts).
   const channel = createReplayStream<string, string>();
-  const { operation, resolve } = withResolvers<Result<string>>();
+  const { operation, resolve } = withResolvers<Result<Json>>();
 
   yield* spawn(function* () {
     let emitted = false;
@@ -431,18 +523,20 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      const output = yield* durableRun(() => documentWorkflow(props), {
+      const { output, value } = yield* durableRun(() => documentWorkflow(props), {
         stream,
       });
 
       // Preserve output for any synchronous completion path that did not emit
-      // through the streaming API.
+      // through the streaming API — a replayed run restores its body text from
+      // the journal instead of re-executing, and callback consumers only ever
+      // see chunks, never the close value.
       if (!emitted && output) {
         yield* DocumentOutput.operations.output(output);
       }
 
       yield* channel.close(output);
-      resolve(Ok(output));
+      resolve(Ok(value));
     } catch (error) {
       // Close with everything already emitted — diagnostics produced before
       // an abort stay visible to consumers of the close value.

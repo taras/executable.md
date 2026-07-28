@@ -1442,18 +1442,23 @@ props:
 
 #### Frontmatter structure
 
-Frontmatter has two sections: **meta** (the component's own data) and
-**props** (the declared caller interface).
+Frontmatter has three sections: **meta** (the component's own data),
+**props** (the declared caller interface), and **returns** (the declared
+return value).
 
-**Meta** — every frontmatter key except `props` and `required` is a
-meta value. Meta values are the component's own constants, accessible
-via `{meta.key}` in the body. They can be any YAML value: strings,
-numbers, booleans, arrays, objects.
+**Meta** — every frontmatter key except `props`, `required`, and
+`returns` is a meta value. Meta values are the component's own constants,
+accessible via `{meta.key}` in the body. They can be any YAML value:
+strings, numbers, booleans, arrays, objects.
 
 **Props** — the reserved `props` key declares the props callers can
 pass. Its value is either a map of prop names to draft-07 subschemas or
 a complete draft-07 object schema. The reserved `required` key names the
 props a caller must supply when `props` is a map.
+
+**Returns** — the reserved `returns` key declares the value the component
+produces instead of rendered text (§6.10). A component that omits it returns
+its rendering.
 
 #### Input definitions
 
@@ -1627,14 +1632,15 @@ export default function*(props: Record<string, Json>) {
 
 ```typescript
 export interface FunctionComponent {
-  (props: Record<string, Json>): Operation<string>;
+  (props: Record<string, Json>): Operation<Json>;
 }
 
 export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   path: string;
-  props: PropsSchema;   // canonical draft-07 JSON Schema (§5.1.1)
+  props: PropsSchema;      // canonical draft-07 JSON Schema (§5.1.1)
+  returns?: ReturnsSchema; // declared return schema (§6.10); absent in text mode
   fn: FunctionComponent;
 }
 ```
@@ -1646,6 +1652,13 @@ components at load time. This is equivalent to the full `props:` schema
 in markdown component frontmatter; the prop-name map is a frontmatter
 spelling and does not apply to a TypeScript export. If no `props`
 export exists, the component accepts no props.
+
+**Return declaration.** A named `export const returns = { ... }` declares a
+return value under the same contract as the `returns:` frontmatter key,
+including the object-return shorthand (§6.10). The generator of a value
+function component returns that JSON value rather than a string; without the
+export, its returned string is its rendering, and returning anything else is
+an error.
 
 **Children via `useContent()`.** Function components access children
 contextually, not from props. The expansion engine installs a
@@ -1975,6 +1988,25 @@ completed successfully — a failure while executing documentation produces no
 emission, and an empty selection emits nothing. A component invoked within the
 root expands recursively and its result is buffered into the surrounding
 output in both cases.
+
+#### Text roots and value roots
+
+A root has the same two return modes as any component (§6.10), with one
+difference: it has no caller, so it needs no `as`.
+
+A **text root** declares no `returns` and behaves exactly as described above:
+its rendered Markdown is its return value, and `execute()` completes with that
+text.
+
+A **value root** declares `returns`. It executes its complete body, holds
+exactly one direct top-level `<Return>`, validates that value against its
+schema, and completes with the validated JSON. Its rendered body Markdown is
+not its result: the output stream stays an observability channel a consumer may
+watch independently, and a diagnostic can never pass for a result. A value
+root's body therefore runs fail-fast — a structural violation, an invalid
+schema, an invalid value, a body error, and a failure raised after `<Return>`
+all complete `Err`, and body text emitted before the failure remains only on
+the output stream.
 
 ### 5.5 The Component Api
 
@@ -3182,6 +3214,127 @@ Because selecting output requires the whole body, a root that declares
 while a root without `<Output>` keeps per-segment streaming. Buffering defers
 only when output is emitted, not what executes, so replay is deterministic.
 
+### 6.10 Component return values: `returns` and `<Return>`
+
+A component has one return path. It either returns its rendered Markdown or
+declares and produces a typed value — never both. Agent workflows need values
+for control flow (a verdict, a list of findings, a question), and a value
+component gives the caller one directly instead of text to re-parse.
+
+`Review.md` decides whether a change passes; its caller renders the outcome:
+
+````markdown
+---
+returns:
+  passed: { type: boolean }
+  revisionPrompt: { type: string }
+---
+
+```js eval
+const verdict = { passed: true, revisionPrompt: "" };
+```
+
+<Return value={verdict} />
+````
+
+```markdown
+<Review as="review" />
+
+<Show when={review.passed}>
+Review passed.
+</Show>
+```
+
+#### The two modes
+
+A component **without** a `returns` declaration is a **text component**: its
+rendered Markdown is its return value, `<Output>` selects which region renders,
+invoking it normally renders that text, and invoking it with `as` binds the
+text and renders nothing. Its effective return schema is `{ type: "string" }`.
+
+A component **with** a `returns` declaration is a **value component**. It
+renders nothing, must be invoked with `as`, and binds one schema-validated JSON
+value. Absence of the declaration is what selects text mode, so an explicit
+`returns: { type: string }` is a value component that happens to return a
+string.
+
+#### Declaring a return value
+
+`returns` is an object: either a draft-07 JSON Schema, marked by `type` or
+`$schema` and validated for dialect exactly as `props` is, or the concise
+**object-return shorthand**, a map of property names to subschemas. A schema
+may describe any JSON value: string, number, boolean, array, object, or null.
+Booleans and other non-object declarations are rejected.
+
+```yaml
+returns:
+  passed: { type: boolean }
+  revisionPrompt: { type: string }
+```
+
+The shorthand above normalizes to `type: object` with both properties,
+`required: [passed, revisionPrompt]`, and `additionalProperties: false`: **every
+shorthand property is required**. A component with an optional property
+declares the full schema instead, where `required` names only what the caller
+can rely on.
+
+#### `<Return>` selects the value
+
+A value component contains exactly one direct top-level `<Return value={…} />`.
+It takes that one prop, takes no children, and renders nothing.
+
+`<Return>` marks *which* value the body produces; it does not end the body.
+Everything else in the body is documentation: it executes in document order for
+its side effects and what it renders is discarded. The return expression is
+evaluated at its own position, so it sees bindings computed before it and not
+bindings created after it, and documentation after `<Return>` still runs. The
+value is held until the whole body completes.
+
+`<Return>` is reserved throughout expansion. Only a definition-owned direct
+top-level `<Return>` is consumed, so a `<Return>` that reaches ordinary
+expansion — projected caller content, `render(markdown)` output, any
+dynamically produced segment — is diagnosed rather than resolved as a component
+named `Return`.
+
+#### Validation
+
+The produced value crosses the JSON boundary before its schema: a value that
+could not survive capture and replay — `undefined`, a non-finite number, a
+function, a class instance, a sparse array, a cyclic object — is rejected
+there. Validation then runs against a clone, so schema defaults fill the
+returned value without mutating the producer's own object, and only that
+normalized clone reaches the caller. Every failure names the component and
+carries its normalized issues.
+
+#### Structure is checked before body effects
+
+Placement is validated against the component's own source, before `<Content />`
+substitution, so projected content can neither introduce nor satisfy a
+declaration. All violations are reported together, and a structurally invalid
+component runs no eval, exec, `<Capture>`, or nested component:
+
+- `<Return>` in a text component;
+- a missing, duplicated, nested, or otherwise misplaced `<Return>`;
+- `<Output>` in a component that declares `returns` — the two are mutually
+  exclusive;
+- a `<Return>` with children, with any prop other than `value`, or without
+  `value`.
+
+Invoking a value component without `as` fails the same way, before its body
+runs: a component that renders nothing and is not captured produces nothing.
+
+#### Function components
+
+Markdown and TypeScript components share one contract. A function component
+declares `export const returns` (§5.1.2), and its generator returns the JSON
+value validated against that schema. It renders nothing and must be captured
+with `as`. Without the declaration it returns its rendered string, as before.
+
+#### Roots
+
+A root uses the same modes, minus `as` (§5.4). Typed root returns reach the
+command line through the JSON result contract of `xmd run` (§9.6).
+
 ---
 
 ## 7. Entry point
@@ -3200,21 +3353,33 @@ workflow and returns a `DocumentExecution` handle. Options:
   built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
 
 `inspectDocument({ path })` loads and validates the root definition and returns
-its props schema without executing the document or creating a journal. Root
-input sources and validation are defined in
-[Root Document Props](./root-document-props-spec.md).
+what it declares — without executing the document or creating a journal:
 
-`DocumentExecution` is an `Operation<Result<string>>`: `yield* execution`
-completes with `Ok(output)` on success and `Err(error)` on document,
-infrastructure, or policy failure. Once `execute` has returned a handle,
-completion never throws — every later failure closes the output stream
-(with the complete or partial rendered output) and resolves `Err`. A
-failure before a handle can be created may still throw. Its `output`
-property is a replay-safe `Stream<string, string>` of the chunks emitted
-during execution (per-segment for streaming roots, one chunk for buffered
-`<Output>` roots — §5.4); late and repeated subscribers receive the full
-sequence, and the stream closes with the full (or partial) output as its
-close value.
+- `props` — the declared props schema. Root input sources and validation are
+  defined in [Root Document Props](./root-document-props-spec.md).
+- `returns` — the effective return schema: `{ type: "string" }` for a document
+  that declares none, otherwise the validated declared schema.
+- `returnMode` — `"text"` or `"value"`. An explicit `returns: { type: string }`
+  produces the same effective schema as the default, so the mode is what tells
+  the two apart.
+
+An invalid return schema fails inspection exactly as it fails execution: both
+load the definition through the same path.
+
+`DocumentExecution` is an `Operation<Result<Json>>`: `yield* execution`
+completes with `Ok(value)` on success and `Err(error)` on document,
+infrastructure, or policy failure. The successful value is the document's
+return value — its rendered Markdown for a text root, its validated JSON for a
+value root (§5.4). `collect(execution)` unwraps that same value and throws on
+`Err`. Once `execute` has returned a handle, completion never throws — every
+later failure closes the output stream (with the complete or partial rendered
+output) and resolves `Err`. A failure before a handle can be created may still
+throw. Its `output` property is a replay-safe `Stream<string, string>` of the
+rendered chunks emitted during execution (per-segment for streaming roots, one
+chunk for buffered `<Output>` roots — §5.4); it carries body text for both
+kinds of root, and for a value root it is observability rather than a second
+return value. Late and repeated subscribers receive the full sequence, and the
+stream closes with the full (or partial) output as its close value.
 
 Execution runs in its own scope. Before the durable workflow starts,
 `execute` installs the document's scope-local runtime providers —
@@ -3497,6 +3662,24 @@ function* run(/* ... config params ... */) {
   }
 }
 ```
+
+#### The value-root result on the command line
+
+`xmd run` reserves stdout for the successful result of a value root (§5.4). The
+CLI learns which mode the document is in from `inspectDocument().returnMode`,
+which performs no document effects, and routes the channels accordingly:
+
+- stdout carries only the final value, encoded as JSON and followed by a
+  newline; a string result stays a quoted JSON string. It is written directly,
+  bypassing markdown normalization and terminal formatting.
+- rendered body output is observability: `--verbose` sends it, and the journal
+  diagnostics, to stderr; without `--verbose` it is discarded.
+- every failure — structural, schema, value, body, or after `<Return>` — writes
+  its diagnostic to stderr, exits non-zero, and writes nothing to stdout.
+
+Text roots are unchanged: rendered Markdown goes to stdout and `--verbose` adds
+diagnostics on stderr. `xmd test` reports on stdout in both modes; the JSON
+result contract belongs to `xmd run`.
 
 ### 9.7 Execution flows
 
@@ -4231,6 +4414,30 @@ visible warning blocks, collect into a separate error report).
 | BC2 | Counter stable across runs | Same document structure produces the same block IDs |
 | BC3 | Counter threaded through expansion | Nested component expansion uses same counter |
 | BC4 | Counter not reset per root segment | Per-segment expansion does not reset counter |
+
+### Tier RV — Component return values
+
+| # | Test | Verify |
+|---|------|--------|
+| RV1 | Value kinds | String, number, boolean, array, object, and null bind through `as` |
+| RV2 | Renders nothing | A value component contributes no segments to its caller |
+| RV3 | Caller control flow | The captured value drives `<Show>` in the caller |
+| RV4 | Object-return shorthand | Normalizes with every property required and `additionalProperties: false` |
+| RV5 | Full schema | An optional property is accepted when absent |
+| RV6 | Declaration shape | A non-object or boolean `returns` is rejected in execution and inspection |
+| RV7 | JSON boundary | `undefined`, non-finite, class instance, and cyclic values are rejected before binding |
+| RV8 | Defaults | Schema defaults fill the returned clone, not the producer's object |
+| RV9 | Text mode | No `returns` renders and captures a string; an explicit string schema is value mode |
+| RV10 | Structure | Missing, duplicate, nested, misplaced `<Return>`, `<Output>` with `returns`, bad props, and a missing `as` fail before body effects |
+| RV11 | Reservation | A projected or dynamically produced `<Return>` is diagnosed, never imported |
+| RV12 | Execution order | Documentation after `<Return>` runs; the value sees only preceding bindings |
+| RV13 | Function components | `export const returns` gives the same validation and capture; a text component returning a non-string errors |
+| RV14 | Composition | A value component invoked inside another component's body |
+| RV15 | Value roots | Completion carries the validated value; body text stays on `.output`; every failure completes `Err` |
+| RV16 | Inspection | `returns` and `returnMode` report the effective schema without executing |
+| RV17 | Replay | Golden run and replay produce the same value and output with no re-execution |
+| RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
+| VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
 
 ---
 

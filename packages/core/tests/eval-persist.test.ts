@@ -14,6 +14,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 import { unbox } from "effection";
 import type { Result } from "effection";
 
@@ -27,11 +28,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output).toBe("");
@@ -46,11 +49,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output).toBe("");
@@ -66,11 +71,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output.trim()).toBe("");
@@ -85,18 +92,22 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output1 = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output1 = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
-    const output2 = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output2 = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output2).toBe(output1);
@@ -146,11 +157,13 @@ describe("Tier T6 — persist modifier", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
     );
 
     expect(output.trim()).toBe("");

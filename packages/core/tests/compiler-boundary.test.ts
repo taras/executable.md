@@ -14,10 +14,11 @@ import { useStubFs } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 
 function* runDoc(source: string): Operation<string> {
   yield* useStubFs({ "doc.md": source });
-  return yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() }));
+  return asText(yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() })));
 }
 
 describe("Tier CB — compiler boundary", () => {

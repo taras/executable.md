@@ -9,81 +9,19 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { timebox } from "@effectionx/timebox";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { ensure, spawn, each, type Operation } from "effection";
-import { exec } from "@effectionx/process";
+import { ensure, type Operation } from "effection";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { cliCommand } from "@executablemd/test-support/launch";
+import { runCli } from "@executablemd/test-support/launch";
 
-const CLI_ARGS = ["run"];
-const TIMEOUT = 15_000;
+// These runs read fixtures from the repository, so they keep this process's
+// working directory and its whole environment.
+const RUN = { inheritEnv: true, timeout: 15_000 };
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-cli-test-"));
-}
-
-interface CliResult {
-  code: number | undefined;
-  stdout: string;
-  stderr: string;
-}
-
-/**
- * Run the CLI as a subprocess and collect stdout/stderr regardless
- * of exit code. This avoids ExecError swallowing diagnostic output.
- */
-function* runCliResult(args: string[]) {
-  const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const cli = cliCommand([...CLI_ARGS, ...args]);
-    const proc = yield* exec(cli.command, {
-      arguments: cli.arguments,
-      env: process.env as Record<string, string>,
-    });
-
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-
-    const readStdout = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stdout)) {
-        stdoutChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-
-    const readStderr = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stderr)) {
-        stderrChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-
-    const status = yield* proc.join();
-    yield* readStdout;
-    yield* readStderr;
-
-    return {
-      code: status.code,
-      stdout: stdoutChunks.join(""),
-      stderr: stderrChunks.join(""),
-    };
-  });
-  if (result.timeout) {
-    throw new Error(`CLI timed out after ${TIMEOUT}ms`);
-  }
-  return result.value;
-}
-
-function* runCli(args: string[]) {
-  const result = yield* runCliResult(args);
-  if (result.code !== 0) {
-    throw new Error(
-      `CLI exited with code ${result.code}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`,
-    );
-  }
-  return result;
 }
 
 interface JournalEventView {
@@ -103,7 +41,10 @@ function* readJournal(filePath: string): Operation<JournalEventView[]> {
 describe("CLI journal integration", () => {
   // CJ1: Run without journal (raw)
   it("CJ1: runs document without journal --raw", function* () {
-    const result = yield* runCli(["packages/core/tests/fixtures/streaming/simple.md", "--raw"]);
+    const result = yield* runCli(
+      ["run", "packages/core/tests/fixtures/streaming/simple.md", "--raw"],
+      RUN,
+    ).expect();
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello world");
@@ -111,7 +52,10 @@ describe("CLI journal integration", () => {
 
   // CJ2: Run without journal (normalized)
   it("CJ2: runs document without journal (normalized)", function* () {
-    const result = yield* runCli(["packages/core/tests/fixtures/streaming/simple.md"]);
+    const result = yield* runCli(
+      ["run", "packages/core/tests/fixtures/streaming/simple.md"],
+      RUN,
+    ).expect();
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello world");
@@ -122,11 +66,15 @@ describe("CLI journal integration", () => {
     const journalPath = path.join(tmpDir, "test.jsonl");
     yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
-    const result = yield* runCli([
-      "packages/core/tests/fixtures/streaming/simple.md",
-      `--journal=${journalPath}`,
-      "--raw",
-    ]);
+    const result = yield* runCli(
+      [
+        "run",
+        "packages/core/tests/fixtures/streaming/simple.md",
+        `--journal=${journalPath}`,
+        "--raw",
+      ],
+      RUN,
+    ).expect();
     expect(result.code).toBe(0);
     expect(yield* exists(journalPath)).toBe(true);
 
@@ -152,7 +100,10 @@ describe("CLI journal integration", () => {
       ["```bash exec", `printf ran > "${markerPath}"`, "```"].join("\n"),
     );
 
-    const result = yield* runCliResult([documentPath, `--journal=${journalPath}`, "--raw"]);
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).join();
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("Journal trace already exists");
@@ -169,10 +120,16 @@ describe("CLI journal integration", () => {
     yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     yield* writeTextFile(documentPath, "Version one\n");
-    const firstRun = yield* runCli([documentPath, `--journal=${firstJournal}`, "--raw"]);
+    const firstRun = yield* runCli(
+      ["run", documentPath, `--journal=${firstJournal}`, "--raw"],
+      RUN,
+    ).expect();
 
     yield* writeTextFile(documentPath, "Version two\n");
-    const secondRun = yield* runCli([documentPath, `--journal=${secondJournal}`, "--raw"]);
+    const secondRun = yield* runCli(
+      ["run", documentPath, `--journal=${secondJournal}`, "--raw"],
+      RUN,
+    ).expect();
 
     expect(firstRun.stdout).toContain("Version one");
     expect(secondRun.stdout).toContain("Version two");
@@ -185,10 +142,10 @@ describe("CLI journal integration", () => {
     const journalPath = path.join(tmpDir, "test.jsonl");
     yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
-    const result = yield* runCli([
-      "packages/core/tests/fixtures/streaming/with-exec.md",
-      `--journal=${journalPath}`,
-    ]);
+    const result = yield* runCli(
+      ["run", "packages/core/tests/fixtures/streaming/with-exec.md", `--journal=${journalPath}`],
+      RUN,
+    ).expect();
     expect(result.code).toBe(0);
     expect(
       (yield* readJournal(journalPath)).some((event) => event.description?.type === "exec"),

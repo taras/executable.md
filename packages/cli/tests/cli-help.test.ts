@@ -9,32 +9,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exec, type Exec } from "@effectionx/process";
-import { cliCommand } from "@executablemd/test-support/launch";
-import process from "node:process";
-
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of [
-    "PATH",
-    "HOME",
-    "DENO_DIR",
-    "DENO_INSTALL_ROOT",
-    "XDG_CACHE_HOME",
-    "TMPDIR",
-  ]) {
-    const value = process.env[name];
-    if (typeof value === "string") {
-      env[name] = value;
-    }
-  }
-  return env;
-}
-
-function runCli(args: string[]): Exec {
-  const cli = cliCommand(args);
-  return exec(cli.command, { arguments: cli.arguments, env: cliEnv() });
-}
+import { runCli } from "@executablemd/test-support/launch";
 
 describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("CH1: program help lists the commands", function* () {
