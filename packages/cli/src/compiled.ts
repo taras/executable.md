@@ -8,16 +8,23 @@
 import { main } from "effection";
 import process from "node:process";
 import { API } from "@executablemd/runtime";
-import { useDataUriCompiler } from "@executablemd/core";
-import { compiledCommand } from "./commands.ts";
+import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 
 await main(function* (args) {
-  yield* API.Env.around({
-    *command([xmdArgs = []], next) {
-      void next; // terminal middleware — does not delegate
-      return compiledCommand(process.execPath, xmdArgs);
+  // The base providers for this host. `at: "min"` puts them beneath ordinary
+  // middleware, so a policy installed later can wrap either one.
+  yield* API.Env.around(
+    {
+      *command([xmdArgs = []]) {
+        return [process.execPath, ...xmdArgs];
+      },
+
+      *compile([source, options]) {
+        return yield* compileDataUri(source, options);
+      },
     },
-  });
-  yield* runXmd(args, { useCompiler: useDataUriCompiler });
+    { at: "min" },
+  );
+  yield* runXmd(args);
 });

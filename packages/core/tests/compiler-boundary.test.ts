@@ -30,20 +30,22 @@ describe("Tier CB — compiler boundary", () => {
   it("CB2: an eval block without compiler middleware reports that explicitly", function* () {
     const output = yield* runDoc(["# Doc", "", "```js eval", "env.x = 1;", "```", ""].join("\n"));
     expect(output).toContain("compiler not installed");
-    expect(output).toContain("API.Compiler.around()");
+    expect(output).toContain("API.Env.around()");
   });
 
   it("CB3: execute() uses the caller's compiler rather than shadowing it", function* () {
     const compiled: string[] = [];
-    yield* API.Compiler.around({
-      *compile([source], next) {
-        void next; // terminal middleware — does not delegate
-        compiled.push(source);
-        return function* () {
-          return undefined;
-        };
+    yield* API.Env.around(
+      {
+        *compile([source]) {
+          compiled.push(source);
+          return function* () {
+            return undefined;
+          };
+        },
       },
-    });
+      { at: "min" },
+    );
 
     const output = yield* runDoc(["# Doc", "", "```js eval", "env.x = 1;", "```", ""].join("\n"));
     expect(output).not.toContain("compiler not installed");

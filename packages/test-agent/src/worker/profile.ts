@@ -77,7 +77,7 @@ export function* installWorkerProfile(filesystem: WorkerFilesystem): Operation<v
       throw new Error("filesystem globbing is denied in behavior documents");
     },
   });
-  yield* API.Compiler.around({
+  yield* API.Env.around({
     *compile([source, options], next) {
       const imports = options?.imports ?? [];
       if (imports.length > 0) {

@@ -33,10 +33,12 @@
  *   used together for component resolution and replay guards.
  * - **Fetch** — HTTP has distinct timeout/body/abort semantics. Merging
  *   with Fs or Process would blur cancellation boundaries.
- * - **Env** — host metadata (env vars, platform) plus `command`, the
- *   invocation of this xmd. Kept as a context-api because tests use
- *   `.around()` to mock platform/env for deterministic replay testing, and
- *   because only a runtime-named entrypoint can supply `command`.
+ * - **Env** — the host itself: metadata (env vars, platform) plus the two
+ *   capabilities only the entrypoint can supply, `command` (how to re-invoke
+ *   this xmd) and `compile` (how this host loads a generated module). Tests
+ *   use `.around()` to mock platform/env for deterministic replay; an
+ *   entrypoint installs its `command` and `compile` with `{ at: "min" }` so
+ *   ordinary middleware can wrap them.
  *
  * ## Middleware
  *
@@ -156,18 +158,18 @@ interface FetchHandler {
   ): Operation<RuntimeFetchResponse>;
 }
 
+/**
+ * A compiled eval block: a generator function over the document's binding
+ * environment. What a compiler produces and `compile` returns.
+ */
+export type EvalBlock = (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
+
 interface EnvHandler {
   cwd(): Operation<string>;
   env(name: string): Operation<string | undefined>;
   platform(): Operation<{ os: string; arch: string }>;
   command(args?: string[]): Operation<string[]>;
-}
-
-interface CompilerHandler {
-  compile(
-    source: string,
-    options?: { imports: string[] },
-  ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>>;
+  compile(source: string, options?: { imports: string[] }): Operation<EvalBlock>;
 }
 
 export const API: {
@@ -175,7 +177,6 @@ export const API: {
   Fs: Api<FsHandler>;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
-  Compiler: Api<CompilerHandler>;
 } = {
   /**
    * Subprocess execution.
@@ -355,23 +356,16 @@ export const API: {
         "xmd command not installed — a runtime-named entrypoint must install it via API.Env.around()",
       );
     },
-  }),
 
-  /**
-   * Block compilation.
-   *
-   * Default handler throws — platform-specific middleware must be
-   * installed via `yield* API.Compiler.around(...)` before use.
-   * See `packages/core/src/data-uri-compiler.ts` and `temp-file-compiler.ts`.
-   */
-  Compiler: createApi("runtime.compiler", {
+    /**
+     * Compiling an eval block means loading a module the way this host
+     * loads modules, so the implementation belongs with the entrypoint that
+     * knows the host — beside `command`, installed in the same call.
+     */
     // deno-lint-ignore require-yield
-    *compile(
-      _source: string,
-      _options?: { imports: string[] },
-    ): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
+    *compile(_source: string, _options?: { imports: string[] }): Operation<EvalBlock> {
       throw new Error(
-        "compiler not installed — install platform-specific middleware via API.Compiler.around()",
+        "compiler not installed — install platform-specific middleware via API.Env.around()",
       );
     },
   }),
@@ -395,4 +389,4 @@ export const platform: typeof API.Env.operations.platform = API.Env.operations.p
 
 export const command: typeof API.Env.operations.command = API.Env.operations.command;
 
-export const compile: typeof API.Compiler.operations.compile = API.Compiler.operations.compile;
+export const compile: typeof API.Env.operations.compile = API.Env.operations.compile;

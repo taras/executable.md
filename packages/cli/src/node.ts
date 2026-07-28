@@ -15,18 +15,29 @@ import { main } from "effection";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API } from "@executablemd/runtime";
-import { useTempFileCompiler } from "@executablemd/core";
-import { nodeCommand } from "./commands.ts";
+import { compileTempFile } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
 await main(function* (args) {
-  yield* API.Env.around({
-    *command([xmdArgs = []], next) {
-      void next; // terminal middleware — does not delegate
-      return nodeCommand(process.execPath, process.execArgv, ENTRYPOINT, xmdArgs);
+  // The base providers for this host. `at: "min"` puts them beneath ordinary
+  // middleware, so a policy installed later can wrap either one.
+  yield* API.Env.around(
+    {
+      *command([xmdArgs = []]) {
+        // A worker inheriting the parent's --inspect would exit immediately on
+        // the debug port the parent already holds. Every other execArgv entry
+        // carries across: a loader the parent needs, the child needs too.
+        const execArgv = process.execArgv.filter((option) => !option.startsWith("--inspect"));
+        return [process.execPath, ...execArgv, ENTRYPOINT, ...xmdArgs];
+      },
+
+      *compile([source, options]) {
+        return yield* compileTempFile(source, options);
+      },
     },
-  });
-  yield* runXmd(args, { useCompiler: useTempFileCompiler });
+    { at: "min" },
+  );
+  yield* runXmd(args);
 });

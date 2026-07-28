@@ -9,9 +9,9 @@
  * - `API.Process` — subprocess execution (`exec`)
  * - `API.Fs` — filesystem (`readTextFile`, `stat`, `glob`)
  * - `API.Fetch` — HTTP requests (`fetch`)
- * - `API.Env` — host environment: variables, platform info, and the command
- *   that invokes this xmd (`cwd`, `env`, `platform`, `command`)
- * - `API.Compiler` — block compilation (`compile`)
+ * - `API.Env` — the host: variables, platform info, the command that invokes
+ *   this xmd, and eval-block compilation
+ *   (`cwd`, `env`, `platform`, `command`, `compile`)
  * - `Config` — shared execution config (`timeout`)
  *
  * See `apis.ts` for architecture rationale.
@@ -31,7 +31,7 @@ export {
   command,
   compile,
 } from "./apis.ts";
-export type { ResponseHeaders, RuntimeFetchResponse, StatResult } from "./apis.ts";
+export type { EvalBlock, ResponseHeaders, RuntimeFetchResponse, StatResult } from "./apis.ts";
 export { findFreePort } from "./find-free-port.ts";
 export { Config, timeout } from "./config.ts";
 export type { ConfigApi } from "./config.ts";

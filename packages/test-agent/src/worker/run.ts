@@ -63,19 +63,7 @@ interface ScenarioRuntime {
   markExhausted(): void;
 }
 
-export interface RunTestAgentWorkerOptions {
-  /** Opaque controller route (controller-launched workers only). */
-  connect: string;
-  /**
-   * Installs the eval compiler for this host. The worker installs it beneath
-   * the behavior-document profile, so the profile's inline-only restriction
-   * wraps it — a compiler installed above the profile would answer `compile`
-   * itself and the restriction would never run.
-   */
-  useCompiler(): Operation<void>;
-}
-
-export function* runTestAgentWorker(options: RunTestAgentWorkerOptions): Operation<void> {
+export function* runTestAgentWorker(options: { connect: string }): Operation<void> {
   const route = parseRoute(options.connect);
   if (!route.ok) {
     throw new Error(route.error);
@@ -193,9 +181,6 @@ export function* runTestAgentWorker(options: RunTestAgentWorkerOptions): Operati
             return { exists: reply.exists, isFile: reply.isFile, isDirectory: false };
           },
         });
-        // Beneath the profile, so its inline-only check runs first and the
-        // passthrough for an allowed block reaches a real compiler.
-        yield* options.useCompiler();
         yield* installWhenPromptComponent(bridge);
         // Behavior-document errors — eval preflight rejections,
         // unsupported components, matcher configuration — must fail the

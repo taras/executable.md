@@ -9,7 +9,7 @@ import { compile as runtimeCompile } from "@executablemd/runtime";
  * Compile transformed source code into a generator function.
  *
  * Delegates to `@executablemd/runtime` so platform-specific
- * compilation can be provided via API.Compiler middleware.
+ * compilation can be provided via API.Env.compile middleware.
  */
 export function compileBlock(
   transformedBodyCode: string,

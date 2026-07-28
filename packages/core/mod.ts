@@ -89,8 +89,8 @@ export type { ExecuteOptions, ExecutionApi, DocumentExecution } from "./src/exec
 export { inspectDocument } from "./src/inspect.ts";
 export type { DocumentInfo, InspectOptions } from "./src/inspect.ts";
 export { parseMarkdownDefinition } from "./src/definition.ts";
-export { useDataUriCompiler } from "./src/data-uri-compiler.ts";
-export { useTempFileCompiler } from "./src/temp-file-compiler.ts";
+export { compileDataUri, useDataUriCompiler } from "./src/data-uri-compiler.ts";
+export { compileTempFile, useTempFileCompiler } from "./src/temp-file-compiler.ts";
 
 export { collect } from "./src/collect.ts";
 

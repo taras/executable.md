@@ -11,18 +11,25 @@ import { main } from "effection";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API } from "@executablemd/runtime";
-import { useDataUriCompiler } from "@executablemd/core";
-import { denoCommand } from "./commands.ts";
+import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
 await main(function* (args) {
-  yield* API.Env.around({
-    *command([xmdArgs = []], next) {
-      void next; // terminal middleware — does not delegate
-      return denoCommand(process.execPath, ENTRYPOINT, xmdArgs);
+  // The base providers for this host. `at: "min"` puts them beneath ordinary
+  // middleware, so a policy installed later can wrap either one.
+  yield* API.Env.around(
+    {
+      *command([xmdArgs = []]) {
+        return [process.execPath, "run", "--allow-all", ENTRYPOINT, ...xmdArgs];
+      },
+
+      *compile([source, options]) {
+        return yield* compileDataUri(source, options);
+      },
     },
-  });
-  yield* runXmd(args, { useCompiler: useDataUriCompiler });
+    { at: "min" },
+  );
+  yield* runXmd(args);
 });

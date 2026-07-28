@@ -14,6 +14,7 @@
 import { until } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
+import type { EvalBlock } from "@executablemd/runtime";
 // STANDARD_IMPORTS below resolve at runtime from generated eval modules;
 // without these static anchors, `deno compile --exclude-unused-npm` prunes
 // the packages from the binary and every eval block using them fails.
@@ -32,35 +33,44 @@ const STANDARD_IMPORTS = [
   'import { findFreePort } from "@executablemd/runtime";',
 ];
 
+/** Compile one eval block by importing it as a data: URI. */
+export function* compileDataUri(
+  source: string,
+  options?: { imports: string[] },
+): Operation<EvalBlock> {
+  const userImports = options?.imports ?? [];
+  const allImports = [...STANDARD_IMPORTS, ...userImports];
+
+  const importLines = allImports.join("\n");
+
+  const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
+
+  const dataUri = `data:application/typescript,${encodeURIComponent(moduleSource)}`;
+  const mod: { default: EvalBlock } = yield* until(import(dataUri));
+
+  if (typeof mod.default !== "function") {
+    throw new Error(
+      `compileDataUri: expected default export to be a generator function, got ${typeof mod.default}`,
+    );
+  }
+
+  return mod.default;
+}
+
 /**
- * Install the data: URI compiler as middleware on the current scope.
+ * Install the data: URI compiler as the base provider on the current scope.
  *
- * Must be called inside an Effection scope before any eval blocks execute.
+ * `at: "min"` puts it beneath ordinary middleware, so a policy installed
+ * later — the behavior-document restriction, an instrumenting wrapper — can
+ * inspect a block and delegate here.
  */
 export function* useDataUriCompiler(): Operation<void> {
-  yield* API.Compiler.around({
-    *compile([source, options], next) {
-      void next; // terminal middleware — does not delegate
-
-      const userImports = options?.imports ?? [];
-      const allImports = [...STANDARD_IMPORTS, ...userImports];
-
-      const importLines = allImports.join("\n");
-
-      const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
-
-      const dataUri = `data:application/typescript,${encodeURIComponent(moduleSource)}`;
-      const mod: {
-        default: (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
-      } = yield* until(import(dataUri));
-
-      if (typeof mod.default !== "function") {
-        throw new Error(
-          `useDataUriCompiler: expected default export to be a generator function, got ${typeof mod.default}`,
-        );
-      }
-
-      return mod.default;
+  yield* API.Env.around(
+    {
+      *compile([source, options]) {
+        return yield* compileDataUri(source, options);
+      },
     },
-  });
+    { at: "min" },
+  );
 }

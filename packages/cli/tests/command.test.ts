@@ -1,9 +1,10 @@
 /**
- * Tier XC — how each runtime re-invokes this CLI (`API.Env.command`).
+ * Tier XC — `API.Env.command`, the invocation of the running xmd.
  *
- * The builders are asserted directly because the entrypoints that use them
- * are scripts: importing one runs the CLI. Each entrypoint's own wiring is
- * covered end-to-end by the test-agent suites, which relaunch a real worker.
+ * The contract is asserted where it is observable: through the operation
+ * itself, and through an entrypoint that has to relaunch a real worker. The
+ * per-host argument order lives inside each entrypoint's own middleware and is
+ * proven by that relaunch succeeding, not by inspecting an array.
  */
 import { describe, it } from "@effectionx/bdd/node";
 import { expect } from "@effectionx/bdd/expect";
@@ -17,9 +18,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { API, command } from "@executablemd/runtime";
-import { bunCommand, compiledCommand, denoCommand, nodeCommand } from "../src/commands.ts";
-
-const ENTRY = "/abs/path/to/entry.ts";
 
 /** Inherit the environment so the child resolves the same Deno install. */
 function cliEnv(): Record<string, string> {
@@ -33,49 +31,7 @@ function cliEnv(): Record<string, string> {
 }
 
 describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources: false }, () => {
-  it("XC1: every runtime places supplied arguments after its entry module", function* () {
-    expect(denoCommand("/bin/deno", ENTRY, ["test-agent"])).toEqual([
-      "/bin/deno",
-      "run",
-      "--allow-all",
-      ENTRY,
-      "test-agent",
-    ]);
-    expect(nodeCommand("/bin/node", [], ENTRY, ["test-agent"])).toEqual([
-      "/bin/node",
-      ENTRY,
-      "test-agent",
-    ]);
-    expect(bunCommand("/bin/bun", ENTRY, ["test-agent"])).toEqual([
-      "/bin/bun",
-      ENTRY,
-      "test-agent",
-    ]);
-    // The binary carries its own entry module, so there is no path to name.
-    expect(compiledCommand("/bin/xmd", ["test-agent"])).toEqual(["/bin/xmd", "test-agent"]);
-  });
-
-  it("XC2: the base invocation carries no subcommand", function* () {
-    expect(denoCommand("/bin/deno", ENTRY, [])).toEqual(["/bin/deno", "run", "--allow-all", ENTRY]);
-    expect(compiledCommand("/bin/xmd", [])).toEqual(["/bin/xmd"]);
-  });
-
-  it("XC3: `test-agent` appears exactly once in the worker invocation", function* () {
-    const worker = denoCommand("/bin/deno", ENTRY, ["test-agent"]);
-    expect(worker.filter((segment) => segment === "test-agent")).toHaveLength(1);
-  });
-
-  it("XC4: node keeps its loader flags but drops --inspect", function* () {
-    const worker = nodeCommand(
-      "/bin/node",
-      ["--import", "tsx", "--inspect=9229", "--inspect-brk"],
-      ENTRY,
-      ["test-agent"],
-    );
-    expect(worker).toEqual(["/bin/node", "--import", "tsx", ENTRY, "test-agent"]);
-  });
-
-  it("XC5: with no adapter installed, command reports that rather than guessing", function* () {
+  it("XC1: with no adapter installed, command reports that rather than guessing", function* () {
     let message = "";
     try {
       yield* command(["test-agent"]);
@@ -85,23 +41,45 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
     expect(message).toContain("xmd command not installed");
   });
 
-  it("XC6: middleware can override the command", function* () {
-    yield* API.Env.around({
-      *command([args = []], next) {
-        void next;
-        return ["stub-xmd", ...args];
+  it("XC2: an adapter appends the arguments it is given", function* () {
+    yield* API.Env.around(
+      {
+        *command([args = []]) {
+          return ["stub-xmd", ...args];
+        },
       },
-    });
+      { at: "min" },
+    );
     expect(yield* command(["test-agent"])).toEqual(["stub-xmd", "test-agent"]);
+    // The base invocation carries no subcommand.
     expect(yield* command()).toEqual(["stub-xmd"]);
   });
 
-  it("XC7: the worker launches when xmd runs from another directory", function* () {
-    // The entrypoint path comes from import.meta.url, so it stays valid
-    // wherever the CLI was started. Running from a scratch directory — with
-    // both the entry module and the document named absolutely — exercises
-    // that end to end: a relaunch command built from a working-directory
-    // relative path would fail to spawn here.
+  it("XC3: ordinary middleware wraps the entrypoint's base provider", function* () {
+    const seen: string[][] = [];
+    yield* API.Env.around(
+      {
+        *command([args = []]) {
+          return ["base-xmd", ...args];
+        },
+      },
+      { at: "min" },
+    );
+    yield* API.Env.around({
+      *command([args = []], next) {
+        seen.push(args);
+        return yield* next(args);
+      },
+    });
+    expect(yield* command(["test-agent"])).toEqual(["base-xmd", "test-agent"]);
+    expect(seen).toEqual([["test-agent"]]);
+  });
+
+  it("XC4: the Deno entrypoint relaunches a worker from another directory", function* () {
+    // Argument placement is proven by the worker actually starting: the
+    // relaunch command is what spawns it. Running from a scratch directory
+    // also exercises the entry path, which comes from import.meta.url and so
+    // stays valid wherever the CLI was started.
     const elsewhere = path.join(os.tmpdir(), `xmd-xc-${randomUUID()}`);
     yield* ensureDir(elsewhere);
     yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));

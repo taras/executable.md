@@ -299,16 +299,9 @@ function* run(
     journal: string | undefined;
     raw: boolean;
   },
-  mode: {
-    testing: boolean;
-    agent?: AgentFlags;
-    props?: Record<string, Json>;
-    useCompiler(): Operation<void>;
-  },
+  mode: { testing: boolean; agent?: AgentFlags; props?: Record<string, Json> },
 ): Operation<void> {
   const { path: rootPath, componentDir, verbose, journal, raw } = config;
-
-  yield* mode.useCompiler();
 
   // Every CLI invocation starts from an empty stream. --journal writes
   // current-run diagnostics only; existing traces are never loaded.
@@ -564,28 +557,18 @@ function* resolveRunProps(
   }
 }
 
-export interface XmdOptions {
-  /**
-   * Installs the eval compiler for this host. The entrypoint chooses which
-   * one; this module chooses where, because the position in the middleware
-   * chain is a property of the command, not of the runtime.
-   */
-  useCompiler(): Operation<void>;
-}
-
 /**
  * Run the CLI.
  *
- * Three host-specific decisions are supplied by the entrypoint that calls
- * this: how this xmd is re-invoked, which compiler suits the runtime, and
- * therefore whether the runtime needs detecting at all. None of them is made
- * here.
+ * The entrypoint that calls this has already installed the host's `API.Env`
+ * providers — how this xmd is re-invoked, and how it compiles an eval block.
+ * Neither decision, nor any runtime detection, happens here.
  *
  * This module still reaches the host directly for terminal and journal I/O —
  * `process.stdout` and `node:fs/promises`. Routing those through contextual
  * APIs is #156.
  */
-export function* runXmd(args: string[], options: XmdOptions): Operation<void> {
+export function* runXmd(args: string[]): Operation<void> {
   const helpRequest = takeHelpFlag(args);
   const propsPhase = yield* preparePropsPhase(helpRequest.args);
 
@@ -634,7 +617,6 @@ export function* runXmd(args: string[], options: XmdOptions): Operation<void> {
       }
       yield* run(config, {
         testing: false,
-        useCompiler: options.useCompiler,
         props: props.value,
         agent: {
           agentProvider: config.agentProvider,
@@ -664,14 +646,11 @@ export function* runXmd(args: string[], options: XmdOptions): Operation<void> {
         yield* exit(1);
         break;
       }
-      yield* run(command.config, { testing: true, useCompiler: options.useCompiler });
+      yield* run(command.config, { testing: true });
       break;
     }
     case "test-agent":
-      yield* runTestAgentWorker({
-        connect: command.config.connect,
-        useCompiler: options.useCompiler,
-      });
+      yield* runTestAgentWorker({ connect: command.config.connect });
       break;
   }
 }

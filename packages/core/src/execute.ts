@@ -387,7 +387,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       // No compiler is installed here. Which one suits the host is the
       // entrypoint's decision, and installing one from inside this task would
       // shadow whatever the caller installed outside it. A document with no
-      // eval blocks never reaches API.Compiler at all.
+      // eval blocks never reaches API.Env.compile at all.
 
       // DocumentOutput → channel bridge (innermost middleware — output flows
       // through caller-installed normalize/terminal middleware first, then here).
