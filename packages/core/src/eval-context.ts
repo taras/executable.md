@@ -4,9 +4,10 @@
 
 import type { Operation } from "effection";
 import { compile as runtimeCompile } from "@executablemd/runtime";
+import type { EvalBlock } from "@executablemd/runtime";
 
 /**
- * Compile transformed source code into a generator function.
+ * Compile transformed source code into a runnable eval block.
  *
  * Delegates to `@executablemd/runtime` so platform-specific
  * compilation can be provided via API.Env.compile middleware.
@@ -14,6 +15,6 @@ import { compile as runtimeCompile } from "@executablemd/runtime";
 export function compileBlock(
   transformedBodyCode: string,
   userImports: string[],
-): Operation<(env: Record<string, unknown>) => Generator<unknown, unknown, unknown>> {
+): Operation<EvalBlock> {
   return runtimeCompile(transformedBodyCode, { imports: userImports });
 }

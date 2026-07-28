@@ -159,10 +159,14 @@ interface FetchHandler {
 }
 
 /**
- * A compiled eval block: a generator function over the document's binding
- * environment. What a compiler produces and `compile` returns.
+ * A compiled eval block: applied to the document's binding environment, it
+ * yields an operation the caller runs with `yield*`.
+ *
+ * Compilers generate `function*` modules, and a generator object already
+ * satisfies `Operation` — but that is how the block happens to be built, not
+ * what callers may depend on.
  */
-export type EvalBlock = (env: Record<string, unknown>) => Generator<unknown, unknown, unknown>;
+export type EvalBlock = (env: Record<string, unknown>) => Operation<unknown>;
 
 interface EnvHandler {
   cwd(): Operation<string>;

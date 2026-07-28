@@ -93,11 +93,7 @@ describe("Tier R — Eval module globals", () => {
     // in the generated module via standard imports
     const fn = yield* compileBlock("env.hasWhen = typeof when === 'function';", []);
     const env: Record<string, unknown> = {};
-    const gen = fn(env);
-    let r = gen.next();
-    while (!r.done) {
-      r = gen.next();
-    }
+    yield* fn(env);
     expect(env["hasWhen"]).toBe(true);
   });
 
@@ -105,11 +101,7 @@ describe("Tier R — Eval module globals", () => {
   it("R1c: findFreePort is accessible in eval sandbox", function* () {
     const fn = yield* compileBlock("env.hasFindFreePort = typeof findFreePort === 'function';", []);
     const env: Record<string, unknown> = {};
-    const gen = fn(env);
-    let r = gen.next();
-    while (!r.done) {
-      r = gen.next();
-    }
+    yield* fn(env);
     expect(env["hasFindFreePort"]).toBe(true);
   });
 
@@ -133,11 +125,7 @@ describe("Tier R — Eval module globals", () => {
       .join("\n");
     const fn = yield* compileBlock(checkCode, []);
     const env: Record<string, unknown> = {};
-    const gen = fn(env);
-    let r = gen.next();
-    while (!r.done) {
-      r = gen.next();
-    }
+    yield* fn(env);
     for (const name of checks) {
       expect(env[`has_${name}`]).toBe(true);
     }

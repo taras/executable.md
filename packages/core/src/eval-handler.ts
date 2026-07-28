@@ -45,8 +45,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         Object.assign(evalEnv.values, bindings);
 
         // Compile the eval block via data: URI module import.
-        // compileBlock is async (returns Operation) — it generates a
-        // TypeScript module and imports it via data: URI.
+        // Compiling loads a module, so it is itself an operation.
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
 
         if (persist) {
@@ -58,9 +57,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
               `persist eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,
             );
           }
-          const blockResult = yield* scope.eval(
-            () => fn(evalEnv.values) as unknown as Operation<unknown>,
-          );
+          const blockResult = yield* scope.eval(() => fn(evalEnv.values));
           const returnValue = unbox(blockResult);
           if (!outputRef.text && returnValue != null) {
             outputRef.text = String(returnValue);
@@ -68,7 +65,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         } else {
           // Normal mode: run the compiled block in the current scope.
           // Resources are torn down when this operation completes.
-          const returnValue = yield* fn(evalEnv.values) as unknown as Operation<unknown>;
+          const returnValue = yield* fn(evalEnv.values);
           if (!outputRef.text && returnValue != null) {
             outputRef.text = String(returnValue);
           }
