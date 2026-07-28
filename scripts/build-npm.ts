@@ -235,9 +235,8 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     isolatedImports[name] = `npm:${name}@^${siblingVer}`;
     isolatedImports[`${name}/`] = `npm:${name}@^${siblingVer}/`;
   }
-  // Preserve the manifest fields alongside the rewritten imports: the CLI
-  // imports its own deno.json for `version`, so replacing the copy with a bare
-  // import map makes that property vanish from the JSON module's type.
+  // The CLI imports its own deno.json for `version`, so replacing the copy with
+  // a bare import map would make that property vanish from the JSON module's type.
   yield* writeTextFile(
     join(srcCopy, "deno.json"),
     JSON.stringify(

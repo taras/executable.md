@@ -5,7 +5,7 @@
  * URI, which leaves nothing on disk. Deno and Bun load one; Node's tsx loader
  * rejects it, so the Node entrypoint installs the temp-file compiler instead.
  * Standard imports (Effection, executable.md APIs) are captured in the middleware
- * closure — they are not part of the Compiler API interface.
+ * closure — they are not part of the `API.Env.compile` interface.
  *
  * Install via `yield* useDataUriCompiler()` inside a document execution
  * scope before any eval blocks are processed.

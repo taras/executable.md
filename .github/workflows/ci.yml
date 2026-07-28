@@ -140,3 +140,11 @@ jobs:
 
       - name: Test
         run: bun run test:bun
+
+      # test:bun never loads packages/cli/src/bun.ts, so it cannot tell whether
+      # the Bun entrypoint's API.Env providers work. This document drives a
+      # <TestAgent> scenario, which makes the parent relaunch bun.ts as
+      # `test-agent` through the command it builds — the only check that
+      # exercises that relaunch.
+      - name: Bun entrypoint smoke
+        run: bun run packages/cli/src/bun.ts test smoke-test/test-agent/README.md --raw

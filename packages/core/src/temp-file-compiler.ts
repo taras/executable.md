@@ -6,7 +6,7 @@
  * Bun handles .ts natively; Node requires tsx.
  *
  * Standard imports (Effection, executable.md APIs) are captured in the middleware
- * closure — they are not part of the Compiler API interface.
+ * closure — they are not part of the `API.Env.compile` interface.
  *
  * Installed automatically by `execute` when running on Node or Bun.
  */
@@ -72,7 +72,6 @@ export function* compileTempFile(
 
     return mod.default;
   } finally {
-    // Clean up temp file — don't await, fire and forget
     unlink(tmpPath).catch(() => {});
   }
 }
