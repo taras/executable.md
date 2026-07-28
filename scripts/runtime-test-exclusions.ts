@@ -1,9 +1,10 @@
 /**
  * Test files that do not run under a given runtime.
  *
- * Discovery covers every `*.test.ts` in the repository, so a new test joins all
- * three runtime jobs by default. Staying out of one is a deliberate act, and
- * this file is where that act is recorded and reviewed.
+ * Discovery covers `tests/` beneath each workspace member plus `scripts/tests/`,
+ * so a new test file there joins all three runtime jobs by default. Staying out
+ * of one is a deliberate act, and this file is where that act is recorded and
+ * reviewed.
  *
  * `scripts/tests/runtime-exclusions.test.ts` checks that each entry is
  * structurally sound — the path exists, discovery would have found it, it is
