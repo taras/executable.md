@@ -73,7 +73,7 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
       cwd: elsewhere,
       inheritEnv: true,
       timeout: 180_000,
-    });
+    }).join();
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("The review of **packages/core** passed.");
   });

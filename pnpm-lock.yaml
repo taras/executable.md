@@ -326,9 +326,15 @@ importers:
 
   packages/test-support:
     dependencies:
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0-alpha.10)
       '@effectionx/test-adapter':
         specifier: 0.7.4
         version: 0.7.4(effection@4.1.0-alpha.10)
+      '@effectionx/timebox':
+        specifier: 0.4.3
+        version: 0.4.3(effection@4.1.0-alpha.10)
       effection:
         specifier: 4.1.0-alpha.10
         version: 4.1.0-alpha.10

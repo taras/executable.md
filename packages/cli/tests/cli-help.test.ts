@@ -9,18 +9,18 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { expectCli, runCli } from "@executablemd/test-support/launch";
+import { runCli } from "@executablemd/test-support/launch";
 
 describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("CH1: program help lists the commands", function* () {
-    const { stdout } = yield* expectCli(["--help"]);
+    const { stdout } = yield* runCli(["--help"]).expect();
     expect(stdout).toContain("Usage: xmd <COMMAND> [OPTIONS]");
     expect(stdout).toContain("run");
     expect(stdout).toContain("test-agent");
   });
 
   it("CH2: xmd run --help prints run help instead of a missing-argument error", function* () {
-    const { stdout, stderr } = yield* expectCli(["run", "--help"]);
+    const { stdout, stderr } = yield* runCli(["run", "--help"]).expect();
     expect(stdout).toContain("Usage: xmd run [OPTIONS] <path>");
     expect(stdout).toContain("markdown document to execute");
     expect(stdout).toContain("--component-dir");
@@ -28,18 +28,18 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
   });
 
   it("CH3: xmd test --help prints test help", function* () {
-    const { stdout } = yield* expectCli(["test", "--help"]);
+    const { stdout } = yield* runCli(["test", "--help"]).expect();
     expect(stdout).toContain("Usage: xmd test [OPTIONS] <path>");
     expect(stdout).toContain("markdown document to test");
   });
 
   it("CH4: --version prints the version", function* () {
-    const { stdout } = yield* expectCli(["--version"]);
+    const { stdout } = yield* runCli(["--version"]).expect();
     expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("CH5: a missing document still fails, so help detection does not mask errors", function* () {
-    const { code, stderr } = yield* runCli(["run"]);
+    const { code, stderr } = yield* runCli(["run"]).join();
     expect(code).toBe(1);
     expect(stderr).toContain("path");
   });

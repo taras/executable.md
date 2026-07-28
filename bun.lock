@@ -153,7 +153,9 @@
       "name": "@executablemd/test-support",
       "version": "0.0.0",
       "dependencies": {
+        "@effectionx/process": "0.8.1",
         "@effectionx/test-adapter": "0.7.4",
+        "@effectionx/timebox": "0.4.3",
         "effection": "4.1.0-alpha.10",
         "expect": "^30.0.0",
       },
