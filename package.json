@@ -50,13 +50,21 @@
   },
   "devDependencies": {
     "@durable-streams/server": "^0.3.8",
+    "@executablemd/acp": "workspace:*",
+    "@executablemd/cli": "workspace:*",
+    "@executablemd/code-review-agent": "workspace:*",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "@executablemd/test-agent": "workspace:*",
     "@executablemd/test-support": "workspace:*",
-    "oxlint": "^1",
-    "oxfmt": "^0.41.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.0.0",
+    "@executablemd/testing": "workspace:*",
+    "@types/node": "^22.0.0",
     "expect": "^30.0.0",
-    "@types/node": "^22.0.0"
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
   },
   "scripts": {
     "test:node": "tsx scripts/runtime-tests.ts node",

@@ -84,9 +84,33 @@ importers:
       '@durable-streams/server':
         specifier: ^0.3.8
         version: 0.3.8
+      '@executablemd/acp':
+        specifier: workspace:*
+        version: link:packages/acp
+      '@executablemd/cli':
+        specifier: workspace:*
+        version: link:packages/cli
+      '@executablemd/code-review-agent':
+        specifier: workspace:*
+        version: link:packages/code-review-agent
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:packages/durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:packages/runtime
+      '@executablemd/test-agent':
+        specifier: workspace:*
+        version: link:packages/test-agent
       '@executablemd/test-support':
         specifier: workspace:*
         version: link:packages/test-support
+      '@executablemd/testing':
+        specifier: workspace:*
+        version: link:packages/testing
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15

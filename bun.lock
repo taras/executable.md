@@ -31,7 +31,15 @@
       },
       "devDependencies": {
         "@durable-streams/server": "^0.3.8",
+        "@executablemd/acp": "workspace:*",
+        "@executablemd/cli": "workspace:*",
+        "@executablemd/code-review-agent": "workspace:*",
+        "@executablemd/core": "workspace:*",
+        "@executablemd/durable-streams": "workspace:*",
+        "@executablemd/runtime": "workspace:*",
+        "@executablemd/test-agent": "workspace:*",
         "@executablemd/test-support": "workspace:*",
+        "@executablemd/testing": "workspace:*",
         "@types/node": "^22.0.0",
         "expect": "^30.0.0",
         "oxfmt": "^0.41.0",
@@ -54,7 +62,7 @@
       "name": "@executablemd/cli",
       "version": "0.6.0",
       "bin": {
-        "xmd": "./src/cli.ts",
+        "xmd": "./src/node.ts",
       },
       "dependencies": {
         "@effectionx/stream-helpers": "0.8.3",
