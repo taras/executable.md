@@ -1,6 +1,6 @@
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
-import { z } from "npm:zod@^4";
+import { z } from "zod";
 import { listWorkspacePaths } from "./workspace.ts";
 
 const SCOPE = "@executablemd/";

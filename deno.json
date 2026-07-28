@@ -30,6 +30,7 @@
     "oxlint": "npm:oxlint@^1",
     "oxlint-tsgolint": "npm:oxlint-tsgolint@^0.17",
     "unist-util-select": "npm:unist-util-select@^5",
+    "zod": "npm:zod@^4.3.6",
     "mdast-util-to-string": "npm:mdast-util-to-string@^4"
   },
   "tasks": {

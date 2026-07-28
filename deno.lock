@@ -3189,7 +3189,8 @@
       "npm:mdast-util-to-string@4",
       "npm:oxlint-tsgolint@0.17",
       "npm:oxlint@1",
-      "npm:unist-util-select@5"
+      "npm:unist-util-select@5",
+      "npm:zod@^4.3.6"
     ],
     "packageJson": {
       "dependencies": [
