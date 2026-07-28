@@ -1,14 +1,17 @@
 /**
- * Temp-file eval block compiler middleware for Node and Bun.
+ * Temp-file eval block compiler.
  *
  * Compiles eval block source into generator functions by writing
  * temporary .ts files to `.xmd-eval/` and dynamically importing them.
  * Bun handles .ts natively; Node requires tsx.
  *
- * Standard imports (Effection, executable.md APIs) are captured in the middleware
+ * Standard imports (Effection, executable.md APIs) are captured in the
  * closure — they are not part of the `API.Env.compile` interface.
  *
- * Installed automatically by `execute` when running on Node or Bun.
+ * Nothing installs this implicitly: `execute` installs no compiler. The Node
+ * entrypoint calls `compileTempFile` from its own `API.Env.compile` provider,
+ * and a programmatic caller that wants only a compiler installs
+ * `useTempFileCompiler()`.
  */
 
 import { call } from "effection";
