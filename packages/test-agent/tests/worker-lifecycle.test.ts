@@ -19,6 +19,7 @@ import process from "node:process";
 import { useTestAgentController } from "../src/controller.ts";
 import type { TestAgentControllerInternals } from "../src/controller.ts";
 import { useLineServer } from "../src/net.ts";
+import { cliCommand } from "@executablemd/test-support/launch";
 import {
   createLineSplitter,
   encodeMessage,
@@ -26,7 +27,6 @@ import {
   parseWorkerMessage,
 } from "../src/protocol.ts";
 
-const CLI = path.resolve("packages/cli/src/deno.ts");
 const BEHAVIOR = [
   "<WhenPrompt",
   '  as="review"',
@@ -57,7 +57,9 @@ interface AcpClientHandle {
 }
 
 function* useWorker(route: string): Operation<AcpClientHandle> {
-  const proc = yield* exec(`deno run --allow-all ${CLI} test-agent --connect ${route}`, {
+  const cli = cliCommand(["test-agent", "--connect", route]);
+  const proc = yield* exec(cli.command, {
+    arguments: cli.arguments,
     env: { ...process.env, NO_COLOR: "1" },
   });
   const lines = createSignal<Record<string, unknown>, undefined>();

@@ -19,9 +19,9 @@ import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
 import { useCommand } from "./command.ts";
+import { cliBase, cliCommand } from "@executablemd/test-support/launch";
 
 const DOC = path.resolve("smoke-test/test-agent/README.md");
-const CLI = path.resolve("packages/cli/src/deno.ts");
 const TIMEOUT = 120_000;
 
 interface CliResult {
@@ -42,8 +42,9 @@ function cliEnv(): Record<string, string> {
 
 function* runCli(args: string[]): Operation<CliResult> {
   const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const proc = yield* exec("deno", {
-      arguments: ["run", "--allow-all", CLI, ...args],
+    const cli = cliCommand(args);
+    const proc = yield* exec(cli.command, {
+      arguments: cli.arguments,
       env: cliEnv(),
     });
 
@@ -109,7 +110,7 @@ describe("Tier TG — test-agent smoke", { sanitizeOps: false, sanitizeResources
   it("TG2: replay repeats the completed journal without contacting ACPX", function* () {
     const stream = new InMemoryStream();
 
-    const live = yield* runSmoke(stream, ["deno", "run", "--allow-all", CLI]);
+    const live = yield* runSmoke(stream, cliBase());
     expect(live.results.map((entry) => entry.status)).toEqual(["pass"]);
     expect(live.result.ok).toBe(true);
     expect(live.output).not.toContain("ERROR");

@@ -19,7 +19,8 @@
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
       "@executablemd/testing": ["./packages/testing/mod.ts"],
       "@executablemd/test-support/bdd": ["./packages/test-support/bdd.ts"],
-      "@executablemd/test-support/expect": ["./packages/test-support/expect.ts"]
+      "@executablemd/test-support/expect": ["./packages/test-support/expect.ts"],
+      "@executablemd/test-support/launch": ["./packages/test-support/launch.ts"]
     }
   },
   "include": [

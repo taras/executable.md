@@ -18,8 +18,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { API, command } from "@executablemd/runtime";
+import { cliCommand } from "@executablemd/test-support/launch";
 
-/** Inherit the environment so the child resolves the same Deno install. */
+/** Inherit PATH so the Node launcher can resolve tsx. */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -74,7 +75,7 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
     expect(seen).toEqual([["test-agent"]]);
   });
 
-  it("XC4: the Deno entrypoint relaunches a worker from another directory", function* () {
+  it("XC4: this runtime's entrypoint relaunches a worker from another directory", function* () {
     // Argument placement is proven by the worker actually starting: the
     // relaunch command is what spawns it. Running from a scratch directory
     // also exercises the entry path, which comes from import.meta.url and so
@@ -84,14 +85,9 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
     yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
 
     const result = yield* timebox<ProcessResult>(180_000, function* () {
-      return yield* exec("deno", {
-        arguments: [
-          "run",
-          "--allow-all",
-          path.resolve("packages/cli/src/deno.ts"),
-          "test",
-          path.resolve("smoke-test/test-agent/README.md"),
-        ],
+      const cli = cliCommand(["test", path.resolve("smoke-test/test-agent/README.md")]);
+      return yield* exec(cli.command, {
+        arguments: cli.arguments,
         cwd: elsewhere,
         env: cliEnv(),
       }).join();

@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./bdd": "./bdd.ts",
-    "./expect": "./expect.ts"
+    "./expect": "./expect.ts",
+    "./launch": "./launch.ts"
   },
   "dependencies": {
     "@effectionx/test-adapter": "0.7.4",

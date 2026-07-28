@@ -8,6 +8,7 @@
     "@durable-streams/server": "npm:@durable-streams/server@^0.3.8",
     "@executablemd/test-support/bdd": "./packages/test-support/bdd.ts",
     "@executablemd/test-support/expect": "./packages/test-support/expect.ts",
+    "@executablemd/test-support/launch": "./packages/test-support/launch.ts",
     "@effectionx/test-adapter": "npm:@effectionx/test-adapter@0.7.4",
     "effection": "npm:effection@4.1.0-alpha.10",
     "effection/experimental": "npm:effection@4.1.0-alpha.10/experimental",

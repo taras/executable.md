@@ -10,10 +10,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exec, type Exec } from "@effectionx/process";
+import { cliCommand } from "@executablemd/test-support/launch";
 import process from "node:process";
-import * as path from "node:path";
-
-const CLI = path.resolve("packages/cli/src/deno.ts");
 
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -34,10 +32,8 @@ function cliEnv(): Record<string, string> {
 }
 
 function runCli(args: string[]): Exec {
-  return exec("deno", {
-    arguments: ["run", "--allow-all", CLI, ...args],
-    env: cliEnv(),
-  });
+  const cli = cliCommand(args);
+  return exec(cli.command, { arguments: cli.arguments, env: cliEnv() });
 }
 
 describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false }, () => {
