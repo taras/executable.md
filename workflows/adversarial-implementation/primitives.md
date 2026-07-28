@@ -14,25 +14,29 @@ The workflow exposes these missing contracts:
 
 1. `<Stage>` selects one manual stage, restores its inputs, and publishes its
    outputs.
-2. `<RunHistory>` creates or resolves the stable run identity, installs it
-   through the Run API, and automatically snapshots execution records and
-   sidecar artifacts. Descendants consume that context internally; authors
-   access the identity only through the API when they genuinely need it.
+2. `<RunHistory>` creates or resolves the stable run identity, resolves its
+   `base` prop once to a source revision, installs both through the Run API, and
+   automatically snapshots execution records and immutable versions of named
+   captures. Resuming a stage restores captured values by stable component and
+   loop-iteration identity. Descendants consume that context internally;
+   authors access the identity only through the API when they genuinely need
+   it.
 3. `<Sandbox>` enforces filesystem, environment, process, network, and durable
    effect capabilities.
-4. `<Worktree>` reconciles a workspace, supplies contextual working directory,
-   sets `Env.cwd` while rendering its children, and cleans up safely.
+4. `<Worktree>` reconciles a workspace from the source revision pinned by the
+   run, supplies contextual working directory, sets `Env.cwd` while rendering
+   its children, and cleans up safely. This workflow invokes it when
+   implementor planning begins, not during discovery.
 5. `<Glob>` evaluates explicit include and exclude patterns relative to
    `Env.cwd` and binds a deduplicated, deterministically ordered list of
    normalized relative paths. Its typed list output is a concrete use case for
    structured component output.
-6. A self-closing `<File>` reads and renders exact content relative to
-   `Env.cwd`. The content-writing form renders its children, writes that
-   content relative to `Env.cwd`, and renders the same content for capture.
-   The `path` prop selects the persistence location; it is not an output value.
-   The caller owns persistence, while content-producing components remain
-   independent of storage. Structured file handles remain part of the
-   structured-output design.
+6. A self-closing `<File>` reads and renders exact repository content relative
+   to `Env.cwd`. The content-writing form is reserved for source changes,
+   explicit exports, and external tools that require a path. Generated
+   handoffs, plans, reviews, and decisions remain captured values in run
+   history. The `path` prop selects a persistence location; it is not an output
+   value. Structured file handles remain part of the structured-output design.
 7. `<Parse>` renders its children, decodes the result as JSON, validates it
    against captured draft-07 JSON Schema content, and binds the validated value
    through `as`. It fails on malformed or invalid content. `<SafeParse>`
@@ -52,11 +56,11 @@ The workflow exposes these missing contracts:
 10. `<Elicit>` renders its children as the request message, accepts a response
     schema that defines the exact fields and options available to the user, and
     binds the validated response directly. The manual exercise obtains that
-    response through a file; runtime input can provide it later. The primitive
-    does not add protocol-defined actions, determine whether involvement is
-    required, or make a decision. Cancelling execution remains a lifecycle
-    event unless the document explicitly includes cancellation as a response
-    option.
+    response through an explicit user-run step; runtime input can provide it
+    later. The primitive does not add protocol-defined actions, determine
+    whether involvement is required, or make a decision. Cancelling execution
+    remains a lifecycle event unless the document explicitly includes
+    cancellation as a response option.
 11. `<Loop>`, `<If>` with an optional nested `<Else>`, and `<Break>` provide
     visible bounded control flow.
     [Issue #78](https://github.com/taras/executable.md/issues/78) defines the

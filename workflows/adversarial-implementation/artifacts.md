@@ -19,10 +19,22 @@ fetch this history. Objects must remain reachable through a ref. Content is
 screened for credentials and other data that must not become durable.
 
 `<RunHistory>` derives snapshots from the execution record. It records the
-source revision, component and loop-iteration identity, inputs, file effects,
-agent results, user decisions, Git and GitHub effects, outcome, and stop reason.
-It appends a snapshot when a manual execution or loop iteration completes and
-when execution succeeds, fails, or is cancelled.
+source revision, component and loop-iteration identity, named captures, inputs,
+file effects, agent results, user decisions, Git and GitHub effects, outcome,
+and stop reason. Each captured result is an immutable artifact version with a
+content hash. It appends a snapshot when a manual execution or loop iteration
+completes and when execution succeeds, fails, or is cancelled.
+
+When a later manual stage resumes the same run, `<RunHistory>` restores its
+named inputs from those recorded values. Required workflow context is rendered
+directly into the next prompt. The agent is not asked to locate or read a
+generated handoff file, so prompt construction does not depend on tool use,
+working directory, permissions, or mutable filesystem content.
+
+Persisting a generated file does not itself reduce model tokens: reading the
+file adds its content to context and normally adds tool-call overhead. Files
+remain useful as explicit user exports or when an external tool requires a
+path, but they are derived views rather than canonical run state.
 
 ## Structured results
 

@@ -184,9 +184,9 @@ does not use named schema strings or a `<Prompt schema>` prop.
 
 ## Workflow-owned development assets
 
-The workflow owns worktrees, working directories, handoff files, plan files,
-feedback, branches, issues, and pull requests. An agent does not own an asset
-merely because its process created it.
+The workflow owns worktrees, working directories, captured handoffs, plans,
+feedback, decisions, branches, issues, and pull requests. An agent does not own
+an asset merely because its process created it.
 
 Deterministic components provide and pass those assets:
 
@@ -194,10 +194,9 @@ Deterministic components provide and pass those assets:
   rendering its children.
 - `<Glob>` resolves explicit include and exclude patterns against `Env.cwd`
   into a deterministic list of normalized relative paths.
-- The content-writing form of `<File>` renders its children, writes that
-  content relative to `Env.cwd`, and renders the same content for capture. Its
-  `path` prop selects the persistence location rather than defining a second
-  output value. A self-closing `<File>` reads and renders exact content.
+- A self-closing `<File>` reads and renders exact repository content. Its
+  content-writing form is used for source changes, explicit exports, or
+  external tools that require a path, not as the default agent handoff.
 - `<PullRequest>` creates or resolves the pull request for a branch and returns
   its identity and state.
 
@@ -209,10 +208,11 @@ existing state, returns a structured handle, and records its observed effects.
 Rerunning a pull-request operation resolves the existing pull request rather
 than creating a duplicate.
 
-Nested agent prompts receive asset paths, contents, commit identities, and pull
-request metadata programmatically. The workflow does not depend on a user
-copying output between agent transcripts or locating another agent's private
-plan file.
+Nested agent prompts receive required handoffs, plans, reviews, decisions,
+commit identities, and pull-request metadata as exact content. Repository
+evidence remains available through paths and read tools for selective
+investigation. The workflow does not depend on a user copying output between
+agent transcripts or asking an agent to locate and read another agent's file.
 
 ### Lab artifact history
 
@@ -225,6 +225,12 @@ Each run records the source commit it investigated along with its artifact
 contents and provenance. The sidecar ref keeps the objects reachable, and the
 workflow pushes and fetches it explicitly because ordinary branch refspecs do
 not imply transport of custom refs.
+
+Captured results are immutable artifact versions keyed by stable component and
+loop-iteration identity. Resuming a named run restores those values and renders
+required content directly into later prompts. A generated file is an optional
+export, not canonical run state. Reading such a file does not inherently save
+tokens because its contents still enter model context.
 
 `<RunHistory>` creates or resolves the stable run identity and installs it
 through a contextual Run API. Worktrees, decisions, pull requests, and issues
@@ -244,8 +250,14 @@ is written to the history.
 
 ### Experiment isolation
 
+The run resolves and records its source revision before discovery. Planner
+discovery and handoff validation do not create a worktree. A worktree is
+created from the pinned revision when implementor planning begins, so the
+implementation plan and later changes use the same filesystem even if the base
+branch moves.
+
 A worktree isolates experimental Git state from the user's current checkout,
-but it is not a security boundary. A supervised manual exercise combines a
+but it is not a security boundary. A supervised manual exercise combines that
 disposable worktree, the narrowest available agent permission policy, a
 deliberately limited task, and explicit user approval before durable or remote
 effects.
@@ -365,15 +377,16 @@ managing implementation mechanics and focus on the design of the workflow.
 ## First exercise
 
 The first exercise uses this workflow to design its own initial automation.
-Artifacts live in explicit repository files. The user triggers each stage
-manually and passes artifacts by path rather than copying their contents between
-agent transcripts.
+The user triggers each stage manually within a named run. `<RunHistory>`
+restores captured values and the workflow renders required content directly
+into later prompts. Generated artifacts do not appear in the repository or
+worktree unless the user explicitly exports them.
 
 The exercise succeeds when:
 
-1. Each manually invoked stage declares its inputs, writes its result to a
-   stable path, and returns.
-2. The planner completes the technical interview and writes an implementor
+1. Each manually invoked stage declares its inputs, records named results in
+   run history, and returns.
+2. The planner completes the technical interview and produces an implementor
    handoff.
 3. The user validates the handoff.
 4. The implementor returns a repository-grounded plan that confirms, refutes, or
@@ -381,13 +394,14 @@ The exercise succeeds when:
 5. The planner returns a verdict with evidence, a focused revision prompt on
    failure, and explicit user decisions when needed.
 6. The loop reaches a user-authorized shared plan before implementation.
-7. The implementor changes only the workflow-owned worktree and records
-   validation evidence.
+7. Implementor planning creates the workflow-owned worktree from the source
+   revision pinned before discovery; implementation changes only that worktree
+   and records validation evidence.
 8. The planner reviews the resulting pull request, and implementation and
    review repeat when the verdict fails.
 9. The user decides whether to accept the completed change.
-10. The participants record every manual artifact transfer or hidden-state
-   dependency encountered during the exercise.
+10. The participants record every hidden-state dependency or optional file
+    export encountered during the exercise.
 11. The completed artifacts remain reachable through the sidecar Git history
    without appearing in the main source tree.
 12. Those observations determine the smallest useful runtime implementation
@@ -401,11 +415,12 @@ slice:
 1. How does a component return a structured asset handle that later components
    can consume without prose parsing?
 2. How does `<Worktree>` choose an idempotent identity, branch name, location,
-   base revision, and cleanup policy?
+   and cleanup policy from the source revision already pinned by the run?
 3. How does a worktree set the contextual working directory inherited by agent,
    file, process, and Git operations?
-4. Which file operations belong in the first `<File>` component, and how are
-   writes constrained to the provided workspace?
+4. Which repository reads, source writes, explicit exports, and path-requiring
+   tool operations belong in the first `<File>` component, and how are writes
+   constrained to the provided workspace?
 5. What assessment does `<UserGate>` require from its supplied agent, and how
    does the lower-level `<Elicit>` runtime primitive present document-defined
    options and bind a validated response without assuming decision policy?

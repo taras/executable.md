@@ -6,10 +6,8 @@ inputs:
       type: string
     authorizationGate:
       type: string
-    instructionPaths:
-      type: array
-      items:
-        type: string
+    instructions:
+      type: string
     planner:
       type: string
     implementor:
@@ -17,7 +15,7 @@ inputs:
   required:
     - planResult
     - authorizationGate
-    - instructionPaths
+    - instructions
     - planner
     - implementor
   additionalProperties: false
@@ -97,7 +95,7 @@ remote effects.
       <Prompt as="implementationCandidate" throwOnError>
         Repository instructions:
 
-        <InstructionFiles paths={props.instructionPaths} />
+        {props.instructions}
 
         Authorized plan:
 
@@ -155,20 +153,6 @@ remote effects.
     </Session>
   </Agent>
 
-  <File path="implementation-result.md">
-    # Implementation result
-
-    ## Changed files
-
-    <Each in={implementation.changedFiles} let="changedFile">
-    - {changedFile}
-    </Each>
-
-    ## Report
-
-    {implementation.report}
-  </File>
-
   <Commit
     paths={implementation.changedFiles}
     message={implementation.commitMessage}
@@ -185,7 +169,7 @@ remote effects.
       <Prompt as="verdictCandidate" throwOnError>
         Repository instructions:
 
-        <InstructionFiles paths={props.instructionPaths} />
+        {props.instructions}
 
         Authorized plan:
 
@@ -246,27 +230,6 @@ remote effects.
       </Parse>
     </Session>
   </Agent>
-  <File path="planner-pull-request-review.md">
-    # Pull-request verdict
-
-    Passed: {verdict.passed}
-
-    {verdict.review}
-
-    ## Findings
-
-    <Each in={verdict.findings} let="finding">
-    ### {finding.title}
-
-    Disposition: {finding.disposition}
-
-    {finding.description}
-    </Each>
-
-    ## Revision prompt
-
-    {verdict.revisionPrompt}
-  </File>
 
   <Each in={verdict.findings} let="finding">
     <If condition={finding.disposition === "defer"}>
@@ -277,32 +240,33 @@ remote effects.
     </If>
   </Each>
 
-  <File path="review-user-gate.md" as="reviewGate">
-    <UserGate purpose="resolve the pull-request review"
-      agent={props.planner}>
-      ## Authorized plan
+  <UserGate
+    purpose="resolve the pull-request review"
+    agent={props.planner}
+    as="reviewGate"
+  >
+    ## Authorized plan
 
-      {props.planResult}
+    {props.planResult}
 
-      ## Pull request
+    ## Pull request
 
-      {pullRequest}
+    {pullRequest}
 
-      ## Planner review
+    ## Planner review
 
-      Passed: {verdict.passed}
+    Passed: {verdict.passed}
 
-      {verdict.review}
+    {verdict.review}
 
-      <Each in={verdict.findings} let="finding">
-      ### {finding.title}
+    <Each in={verdict.findings} let="finding">
+    ### {finding.title}
 
-      Disposition: {finding.disposition}
+    Disposition: {finding.disposition}
 
-      {finding.description}
-      </Each>
-    </UserGate>
-  </File>
+    {finding.description}
+    </Each>
+  </UserGate>
   <If condition={verdict.passed}>
     <Break />
     <Else>
@@ -323,10 +287,7 @@ remote effects.
   </If>
 </Loop>
 
-<File
-  path="implementation-review-result.md"
-  as="implementationReviewResult"
->
+<Output>
   # Implementation review result
 
   ## Pull request
@@ -348,9 +309,11 @@ remote effects.
 
   {finding.description}
   </Each>
-</File>
+</Output>
 
-<Output>{implementationReviewResult}</Output>
+`RunHistory` records each parsed implementation result, commit and pull-request
+handle, planner verdict, and user-gate result. Only implementation source files
+are written into the worktree.
 
 ## Finding dispositions
 

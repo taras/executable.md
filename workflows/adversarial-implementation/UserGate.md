@@ -173,7 +173,7 @@ Rationale: {elicitation.rationale}
 the choice itself. The caller renders the complete material to assess as child
 content rather than asking the agent to locate or read it. `<Elicit>` only
 transports and records a response as a runtime primitive. During the manual
-exercise that response arrives through a file between stage executions;
+exercise an explicit user-run step records that response in run history;
 runtime input can implement the same narrow contract later.
 
 `<SafeParse>` exposes validation failures as data so the document can show the

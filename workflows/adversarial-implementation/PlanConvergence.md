@@ -6,10 +6,8 @@ inputs:
       type: string
     handoffGate:
       type: string
-    instructionPaths:
-      type: array
-      items:
-        type: string
+    instructions:
+      type: string
     planner:
       type: string
     implementor:
@@ -17,7 +15,7 @@ inputs:
   required:
     - handoff
     - handoffGate
-    - instructionPaths
+    - instructions
     - planner
     - implementor
   additionalProperties: false
@@ -56,7 +54,7 @@ resolves factual disagreement, while the user resolves material choices.
   >
     Repository instructions:
 
-    <InstructionFiles paths={props.instructionPaths} />
+    {props.instructions}
 
     Planner handoff:
 
@@ -71,16 +69,13 @@ resolves factual disagreement, while the user resolves material choices.
     concrete implementation plan with the evidence, validation, effects, and
     pull-request boundaries described by this workflow.
   </Prompt>
-  <File path="implementor-plan.md">
-    {plan}
-  </File>
 
   <Agent name={props.planner}>
     <Session name="planner">
       <Prompt as="verdictCandidate" throwOnError>
         Repository instructions:
 
-        <InstructionFiles paths={props.instructionPaths} />
+        {props.instructions}
 
         Planner handoff:
 
@@ -140,36 +135,26 @@ resolves factual disagreement, while the user resolves material choices.
       </Parse>
     </Session>
   </Agent>
-  <File path="planner-plan-review.md">
-    # Planner verdict
+
+  <UserGate
+    purpose="resolve the plan review"
+    agent={props.planner}
+    as="planGate"
+  >
+    ## Implementation plan
+
+    {plan}
+
+    ## Planner review
 
     Passed: {verdict.passed}
 
     {verdict.review}
 
-    ## Revision prompt
+    Revision prompt:
 
     {verdict.revisionPrompt}
-  </File>
-
-  <File path="plan-user-gate.md" as="planGate">
-    <UserGate purpose="resolve the plan review"
-      agent={props.planner}>
-      ## Implementation plan
-
-      {plan}
-
-      ## Planner review
-
-      Passed: {verdict.passed}
-
-      {verdict.review}
-
-      Revision prompt:
-
-      {verdict.revisionPrompt}
-    </UserGate>
-  </File>
+  </UserGate>
   <If condition={verdict.passed}>
     <Break />
     <Else>
@@ -190,7 +175,7 @@ resolves factual disagreement, while the user resolves material choices.
   </If>
 </Loop>
 
-<File path="plan-result.md" as="planResult">
+<Output>
   # Converged implementation plan
 
   {plan}
@@ -200,9 +185,9 @@ resolves factual disagreement, while the user resolves material choices.
   Passed: {verdict.passed}
 
   {verdict.review}
-</File>
-
-<Output>{planResult}</Output>
+</Output>
 
 The loop is bounded and reports why it stopped: passed, user stopped, failed,
-cancelled, or retry limit reached.
+cancelled, or retry limit reached. `RunHistory` records every `plan`,
+`verdict`, and `planGate` version under its loop iteration; the component does
+not create handoff files.

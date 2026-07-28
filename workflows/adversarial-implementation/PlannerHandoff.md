@@ -2,14 +2,12 @@
 inputs:
   type: object
   properties:
-    instructionPaths:
-      type: array
-      items:
-        type: string
+    instructions:
+      type: string
     planner:
       type: string
   required:
-    - instructionPaths
+    - instructions
     - planner
   additionalProperties: false
 ---
@@ -27,7 +25,7 @@ issue may enter directly at implementor planning.
     <Prompt as="handoff" throwOnError>
       Repository instructions:
 
-      <InstructionFiles paths={props.instructionPaths} />
+      {props.instructions}
 
       User request:
 

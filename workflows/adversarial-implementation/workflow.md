@@ -22,74 +22,85 @@ does not yet provide the required primitive.
 
 Each invoked component renders its result through its `<Output>` region. The
 caller's `as` prop captures that result and passes it explicitly to the next
-component. A content-writing `<File>` persists its rendered content without
-replacing it with a path. Root `props` supplies `request`, `base`, `planner`,
-and `implementor`.
+component. `<RunHistory>` persists captured results and restores them when a
+later manual stage resumes. Generated handoffs are prompt content, not files
+that an agent must choose to read. Root `props` supplies `request`, `base`,
+`planner`, and `implementor`.
 
 ## Complete flow
 
-<RunHistory ref="refs/xmd/runs">
+<RunHistory ref="refs/xmd/runs" base={props.base}>
   <Sandbox policy="supervised-implementation">
-    <Worktree base={props.base}>
-      <Glob
-        include={["AGENTS.md", "**/AGENTS.md"]}
-        exclude={[".git/**", "**/node_modules/**"]}
-        as="instructionPaths"
-      />
-      <File path="planner-handoff.md" as="handoff">
-        <PlannerHandoff
-          instructionPaths={instructionPaths}
-          planner={props.planner}
-        >
-          {props.request}
-        </PlannerHandoff>
-      </File>
-      <File path="handoff-user-gate.md" as="handoffGate">
-        <UserGate purpose="validate the planner handoff"
-          agent={props.planner}>
-          {handoff}
-        </UserGate>
-      </File>
+    <Glob
+      include={["AGENTS.md", "**/AGENTS.md"]}
+      exclude={[".git/**", "**/node_modules/**"]}
+      as="instructionPaths"
+    />
+    <Capture as="instructions">
+      <InstructionFiles paths={instructionPaths} />
+    </Capture>
+    <PlannerHandoff
+      instructions={instructions}
+      planner={props.planner}
+      as="handoff"
+    >
+      {props.request}
+    </PlannerHandoff>
+    <UserGate
+      purpose="validate the planner handoff"
+      agent={props.planner}
+      as="handoffGate"
+    >
+      {handoff}
+    </UserGate>
+    <Worktree>
       <PlanConvergence handoff={handoff}
         handoffGate={handoffGate}
-        instructionPaths={instructionPaths}
+        instructions={instructions}
         planner={props.planner}
         implementor={props.implementor}
         as="planResult" />
-      <File path="authorization-user-gate.md" as="authorizationGate">
-        <UserGate purpose="authorize implementation"
-          agent={props.planner}>
-          {planResult}
-        </UserGate>
-      </File>
+      <UserGate
+        purpose="authorize implementation"
+        agent={props.planner}
+        as="authorizationGate"
+      >
+        {planResult}
+      </UserGate>
       <ImplementationReview planResult={planResult}
         authorizationGate={authorizationGate}
-        instructionPaths={instructionPaths}
+        instructions={instructions}
         planner={props.planner}
         implementor={props.implementor}
         as="implementationReviewResult" />
-      <File path="acceptance-user-gate.md" as="acceptanceGate">
-        <UserGate purpose="accept the completed change"
-          agent={props.planner}>
-          {implementationReviewResult}
-        </UserGate>
-      </File>
+      <UserGate
+        purpose="accept the completed change"
+        agent={props.planner}
+        as="acceptanceGate"
+      >
+        {implementationReviewResult}
+      </UserGate>
       <Output>{acceptanceGate}</Output>
     </Worktree>
   </Sandbox>
 </RunHistory>
 
+`RunHistory` resolves `props.base` to a source revision before discovery. The
+worktree is created only when implementor planning begins and uses that pinned
+revision even if the branch moves while discovery is in progress.
+
 ## Rendered data flow
 
-| Captured value               | Rendered by               | Consumed by                                                |
+| Captured value               | Produced by               | Consumed by                                                |
 | ---------------------------- | ------------------------- | ---------------------------------------------------------- |
-| `instructionPaths`           | `Glob`                    | `PlannerHandoff`, `PlanConvergence`, `ImplementationReview` |
-| `handoff`                    | handoff `File`            | handoff `UserGate`, `PlanConvergence`                       |
-| `handoffGate`                | handoff gate `File`       | `PlanConvergence`                                          |
+| `instructionPaths`           | `Glob`                    | `InstructionFiles`                                         |
+| `instructions`               | `InstructionFiles` capture | every agent prompt                                         |
+| `handoff`                    | `PlannerHandoff`          | handoff `UserGate`, `PlanConvergence`                       |
+| `handoffGate`                | handoff `UserGate`        | `PlanConvergence`                                          |
 | `planResult`                 | `PlanConvergence`         | authorization `UserGate`, `ImplementationReview`           |
-| `authorizationGate`          | authorization gate `File` | `ImplementationReview`                                     |
+| `authorizationGate`          | authorization `UserGate`  | `ImplementationReview`                                     |
 | `implementationReviewResult` | `ImplementationReview`    | acceptance `UserGate`                                      |
-| `acceptanceGate`             | acceptance gate `File`    | workflow output, automatic `RunHistory` snapshot            |
+| `acceptanceGate`             | acceptance `UserGate`     | workflow output, automatic `RunHistory` snapshot            |
 
 ## Details
 

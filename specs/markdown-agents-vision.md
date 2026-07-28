@@ -180,16 +180,18 @@ validated workflow state.
 
 ## Workflow-owned development artifacts
 
-A development workflow owns its material environment. Worktrees, working
-directories, handoff documents, implementation plans, feedback, branches, and
-pull requests do not belong to whichever agent happened to create them. The
-document creates or resolves those assets through deterministic components and
-passes their handles into agent prompts explicitly.
+A development workflow owns its material environment and logical run state.
+Worktrees, working directories, captured handoffs, implementation plans,
+feedback, decisions, branches, and pull requests do not belong to whichever
+agent happened to create them. The document captures or resolves those assets
+deterministically and passes required content into agent prompts explicitly.
 
-Illustrative components such as `<Worktree>`, `<File>`, and `<PullRequest>`
-perform operations that should not depend on model judgment:
+Illustrative components such as `<RunHistory>`, `<Worktree>`, `<File>`, and
+`<PullRequest>` perform operations that should not depend on model judgment:
 
-- create or resolve a named workspace, branch, file, or pull request;
+- record immutable handoff, plan, review, and decision versions;
+- create or resolve a named workspace, branch, file, or pull request only when
+  that environmental asset is needed;
 - establish the working directory inherited by child operations;
 - read and write exact artifact content;
 - return paths, commit identities, pull-request numbers, and URLs as workflow
@@ -198,9 +200,10 @@ perform operations that should not depend on model judgment:
 - record the inputs, observed state, effects, and outputs of each operation.
 
 Agent calls analyze evidence and propose changes. Deterministic components apply
-approved environmental changes and provide their results to the next call. This
-removes manual copying between agent-owned transcripts, plan files, and working
-directories.
+approved environmental changes and provide exact required content to the next
+call. Generated files are optional exports rather than the handoff protocol.
+This removes manual copying between agent-owned transcripts, plan files, and
+working directories.
 
 Resources clean up with their enclosing execution by default. Agent sessions,
 processes, streams, and other ongoing effects always stop. An execution may

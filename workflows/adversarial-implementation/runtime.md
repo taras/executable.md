@@ -11,12 +11,13 @@ inputs:
 # Runtime and Isolation
 
 The run owns its worktree, artifact history, processes, and deterministic
-effects. A worktree isolates Git state from the user's checkout but is not a
-security boundary.
+effects. It pins the source revision before discovery. A worktree isolates Git
+state from the user's checkout but is not a security boundary, and it is not
+created until implementor planning needs a stable repository filesystem.
 
 ## Target shape
 
-<RunHistory ref="refs/xmd/runs">
+<RunHistory ref="refs/xmd/runs" base={props.base}>
   <Sandbox
     readable={["repository"]}
     writable={["workspace"]}
@@ -25,18 +26,20 @@ security boundary.
     agentNetwork="deny"
     deterministicEffects={["git-objects", "github"]}
   >
-    <Worktree
-      base={props.base}
-      retain="on-dirty-or-failure"
-    >
-      <Content />
+    <Content slot="discovery" />
+    <Worktree retain="on-dirty-or-failure">
+      <Content slot="repository" />
     </Worktree>
   </Sandbox>
 </RunHistory>
 
 ## Manual exercise
 
-- Use a disposable worktree.
+- Resolve `base` to a source revision before planner discovery and record it in
+  run history.
+- Keep handoffs and user decisions as restored run values during discovery.
+- Create a disposable worktree when implementor planning begins, using the
+  pinned revision rather than resolving the branch again.
 - Let `<Worktree>` set `Env.cwd` while it renders every child.
 - Give the planner read and search access.
 - Restrict implementor writes to worktree files.
@@ -52,8 +55,9 @@ unattended. The manual exercise uses the narrowest host sandbox and permission
 policy already available.
 
 `<RunHistory>` automatically snapshots completed manual executions, completed
-loop iterations, terminal success, failure, and cancellation. Authors do not
-repeat observed artifact paths in an explicit checkpoint.
+loop iterations, terminal success, failure, and cancellation. It restores named
+captures when the next manual stage resumes. Authors do not repeat observed
+artifact paths or generate transfer files in an explicit checkpoint.
 
 ## Loop interruption
 
