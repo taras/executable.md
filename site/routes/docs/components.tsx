@@ -76,13 +76,15 @@ export default define.page(function Components() {
 
       <h2>Returning values</h2>
       <p>
-        A component returns one thing. Without <code>returns</code>, that is its
-        rendered Markdown — the component above renders text, and{" "}
-        <code>as</code> binds that text as a string. A <code>returns</code>{" "}
-        declaration makes it a value component instead: it renders nothing,
-        must be invoked with <code>as</code>, and binds the JSON value its
-        single top-level <code>&lt;Return /&gt;</code>{" "}
-        produces, validated against the schema.
+        A component returns one thing. Without{" "}
+        <code>returns</code>, that is its rendered Markdown — the component
+        above renders text, and <code>as</code> binds that text as a string. A
+        {" "}
+        <code>returns</code>{" "}
+        declaration makes it a value component instead: it renders nothing, must
+        be invoked with{" "}
+        <code>as</code>, and binds the JSON value its single top-level{" "}
+        <code>&lt;Return /&gt;</code> produces, validated against the schema.
       </p>
       <CodeBlock filename="components/Review.md">{VALUE_COMPONENT}</CodeBlock>
       <p>The caller renders whatever presentation it wants from the value.</p>
