@@ -6,77 +6,22 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { timebox } from "@effectionx/timebox";
-import { spawn, each } from "effection";
-import type { Operation } from "effection";
-import { exec } from "@effectionx/process";
-import process from "node:process";
-import { cliCommand } from "@executablemd/test-support/launch";
+import { runCli } from "@executablemd/test-support/launch";
 
-const TIMEOUT = 30_000;
-
-interface CliResult {
-  code: number | undefined;
-  stdout: string;
-  stderr: string;
-}
-
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") {
-      env[key] = value;
-    }
-  }
-  return env;
-}
-
-function* runCli(args: string[]): Operation<CliResult> {
-  const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const cli = cliCommand(args);
-    const proc = yield* exec(cli.command, { arguments: cli.arguments, env: cliEnv() });
-
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    const readStdout = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stdout)) {
-        stdoutChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-    const readStderr = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stderr)) {
-        stderrChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-
-    const status = yield* proc.join();
-    yield* readStdout;
-    yield* readStderr;
-
-    return {
-      code: status.code,
-      stdout: stdoutChunks.join(""),
-      stderr: stderrChunks.join(""),
-    };
-  });
-  if (result.timeout) {
-    throw new Error("CLI subprocess timed out");
-  }
-  return result.value;
-}
+// These runs read fixtures from the repository, so they keep this process's
+// working directory and its whole environment.
+const RUN = { inheritEnv: true, timeout: 30_000 };
 
 describe("xmd CLI", () => {
   it("test exits 0 and prints the report when every test passes", function* () {
-    const result = yield* runCli(["test", "packages/testing/tests/fixtures/passing.md"]);
+    const result = yield* runCli(["test", "packages/testing/tests/fixtures/passing.md"], RUN);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("**AssertEquals** passed");
     expect(result.stdout).toContain("Regular content stays.");
   });
 
   it("test exits 1 and prints the failure diagnostic when a test fails", function* () {
-    const result = yield* runCli(["test", "packages/testing/tests/fixtures/failing.md"]);
+    const result = yield* runCli(["test", "packages/testing/tests/fixtures/failing.md"], RUN);
     expect(result.code).toBe(1);
     expect(result.stdout).toContain("**Assert** failed");
     expect(result.stdout).toContain("Test **bad** failed");
@@ -84,13 +29,13 @@ describe("xmd CLI", () => {
   });
 
   it("test exits 1 when no tests are discovered", function* () {
-    const result = yield* runCli(["test", "README.md"]);
+    const result = yield* runCli(["test", "README.md"], RUN);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("no tests were discovered");
   });
 
   it("run skips tests entirely and exits 0", function* () {
-    const result = yield* runCli(["run", "packages/testing/tests/fixtures/failing.md"]);
+    const result = yield* runCli(["run", "packages/testing/tests/fixtures/failing.md"], RUN);
     expect(result.code).toBe(0);
     expect(result.stdout).not.toContain("Assert");
     expect(result.stdout).toContain("# Fixture");

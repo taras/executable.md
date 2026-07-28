@@ -10,26 +10,11 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
-import { exec } from "@effectionx/process";
-import type { ProcessResult } from "@effectionx/process";
-import { timebox } from "@effectionx/timebox";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import process from "node:process";
 import { API, command } from "@executablemd/runtime";
-import { cliCommand } from "@executablemd/test-support/launch";
-
-/** Inherit PATH so the Node launcher can resolve tsx. */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") {
-      env[key] = value;
-    }
-  }
-  return env;
-}
+import { runCli } from "@executablemd/test-support/launch";
 
 describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("XC1: with no adapter installed, command reports that rather than guessing", function* () {
@@ -84,18 +69,12 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
     yield* ensureDir(elsewhere);
     yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
 
-    const result = yield* timebox<ProcessResult>(180_000, function* () {
-      const cli = cliCommand(["test", path.resolve("smoke-test/test-agent/README.md")]);
-      return yield* exec(cli.command, {
-        arguments: cli.arguments,
-        cwd: elsewhere,
-        env: cliEnv(),
-      }).join();
+    const result = yield* runCli(["test", path.resolve("smoke-test/test-agent/README.md")], {
+      cwd: elsewhere,
+      inheritEnv: true,
+      timeout: 180_000,
     });
-    if (result.timeout) {
-      throw new Error("the CLI timed out");
-    }
-    expect(result.value.code).toBe(0);
-    expect(result.value.stdout).toContain("The review of **packages/core** passed.");
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("The review of **packages/core** passed.");
   });
 });

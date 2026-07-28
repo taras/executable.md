@@ -7,75 +7,13 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { timebox } from "@effectionx/timebox";
-import { each, ensure, scoped, spawn } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { exec } from "@effectionx/process";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import process from "node:process";
-import { cliCommand } from "@executablemd/test-support/launch";
-
-const TIMEOUT = 60_000;
-
-interface CliResult {
-  code: number | undefined;
-  stdout: string;
-  stderr: string;
-}
-
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of [
-    "PATH",
-    "HOME",
-    "DENO_DIR",
-    "DENO_INSTALL_ROOT",
-    "XDG_CACHE_HOME",
-    "TMPDIR",
-  ]) {
-    const value = process.env[name];
-    if (typeof value === "string") {
-      env[name] = value;
-    }
-  }
-  return env;
-}
-
-function* runCli(args: string[], dir: string): Operation<CliResult> {
-  const result = yield* timebox<CliResult>(TIMEOUT, function* () {
-    const cli = cliCommand(args);
-    const proc = yield* exec(cli.command, {
-      arguments: cli.arguments,
-      cwd: dir,
-      env: cliEnv(),
-    });
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    const readStdout = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stdout)) {
-        stdoutChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-    const readStderr = yield* spawn(function* () {
-      for (const chunk of yield* each(proc.stderr)) {
-        stderrChunks.push(new TextDecoder().decode(chunk));
-        yield* each.next();
-      }
-    });
-    const status = yield* proc.join();
-    yield* readStdout;
-    yield* readStderr;
-    return { code: status.code, stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
-  });
-  if (result.timeout) {
-    throw new Error("CLI subprocess timed out");
-  }
-  return result.value;
-}
+import { expectCli, runCli } from "@executablemd/test-support/launch";
 
 function* useFixture<T>(
   files: Record<string, string>,
@@ -142,7 +80,7 @@ const TEXT_ROOT = "TEXT_MARKER\n";
 describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("VR1: stdout carries only the JSON result", function* () {
     const result = yield* useFixture({ "doc.md": OBJECT_ROOT }, function* (dir) {
-      return yield* runCli(["run", "doc.md"], dir);
+      return yield* expectCli(["run", "doc.md"], { cwd: dir });
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('{"passed":true,"summary":"looks good"}\n');
@@ -151,7 +89,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
 
   it("VR2: a string result stays a quoted JSON string", function* () {
     const result = yield* useFixture({ "doc.md": STRING_ROOT }, function* (dir) {
-      return yield* runCli(["run", "doc.md"], dir);
+      return yield* expectCli(["run", "doc.md"], { cwd: dir });
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('"shipped"\n');
@@ -159,7 +97,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
 
   it("VR3: --verbose moves body output and diagnostics to stderr", function* () {
     const result = yield* useFixture({ "doc.md": OBJECT_ROOT }, function* (dir) {
-      return yield* runCli(["run", "doc.md", "--verbose"], dir);
+      return yield* expectCli(["run", "doc.md", "--verbose"], { cwd: dir });
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('{"passed":true,"summary":"looks good"}\n');
@@ -168,7 +106,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
 
   it("VR4: a structural failure exits nonzero with empty stdout", function* () {
     const result = yield* useFixture({ "doc.md": INVALID_STRUCTURE_ROOT }, function* (dir) {
-      return yield* runCli(["run", "doc.md"], dir);
+      return yield* runCli(["run", "doc.md"], { cwd: dir });
     });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
@@ -177,7 +115,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
 
   it("VR5: a failure after <Return> exits nonzero with empty stdout", function* () {
     const result = yield* useFixture({ "doc.md": FAILS_AFTER_RETURN_ROOT }, function* (dir) {
-      return yield* runCli(["run", "doc.md"], dir);
+      return yield* runCli(["run", "doc.md"], { cwd: dir });
     });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
@@ -186,7 +124,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
 
   it("VR6: a text root still writes its rendering to stdout", function* () {
     const result = yield* useFixture({ "doc.md": TEXT_ROOT }, function* (dir) {
-      return yield* runCli(["run", "doc.md", "--raw"], dir);
+      return yield* expectCli(["run", "doc.md", "--raw"], { cwd: dir });
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("TEXT_MARKER");

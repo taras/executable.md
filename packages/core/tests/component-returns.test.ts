@@ -13,9 +13,11 @@ import type { Operation } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
-import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { symlinkSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -92,15 +94,17 @@ function run(files: Record<string, string>, stream?: DurableStream): Operation<R
  */
 function runFixture(files: Record<string, string>): Operation<Run> {
   return scoped(function* () {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "returns-test-"));
-    yield* ensure(function* () {
-      fs.unlinkSync(path.join(dir, "node_modules"));
-      fs.rmSync(dir, { recursive: true, force: true });
-    });
-    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
-    fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir");
+    const dir = path.join(os.tmpdir(), `returns-test-${randomUUID()}`);
+    yield* ensureDir(dir);
+    // Removing the directory removes the symlink with it, and registering the
+    // cleanup first means a failure during setup still takes the fixture away.
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
+    yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
+    // The only step @effectionx/fs does not cover.
+    symlinkSync(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir");
     for (const [name, content] of Object.entries(files)) {
-      fs.writeFileSync(path.join(dir, name), content);
+      yield* writeTextFile(path.join(dir, name), content);
     }
 
     return yield* runExecution({

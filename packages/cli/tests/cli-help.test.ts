@@ -9,43 +9,18 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exec, type Exec } from "@effectionx/process";
-import { cliCommand } from "@executablemd/test-support/launch";
-import process from "node:process";
-
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of [
-    "PATH",
-    "HOME",
-    "DENO_DIR",
-    "DENO_INSTALL_ROOT",
-    "XDG_CACHE_HOME",
-    "TMPDIR",
-  ]) {
-    const value = process.env[name];
-    if (typeof value === "string") {
-      env[name] = value;
-    }
-  }
-  return env;
-}
-
-function runCli(args: string[]): Exec {
-  const cli = cliCommand(args);
-  return exec(cli.command, { arguments: cli.arguments, env: cliEnv() });
-}
+import { expectCli, runCli } from "@executablemd/test-support/launch";
 
 describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("CH1: program help lists the commands", function* () {
-    const { stdout } = yield* runCli(["--help"]).expect();
+    const { stdout } = yield* expectCli(["--help"]);
     expect(stdout).toContain("Usage: xmd <COMMAND> [OPTIONS]");
     expect(stdout).toContain("run");
     expect(stdout).toContain("test-agent");
   });
 
   it("CH2: xmd run --help prints run help instead of a missing-argument error", function* () {
-    const { stdout, stderr } = yield* runCli(["run", "--help"]).expect();
+    const { stdout, stderr } = yield* expectCli(["run", "--help"]);
     expect(stdout).toContain("Usage: xmd run [OPTIONS] <path>");
     expect(stdout).toContain("markdown document to execute");
     expect(stdout).toContain("--component-dir");
@@ -53,18 +28,18 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
   });
 
   it("CH3: xmd test --help prints test help", function* () {
-    const { stdout } = yield* runCli(["test", "--help"]).expect();
+    const { stdout } = yield* expectCli(["test", "--help"]);
     expect(stdout).toContain("Usage: xmd test [OPTIONS] <path>");
     expect(stdout).toContain("markdown document to test");
   });
 
   it("CH4: --version prints the version", function* () {
-    const { stdout } = yield* runCli(["--version"]).expect();
+    const { stdout } = yield* expectCli(["--version"]);
     expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("CH5: a missing document still fails, so help detection does not mask errors", function* () {
-    const { code, stderr } = yield* runCli(["run"]).join();
+    const { code, stderr } = yield* runCli(["run"]);
     expect(code).toBe(1);
     expect(stderr).toContain("path");
   });
