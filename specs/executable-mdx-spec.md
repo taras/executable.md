@@ -1227,10 +1227,9 @@ three, nested:
 - an **invocation** scope, one per component invocation (§6.2). `persist` blocks
   and daemons in a component's body anchor here.
 - a **content** scope, created at an invocation's first projection and shared by
-  the rest of them (§6.3). Content projected through `useContent()`,
-  `renderChildren()` and `render()` anchors here. Content substituted at a
-  `<Content />` position is spliced into the body before expansion (§6.3) and
-  anchors in the invocation scope.
+  the rest of them (§6.3). Everything projected content creates anchors here —
+  Markdown `<Content />`, `useContent()`, `renderChildren()` and `render()`
+  alike.
 
 #### The invocation boundary
 
@@ -1266,7 +1265,9 @@ Leaving an invocation runs one destructor with three ordered stages:
 
 Each stage finishes before the next begins, so projected content has stopped
 before the component releases anything of its own, whichever order the component
-happened to acquire things in. Every stage is attempted even when an earlier one
+happened to acquire things in. The ordering is the boundary's, not a
+consequence of acquisition order within a scope: a provider that retains a
+resource *after* projecting still releases it after that content stops. Every stage is attempted even when an earlier one
 fails; the failures are reported together as one teardown error.
 
 Success, error and cancellation all leave through that destructor. A body that
@@ -2344,7 +2345,20 @@ Invalid slot names (empty strings or names not matching
 `errors` array. These are emitted at the first `<Content />` or
 `<Content slot="..." />` projection point.
 
-#### 6.3.4 Updated `substituteContent`
+#### 6.3.4 Projection and where it executes
+
+Slot resolution happens during body substitution — partitioning, validation and
+the once-only slot errors of §6.3.3 — and the resolved segments ride on the
+`<Content />` element rather than replacing it. Expansion then runs them in the
+invocation's content scope (§4.4), so a resource projected content creates stops
+when that scope is halted, before the component releases its own.
+
+Only the resource scope moves. The binding environment, `{meta.key}` /
+`{props.key}` inputs, cycle-detection hide set and block counter are the body's,
+exactly as they are for content spliced in place, and expression props on
+projected children still resolve against the caller's environment.
+
+`substituteContent` resolves the slots:
 
 ```typescript
 function substituteContent(
@@ -4376,6 +4390,10 @@ visible warning blocks, collect into a separate error report).
 | O4 | Component resource live during projection | A resource a TypeScript component acquires directly is running while its projected content executes |
 | O5 | Projected content stops first | `start:own, start:projected, stop:projected, stop:own` — no `ephemeral()`, `scoped()` or wrapper in the component |
 | O6 | Ordering is the boundary's | Same order when the resource is acquired after the first projection: `start:projected, start:own, stop:projected, stop:own` |
+| O7 | Markdown `<Content />` lifetime | A provider retaining a resource *after* projecting still releases it after the projected content stops |
+| O11/O12 | Propagated body error | Both component forms stop projected content before releasing their own |
+| O13/O14 | Cancellation | Both forms tear down in the same order when halted mid-projection |
+| O15 | TypeScript nesting | Nested invocations leaf-first; siblings isolated |
 | O9 | Content teardown failure | Stages 2 and 3 still run, in order, and the failure is reported |
 | O10 | Body teardown failure | Reported after every stage has run |
 | O18 | Nested and sibling invocations | Nested invocations tear down leaf-first; siblings never interleave |
@@ -4408,7 +4426,7 @@ visible warning blocks, collect into a separate error report).
 | Q4 | Process forked into eval scope | Process alive during `<children />` expansion |
 | Q5 | Process terminated when the invocation completes | A `kill -0` probe in a block after the component, while the document is still running, reports the process gone |
 | Q6 | Process terminated on component error | If child expansion throws, process still terminated |
-| Q7 | Process terminated on parent cancellation | If parent scope cancelled, process terminated |
+| Q7 | Root cancellation resolves promptly | Cancelling the root resolves instead of waiting on the daemon's blocks; invocation teardown order is covered by Tier O |
 | Q8 | Premature exit propagates as error | Process exits during expansion → `daemon()` throws → `ErrorSegment` in output |
 | Q9 | `{port}` interpolation in daemon content | Binding from preceding `eval` block substituted into command |
 | Q10 | `daemon` without eval scope | No eval scope in scope → clear error |

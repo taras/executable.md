@@ -8,7 +8,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped } from "effection";
+import { ensure, race, resource, scoped, sleep, suspend } from "effection";
 import type { Operation } from "effection";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Component } from "../src/component-api.ts";
@@ -83,12 +83,19 @@ function useHarness(
         onBlock?.([...timeline]);
         const watches = modifiers.some((modifier) => modifier.name === "watch");
         const failing = modifiers.some((modifier) => modifier.name === "watch-fails");
-        if (watches || failing) {
+        const hangs = modifiers.some((modifier) => modifier.name === "watch-hangs");
+        if (modifiers.some((modifier) => modifier.name === "boom")) {
+          throw new Error("body exploded");
+        }
+        if (watches || failing || hangs) {
           const scope = yield* Component.operations.evalScope;
           if (!scope) {
             throw new Error("watch requires an eval scope");
           }
           yield* scope.eval(() => useWatch(timeline, label, failing));
+        }
+        if (hangs) {
+          yield* suspend();
         }
         return { output: "", exitCode: 0, stderr: "" };
       },
@@ -113,6 +120,9 @@ function* expandAll(
 }
 
 const WATCH_BLOCK = "```sh watch exec\nprojected\n```";
+const BOOM_BLOCK = "```sh boom exec\nboom\n```";
+const HANG_BLOCK = "```sh watch-hangs exec\nprojected\n```";
+const WATCH_BLOCK_OWN = "```sh watch exec\nown\n```";
 const FAILING_WATCH_BLOCK = "```sh watch-fails exec\nprojected\n```";
 
 describe("Tier O — Eval scope hierarchy", () => {
@@ -225,6 +235,119 @@ describe("Tier O — Eval scope hierarchy", () => {
 
     expect(timeline).toEqual(["start:own", "start:projected", "stop:projected", "stop:own"]);
     expect(renderSegments(expanded)).toContain("teardown failed: own");
+  });
+
+  // O7: the same contract for a Markdown provider projecting <Content />.
+  // Acquiring the provider's own resource AFTER the projection is what
+  // separates a real content scope from eval-scope LIFO: under LIFO the
+  // later-created resource would be released first.
+  it("O7: Markdown <Content /> content stops before the provider's own resource", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Provider: markdown("Provider", `<Content />\n\n${WATCH_BLOCK_OWN}`),
+    };
+
+    yield* expandAll(`<Provider>\n${WATCH_BLOCK}\n</Provider>`, definitions, timeline);
+
+    expect(timeline).toEqual(["start:projected", "start:own", "stop:projected", "stop:own"]);
+  });
+
+  // O11/O12: the same teardown order on a propagated body error, for both
+  // component forms. The body throws after projecting, so the projected
+  // resource is still alive when the invocation starts unwinding.
+  it("O11: Markdown — a body error still stops projected content first", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Provider: markdown("Provider", `<Content />\n\n${BOOM_BLOCK}`),
+    };
+
+    yield* expandAll(`<Provider>\n${WATCH_BLOCK}\n</Provider>`, definitions, timeline);
+
+    expect(timeline).toEqual(["start:projected", "stop:projected"]);
+  });
+
+  it("O12: TypeScript — a body error still stops projected content first", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Probe: component("Probe", () =>
+        (function* () {
+          yield* useWatch(timeline, "own");
+          yield* useContent();
+          throw new Error("body exploded");
+        })(),
+      ),
+    };
+
+    yield* expandAll(`<Probe>\n${WATCH_BLOCK}\n</Probe>`, definitions, timeline);
+
+    expect(timeline).toEqual(["start:own", "start:projected", "stop:projected", "stop:own"]);
+  });
+
+  // O13/O14: cancellation mid-projection tears down in the same order. The
+  // projected block suspends, so the halt lands while content is live —
+  // unlike Q7, which cancels the root and asserts nothing about ordering.
+  it("O13: Markdown — cancellation stops projected content before the invocation", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Provider: markdown("Provider", `${WATCH_BLOCK_OWN}\n\n<Content />`),
+    };
+
+    yield* race([
+      expandAll(`<Provider>\n${HANG_BLOCK}\n</Provider>`, definitions, timeline),
+      sleep(50),
+    ]);
+
+    expect(timeline).toEqual(["start:own", "start:projected", "stop:projected", "stop:own"]);
+  });
+
+  it("O14: TypeScript — cancellation stops projected content before the invocation", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Probe: component("Probe", () =>
+        (function* () {
+          yield* useWatch(timeline, "own");
+          return yield* useContent();
+        })(),
+      ),
+    };
+
+    yield* race([expandAll(`<Probe>\n${HANG_BLOCK}\n</Probe>`, definitions, timeline), sleep(50)]);
+
+    expect(timeline).toEqual(["start:own", "start:projected", "stop:projected", "stop:own"]);
+  });
+
+  // O15: TypeScript nesting and sibling isolation, mirroring O18 for Markdown.
+  it("O15: TypeScript — nested invocations are leaf-first and siblings isolated", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Outer: component("Outer", () =>
+        (function* () {
+          yield* useWatch(timeline, "outer");
+          return yield* useContent();
+        })(),
+      ),
+      Inner: component("Inner", () =>
+        (function* () {
+          yield* useWatch(timeline, "inner");
+          return yield* useContent();
+        })(),
+      ),
+    };
+
+    yield* expandAll(
+      `<Outer>\n<Inner>\ntext\n</Inner>\n</Outer>\n\n<Outer>\ntext\n</Outer>`,
+      definitions,
+      timeline,
+    );
+
+    expect(timeline).toEqual([
+      "start:outer",
+      "start:inner",
+      "stop:inner",
+      "stop:outer",
+      "start:outer",
+      "stop:outer",
+    ]);
   });
 
   // O18: nesting tears down leaf-first and siblings never interleave.

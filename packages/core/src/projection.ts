@@ -1,11 +1,15 @@
 /**
  * Content projection (spec §6.3).
  *
- * `<Content />`, `useContent()`, `renderChildren()` and `render()` are one
- * mechanism. A component invocation publishes a handle describing what it can
- * project and where; the handle expands the requested segments inside the
- * invocation's content scope, so their live effects belong to the invocation
- * rather than to the caller that wrote the content.
+ * A component invocation publishes a handle describing what it can project and
+ * where. Every projection — Markdown `<Content />`, `useContent()`,
+ * `renderChildren()` and `render()` — expands inside the invocation's content
+ * scope, so its live effects belong to the invocation rather than to the caller
+ * that wrote the content, and stop before the invocation cleans up its own.
+ *
+ * `<Content />` differs only in how its segments are chosen: slots are resolved
+ * during body substitution, and the resolved segments ride on the element the
+ * handle claims. The other three ask the handle to select their segments.
  *
  * The handle is deliberately not part of the public API: it carries the
  * invocation's slot map, its content scope and its enclosing handle, none of
@@ -15,7 +19,7 @@
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import type { ErrorPolicy } from "./errors.ts";
-import type { Segment } from "./types.ts";
+import type { ComponentElement, Json, Segment } from "./types.ts";
 
 /**
  * What to project.
@@ -31,6 +35,20 @@ export type ProjectionRequest = { policy?: ErrorPolicy } & (
 );
 
 export interface ProjectionHandle {
+  /**
+   * Mark a `<Content />` element as carrying a resolved projection, so
+   * expansion runs its children in this invocation's content scope. Identity
+   * is the boundary: an unclaimed `<Content />` is not a projection.
+   */
+  claim(element: ComponentElement): ComponentElement;
+  claims(element: ComponentElement): boolean;
+  /** Expand a claimed element's children inside the content scope. */
+  expandClaimed(
+    element: ComponentElement,
+    meta: Record<string, unknown>,
+    props: Record<string, Json>,
+    hideSet: Set<string>,
+  ): Operation<Segment[]>;
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;
   /**

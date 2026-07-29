@@ -185,6 +185,47 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     return state.callerEnv;
   }
 
+  const claimed = new WeakSet<ComponentElement>();
+
+  /**
+   * Run already-selected segments inside the content scope. Shared by every
+   * projection so none of them depends on eval-scope acquisition order.
+   */
+  function* runInContentScope(options: {
+    segments: Segment[];
+    policy: ErrorPolicy;
+    env: EvalEnv | undefined;
+    meta: Record<string, unknown>;
+    props: Record<string, Json>;
+    hideSet: Set<string>;
+    inner: ProjectionHandle | undefined;
+    errors: Segment[];
+  }): Operation<Segment[]> {
+    return yield* scoped(function* () {
+      const contentScope = yield* state.invocation.useContentScope();
+      const task = contentScope.scope.run(function* () {
+        yield* AmbientErrorPolicy.set(options.policy);
+        if (options.segments.length === 0) {
+          return [];
+        }
+        yield* provideEvalScope(contentScope);
+        if (options.env) {
+          yield* provideEnv(options.env);
+        }
+        yield* ActiveProjection.set(options.inner);
+        return yield* expandSegments(
+          options.segments,
+          options.meta,
+          options.props,
+          options.hideSet,
+          state.counter,
+        );
+      });
+      yield* ensure(() => task.halt());
+      return [...options.errors, ...(yield* task)];
+    });
+  }
+
   function* runProjection(request: ProjectionRequest): Operation<Segment[]> {
     const segments = select(request);
     const policy = request.policy ?? (yield* AmbientErrorPolicy.get()) ?? "collect";
@@ -230,6 +271,32 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   }
 
   const handle: ProjectionHandle = {
+    claim(element: ComponentElement): ComponentElement {
+      claimed.add(element);
+      return element;
+    },
+    claims(element: ComponentElement): boolean {
+      return claimed.has(element);
+    },
+    expandClaimed(
+      element: ComponentElement,
+      meta: Record<string, unknown>,
+      props: Record<string, Json>,
+      hideSet: Set<string>,
+    ): Operation<Segment[]> {
+      // Slots were resolved during substitution, so the environment, meta,
+      // props and hide set are the body's own — only the resource scope moves.
+      return runInContentScope({
+        segments: element.children,
+        policy: "collect",
+        env: undefined,
+        meta,
+        props,
+        hideSet,
+        inner: state.enclosing,
+        errors: [],
+      });
+    },
     project: runProjection,
     *projectToString(request: ProjectionRequest): Operation<string> {
       const segments = yield* runProjection(request);
@@ -322,6 +389,21 @@ export function* expandSegments(
             }
           }
           break;
+        }
+
+        if (segment.name === "Content") {
+          // A `<Content />` the invocation claimed carries its resolved
+          // projection; expanding it here runs that content in the
+          // invocation's content scope, which stops before the invocation
+          // releases anything of its own. Its segments already went through
+          // the ambient policy, so they are appended as they are.
+          const projection = yield* ActiveProjection.get();
+          if (projection && projection.claims(segment)) {
+            result.push(
+              ...(yield* projection.expandClaimed(segment, parentMeta, parentProps, hideSet)),
+            );
+            break;
+          }
         }
 
         if (segment.name === "Output") {
@@ -838,6 +920,8 @@ function* expandComponent(
 
   // Both bodies run inside one invocation, so a value component owns its
   // resources exactly like a rendered one.
+  let claimProjection: ClaimFn = passthroughClaim;
+
   function* installInvocation(invocation: Invocation): Operation<void> {
     const enclosing = yield* ActiveProjection.get();
     const handle = createProjectionHandle({
@@ -854,6 +938,7 @@ function* expandComponent(
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
     invocation.evalScope.scope.set(ActiveProjection, handle);
+    claimProjection = handle.claim;
 
     // Installed on the invocation's own body task rather than a nested
     // scoped(): anything the body acquires must still be alive when teardown
@@ -902,6 +987,7 @@ function* expandComponent(
           newHideSet,
           counter,
           callerEvalEnv ?? undefined,
+          claimProjection,
         );
       });
     } catch (error) {
@@ -939,6 +1025,7 @@ function* expandComponent(
       newHideSet,
       counter,
       callerEvalEnv ?? undefined,
+      claimProjection,
     );
   });
 
@@ -1413,6 +1500,15 @@ export function stripSlotProp(segment: Segment): Segment {
 
 type ProjectFn = (segments: Segment[]) => Segment[];
 
+/**
+ * Marks a `<Content />` element as carrying a resolved projection. Identity,
+ * not a name or a segment type, is what separates it from a `<Content />` an
+ * author wrote somewhere the engine does not project.
+ */
+type ClaimFn = (element: ComponentElement) => ComponentElement;
+
+const passthroughClaim: ClaimFn = (element) => element;
+
 /** Mutable flag so slot validation errors are emitted only once. */
 interface SubstitutionState {
   errorsEmitted: boolean;
@@ -1454,8 +1550,9 @@ function substituteSegmentList(
   props: Record<string, Json>,
   project: ProjectFn,
   state: SubstitutionState,
+  claim: ClaimFn,
 ): Segment[] {
-  return segments.flatMap((segment) => {
+  return segments.flatMap((segment): Segment[] => {
     if (segment.type === "component" && segment.name === "Content") {
       const targetSlot = segment.props.slot;
       const pendingErrors = !state.errorsEmitted ? slots.errors : [];
@@ -1463,11 +1560,16 @@ function substituteSegmentList(
         state.errorsEmitted = true;
       }
 
-      if (targetSlot !== undefined) {
-        const slotKey = String(targetSlot);
-        return [...pendingErrors, ...project((slots.named.get(slotKey) ?? []).map(stripSlotProp))];
-      }
-      return [...pendingErrors, ...project(slots.default)];
+      // Slot resolution stays here — partitioning, validation and once-only
+      // errors are unchanged. What changes is that the resolved segments ride
+      // on the element instead of being spliced in, so expansion can run them
+      // inside the invocation's content scope rather than its own.
+      const projected =
+        targetSlot !== undefined
+          ? project((slots.named.get(String(targetSlot)) ?? []).map(stripSlotProp))
+          : project(slots.default);
+      const element: ComponentElement = { ...segment, children: projected, selfClosing: false };
+      return [...pendingErrors, claim(element)];
     }
     if (segment.type === "text") {
       return [{ ...segment, content: interpolate(segment.content, meta, props) }];
@@ -1489,12 +1591,13 @@ function substituteContent(
   children: Segment[],
   meta: Record<string, unknown>,
   props: Record<string, Json>,
-  callerEnv?: EvalEnv,
+  callerEnv: EvalEnv | undefined,
+  claim: ClaimFn,
 ): Segment[] {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);
-  return substituteSegmentList(bodySegments, slots, meta, props, project, state);
+  return substituteSegmentList(bodySegments, slots, meta, props, project, state, claim);
 }
 
 interface BodyChunk {
@@ -1752,6 +1855,7 @@ function buildBody(
   meta: Record<string, unknown>,
   props: Record<string, Json>,
   callerEnv: EvalEnv | undefined,
+  claim: ClaimFn,
 ): BodyChunk[] {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -1772,12 +1876,13 @@ function buildBody(
         props,
         project,
         state,
+        claim,
       );
       chunks.push({ output: true, segments: outputSegments });
       continue;
     }
 
-    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state);
+    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
     chunks.push({ output: false, segments: docSegments });
   }
 
@@ -1802,13 +1907,14 @@ export function* expandBody(
   hideSet: Set<string>,
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
+  claim: ClaimFn = passthroughClaim,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
-    const substituted = substituteContent(bodySegments, children, meta, props, callerEnv);
+    const substituted = substituteContent(bodySegments, children, meta, props, callerEnv, claim);
     return yield* expandSegments(substituted, meta, props, hideSet, counter);
   }
 
-  const chunks = buildBody(bodySegments, children, meta, props, callerEnv);
+  const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim);
   const output: Segment[] = [];
 
   for (const chunk of chunks) {
@@ -1897,6 +2003,7 @@ function* expandValueBody(
   hideSet: Set<string>,
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
+  claim: ClaimFn = passthroughClaim,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -1908,7 +2015,7 @@ function* expandValueBody(
       produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
       continue;
     }
-    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state);
+    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
     yield* runDocumentation(docSegments, meta, props, hideSet, counter);
   }
 

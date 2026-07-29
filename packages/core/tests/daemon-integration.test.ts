@@ -341,7 +341,14 @@ describe("Tier Q — Daemon integration", () => {
   // When the parent scope is cancelled (via race with a short sleep),
   // structured concurrency guarantees the daemon subprocess is torn down.
   // Verified by: race resolves without hanging (daemon didn't block teardown).
-  it("Q7: daemon terminated on parent cancellation — race completes", function* () {
+  // Q7: cancelling the root resolves promptly instead of blocking on the
+  // daemon. Invocation-level teardown ORDER is proven deterministically by
+  // Tier O (O13/O14); this row covers only the root-cancellation path.
+  //
+  // Note: a daemon signalled by root cancellation is not reaped by the time
+  // the race resolves. That is pre-existing behaviour — the same probe fails
+  // identically on main — so this row deliberately does not assert it.
+  it("Q7: cancelling the root resolves without waiting for the daemon", function* () {
     const tmpDir = makeTempDir();
 
     try {
@@ -351,7 +358,7 @@ describe("Tier Q — Daemon integration", () => {
           "sleep 300",
           "```",
           "",
-          // This exec block sleeps long enough that we cancel before it finishes
+          // Long enough that cancellation lands mid-document.
           "```bash exec",
           "sleep 300",
           "```",
@@ -360,9 +367,6 @@ describe("Tier Q — Daemon integration", () => {
 
       const stream = new InMemoryStream();
 
-      // Race execute against a short sleep. The sleep wins,
-      // cancelling the execute scope (and the daemon within it).
-      // If daemon cleanup is broken, race would hang for 300s.
       const result = yield* race([
         collect(
           yield* execute({
@@ -373,10 +377,9 @@ describe("Tier Q — Daemon integration", () => {
         sleep(500),
       ]);
 
-      // sleep(500) returns void, collect(execute) returns string.
-      // If sleep won (expected), result is undefined.
-      // Either way, the test passed — race resolved without hanging.
-      expect(true).toBe(true);
+      // The sleep won: execution was cancelled rather than running the two
+      // 300s blocks to completion.
+      expect(result).toBeUndefined();
     } finally {
       cleanup(tmpDir);
     }
