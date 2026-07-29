@@ -98,7 +98,17 @@ const SAFE_PARSE = `<SafeParse schema={schema} as="result">
   <Prompt>Answer with JSON only: did the change pass review?</Prompt>
 </SafeParse>`;
 
-const REPAIR = `That first answer was not usable:
+const REPAIR = `<SafeParse schema={schema} as="result">
+  <Prompt>Answer with JSON only: did the change pass review?</Prompt>
+</SafeParse>
+
+<If condition={result.ok}>
+
+Review passed: {result.value.passed}
+
+<Else>
+
+That first answer was not usable:
 
 \`\`\`
 {result.input}
@@ -110,7 +120,12 @@ const REPAIR = `That first answer was not usable:
 
 <Parse schema={schema} as="verdict">
   <Prompt>Correct the JSON above so it satisfies every point.</Prompt>
-</Parse>`;
+</Parse>
+
+Review passed: {verdict.passed}
+
+</Else>
+</If>`;
 
 export default define.page(function Components() {
   return (
@@ -335,22 +350,28 @@ export default define.page(function Components() {
 
       <h3>A bounded repair prompt</h3>
       <p>
-        Because the failure is a value, repair is ordinary Markdown rather than
-        something hidden in the component. The fragment below is the{" "}
-        <strong>failure branch</strong> — it assumes <code>result</code>{" "}
-        has already come back failed. It quotes the input, renders every issue
-        into one corrective prompt, and validates the reply strictly.
+        Because the failure is a value and <code>&lt;If&gt;</code>{" "}
+        chooses a branch, the whole retry is ordinary Markdown rather than
+        something hidden in the component. A successful result is read straight
+        off <code>result.value</code>. A failed one quotes{" "}
+        <code>result.input</code>, renders every issue in{" "}
+        <code>result.errors</code>{" "}
+        into one corrective prompt, and validates the reply strictly with{" "}
+        <code>&lt;Parse&gt;</code>.
       </p>
       <CodeBlock>{REPAIR}</CodeBlock>
       <p>
-        Core ships no conditional component today — the{" "}
-        <code>&lt;Show&gt;</code>{" "}
-        in the value-component example above is an author's own component, not a
-        core one. So this fragment is not yet an executable branch on its own:
-        choosing it only when <code>result.ok</code>{" "}
-        is false is what issue #78 adds. Until then, treat it as the shape a
-        bounded retry takes: inspect, prompt once with the errors, then{" "}
-        <code>&lt;Parse&gt;</code>.
+        The retry is <strong>bounded by construction</strong>, not by a counter.
+        {" "}
+        <code>&lt;If&gt;</code>{" "}
+        expands exactly one branch and never the other, so at most two attempts
+        can execute: the initial{" "}
+        <code>&lt;SafeParse&gt;</code>, and — only when that one failed — the
+        single corrective <code>&lt;Parse&gt;</code> inside{" "}
+        <code>&lt;Else&gt;</code>. When the first answer parses, the failure
+        branch never expands, so its prompt is never sent. Nothing in the
+        failure branch reaches back to the beginning, so there is no third
+        attempt to bound.
       </p>
 
       <h2>How it renders</h2>
