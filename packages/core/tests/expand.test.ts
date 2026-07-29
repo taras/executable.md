@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component } from "../src/component-api.ts";
+import { Component, raise } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
@@ -67,15 +67,17 @@ function useTestComponents(
 }
 
 /**
- * An extension that claims `<Broken />` and answers with an error segment —
- * the engine re-raises it under whatever policy the region installed.
+ * An extension that claims `<Broken />` and answers with an error segment. The
+ * handler reports what it creates (§6.9); the engine settles the returned
+ * segment under whatever policy the region installed.
  */
 function useBrokenExtension(): Operation<void> {
   return Component.around({
-    // deno-lint-ignore require-yield
     *expand([element], next) {
       if (element.name === "Broken") {
-        return { segments: [{ type: "error", message: "broken thing", source: "Broken" }] };
+        return {
+          segments: [yield* raise({ type: "error", message: "broken thing", source: "Broken" })],
+        };
       }
       return yield* next(element);
     },

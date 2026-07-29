@@ -1,5 +1,5 @@
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
-import { useTempFileCompiler } from "@executablemd/core";
+import { Component, useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { AssertionError } from "node:assert/strict";
 import { TestFailureError } from "../src/test-api.ts";
@@ -18,6 +18,22 @@ describe("assertion components", () => {
     expect(run.completion.ok).toBe(true);
     expect(run.output).toContain("**AssertEquals** passed");
     expect(run.results).toEqual([{ status: "pass", name: "eq", location: "README.md:1:10" }]);
+  });
+
+  it("a validation diagnostic is observed once and rendered once", function* () {
+    const observed: string[] = [];
+    yield* Component.around({
+      *raise([error], next) {
+        observed.push(error.message);
+        return yield* next(error);
+      },
+    });
+    const run = yield* runDoc({
+      "README.md": "<AssertEquals actual={1} expected={1} bogus={2} />\n",
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toContain('does not accept a "bogus"');
+    expect(run.output.match(/does not accept a "bogus"/g)).toHaveLength(1);
   });
 
   it("assertions outside a test pass silently during regular execution", function* () {

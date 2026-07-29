@@ -40,7 +40,7 @@ import {
   importComponent,
   raise,
 } from "./component-api.ts";
-import { AmbientErrorPolicy, durabilityFailure, fatalCause } from "./errors.ts";
+import { AmbientErrorPolicy, durabilityFailure, fatalCause, settle } from "./errors.ts";
 import type { ErrorPolicy } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -462,13 +462,14 @@ export function* expandSegments(
 
       case "component": {
         // Extension hook: installed component support may claim this element
-        // before built-in expansion. Returned error segments follow the
-        // ambient raise policy, like any component-produced error.
+        // before built-in expansion. A handler reports the errors it creates
+        // (§6.9), so returned segments are settled here rather than reported
+        // again: a collecting policy keeps them, a throwing one aborts.
         const handling = yield* offerElement(segment, parentMeta, parentProps, hideSet, counter);
         if (handling) {
           for (const handled of handling.segments) {
             if (handled.type === "error") {
-              result.push(yield* raise(handled));
+              result.push(yield* settle(handled));
             } else {
               result.push(handled);
             }

@@ -15,6 +15,7 @@ import {
   env,
   evalScope,
   expandSegments,
+  raise,
   validateBindingName,
   withInvocation,
 } from "@executablemd/core";
@@ -110,14 +111,14 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
       return [];
     }
     if (yield* inTest) {
-      // Returned while the ENCLOSING test's raise interceptor is still
-      // active — the hook's re-raise fails the current test.
+      // Reported here, while the ENCLOSING test's raise interceptor is still
+      // active, so the nesting fails the current test.
       const error: ErrorSegment = {
         type: "error",
         message: "Nested <Test> elements are invalid.",
         source: "Test",
       };
-      return [error];
+      return [yield* raise(error)];
     }
 
     const name = typeof element.props.name === "string" ? element.props.name : undefined;
@@ -213,7 +214,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
 
     if (result.status === "fail") {
       // Containment invariant: a completed test returns only text segments.
-      // The hook re-raises returned ErrorSegments under the AMBIENT policy —
+      // A returned ErrorSegment would be settled under the AMBIENT policy —
       // after this test's interception scope has ended — so raised segments
       // are formatted into the diagnostic instead of returned raw.
       if (bodyError instanceof AssertionDiagnostic) {
@@ -232,21 +233,25 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     for (const propName of [...Object.keys(element.props), ...Object.keys(element.expressions)]) {
       if (propName !== "message" && propName !== "as") {
         return [
-          validationError(
-            "AssertThrows",
-            `does not accept a "${propName}" prop (allowed: message, as).`,
+          yield* raise(
+            validationError(
+              "AssertThrows",
+              `does not accept a "${propName}" prop (allowed: message, as).`,
+            ),
           ),
         ];
       }
     }
     if (!("message" in element.props) && !("message" in element.expressions)) {
-      return [validationError("AssertThrows", 'requires a "message" prop.')];
+      return [yield* raise(validationError("AssertThrows", 'requires a "message" prop.'))];
     }
     if ("as" in element.expressions) {
       return [
-        validationError(
-          "AssertThrows",
-          'the "as" prop must be a string literal, not an expression.',
+        yield* raise(
+          validationError(
+            "AssertThrows",
+            'the "as" prop must be a string literal, not an expression.',
+          ),
         ),
       ];
     }
@@ -264,11 +269,13 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         evaluated = evaluateExpression(element.expressions["message"]!, merged);
       } catch (error) {
         return [
-          validationError(
-            "AssertThrows",
-            `failed to evaluate the "message" expression: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+          yield* raise(
+            validationError(
+              "AssertThrows",
+              `failed to evaluate the "message" expression: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
           ),
         ];
       }
@@ -276,16 +283,20 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
         matcher = evaluated;
       } else {
         return [
-          validationError(
-            "AssertThrows",
-            `the "message" expression must evaluate to a string or RegExp, got ${typeof evaluated}.`,
+          yield* raise(
+            validationError(
+              "AssertThrows",
+              `the "message" expression must evaluate to a string or RegExp, got ${typeof evaluated}.`,
+            ),
           ),
         ];
       }
     } else {
       const literal = element.props["message"];
       if (typeof literal !== "string") {
-        return [validationError("AssertThrows", 'the "message" prop must be a string.')];
+        return [
+          yield* raise(validationError("AssertThrows", 'the "message" prop must be a string.')),
+        ];
       }
       matcher = literal;
     }
@@ -294,15 +305,23 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     if ("as" in element.props) {
       if (!currentEnv) {
         return [
-          validationError("AssertThrows", 'binding with "as" requires an eval scope in context.'),
+          yield* raise(
+            validationError("AssertThrows", 'binding with "as" requires an eval scope in context.'),
+          ),
         ];
       }
       const parsed = validateBindingName(element.props["as"]);
       if (!parsed.ok) {
-        return [validationError("AssertThrows", `the "as" prop ${parsed.error.message}`)];
+        return [
+          yield* raise(validationError("AssertThrows", `the "as" prop ${parsed.error.message}`)),
+        ];
       }
       if (parsed.value === undefined) {
-        return [validationError("AssertThrows", 'the "as" prop must be a non-empty string.')];
+        return [
+          yield* raise(
+            validationError("AssertThrows", 'the "as" prop must be a non-empty string.'),
+          ),
+        ];
       }
       binding = parsed.value;
     }

@@ -4,7 +4,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component } from "../src/component-api.ts";
+import { Component, raise } from "../src/component-api.ts";
 import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
@@ -720,11 +720,14 @@ describe("Tier IF — error observation", () => {
         },
       });
       yield* Component.around({
-        // deno-lint-ignore require-yield
         *expand([element], next) {
           if (element.name === "Broken") {
+            // The handler owns the observation of the error it creates (§6.9);
+            // the engine settles what comes back without reporting it again.
             return {
-              segments: [{ type: "error", message: "broken thing", source: "Broken" }],
+              segments: [
+                yield* raise({ type: "error", message: "broken thing", source: "Broken" }),
+              ],
             };
           }
           return yield* next(element);

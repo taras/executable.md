@@ -15,10 +15,11 @@ import {
   Component,
   env,
   expandSegments,
+  raise,
   renderSegments,
   validateBindingName,
 } from "@executablemd/core";
-import type { ComponentElement, Segment } from "@executablemd/core";
+import type { ComponentElement, ErrorSegment, Segment } from "@executablemd/core";
 import { matchPrompt, parseTemplate } from "../template.ts";
 import type { ParsedTemplate } from "../template.ts";
 import type { TurnBridge } from "./bridge.ts";
@@ -54,7 +55,7 @@ function parseStageRecord(value: unknown): StageRecord | undefined {
   return { prompt, captures: parsed };
 }
 
-function configError(message: string): Segment {
+function configError(message: string): ErrorSegment {
   return { type: "error", message: `<WhenPrompt> ${message}`, source: "WhenPrompt" };
 }
 
@@ -110,13 +111,15 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
   function* expandWhenPrompt(element: ComponentElement): Operation<Segment[]> {
     for (const name of Object.keys({ ...element.props, ...element.expressions })) {
       if (name !== "template" && name !== "as") {
-        return [configError(`does not accept a "${name}" prop (allowed: template, as).`)];
+        return [
+          yield* raise(configError(`does not accept a "${name}" prop (allowed: template, as).`)),
+        ];
       }
     }
     const templateProp = element.props.template;
     const hasChildren = !element.selfClosing && element.children.length > 0;
     if (typeof templateProp === "string" && hasChildren) {
-      return [configError("accepts either a template prop or children, not both.")];
+      return [yield* raise(configError("accepts either a template prop or children, not both."))];
     }
     let source: string;
     if (typeof templateProp === "string") {
@@ -124,29 +127,29 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
     } else if (hasChildren) {
       source = renderSegments(yield* expandSegments(element.children)).trim();
     } else {
-      return [configError("requires a template prop or template children.")];
+      return [yield* raise(configError("requires a template prop or template children."))];
     }
 
     const parsed = parseTemplate(source);
     if (!parsed.ok) {
-      return [configError(parsed.error.message)];
+      return [yield* raise(configError(parsed.error.message))];
     }
     const binding = element.props.as;
     if (parsed.value.captureNames.length > 0 && typeof binding !== "string") {
-      return [configError('captures require an "as" prop.')];
+      return [yield* raise(configError('captures require an "as" prop.'))];
     }
     let bindingName: string | undefined;
     if (binding !== undefined) {
       const validated = validateBindingName(binding);
       if (!validated.ok || validated.value === undefined) {
-        return [configError('the "as" prop must be a valid binding name.')];
+        return [yield* raise(configError('the "as" prop must be a valid binding name.'))];
       }
       bindingName = validated.value;
     }
 
     const currentEnv = yield* env;
     if (!currentEnv) {
-      return [configError("requires an eval scope in context.")];
+      return [yield* raise(configError("requires an eval scope in context."))];
     }
 
     const location = formatLocation(element);
