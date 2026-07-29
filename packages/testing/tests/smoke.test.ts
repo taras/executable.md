@@ -75,6 +75,14 @@ const EMBEDDED_TESTS = [
   "The unselected branch creates no binding",
   "Nested conditionals select independently",
   "The unselected branch never runs",
+  "Loop expands its body once per iteration",
+  "Loop resolves its bound from an existing binding",
+  "A binding carries from one iteration to the next",
+  "The final binding stays available after the loop",
+  "Break ends the loop and the rest of its iteration",
+  "Break inside If exits only when the condition selects it",
+  "Break exits only the nearest loop",
+  "Content after Break never runs",
 ];
 
 interface SmokeSession {

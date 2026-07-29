@@ -3038,6 +3038,109 @@ Diagnostics from `<If>` and `<Else>` carry the source location of the element
 that caused them, as `path:line:column` when the element came from a file and
 `line:column` for text scanned without an origin.
 
+#### `<Loop>` bounded repetition directive
+
+`<Loop>` expands a region of a document more than once, under a bound the
+document states. Like `<Capture>`, `<Each>` and `<If>` it is a native directive
+handled by the expansion engine, never resolved from the filesystem.
+
+```markdown
+<Loop name="planning" max={5}>
+<Plan />
+<Review as="verdict" />
+<If condition={verdict.passed}>
+<Break />
+</If>
+</Loop>
+```
+
+Props (only these two are accepted; any other prop is an error):
+
+- `max` — required. The bound on how many times the body expands. An eval
+  expression (`max={policy.attempts}`) resolves against the caller/projected
+  env at expansion time, a JSON literal (`max={5}`) at scan time, and the
+  result must be a **positive integer**. Zero, a negative number, a fraction, a
+  non-finite number, and any non-number are errors rather than a bound to round
+  or coerce. There is no unbounded form of the directive.
+- `name` — optional. A **string-literal**, non-empty label. It is diagnostic
+  metadata: the loop's own errors name it, and nothing else observes it. It is
+  not passed to descendants, and it creates no binding.
+
+The body expands in document order, at most `max` times. **Reaching `max`
+completes the loop normally** — exhaustion is not a failure and produces no
+diagnostic. Whether an exhausted bound means the work succeeded is the
+surrounding document's policy to state, written as an ordinary `<If>` on
+whatever the body bound. Retry-limit failure is therefore something a document
+declares, not something `<Loop>` does.
+
+**`<Loop>` opens no binding scope.** Every iteration expands in the enclosing
+environment, so an iteration reads what earlier ones bound, and the final
+values stay readable after `</Loop>` — that is how a document acts on what the
+repetition produced. This is the opposite of `<Each>`, whose per-item binding
+exists only for the iteration that renders it.
+
+Like `<Each>` and `<If>`, `<Loop>` is **structural**: each iteration expands to
+segments appended to the loop's output, so `ErrorSegment` and `execOutput`
+segments survive and the ambient raise policy applies to them exactly as
+elsewhere. It is **not an observation boundary** either — it reports the errors
+it creates itself (an invalid bound, an invalid name, an unknown prop) and
+hands the body's segments back untouched.
+
+`<Loop>` adds no error policy of its own. Under a throwing policy the first
+failure ends the loop by propagating out of it; under a collecting one the
+diagnostic renders and the next iteration runs. Cancellation stops the loop
+where it stands. Resources an iteration acquires are released at their own
+invocation boundary (§4.4), so an iteration's resources are gone before the
+next one begins and none of them outlive the loop.
+
+**Iteration identity.** The runtime identifies iterations deterministically
+through the block ID counter (§6.1), which advances monotonically across them:
+each iteration's blocks journal under their own entries, in the same order on
+every run, so a truncated journal replays into the same iteration it was cut
+from. The identity is internal — it is not exposed as a binding, a prop, or a
+value the body can read. An execution's records therefore distinguish how a
+loop finished: a break leaves entries for the iterations that ran and none
+after, exhaustion leaves exactly `max` iterations' worth, a failure leaves an
+`err` result, and cancellation a `cancelled` one.
+
+#### `<Break>` loop exit
+
+`<Break>` ends the loop it is written in. It is self-closing, accepts no props
+and no content, and is reserved: the name never resolves a component.
+
+```markdown
+<Loop max={5}>
+<Attempt as="result" />
+<If condition={result.ok}>
+<Break />
+</If>
+</Loop>
+```
+
+It stops the remainder of the current iteration and exits the nearest enclosing
+`<Loop>`. Content after it does not expand, so it imports no component, runs no
+eval or exec block, reaches no provider, creates no binding, and writes no
+journal entry — placing a deliberately failing assertion after a `<Break>` is
+the direct way to test that. Everything the iteration produced before the
+`<Break>` stands, bindings included.
+
+A nested `<Loop>` handles its own `<Break>`: the inner loop exits and the outer
+one keeps running. There is no way to break a named outer loop.
+
+The loop boundary is **lexical**. A component invoked from a loop body — and
+the content projected through it — cannot break the loop that invoked it, and a
+`<Break>` written there is an error unless that body has a `<Loop>` of its own.
+How often a component renders `<Content />`, if at all, is the component's
+decision, so a `<Break>` there has no defined relationship to the caller's
+loop.
+
+A `<Break>` outside any `<Loop>` is a diagnostic rather than a component
+invocation. A malformed `<Break>` inside one is reported and still exits the
+loop, so the same diagnostic is not repeated once per remaining iteration.
+
+Diagnostics from `<Loop>` and `<Break>` carry source locations on the same
+terms as `<If>`.
+
 ### 6.6 Eval binding interpolation
 
 Bare `{name}` references (no namespace prefix) resolve against
@@ -5046,6 +5149,72 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
 | IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
+
+### Tier LOOP / BREAK — bounded repetition directive
+
+Identifiers match `packages/core/tests/loop.test.ts` one to one.
+
+| # | Test | Verify |
+|---|------|--------|
+| LOOP1 | Exact repetition | `max={3}` expands the body three times, in order |
+| LOOP2 | Bound of one | `max={1}` expands the body once |
+| LOOP3 | Exhaustion | Reaching `max` completes normally; surrounding content keeps its position |
+| LOOP4 | Empty body | A loop with no children renders nothing |
+| LOOP5 | Self-closing `<Loop>` | Renders nothing, with no error |
+| LOOP6 | Bound from a binding | `max={attempts}` resolves from the evaluation environment |
+| LOOP7 | Repeated blocks | The body's code block runs once per iteration |
+| LOOP8 | Repeated invocations | The body's component is imported once per iteration |
+| LOOP9 | Nesting | An inner loop reruns in full for every outer iteration |
+| LOOP10 | Bindings carry forward | An iteration reads what an earlier one bound |
+| LOOP11 | Bindings survive the loop | The final value is readable after `</Loop>` |
+| LOOP12 | Last-iteration binding | A binding made in the final iteration survives |
+| LOOP13 | Body reads the shared env | An `<If>` in the body sees a binding an earlier iteration changed |
+| LOOP14 | Missing `max` | Rejected; the body does not render |
+| LOOP15 | Non-positive and fractional bounds | `0`, `-1`, and `1.5` are rejected |
+| LOOP16 | No coercion | String, boolean, `null`, array, and object bounds are rejected with their kind named |
+| LOOP17 | Non-finite bounds | `Infinity` and `NaN` are rejected |
+| LOOP18 | Unresolvable expression | The failing expression is quoted in the diagnostic |
+| LOOP19 | Invalid bound runs nothing | No component in the body is imported |
+| LOOP20 | Unknown props | Literal and expression props other than `max`/`name` are rejected |
+| LOOP21 | `name` is inert | A named loop renders exactly what an unnamed one does |
+| LOOP22 | `name` binds nothing | Neither `{name}` nor the label resolves in the body |
+| LOOP23 | `name` in diagnostics | The loop's own errors name it |
+| LOOP24 | `name={expr}` | Rejected — `name` is a string literal |
+| LOOP25 | Empty or non-string `name` | Rejected |
+| BREAK1 | Immediate break | `max={5}` with a `<Break>` in the body runs one iteration |
+| BREAK2 | Break before output | A leading `<Break>` produces nothing |
+| BREAK3 | Break inside `<If>` | A selected `<Break>` exits the loop |
+| BREAK4 | Unselected break | An unselected `<Break>` leaves the loop running |
+| BREAK5 | Bindings before the break | They remain available after the loop |
+| BREAK6 | Nearest loop only | An inner `<Break>` leaves the outer loop running |
+| BREAK7 | Outer break after an inner loop | The outer loop exits |
+| BREAK8 | Break inside `<Each>` | The enclosing loop exits and the remaining items are skipped |
+| BREAK9 | Text after the break | Does not render |
+| BREAK10 | Component after the break | Never imported |
+| BREAK11 | Code block after the break | Never runs |
+| BREAK12 | `<Capture>` after the break | Creates no binding |
+| BREAK13 | After the loop | Content following `</Loop>` still runs |
+| BREAK14 | Break outside a loop | Diagnosed |
+| BREAK15 | Stray break resolves nothing | No component named `Break` is imported |
+| BREAK16 | Props on `<Break>` | Literal and expression props are both rejected |
+| BREAK17 | Content on `<Break>` | Rejected |
+| BREAK18 | Malformed break exits | The diagnostic reports once rather than once per remaining iteration |
+| BREAK19 | Lexical boundary | A `<Break>` in a component body is diagnosed and the caller's loop keeps running |
+| LOOP26 | Throwing policy | The first failing iteration aborts the loop |
+| LOOP27 | Collecting policy | The diagnostic renders and the next iteration runs |
+| LOOP28 | Cancellation | Halting mid-loop stops it where it stands |
+| LOOP29 | Teardown per iteration | An iteration's resources are released before the next begins |
+| LOOP30 | Teardown on break | The breaking iteration's resources are released before the loop exits |
+| LOOP31 | Local position | A diagnostic carries `line:column` |
+| LOOP32 | Origin position | A scanned origin adds `path:` to the diagnostic |
+| LOOP33 | `<Break>` position | A stray `<Break>` reports its own location |
+| LOOP34 | No position | An element built without scanning diagnoses without a location |
+| LOOP35 | Iteration identities | Each iteration journals a distinct, deterministic eval entry |
+| LOOP36 | Journal after a break | Skipped content writes no eval entry |
+| LOOP37 | Accumulation | A binding grows across iterations end to end |
+| LOOP38 | Repeated import (execution) | The body's component runs once per iteration end to end |
+| LOOP39 | Partial replay | From a journal prefix without the root Close, the remaining iterations run live onto the same identities and reproduce the output |
+| LOOP40 | Break from a binding | A condition computed in the body ends the document's loop |
 
 ### Tier SC — Sample component (integration)
 

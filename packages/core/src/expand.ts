@@ -46,6 +46,8 @@ import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
+import { ActiveLoop } from "./loop.ts";
+import type { LoopFrame } from "./loop.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
@@ -422,6 +424,9 @@ export function* expandSegments(
   counter: BlockCounter = createBlockCounter(),
 ): Operation<Segment[]> {
   const result: Segment[] = [];
+  // Read once: `<Loop>` publishes its frame for the nested call that expands
+  // its body, so the frame ambient here cannot change while this list runs.
+  const loop = yield* ActiveLoop.get();
 
   for (const segment of segments) {
     switch (segment.type) {
@@ -533,6 +538,18 @@ export function* expandSegments(
           break;
         }
 
+        if (segment.name === "Loop") {
+          // No raise() here, for the same reason as <If>: expandLoop reports
+          // the errors it creates, and the body settled its own (§6.9).
+          result.push(...(yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter)));
+          break;
+        }
+
+        if (segment.name === "Break") {
+          result.push(...(yield* expandBreak(segment, loop)));
+          break;
+        }
+
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -629,6 +646,12 @@ export function* expandSegments(
           result.push(segment);
         }
       }
+    }
+
+    // A `<Break>` anywhere below this segment ends the iteration here: what the
+    // list already produced stands, and nothing after it expands.
+    if (loop?.broken) {
+      break;
     }
   }
 
@@ -796,6 +819,7 @@ function* expandEach(
     : contextEnv;
   const parentEvalScope = yield* evalScope;
 
+  const enclosingLoop = yield* ActiveLoop.get();
   const out: Segment[] = [];
   for (const item of items) {
     const expanded = yield* expandChildrenScoped(
@@ -809,6 +833,11 @@ function* expandEach(
       counter,
     );
     out.push(...expanded);
+    // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
+    // items are part of the work that iteration no longer does.
+    if (enclosingLoop?.broken) {
+      break;
+    }
   }
 
   if (asBinding === undefined) {
@@ -1078,6 +1107,188 @@ function* expandIf(
   );
 }
 
+/** How a `<Loop>` names itself in its own diagnostics. */
+function loopTag(segment: ComponentElement): string {
+  const name = segment.props.name;
+  return typeof name === "string" && name.length > 0 ? `<Loop name="${name}">` : "<Loop>";
+}
+
+function loopError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Loop" };
+}
+
+function breakError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Break" };
+}
+
+const LOOP_PROPS = new Set(["max", "name"]);
+
+/** The bound a `<Loop>` runs to, or the diagnostic that rejects it. */
+type LoopBound = { ok: true; max: number } | { ok: false; error: ErrorSegment };
+
+function* loopBound(segment: ComponentElement): Operation<LoopBound> {
+  let max: Json;
+  if ("max" in segment.props) {
+    max = segment.props.max;
+  } else if ("max" in segment.expressions) {
+    try {
+      const resolved = yield* resolveExpressionProps(
+        {},
+        { max: segment.expressions.max },
+        "Loop",
+        segment.projectedEnv,
+      );
+      max = resolved.max;
+    } catch (error) {
+      return {
+        ok: false,
+        error: loopError(segment, error instanceof Error ? error.message : String(error)),
+      };
+    }
+  } else {
+    return {
+      ok: false,
+      error: loopError(
+        segment,
+        `${loopTag(segment)} requires a "max" prop (a positive integer). Repetition is ` +
+          "always bounded — there is no unbounded loop.",
+      ),
+    };
+  }
+
+  if (typeof max !== "number") {
+    return {
+      ok: false,
+      error: loopError(
+        segment,
+        `Prop "max" on ${loopTag(segment)} must be a positive integer, not ${jsonKind(max)}.`,
+      ),
+    };
+  }
+  if (!Number.isInteger(max) || max < 1) {
+    return {
+      ok: false,
+      error: loopError(
+        segment,
+        `Prop "max" on ${loopTag(segment)} must be a positive integer. Got: ${JSON.stringify(max)}.`,
+      ),
+    };
+  }
+  return { ok: true, max };
+}
+
+/**
+ * Expand a bounded repetition (spec §6.5 `<Loop>`). The body expands in
+ * document order at most `max` times, and reaching `max` completes the loop
+ * normally — exhaustion is not a failure. Whether an exhausted loop means
+ * success is the surrounding document's policy to state.
+ *
+ * `<Loop>` opens no binding scope. Every iteration expands in the enclosing
+ * environment, so an iteration reads what earlier ones bound and the final
+ * values stay readable after `</Loop>`.
+ *
+ * Like `<If>` it is not an observation boundary: it reports the errors it
+ * creates itself and hands the body's segments back untouched. It adds no
+ * error policy either — under a throwing policy the first failure ends the
+ * loop by propagating out of it, and under a collecting one the diagnostic
+ * renders and the next iteration runs.
+ */
+function* expandLoop(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<Segment[]> {
+  const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
+    (name) => !LOOP_PROPS.has(name),
+  );
+  if (unknownProp !== undefined) {
+    return [
+      yield* raise(
+        loopError(segment, `<Loop> only accepts "max" and "name" props. Got: "${unknownProp}".`),
+      ),
+    ];
+  }
+
+  if ("name" in segment.expressions) {
+    return [yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.'))];
+  }
+  const name = segment.props.name;
+  if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
+    return [
+      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
+    ];
+  }
+
+  const bound = yield* loopBound(segment);
+  if (!bound.ok) {
+    return [yield* raise(bound.error)];
+  }
+
+  const frame: LoopFrame = { broken: false };
+  const out: Segment[] = [];
+  yield* scoped(function* () {
+    yield* ActiveLoop.set(frame);
+    for (let iteration = 0; iteration < bound.max; iteration++) {
+      out.push(
+        ...(yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter)),
+      );
+      if (frame.broken) {
+        break;
+      }
+    }
+  });
+  return out;
+}
+
+function breakElementViolations(segment: ComponentElement): string[] {
+  const violations: string[] = [];
+  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
+  if (names.length > 0) {
+    violations.push(`<Break> accepts no props. Got: "${names[0]}".`);
+  }
+  if (!segment.selfClosing || segment.children.length > 0) {
+    violations.push("<Break> takes no content. Write it self-closing: <Break />.");
+  }
+  return violations;
+}
+
+/**
+ * Exit the nearest enclosing `<Loop>` (spec §6.5 `<Break>`).
+ *
+ * Marking the frame is the whole effect: `expandSegments` sees the mark after
+ * this element and stops, so the rest of the iteration expands no content,
+ * imports no component, runs no block, and writes no journal entry. Everything
+ * the iteration produced before the mark stands.
+ *
+ * A malformed `<Break>` inside a loop still exits it. The author asked the
+ * loop to end, and continuing would repeat the same diagnostic once per
+ * remaining iteration.
+ */
+function* expandBreak(
+  segment: ComponentElement,
+  loop: LoopFrame | undefined,
+): Operation<Segment[]> {
+  const violations = breakElementViolations(segment);
+  if (!loop) {
+    violations.unshift(
+      "<Break> must be written inside a <Loop>. <Break> is reserved: it never resolves a " +
+        "component, and a component invoked from a loop body cannot break the loop that " +
+        "invoked it.",
+    );
+  }
+
+  const reported: Segment[] = [];
+  for (const violation of violations) {
+    reported.push(yield* raise(breakError(segment, violation)));
+  }
+  if (loop) {
+    loop.broken = true;
+  }
+  return reported;
+}
+
 function* expandComponent(
   name: string,
   props: Record<string, Json>,
@@ -1280,6 +1491,12 @@ function* expandComponent(
     // descends from — including its persist-eval blocks and its content.
     invocation.evalScope.scope.set(ActiveProjection, handle);
     claimProjection = handle.claim;
+
+    // The loop boundary is lexical: a `<Break>` in this body, or in the
+    // content projected through it, belongs to a `<Loop>` written here and
+    // never to the one that invoked the component. Set on the body task, which
+    // the content scope descends from, so both see it.
+    yield* ActiveLoop.set(undefined);
 
     // Installed on the invocation's own body task rather than a nested
     // scoped(): anything the body acquires must still be alive when teardown
@@ -1518,6 +1735,7 @@ function* expandFunctionComponent(
       });
       invocation.evalScope.scope.set(ActiveProjection, handle);
 
+      yield* ActiveLoop.set(undefined);
       yield* provideEvalScope(invocation.evalScope);
       yield* provideRetain(siteEvalScope);
       yield* Component.around(

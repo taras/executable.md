@@ -52,6 +52,12 @@ export default define.page(function Reference() {
           expands one branch; the other performs no work.
         </li>
         <li>
+          <code>&lt;Loop max={"{n}"}&gt;</code> expands its body at most{" "}
+          <code>n</code> times, sharing the enclosing bindings;{" "}
+          <code>&lt;Break /&gt;</code>{" "}
+          exits the nearest loop and skips the rest of the iteration.
+        </li>
+        <li>
           A fenced block is executable iff <code>exec</code> or{" "}
           <code>eval</code> appears after the language word.
         </li>
