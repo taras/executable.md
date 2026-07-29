@@ -79,8 +79,9 @@ jobs:
 
       # A built-in component resolves from the module graph rather than a
       # search path. Only the compiled binary proves it survives `deno compile`.
-      - name: Smoke test a built-in component with no search path
-        run: ./dist/xmd test packages/core/src/components/TempDir.test.md --raw
+      # The directory target runs every built-in's colocated document at once.
+      - name: Smoke test the built-in components with no search path
+        run: ./dist/xmd test packages/core/src/components --raw
 
       # The guide documents this command and its output; running it keeps the
       # value-root contract executable rather than described.

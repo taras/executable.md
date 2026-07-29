@@ -226,6 +226,15 @@ function enforceRootContract(schema: PropsSchema): void {
   }
 }
 
+/**
+ * Ajv's errors in the shape every consumer reads. Exported because parsing
+ * (§6.12) reports the same issues from its own Ajv instance, and a second copy
+ * of this shape would be free to drift from the one diagnostics already carry.
+ */
+export function normalizeIssues(errors: readonly ErrorObject[]): NormalizedIssue[] {
+  return errors.map(normalizeIssue);
+}
+
 function normalizeIssue(error: ErrorObject): NormalizedIssue {
   return {
     instancePath: error.instancePath ?? "",
