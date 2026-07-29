@@ -16,6 +16,7 @@ import { daemon } from "@effectionx/process";
 import type { ModifierFactory } from "../modifiers.ts";
 import { useCodeBlock } from "../modifiers.ts";
 import { evalScope } from "../component-api.ts";
+import { cwd } from "@executablemd/runtime";
 
 /**
  * Terminal modifier factory for long-running background processes.
@@ -25,7 +26,8 @@ import { evalScope } from "../component-api.ts";
  * the contextual `evalScope` value.
  *
  * The block's content (already interpolated with eval bindings by the
- * expansion engine) is used to build the subprocess command. The command
+ * expansion engine) is used to build the subprocess command, which runs in
+ * the contextual working directory (§1.2). The command
  * is forked into the eval scope via `evalScope.eval()` — the subprocess
  * lives for the duration of component expansion.
  *
@@ -47,13 +49,19 @@ export const daemonFactory: ModifierFactory = (_params) => (_args, _next) =>
           throw new Error("daemon requires a component eval scope; none is in scope.");
         }
 
+        // Must be read out here. Inside `scope.eval` the block runs on the
+        // invocation's eval-scope loop task, which is not on the chain the
+        // document's `Env.cwd` was installed on — moving this line in would
+        // silently launch the daemon in the host's directory instead.
+        const directory = yield* cwd();
+
         // The block content is a raw shell command (e.g. the body of a
         // ```bash daemon exec``` block). Pass it directly to daemon()
         // with shell:true so @effectionx/process invokes the system
         // shell instead of splitting with shellwords — which would
         // mangle commands containing nested quotes.
         yield* scope.eval(function* () {
-          yield* daemon(ctx.content, { shell: true });
+          yield* daemon(ctx.content, { shell: true, cwd: directory });
         });
       },
     };
