@@ -19,20 +19,37 @@
  * replacing a directory with a symlink out of the workspace, for instance —
  * and a destination resolved earlier would not be the one the write lands on.
  *
- * Writes go through a sibling temporary file and a rename. That is what makes
- * a failed or cancelled write leave the previous content in place, and it is
- * what closes the one containment hole resolution cannot: a dangling symlink
- * has nothing to resolve, and `rename` replaces the link rather than following
- * it wherever it points.
+ * Writes go through a sibling temporary file and a rename. The rename is the
+ * **commit point**: everything before it can fail or be cancelled with the
+ * previous file untouched, and once it begins the result is the complete old
+ * file or the complete new one, never a partial write. It is not a
+ * transaction — a commit that has happened is not rolled back by a later
+ * cancellation. The temporary also closes the one containment hole resolution
+ * cannot: a dangling symlink has nothing to resolve, and `rename` replaces the
+ * link rather than following it wherever it points.
  *
  * Diagnostics name only the path the document wrote. A resolved workspace
- * path, the destination a symlink pointed at, and a rejected absolute path are
- * all withheld — §1.2 keeps absolute paths out of diagnostics, and a
- * containment failure is the last place to start reporting them.
+ * path, the destination a symlink pointed at, a temporary file, and a rejected
+ * absolute path are all withheld — §1.2 keeps absolute paths out of
+ * diagnostics, and a containment failure is the last place to start reporting
+ * them. Since a platform error carries the path it failed on, every filesystem
+ * call is wrapped: what survives is the errno code, which is a fixed
+ * vocabulary that cannot contain a path.
  *
  * Every filesystem call goes through the contextual `API.Fs`, so a host can
  * observe or sandbox a document's own file access on the same terms as the
  * engine's component resolution.
+ *
+ * ## Threat model
+ *
+ * Containment is judged against the filesystem as this component observes it.
+ * That is sound while the filesystem is stable, and every guarantee here is
+ * stated on that basis. It is not a sandbox: nothing prevents another process
+ * from replacing a directory with a symlink between the moment a path is
+ * validated and the moment it is used. Deferring resolution until immediately
+ * before the write narrows that window and covers the document's own children,
+ * which is the case a document controls; closing it entirely needs a
+ * capability or a platform-enforced sandbox, and is issue #227.
  */
 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -67,6 +84,70 @@ export class FileAccessError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "FileAccessError";
+  }
+}
+
+/**
+ * What a failed filesystem call may be reported as.
+ *
+ * The errno code and nothing else. A platform error message names the path it
+ * failed on — `ENOTDIR: not a directory, stat '/private/var/…'` — which is the
+ * resolved path §1.2 keeps out of diagnostics, and for a write it can be the
+ * temporary file the document never named. A code is a short token from a
+ * fixed vocabulary, so it says what went wrong while carrying nothing.
+ */
+const REASONS: Readonly<Record<string, string>> = {
+  ENOENT: "no such file or directory",
+  ENOTDIR: "a component of the path is not a directory",
+  EISDIR: "it is a directory",
+  ENOTEMPTY: "the directory is not empty",
+  EACCES: "permission denied",
+  EPERM: "the operation is not permitted",
+  EROFS: "the filesystem is read-only",
+  ELOOP: "too many levels of symbolic links",
+  ENAMETOOLONG: "the path is too long",
+  ENOSPC: "no space left on the device",
+  EDQUOT: "the disk quota is exhausted",
+  EXDEV: "the destination is on a different filesystem",
+  EBUSY: "the file is in use",
+  EMFILE: "too many open files",
+};
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  const { code } = error;
+  return typeof code === "string" ? code : undefined;
+}
+
+function reason(error: unknown): string {
+  const code = errorCode(error);
+  if (code === undefined) {
+    return "the filesystem operation failed";
+  }
+  return REASONS[code] ?? `the filesystem reported ${code}`;
+}
+
+/**
+ * Run a filesystem operation, converting whatever it throws into a diagnostic
+ * that names only the path the document wrote.
+ *
+ * A `FileAccessError` passes through: it was raised by this component and is
+ * already safe. Anything else came from the platform and is replaced rather
+ * than wrapped, because wrapping would keep the message that motivated this.
+ *
+ * Cancellation is not a thrown error in Effection — halting resumes the
+ * generator through `return()` — so this never converts a halt into a failure.
+ */
+function* guard<T>(requested: string, verb: string, operation: Operation<T>): Operation<T> {
+  try {
+    return yield* operation;
+  } catch (error) {
+    if (error instanceof FileAccessError) {
+      throw error;
+    }
+    throw new FileAccessError(`cannot ${verb} "${requested}": ${reason(error)}.`);
   }
 }
 
@@ -172,9 +253,9 @@ function* admissible(requested: string): Operation<Admissible> {
  */
 function* destination({ requested, lexical }: Admissible): Operation<string> {
   const directory = yield* cwd();
-  const base = (yield* realpath(directory)) ?? directory;
+  const base = (yield* guard(requested, "resolve", realpath(directory))) ?? directory;
 
-  const effective = yield* resolveExisting(lexical);
+  const effective = yield* guard(requested, "resolve", resolveExisting(lexical));
   if (!within(base, effective)) {
     throw new FileAccessError(
       `"${requested}" leads through a symlink outside the working directory.`,
@@ -185,16 +266,23 @@ function* destination({ requested, lexical }: Admissible): Operation<string> {
 }
 
 /**
- * Whether `path` names something strictly inside `base`.
+ * Whether `path` names the working directory or something inside it.
  *
- * Only a complete `..` segment leaves the directory. A name that merely starts
- * with two dots — `..notes.md`, `..config/settings.json` — is an ordinary file
- * inside it, and a prefix test would refuse it.
+ * The directory itself is contained — `.` is not an escape. What it is instead
+ * is a directory, which is a question about the target rather than about
+ * containment, so it belongs to the read and write checks that come after.
+ *
+ * Only a complete `..` segment leaves. A name that merely starts with two dots
+ * — `..notes.md`, `..config/settings.json` — is an ordinary file inside, and a
+ * prefix test would refuse it.
  */
 function within(base: string, path: string): boolean {
   const rel = relative(base, path);
-  if (rel.length === 0 || isAbsolute(rel)) {
+  if (isAbsolute(rel)) {
     return false;
+  }
+  if (rel.length === 0) {
+    return true;
   }
   return rel !== ".." && !rel.startsWith(`..${sep}`);
 }
@@ -226,7 +314,7 @@ function* resolveExisting(path: string): Operation<string> {
 }
 
 function* read(requested: string, target: string): Operation<string> {
-  const info = yield* stat(target);
+  const info = yield* guard(requested, "read", stat(target));
   if (!info.exists) {
     throw new FileAccessError(`cannot read "${requested}": no such file.`);
   }
@@ -237,7 +325,7 @@ function* read(requested: string, target: string): Operation<string> {
     throw new FileAccessError(`cannot read "${requested}": it is not a regular file.`);
   }
 
-  return yield* readTextFile(target);
+  return yield* guard(requested, "read", readTextFile(target));
 }
 
 /**
@@ -245,18 +333,25 @@ function* read(requested: string, target: string): Operation<string> {
  *
  * The content is whole by the time this runs — the children expanded first —
  * so a child that failed never reaches the filesystem at all. What remains is
- * the write itself, and the temporary file is what keeps that atomic: the
- * rename either publishes the complete text or leaves the previous file
- * exactly as it was.
+ * the write, and it has one commit point.
  *
- * Removal is registered before the temporary is written rather than after.
- * `writeTextFile` is where an interruption is most likely to land, and a
- * cleanup installed on the far side of it would not run for the one failure it
- * exists to handle. `remove` is forced, so registering it for a file that was
- * never created — or one the rename has already consumed — is a no-op.
+ * Everything up to the rename is preparation: a failure or a cancellation
+ * there leaves the previous file untouched, because nothing has replaced it
+ * yet. The rename is the commit. Once it begins the outcome is the complete
+ * old file or the complete new one — never a partial write — but it is a
+ * commit rather than a transaction. `rename` is a single filesystem call that
+ * cannot be interrupted once started, and a cancellation arriving after it has
+ * completed does not undo it. What is promised is that no write is ever half
+ * visible, not that a finished write can be taken back.
+ *
+ * Removal of the temporary is registered before it is written rather than
+ * after. `writeTextFile` is where an interruption is most likely to land, and
+ * a cleanup installed on the far side of it would not run for the one failure
+ * it exists to handle. `remove` is forced, so registering it for a file that
+ * was never created — or one the rename has already consumed — is a no-op.
  */
 function* write(requested: string, target: string, content: string): Operation<void> {
-  const info = yield* stat(target);
+  const info = yield* guard(requested, "write", stat(target));
   if (info.exists && !info.isFile) {
     throw new FileAccessError(
       `cannot write "${requested}": it is a ${info.isDirectory ? "directory" : "special file"}, ` +
@@ -264,12 +359,29 @@ function* write(requested: string, target: string, content: string): Operation<v
     );
   }
 
-  yield* ensureDir(dirname(target));
+  yield* guard(requested, "write", ensureDir(dirname(target)));
 
   yield* scoped(function* () {
     const temporary = `${target}.xmd-${randomUUID().slice(0, 8)}.tmp`;
-    yield* ensure(() => remove(temporary, { force: true }));
-    yield* writeTextFile(temporary, content);
-    yield* rename(temporary, target);
+    yield* ensure(() => discard(temporary));
+    yield* guard(requested, "write", writeTextFile(temporary, content));
+    yield* guard(requested, "write", rename(temporary, target));
   });
+}
+
+/**
+ * Remove the temporary, and stay quiet about it either way.
+ *
+ * This runs during teardown, including the teardown of a write that is already
+ * failing. A throw here would replace or aggregate that failure with one whose
+ * message names the temporary file — a path the document never wrote and this
+ * component does not report. There is nothing a document could do about it in
+ * any case: the temporary is not its file.
+ */
+function* discard(temporary: string): Operation<void> {
+  try {
+    yield* remove(temporary, { force: true });
+  } catch {
+    // Deliberately unreported — see above.
+  }
 }

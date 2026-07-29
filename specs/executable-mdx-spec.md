@@ -3877,6 +3877,10 @@ before any filesystem call — so the failure reveals nothing about what the
 path named. Only a complete `..` segment escapes: a name that merely begins
 with two dots — `..notes.md` — is an ordinary file inside the directory.
 
+The working directory is inside itself, so `.` is not an escape. It is a
+directory, which is a question about the target rather than about containment,
+and it fails as one.
+
 For the write form this stage runs **before the children expand**. An unusable
 path costs nothing, and the diagnostic it produces is about the path rather
 than about whatever the children then did.
@@ -3894,8 +3898,7 @@ immediately before the write. A child can change what a path means — replacing
 a directory with a symlink out of the workspace — so a destination resolved
 any earlier would not be the one the write lands on.
 
-Writes land through a sibling temporary file and a rename. That is what makes
-a failed or cancelled write leave the previous content in place, and it closes
+Writes land through a sibling temporary file and a rename, which also closes
 the one case resolution cannot: a **dangling** symlink has nothing to resolve,
 and `rename` replaces the link rather than following it wherever it points.
 Removal of the temporary is registered before it is written, so the write is
@@ -3904,11 +3907,53 @@ including cancellation.
 
 Reading a path that does not exist, or a directory, fails naming which it was.
 
-A containment diagnostic names the path the document wrote, and nothing else.
-The resolved working directory, the destination a symlink pointed at, and a
-rejected absolute path are all withheld: §1.2 keeps absolute paths out of
-diagnostics, and reporting where an escape led would perform the disclosure
-the refusal exists to prevent.
+#### The commit point
+
+The rename is the write's commit point, and the guarantees are stated around
+it:
+
+- A failure or a cancellation **before** the rename leaves the previous target
+  exactly as it was. Nothing has replaced it yet.
+- The rename **is** the commit. Once it begins, what an observer sees is the
+  complete old file or the complete new one — never a partial write.
+- A commit is not a transaction. `rename` is a single filesystem call that
+  cannot be interrupted once started, and a cancellation arriving after it has
+  completed does not undo it.
+
+What is guaranteed is that no write is ever half visible, not that a finished
+write can be taken back.
+
+#### Diagnostics
+
+A diagnostic names the path the document wrote, and nothing else. The resolved
+working directory, the destination a symlink pointed at, the temporary file,
+and a rejected absolute path are all withheld: §1.2 keeps absolute paths out of
+diagnostics, and reporting where an escape led would perform the disclosure the
+refusal exists to prevent.
+
+A platform error carries the path it failed on — `ENOTDIR: not a directory,
+stat '/private/var/…'` — so forwarding one would leak exactly what the rest of
+this withholds. Every filesystem call is wrapped, and what survives a failure is
+the errno code's meaning. A code is a short token from a fixed vocabulary and
+cannot contain a path. The temporary file's own removal reports nothing at all:
+it runs during teardown, sometimes the teardown of a failure already being
+reported, and the file is not one the document named.
+
+#### Threat model
+
+Containment is judged against the filesystem as `<File>` observes it. That is
+sound while the filesystem is stable, and every guarantee above is stated on
+that basis.
+
+It is not a sandbox. Nothing prevents another process from replacing a
+directory with a symlink between the moment a path is validated and the moment
+it is used. Resolving a write's destination immediately before writing narrows
+that window and closes it for the case a document controls — its own children —
+but check-then-use does not become atomic by being ordered more carefully.
+
+Containment that does not depend on observed filesystem state — directory
+handles, `openat`-style resolution, or platform-enforced sandboxing — is issue
+#227.
 
 #### Scope
 
@@ -4948,8 +4993,14 @@ visible warning blocks, collect into a separate error report).
 | FL18b | Absolute path decided before children | A content-form absolute path is refused with the child's marker never written, the child's own failure absent from the output, and the rejected path unnamed |
 | FL18c | Lexical escape decided before children | The same for `..`, with nothing created outside |
 | FL19 | Failure inside the temporary write | The temporary is removed and the existing target is unchanged |
-| FL20 | Cancellation inside the temporary write | The same, when the run is halted rather than failed |
-| FL21 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
+| FL20 | Cancellation before the commit | The same, when the run is halted rather than failed |
+| FL21 | Failed commit | A failing `rename` leaves the previous content and removes the temporary |
+| FL22 | Cancellation after the commit | A completed replacement is not rolled back |
+| FL23 | Platform errors carry no path | `realpath`, `stat`, `readTextFile`, `ensureDir`, `writeTextFile`, and `rename` each throw an error whose message names an absolute path; the document receives the errno code's meaning and no path |
+| FL23b | Temporary cleanup is silent | A failing `remove` of the temporary produces no diagnostic and does not disturb the write |
+| FL24 | Regular file as a path component | `parent/child.txt` with `parent` a file fails for both forms without naming the resolved path |
+| FL25 | The working directory itself | `.` and a path normalizing to it are contained, and fail as a directory rather than as an escape |
+| FL26 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
 

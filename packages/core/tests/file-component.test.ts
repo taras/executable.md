@@ -136,6 +136,134 @@ function expectNoAbsolutePaths(output: string, fixture: Fixture): void {
   expect(output).not.toContain(fixture.outside);
 }
 
+/**
+ * A platform error shaped like the ones that leak: an errno code, and a
+ * message naming the path it failed on.
+ */
+const PLANTED = "/planted/absolute/path/secret.txt";
+
+function planted(code: string): Error {
+  return Object.assign(new Error(`${code}: operation failed, at '${PLANTED}'`), { code });
+}
+
+const READ_DOC = '<File path="request.md" />';
+const WRITE_DOC = '<File path="request.md">content</File>';
+
+/**
+ * The engine reads and stats files of its own — the root document, component
+ * resolution — through the same Api. A stub that answered for those would fail
+ * the execution before `<File>` ran, so the ones that receive a path only
+ * intervene for the file under test.
+ */
+const TARGET = "request.md";
+
+function isTarget(path: string): boolean {
+  return path.endsWith(TARGET);
+}
+
+/**
+ * Every filesystem call `<File>` makes, and a document that reaches it.
+ *
+ * Each one is made to throw an error carrying an absolute path, which is what
+ * a real `ENOTDIR` or `EACCES` does. None of it may reach the document.
+ */
+const BOUNDARIES: Array<{
+  name: string;
+  code: string;
+  source: string;
+  expected: string;
+  install: () => Operation<void>;
+}> = [
+  {
+    name: "realpath",
+    code: "ELOOP",
+    source: READ_DOC,
+    expected: 'cannot resolve "request.md": too many levels of symbolic links.',
+    *install() {
+      yield* API.Fs.around({
+        *realpath([path], next) {
+          if (!isTarget(path)) {
+            return yield* next(path);
+          }
+          throw planted("ELOOP");
+        },
+      });
+    },
+  },
+  {
+    name: "stat",
+    code: "EACCES",
+    source: READ_DOC,
+    expected: 'cannot read "request.md": permission denied.',
+    *install() {
+      yield* API.Fs.around({
+        *stat([path], next) {
+          if (!isTarget(path)) {
+            return yield* next(path);
+          }
+          throw planted("EACCES");
+        },
+      });
+    },
+  },
+  {
+    name: "readTextFile",
+    code: "EIO",
+    source: READ_DOC,
+    // An unmapped code still says something, and a code cannot carry a path.
+    expected: 'cannot read "request.md": the filesystem reported EIO.',
+    *install() {
+      yield* API.Fs.around({
+        *readTextFile([path], next) {
+          if (!isTarget(path)) {
+            return yield* next(path);
+          }
+          throw planted("EIO");
+        },
+      });
+    },
+  },
+  {
+    name: "ensureDir",
+    code: "EROFS",
+    source: WRITE_DOC,
+    expected: 'cannot write "request.md": the filesystem is read-only.',
+    *install() {
+      yield* API.Fs.around({
+        *ensureDir() {
+          throw planted("EROFS");
+        },
+      });
+    },
+  },
+  {
+    name: "writeTextFile",
+    code: "EDQUOT",
+    source: WRITE_DOC,
+    expected: 'cannot write "request.md": the disk quota is exhausted.',
+    *install() {
+      yield* API.Fs.around({
+        *writeTextFile() {
+          throw planted("EDQUOT");
+        },
+      });
+    },
+  },
+  {
+    name: "rename",
+    code: "EXDEV",
+    source: WRITE_DOC,
+    expected: 'cannot write "request.md": the destination is on a different filesystem.',
+    *install() {
+      yield* API.Fs.around({
+        *rename() {
+          throw planted("EXDEV");
+        },
+      });
+    },
+  },
+];
+
 describe("Tier FL — File", () => {
   beforeAll(() => useTempFileCompiler());
 
@@ -553,21 +681,23 @@ describe("Tier FL — File", () => {
             // case a cleanup registered afterwards would miss entirely.
             *writeTextFile([path, content], next) {
               yield* next(path, content);
-              throw new Error("disk full");
+              throw planted("ENOSPC");
             },
           });
         },
       ),
     );
 
-    expect(output).toContain("disk full");
+    expect(output).toContain('cannot write "notes.md": no space left on the device.');
+    expect(output).not.toContain(PLANTED);
     expect(yield* read(fixture, "notes.md")).toBe("first");
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
 
-  // FL20: the same window, closed by cancellation rather than failure. The
-  // write suspends after creating the temporary and the run is halted there.
-  it("FL20: cancellation during the temporary write leaves nothing behind", function* () {
+  // FL20: the same window, closed by cancellation rather than failure — and
+  // pre-commit, which is the half the contract still promises. The write
+  // suspends after creating the temporary and the run is halted there.
+  it("FL20: cancellation before the commit leaves the previous content", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
 
@@ -585,5 +715,144 @@ describe("Tier FL — File", () => {
 
     expect(yield* read(fixture, "notes.md")).toBe("first");
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  // FL21: the commit itself failing. Nothing has replaced the target yet, so
+  // the previous content stands and the temporary goes with the scope.
+  it("FL21: a failed commit leaves the previous content and removes the temporary", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const output = text(
+      yield* runWith(
+        fixture,
+        '<File path="notes.md">second</File>',
+        new InMemoryStream(),
+        function* () {
+          yield* API.Fs.around({
+            *rename() {
+              throw planted("EXDEV");
+            },
+          });
+        },
+      ),
+    );
+
+    expect(output).toContain('cannot write "notes.md"');
+    expect(output).not.toContain(PLANTED);
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  // FL22: the commit is a commit, not a transaction. `rename` is one
+  // filesystem call that cannot be interrupted once it starts, so a
+  // cancellation arriving after it completes finds the replacement already
+  // done — and does not undo it. What the contract promises is that no write
+  // is ever half visible, not that a finished one can be taken back.
+  it("FL22: cancellation after the commit does not roll it back", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    yield* race([
+      runWith(fixture, '<File path="notes.md">second</File>', new InMemoryStream(), function* () {
+        yield* API.Fs.around({
+          *rename([from, to], next) {
+            yield* next(from, to);
+            yield* suspend();
+          },
+        });
+      }),
+      sleep(500),
+    ]);
+
+    expect(yield* read(fixture, "notes.md")).toBe("second");
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  // FL23: a platform error names the path it failed on, which for a write can
+  // be a temporary the document never wrote. Every call is wrapped, so what
+  // reaches the document is the errno code's meaning and nothing else.
+  for (const boundary of BOUNDARIES) {
+    it(`FL23 (${boundary.name}): a ${boundary.code} failure reaches the document with no path`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.workspace, "request.md"), "existing");
+
+      const output = text(
+        yield* runWith(fixture, boundary.source, new InMemoryStream(), boundary.install),
+      );
+
+      expect(output).toContain(boundary.expected);
+      expect(output).not.toContain(PLANTED);
+      expect(output).not.toContain("operation failed, at");
+      expectNoAbsolutePaths(output, fixture);
+    });
+  }
+
+  // FL23b: the temporary's own cleanup is the one boundary with nothing to
+  // report. It runs during teardown — sometimes the teardown of a failure —
+  // and a throw there would surface a path the document never wrote.
+  it("FL23b: a failure removing the temporary is not reported", function* () {
+    const fixture = yield* useFixture();
+
+    const output = text(
+      yield* runWith(
+        fixture,
+        '<File path="request.md">content</File>',
+        new InMemoryStream(),
+        function* () {
+          yield* API.Fs.around({
+            *remove() {
+              throw planted("EPERM");
+            },
+          });
+        },
+      ),
+    );
+
+    expect(output.trim()).toBe("");
+    expect(output).not.toContain(PLANTED);
+    expect(yield* read(fixture, "request.md")).toBe("content");
+  });
+
+  // FL24: the reported reproduction. A regular file standing where a directory
+  // is expected produces ENOTDIR from `stat`, whose message carries the
+  // canonical absolute path.
+  it("FL24: a regular file as a path component fails without naming the path", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "parent"), "not a directory");
+
+    const reading = text(yield* run(fixture, '<File path="parent/child.txt" />'));
+    expect(reading).toContain(
+      'cannot read "parent/child.txt": a component of the path is not a directory.',
+    );
+    expectNoAbsolutePaths(reading, fixture);
+
+    const writing = text(yield* run(fixture, '<File path="parent/child.txt">content</File>'));
+    expect(writing).toContain(
+      'cannot write "parent/child.txt": a component of the path is not a directory.',
+    );
+    expectNoAbsolutePaths(writing, fixture);
+    // The write never happened: `parent` is still the file it was.
+    expect(yield* read(fixture, "parent")).toBe("not a directory");
+  });
+
+  // FL25: the working directory is inside itself. `.` is not an escape — it is
+  // a directory, which is a question about the target rather than containment,
+  // and the diagnostic should say so.
+  it("FL25: the working directory itself is contained, and reported as a directory", function* () {
+    const fixture = yield* useFixture();
+
+    const reading = text(yield* run(fixture, '<File path="." />'));
+    expect(reading).toContain('cannot read ".": it is a directory, not a text file.');
+    expect(reading).not.toContain("outside the working directory");
+
+    const writing = text(yield* run(fixture, '<File path=".">content</File>'));
+    expect(writing).toContain('cannot write ".": it is a directory, not a text file.');
+    expect(writing).not.toContain("outside the working directory");
+
+    // A path that normalizes to the directory reads the same way.
+    const normalized = text(yield* run(fixture, '<File path="sub/.." />'));
+    expect(normalized).toContain("it is a directory, not a text file.");
+    expect(normalized).not.toContain("outside the working directory");
   });
 });

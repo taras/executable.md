@@ -386,18 +386,66 @@ export default define.page(function Components() {
         and write to another.
       </p>
       <p>
-        A write never half-happens. Children expand completely first, so a
-        failing block leaves the existing file exactly as it was — and because
-        the write has nowhere to render a diagnostic, it fails the invocation
-        rather than writing the diagnostic into your file. The write itself
-        lands through a rename, so a failure partway leaves the previous content
-        in place rather than a truncated file.
+        The working directory is inside itself, so <code>.</code>{" "}
+        is not an escape — it is a directory, and it fails as one.
+      </p>
+
+      <h3>The commit point</h3>
+      <p>
+        Children expand completely before anything is written, so a failing
+        block leaves the existing file exactly as it was — and because the write
+        has nowhere to render a diagnostic, it fails the invocation rather than
+        writing the diagnostic into your file. The write itself lands through a
+        rename, and that rename is the commit point:
+      </p>
+      <ul>
+        <li>
+          A failure or cancellation <em>before</em>{" "}
+          the rename leaves the previous file untouched.
+        </li>
+        <li>
+          Once the rename begins, what anyone sees is the complete old file or
+          the complete new one — never a partial write.
+        </li>
+        <li>
+          A commit is not a transaction. <code>rename</code>{" "}
+          cannot be interrupted once it starts, and a cancellation arriving
+          afterwards does not undo it.
+        </li>
+      </ul>
+      <p>
+        So the promise is that no write is ever half visible — not that a
+        finished write can be taken back.
+      </p>
+
+      <h3>What a failure tells you</h3>
+      <p>
+        The message names the path you wrote and nothing else — not the resolved
+        working directory, not where a symlink pointed, not the temporary file.
+        Reporting where an escape led would perform the disclosure the refusal
+        exists to prevent.
       </p>
       <p>
-        When a path is refused, the message names the path you wrote and nothing
-        else — not the resolved working directory, and not where a symlink
-        pointed. Reporting where an escape led would perform the disclosure the
-        refusal exists to prevent.
+        That includes errors from the filesystem itself, which name the path
+        they failed on. Every call is wrapped, so what reaches your document is
+        what the error code means —{" "}
+        <em>
+          a component of the path is not a directory
+        </em>{" "}
+        — rather than the platform's own message.
+      </p>
+
+      <h3>What this is not</h3>
+      <p>
+        Containment is judged against the filesystem as{" "}
+        <code>&lt;File&gt;</code>{" "}
+        observes it, which holds while the filesystem is stable. It is not a
+        sandbox: another process can replace a directory with a symlink between
+        the moment a path is checked and the moment it is used. Resolving a
+        write's destination immediately before writing closes that window for
+        the case your document controls — its own children — but check-then-use
+        does not become atomic by being ordered more carefully. Containment that
+        does not depend on observed state is tracked in issue #227.
       </p>
 
       <h2>Parsing generated JSON</h2>
