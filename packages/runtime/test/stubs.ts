@@ -30,6 +30,9 @@ import type { StatResult } from "../apis.ts";
  * - `readTextFile` returns content from the `files` map; throws ENOENT for missing keys.
  * - `stat` returns `{ exists: true, isFile: true }` for keys in the map.
  * - `glob` throws (not stubbed). Install `API.Fs.around()` directly if needed.
+ * - the writing half — `writeTextFile`, `ensureDir`, `rename`, `remove`, and
+ *   `realpath` — is not stubbed and reaches the real filesystem. A test that
+ *   exercises a document writing files wants a real temporary directory.
  *
  * The `files` object is captured **by reference** — mutating it between
  * operations changes what `readTextFile`/`stat` see. This is useful for

@@ -112,10 +112,15 @@ All paths stored in a diagnostic trace are **relative to the workspace root**
 makes traces easier to compare and avoids leaking absolute local paths.
 
 Runtime operations (`readTextFile`, `stat`, `exec`, `glob`) all resolve
-paths relative to cwd. Runtime helpers never see
-absolute paths. Component search directories
-(`["./components", "./"]`) are relative. Resolved paths in the
-journal (`"components/Greeting.md"`) are relative.
+paths relative to cwd, and the engine's own file access is written that way:
+component search directories (`["./components", "./"]`) are relative, and
+resolved paths in the journal (`"components/Greeting.md"`) are relative.
+
+A component that resolves against the **contextual** working directory is the
+exception, because a relative path would resolve against the process's
+directory instead of the one it was given. `<File>` (§6.13) resolves its
+`path` prop against `Env.cwd` itself and hands the Fs Api the absolute result.
+Nothing it resolves reaches a diagnostic or the journal.
 
 #### The contextual working directory
 
@@ -1978,11 +1983,11 @@ deterministic from the content, so it needs no separate journal entry.
 
 #### Built-in components
 
-Some components are core's own: `<TempDir>` (§6.11), `<Parse>`, and
-`<SafeParse>` (§6.12). A built-in resolves no path and reads no file: it is
-already in the module graph, so it ships in the compiled binary and every
-published package without a search path or a bundling step, and a document
-invokes it with no `--component-dir`.
+Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
+`<SafeParse>` (§6.12), and `<File>` (§6.13). A built-in resolves no path and
+reads no file: it is already in the module graph, so it ships in the compiled
+binary and every published package without a search path or a bundling step,
+and a document invokes it with no `--component-dir`.
 
 Because there is no resolution and no read, a built-in produces **no
 `import_component` journal entry**: there is no path to resolve and no file to
@@ -3858,6 +3863,250 @@ failure, render its errors into a corrective prompt, and finish with `<Parse>`
 after a bounded retry. That loop is ordinary Markdown, so it is visible and
 testable like anything else.
 
+### 6.13 Reading and writing text: `<File>`
+
+A document reads a repository file, writes a source file, or lays out a
+fixture without asking an agent to choose a path or run a command. `<File>` is
+core's own component (§5.3) and takes one required prop, `path`, resolved
+relative to the contextual `Env.cwd`:
+
+```md
+<File path="request.md" />
+```
+
+Because the path is contextual, `<File>` composes with `<TempDir>` (§6.11)
+without either component knowing about the other:
+
+```md
+<TempDir>
+<File path="fixtures/request.md">
+Request content
+</File>
+</TempDir>
+```
+
+#### The two forms
+
+Written **self-closing**, `<File>` reads. It renders the file's text, and `as`
+captures that text and renders nothing, exactly as it does for any component
+that returns text.
+
+```md
+<File path="request.md" as="request" />
+```
+
+Written **with content**, `<File>` writes. It expands its children, writes the
+result, and renders nothing at all: no output, no path, no file handle. Where
+the file went is what the document already said, and there is nothing to
+capture.
+
+Missing parent directories are created. An existing target is replaced, so
+writing the same content twice leaves the same file.
+
+#### What gets written
+
+Exactly what the children rendered. Nothing is added, trimmed, normalized, or
+reformatted, so where the tags sit is where the file's first and last bytes
+come from. Content on the same line as the tags is the whole file:
+
+```md
+<File path="a.txt">one line</File>
+```
+
+writes `one line`, with no trailing newline. Content on its own line is
+surrounded by line breaks that are themselves inside the element:
+
+```md
+<File path="a.txt">
+one line
+</File>
+```
+
+writes `\none line\n`. That is the exact-content contract: a document that
+needs a file to start or end a particular way says so by where it puts the
+tags, and the component never guesses.
+
+#### A failed child writes nothing
+
+Children expand completely before anything reaches the filesystem, so an
+existing target survives whatever happens among them.
+
+A code block that fails is ordinarily a diagnostic (§6.9): the content still
+renders, with the diagnostic in place. A component that renders its content
+shows it to the reader. `<File>` renders nothing, so the same diagnostic would
+be written into the file instead. It therefore fails the invocation rather
+than writing, and carries the underlying messages in its own diagnostic —
+which is the only place a reader would otherwise learn what went wrong.
+
+#### Containment
+
+Everything `<File>` touches stays inside `Env.cwd`, checked in two stages that
+answer different questions and therefore run at different times.
+
+The **lexical** stage is path arithmetic against `Env.cwd` and nothing else.
+An empty path, an absolute path, and a `..` escape are all decided there,
+before any filesystem call — so the failure reveals nothing about what the
+path named. Only a complete `..` segment escapes: a name that merely begins
+with two dots — `..notes.md` — is an ordinary file inside the directory.
+
+The working directory is inside itself, so `.` is not an escape. It is a
+directory, which is a question about the target rather than about containment,
+and it fails as one.
+
+For the write form this stage runs **before the children expand**. An unusable
+path costs nothing, and the diagnostic it produces is about the path rather
+than about whatever the children then did.
+
+A lexical check is not enough on its own, because a symlink inside the
+directory can point anywhere. The **resolving** stage takes the part of the
+path that already exists — the file itself when it is there, the deepest
+existing ancestor when it is not — and re-checks the result. A symlink whose
+destination is still inside the directory is ordinary and is followed to the
+file it names; one that leaves is refused, before the content outside is read
+or changed.
+
+For the write form this stage runs **after the children have finished**, and
+immediately before the write. A child can change what a path means — replacing
+a directory with a symlink out of the workspace — so a destination resolved
+any earlier would not be the one the write lands on.
+
+Writes land through a sibling temporary file and a rename, which also closes
+the one case resolution cannot: a **dangling** symlink has nothing to resolve,
+and `rename` replaces the link rather than following it wherever it points.
+Removal of the temporary is registered before it is written, so the write is
+covered by it rather than the other way round, and removal is attempted on every
+exit including cancellation.
+
+Reading a path that does not exist, or a directory, fails naming which it was.
+
+#### The commit point
+
+The rename is the write's commit point, and the guarantees are stated around
+it:
+
+- A failure or a cancellation **before** the rename leaves the previous target
+  exactly as it was. Nothing has replaced it yet.
+- The rename **is** the commit. What an observer sees is the complete old file
+  or the complete new one — never a partial write.
+- A commit is not a transaction. `rename` is a single filesystem call that
+  cannot be interrupted once started, and a cancellation arriving after it has
+  completed does not undo it.
+
+What is guaranteed is that no write is ever half visible, not that a finished
+write can be taken back.
+
+##### What a failed write can say about the target
+
+`rename` is an operation on the contextual Fs Api, and an `around` handler may
+do work on both sides of `next()`. So a rename that **throws** may have thrown
+before the underlying rename ran, or after it succeeded, and the component
+cannot tell which. The three outcomes it reports are exactly what it can
+observe:
+
+| Where the write stopped | What is reported |
+|---|---|
+| Preparation — writing the temporary | `The previous file is unchanged.` |
+| The rename threw | `Whether the replacement committed is unknown: the target holds either the complete previous content or the complete replacement, never a partial write.` |
+| The rename returned | `The file was written.` |
+
+Only the first and third are conclusions. The middle one is the honest answer:
+atomicity still holds, so it is one of two whole files, but which one is not
+knowable from here. Reporting that the previous file survived would be a guess,
+and wrong in exactly the case where a handler failed after committing.
+
+A failed cleanup is orthogonal and composes with any of the three, appending:
+
+```text
+A temporary file beside it may remain.
+```
+
+#### Diagnostics
+
+A diagnostic names the path the document wrote, and nothing else. The resolved
+working directory, the destination a symlink pointed at, the temporary file,
+and a rejected absolute path are all withheld: §1.2 keeps absolute paths out of
+diagnostics, and reporting where an escape led would perform the disclosure the
+refusal exists to prevent.
+
+A platform error carries the path it failed on — `ENOTDIR: not a directory,
+stat '/private/var/…'` — so forwarding one would leak exactly what the rest of
+this withholds. Every filesystem call is wrapped, and nothing from the error it
+caught is reproduced: the errno code **selects** a phrase from a fixed
+allowlist, and an unrecognized code selects `the filesystem operation failed`.
+The code itself is never emitted. It is supplied by whatever implements the Fs
+Api, so it can hold a path, a newline, or a comment terminator as easily as
+`ENOENT` can.
+
+The error's class carries no authority either. A `FileAccessError` arriving
+from a wrapped call is replaced like any other, because a class says nothing
+about whether a message is safe to show — trusting one would let an Fs
+implementation choose the text of a diagnostic by choosing what to throw.
+
+#### When cleanup fails
+
+Removal of the temporary is attempted on every exit. If that removal fails the
+document is told — a file it did not create may be sitting next to one it did,
+and that is its directory. The report names the document's own path, never the
+generated temporary:
+
+```text
+cannot clean up "request.md": permission denied. The file was written.
+A temporary file beside it may remain.
+```
+
+A cleanup failure never replaces the write failure it may accompany. Both are
+collected rather than thrown — a destructor that threw would displace the
+failure it was unwinding — and reported together, followed by the target's
+outcome and then the leftover sentence. With a rename that threw and a cleanup
+that failed:
+
+```text
+cannot write "notes.md": the destination is on a different filesystem.
+cannot clean up "notes.md": permission denied. Whether the replacement
+committed is unknown: the target holds either the complete previous content or
+the complete replacement, never a partial write. A temporary file beside it may
+remain.
+```
+
+"May remain" rather than "remains": the removal failing is exactly the evidence
+the component would need to say which. A successful commit consumes the
+temporary, so a cleanup failure after one usually means there was nothing left
+to remove.
+
+#### Threat model
+
+Containment is judged against the filesystem as `<File>` observes it. That is
+sound while the filesystem is stable, and every guarantee above is stated on
+that basis.
+
+It is not a sandbox. Nothing prevents another process from replacing a
+directory with a symlink between the moment a path is validated and the moment
+it is used. Resolving a write's destination immediately before writing narrows
+that window and closes it for the case a document controls — its own children —
+but check-then-use does not become atomic by being ordered more carefully.
+
+Containment that does not depend on observed filesystem state — directory
+handles, `openat`-style resolution, or platform-enforced sandboxing — is issue
+#227.
+
+#### Scope
+
+The initial component is UTF-8 text only. Binary data, configurable encodings,
+structured file handles, and append, patch, or streaming modes are outside it.
+
+`<File>` performs no durable effect of its own — nothing is journaled — so what
+a replay does depends on whether expansion reaches the component at all.
+
+A journal containing the root's close is a **completed execution**. Replaying
+it restores that result without expanding anything, so `<File>` does not run
+and the filesystem is not touched.
+
+A **partial** journal replays what it holds and then continues live, so
+expansion does reach `<File>`. Having recorded nothing, it has nothing to
+restore: the read happens again against whatever the file says now, and the
+write happens again. Inside a wrapping `<TempDir>` that repetition is what the
+directory's replay refusal depends on (§6.11).
+
 ---
 
 ## 7. Entry point
@@ -4850,6 +5099,45 @@ visible warning blocks, collect into a separate error report).
 | PC13 | External reference | An external `$ref` fails with a diagnostic naming the #192 limit |
 | PC14 | Capture and replay | A replay reproduces the bound value and appends no journal entry |
 | PC15 | Colocated documents | `xmd test packages/core/src/components` runs `Parse.test.md` and `SafeParse.test.md` beside `TempDir.test.md`, with no search path and no JavaScript: both schema forms, every JSON result kind, a local `$ref`, both `<SafeParse>` variants, the preserved input, and the three non-transformation guarantees |
+
+### Tier FL — `<File>`
+
+| # | Test | Verify |
+|---|------|--------|
+| FL1 | Relative round trip | A relative write is readable at the same relative path, against the contextual `Env.cwd` |
+| FL2 | Write renders nothing | The write form contributes no output and no path |
+| FL3 | Parent directories | A write creates the directories its path names |
+| FL4 | Replacement | A second write replaces the content, and rewriting the same content changes nothing |
+| FL5 | Missing file | Reading a missing path is a diagnostic, and the sibling after it still runs |
+| FL6 | Directory target | Reading a directory fails naming what it is |
+| FL7 | Absolute path | Rejected before the filesystem is touched; neither the target's content nor the supplied path appears in the diagnostic |
+| FL8 | Lexical escape | `..` out of the working directory is rejected, the content it aimed at never appears, and no absolute path reaches the diagnostic |
+| FL9 | Internal symlink | Followed for both reads and writes; the write updates the linked file and leaves the link a link |
+| FL10 | Escaping file symlink | Rejected, the outside content never appears, and the destination it pointed at is not named |
+| FL11 | Escaping parent symlink | Rejected for a file that does not exist yet, nothing is created outside, and no absolute path is named |
+| FL12 | Failing child | The invocation fails instead of writing, carries the block's own failure, and the existing file is unchanged |
+| FL13 | Failed replacement | A directory that refuses new files stops the write with the previous content in place |
+| FL14 | No temporary left behind | A successful write leaves only the target |
+| FL15 | Completed-root replay | A journal with the root's close restores the result without running `<File>`: the file it read is removed first and the output is unchanged |
+| FL15b | Partial replay, read | Expansion reaches `<File>`, which re-reads — the file's content is changed between runs and the second output follows it |
+| FL15c | Partial replay, write | Expansion reaches `<File>`, which re-writes — the target is removed between runs and is recreated |
+| FL16 | Prop validation | A missing `path` and an undeclared prop are both rejected |
+| FL17 | Leading dots | `..notes.md` and `..config/settings.json` are ordinary files, not escapes |
+| FL18 | Destination resolved after children | A child that replaces the parent directory with an escaping symlink is caught, and nothing is created outside |
+| FL18b | Absolute path decided before children | A content-form absolute path is refused with the child's marker never written, the child's own failure absent from the output, and the rejected path unnamed |
+| FL18c | Lexical escape decided before children | The same for `..`, with nothing created outside |
+| FL19 | Failure inside the temporary write | The temporary is removed, the existing target is unchanged, and the outcome says so |
+| FL20 | Cancellation before the commit | The same, when the run is halted rather than failed |
+| FL21 | Rename throws before `next` | The previous content stands, and the diagnostic reports the outcome as unknown rather than claiming it |
+| FL21b | Rename throws after `next` | The replacement is committed, and the same diagnostic is still factually correct — the error twin of FL22 |
+| FL22 | Cancellation after the commit | A completed replacement is not rolled back |
+| FL23 | Platform errors carry no path | `realpath`, `stat`, `readTextFile`, `ensureDir`, `writeTextFile`, and `rename` each throw an error whose message names an absolute path; the document receives an allowlisted phrase and no path |
+| FL23b | Cleanup failure is reported | A failing `remove` is reported against the document's own path, says the file was written, appends the leftover sentence, and names no temporary |
+| FL23c | Cleanup composes with the write failure | A failing `rename` and a failing `remove` are both reported, followed by the unknown-outcome sentence and the leftover sentence, and the temporary is observably left behind |
+| FL24 | Regular file as a path component | `parent/child.txt` with `parent` a file fails for both forms without naming the resolved path |
+| FL25 | The working directory itself | `.` and a path normalizing to it are contained, and fail as a directory rather than as an escape |
+| FL26 | Adversarial error shapes | A `code` holding an absolute path, markup and a newline, an inherited key (`toString`), a planted path in both message and code, and an externally thrown `FileAccessError` all produce the generic phrase; nothing planted reaches the document and the diagnostic stays one line |
+| FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
 

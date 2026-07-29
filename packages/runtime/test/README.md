@@ -29,6 +29,11 @@ Installs an in-memory filesystem.
 This is the right default for `execute()` tests that want to supply a small
 virtual document tree inline.
 
+The writing half of the Fs Api — `writeTextFile`, `ensureDir`, `rename`,
+`remove`, and `realpath` — is **not** stubbed and reaches the real filesystem.
+A test that exercises a document writing files (`<File>`) wants a real
+temporary directory rather than this map.
+
 ```ts
 import { useStubFs } from "@executablemd/runtime/test";
 

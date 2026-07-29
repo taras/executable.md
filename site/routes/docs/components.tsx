@@ -78,6 +78,35 @@ const TEMPDIR_STANDALONE = `<TempDir as="workspace" />
 
 Files written under {workspace} live until the document ends.`;
 
+const FILE_READ = `<File path="request.md" />`;
+
+const FILE_CAPTURE = `<File path="prompts/review.md" as="instructions" />
+
+<Prompt>{instructions}</Prompt>`;
+
+const FILE_WRITE = `<TempDir>
+<File path="fixtures/request.md">
+Request content
+</File>
+
+\`\`\`sh exec
+cat fixtures/request.md
+\`\`\`
+</TempDir>`;
+
+const FILE_BOTH_FAIL =
+  `cannot write "notes.md": the destination is on a different filesystem.
+cannot clean up "notes.md": permission denied.
+Whether the replacement committed is unknown: the target holds either the
+complete previous content or the complete replacement, never a partial write.
+A temporary file beside it may remain.`;
+
+const FILE_INLINE = `<File path="a.txt">one line</File>`;
+
+const FILE_BLOCK = `<File path="a.txt">
+one line
+</File>`;
+
 const PARSE = `<Capture as="schema" select="code[lang=json]">
 \`\`\`json
 {
@@ -299,6 +328,181 @@ export default define.page(function Components() {
         with the recorded result, and nothing notices that the directory it came
         from is gone. Resuming a document that captures a temporary path is
         unsupported.
+      </p>
+
+      <h2>Reading and writing files</h2>
+      <p>
+        <code>&lt;File&gt;</code> is built into core too. It takes one prop — a
+        {" "}
+        <code>path</code>{" "}
+        relative to the working directory — and does the obvious thing with it.
+        Self-closing, it reads and renders the file's text.
+      </p>
+      <CodeBlock>{FILE_READ}</CodeBlock>
+      <p>
+        <code>as</code>{" "}
+        captures that text and renders nothing, like any other component that
+        returns text — which is how a prompt lives in a file instead of in the
+        document.
+      </p>
+      <CodeBlock>{FILE_CAPTURE}</CodeBlock>
+      <p>
+        Written with content it writes instead, expanding its children first. It
+        renders nothing at all: no output, no path, no file handle. Missing
+        parent directories are created, and an existing file is replaced. Since
+        the path is relative to the <em>contextual</em>{" "}
+        working directory, it composes with <code>&lt;TempDir&gt;</code>{" "}
+        without either component knowing about the other — the shell in the
+        block below finds the file where <code>&lt;File&gt;</code> put it.
+      </p>
+      <CodeBlock>{FILE_WRITE}</CodeBlock>
+
+      <h3>What gets written</h3>
+      <p>
+        Exactly what the children rendered. Nothing is added, trimmed,
+        normalized, or reformatted — so where you put the tags is where the
+        file's first and last bytes come from. On one line, that is the whole
+        file:
+      </p>
+      <CodeBlock>{FILE_INLINE}</CodeBlock>
+      <p>
+        writes <code>one line</code>{" "}
+        — no trailing newline. On its own line, the breaks around it are inside
+        the element, so they are content too:
+      </p>
+      <CodeBlock>{FILE_BLOCK}</CodeBlock>
+      <p>
+        writes <code>{"\\none line\\n"}</code>{" "}
+        . If you want a file to start or end a particular way, say so with where
+        the tags go; the component never guesses. It is UTF-8 text only — no
+        binary data, no configurable encodings, no append or patch modes.
+      </p>
+
+      <h3>Staying inside the workspace</h3>
+      <p>
+        Everything <code>&lt;File&gt;</code>{" "}
+        touches stays inside the working directory, checked in two stages that
+        run at different times.
+      </p>
+      <p>
+        The first is pure path arithmetic: an absolute path and a{" "}
+        <code>..</code>{" "}
+        escape are refused with no filesystem call at all, so the failure says
+        nothing about what the path named. Only a whole <code>..</code>{" "}
+        segment escapes — <code>..notes.md</code>{" "}
+        is just a file with an odd name. For a write this happens{" "}
+        <em>before</em>{" "}
+        the children expand, so an unusable path costs nothing and its message
+        is about the path rather than about what the children then did.
+      </p>
+      <p>
+        Path arithmetic alone would not be enough, because a symlink inside the
+        directory can point anywhere. The second stage resolves whichever part
+        of the path already exists and checks <em>that</em>{" "}
+        — so a symlink staying inside is ordinary and gets followed to the file
+        it names, and one that leaves is refused before anything outside is read
+        or changed. For a write it runs <em>after</em>{" "}
+        the children finish and immediately before writing, because a child can
+        change what the path means — swapping a directory for a symlink out of
+        the workspace, say. Resolving any earlier would approve one destination
+        and write to another.
+      </p>
+      <p>
+        The working directory is inside itself, so <code>.</code>{" "}
+        is not an escape — it is a directory, and it fails as one.
+      </p>
+
+      <h3>The commit point</h3>
+      <p>
+        Children expand completely before anything is written, so a failing
+        block leaves the existing file exactly as it was — and because the write
+        has nowhere to render a diagnostic, it fails the invocation rather than
+        writing the diagnostic into your file. The write itself lands through a
+        rename, and that rename is the commit point:
+      </p>
+      <ul>
+        <li>
+          A failure or cancellation <em>before</em>{" "}
+          the rename leaves the previous file untouched.
+        </li>
+        <li>
+          Once the rename begins, what anyone sees is the complete old file or
+          the complete new one — never a partial write.
+        </li>
+        <li>
+          A commit is not a transaction. <code>rename</code>{" "}
+          cannot be interrupted once it starts, and a cancellation arriving
+          afterwards does not undo it.
+        </li>
+      </ul>
+      <p>
+        So the promise is that no write is ever half visible — not that a
+        finished write can be taken back.
+      </p>
+      <p>
+        Which means a failure can say three different things about your file,
+        and only two of them are conclusions. If <code>rename</code>{" "}
+        itself throws, the component genuinely cannot tell whether the commit
+        happened: filesystem middleware may do work on either side of the call
+        it wraps, so the throw may have arrived before the rename or after it
+        succeeded. It says so rather than guessing.
+      </p>
+      <ul>
+        <li>
+          Preparation failed — <em>The previous file is unchanged.</em>
+        </li>
+        <li>
+          The rename threw —{" "}
+          <em>
+            Whether the replacement committed is unknown: the target holds
+            either the complete previous content or the complete replacement,
+            never a partial write.
+          </em>
+        </li>
+        <li>
+          The rename returned — <em>The file was written.</em>
+        </li>
+      </ul>
+
+      <h3>What a failure tells you</h3>
+      <p>
+        The message names the path you wrote and nothing else — not the resolved
+        working directory, not where a symlink pointed, not the temporary file.
+        Reporting where an escape led would perform the disclosure the refusal
+        exists to prevent.
+      </p>
+      <p>
+        That includes errors from the filesystem itself, which name the path
+        they failed on. Every call is wrapped, and nothing from the error is
+        reproduced: its code <em>selects</em> a phrase from a fixed list —{" "}
+        <em>
+          a component of the path is not a directory
+        </em>{" "}
+        — and an unrecognized code selects{" "}
+        <em>the filesystem operation failed</em>. The code is never printed,
+        because whatever implements the filesystem can put a path or a newline
+        in it as easily as <code>ENOENT</code>.
+      </p>
+      <p>
+        If removing the temporary fails, you are told — a file you did not
+        create may be sitting next to one you did. That report names the path
+        you wrote, never the generated temporary, and it never replaces a write
+        failure it accompanies. When both fail you get both, plus a sentence
+        saying what the directory now holds:
+      </p>
+      <CodeBlock>{FILE_BOTH_FAIL}</CodeBlock>
+
+      <h3>What this is not</h3>
+      <p>
+        Containment is judged against the filesystem as{" "}
+        <code>&lt;File&gt;</code>{" "}
+        observes it, which holds while the filesystem is stable. It is not a
+        sandbox: another process can replace a directory with a symlink between
+        the moment a path is checked and the moment it is used. Resolving a
+        write's destination immediately before writing closes that window for
+        the case your document controls — its own children — but check-then-use
+        does not become atomic by being ordered more carefully. Containment that
+        does not depend on observed state is tracked in issue #227.
       </p>
 
       <h2>Parsing generated JSON</h2>
