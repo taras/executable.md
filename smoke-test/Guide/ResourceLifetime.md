@@ -14,55 +14,47 @@ the document uses *afterwards*, and invocation lifetime has already
 released the resource by then. The scenarios below observe that rather
 than hiding it.
 
-Each scenario is its own test, so the previous one's resources are
-already released when the next begins.
+Each scenario checks the whole lifetime in one test — nothing live
+before, the invocation, then what remains — so no scenario depends on
+what another left behind.
 
 </Section>
-
-Nothing has run yet, so nothing is live.
-
-<Test name="No resource exists before a standalone Thing">
-<Capture as="before"><ThingState /></Capture>
-<AssertEquals actual={before} expected={"none"} />
-</Test>
 
 A standalone `<Thing />` returns a handle, but with invocation lifetime
 the resource behind it is gone by the time the next line reads it.
 
 <Test name="A standalone Thing's resource does not outlive it">
-<Thing as="handle" />
-<Capture as="state"><ThingState /></Capture>
-<Capture as="mine"><ThingHandle handle={handle} /></Capture>
-<AssertMatch actual={handle} expected={/^thing-\d+$/} />
-<AssertEquals actual={state} expected={"none"} />
-<AssertEquals actual={mine} expected={"released"} />
-</Test>
-
-The previous test released everything it acquired, so this one starts
-clean.
-
-<Test name="No resource exists before a paired Thing">
 <Capture as="before"><ThingState /></Capture>
+<Thing as="handle" />
+<Capture as="after"><ThingState /></Capture>
+<Capture as="mine"><ThingHandle handle={handle} /></Capture>
 <AssertEquals actual={before} expected={"none"} />
+<AssertMatch actual={handle} expected={/^thing-\d+$/} />
+<AssertEquals actual={after} expected={"none"} />
+<AssertEquals actual={mine} expected={"released"} />
 </Test>
 
 An empty pair of tags is still content, so `<Thing></Thing>` is the
 wrapping form. It renders nothing and owns its resource, which means
 nothing survives it.
 
-<Test name="A paired Thing releases its resource when it finishes">
+<Test name="An empty paired Thing renders nothing and keeps nothing">
+<Capture as="before"><ThingState /></Capture>
 <Capture as="rendered"><Thing></Thing></Capture>
 <Capture as="after"><ThingState /></Capture>
+<AssertEquals actual={before} expected={"none"} />
 <AssertEquals actual={rendered} expected={""} />
 <AssertEquals actual={after} expected={"none"} />
 </Test>
 
 While a wrapper's content expands, its resource is live — the content
-below asks, from inside.
+asks from inside — and it is released as soon as the wrapping finishes.
 
-<Test name="A paired Thing's resource is live while its content expands">
+<Test name="A paired Thing's resource is live only while its content expands">
+<Capture as="before"><ThingState /></Capture>
 <Capture as="inside"><Thing><ThingState /></Thing></Capture>
 <Capture as="after"><ThingState /></Capture>
+<AssertEquals actual={before} expected={"none"} />
 <AssertEquals actual={inside} expected={"live"} />
 <AssertEquals actual={after} expected={"none"} />
 </Test>
