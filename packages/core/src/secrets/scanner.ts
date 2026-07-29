@@ -16,6 +16,7 @@ import { lintSource } from "@secretlint/core";
 import { creator as recommended } from "@secretlint/secretlint-rule-preset-recommend";
 import { createFingerprinter, SecretScannerError, toSecretFinding } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
+import { xmdCredentialRule } from "./rules.ts";
 
 /** Scans text for credentials. Created once per execution. */
 export interface SecretScanner {
@@ -50,6 +51,10 @@ const CONFIG = {
     {
       id: "@secretlint/secretlint-rule-preset-recommend",
       rule: recommended,
+    },
+    {
+      id: xmdCredentialRule.meta.id,
+      rule: xmdCredentialRule,
     },
   ],
 };
