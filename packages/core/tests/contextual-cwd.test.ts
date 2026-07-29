@@ -22,10 +22,11 @@ import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 /**
  * The boundary under test: a component that installs a directory as the
@@ -52,9 +53,17 @@ const IN_DIRECTORY = [
 ].join("\n");
 
 /**
- * A fixture holding the document, the boundary component, and a directory for
- * the document to run in. `mkdtemp` and `realpath` have no `@effectionx/fs`
- * equivalent; everything else goes through it.
+ * A fixture project, not a bare directory. The boundary component is imported
+ * by absolute file URL, so Node and Bun resolve it the way they resolve any
+ * file: the nearest `package.json` decides its module type and bare specifiers
+ * resolve through the nearest `node_modules`. Under the system temp directory
+ * there is neither, so the component would load as CommonJS and fail to find
+ * `@executablemd/core`. Deno needs neither, because its import map is
+ * process-wide.
+ *
+ * `mkdtemp`, `realpath` and `symlink` have no `@effectionx/fs` equivalent;
+ * everything else goes through it. Removing the fixture unlinks the symlink
+ * rather than following it.
  */
 interface Fixture {
   /** Where the document and its component live. */
@@ -63,13 +72,19 @@ interface Fixture {
   target: string;
 }
 
+const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
+
 function useFixture(): Operation<Fixture> {
   return resource(function* (provide) {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "cw-test-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const target = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "cw-target-")))));
     yield* ensure(() => rm(target, { recursive: true, force: true }));
+
+    yield* writeTextFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
+    yield* until(symlink(join(REPOSITORY, "node_modules"), join(root, "node_modules"), "dir"));
     yield* writeTextFile(join(root, "InDirectory.ts"), IN_DIRECTORY);
+
     yield* provide({ root, target });
   });
 }
