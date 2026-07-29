@@ -68,6 +68,16 @@ const RETAIN_USAGE = `<Thing as="handle" />
 
 The resource behind {handle} is still running here.`;
 
+const TEMPDIR = `<TempDir>
+\`\`\`sh exec
+pwd
+\`\`\`
+</TempDir>`;
+
+const TEMPDIR_STANDALONE = `<TempDir as="workspace" />
+
+Files written under {workspace} live until the document ends.`;
+
 export default define.page(function Components() {
   return (
     <>
@@ -195,6 +205,51 @@ export default define.page(function Components() {
         block is durable — a replay restores its values without running it — so
         a resource retained from one would have nothing to re-establish it, and
         the call is refused rather than silently succeeding.
+      </p>
+
+      <h2>Scoped resources</h2>
+      <p>
+        <code>&lt;TempDir&gt;</code>{" "}
+        is built into core — no search directory, no file to install. Written
+        with content it gives that content an isolated working directory: nested
+        components, code blocks, processes, and agents all observe it, without
+        being handed a path.
+      </p>
+      <CodeBlock>{TEMPDIR}</CodeBlock>
+      <p>
+        Written self-closing there is nothing to wrap, so it renders the
+        directory's path and keeps the directory alive for the siblings that
+        follow. <code>as</code> captures that path like any other value.
+      </p>
+      <CodeBlock>{TEMPDIR_STANDALONE}</CodeBlock>
+      <p>
+        Either way cleanup is automatic and unconditional — on success, on
+        failure, and on cancellation. There is no <code>retain</code>{" "}
+        prop and nothing is kept after a failure. Because the directory is the
+        invocation's own resource, anything the content started — a daemon, a
+        watcher — is stopped before the directory is removed.
+      </p>
+
+      <p>
+        One limitation, and it differs by form. Each run creates a new
+        directory, while a recorded effect is matched by its description — so
+        resuming from a partial journal would replay a result naming a directory
+        that has been removed, and skip the filesystem work it stands for.
+      </p>
+      <p>
+        Inside a <strong>wrapping</strong> <code>&lt;TempDir&gt;</code>{" "}
+        that is caught: the effect fails, the whole execution fails with it, and
+        nothing after the component runs. It is not a diagnostic the document
+        can collect and continue past — re-run from the beginning.
+      </p>
+      <p>
+        The <strong>standalone</strong>{" "}
+        form has no such guard. A directory it retains belongs to the scope that
+        invoked it, and a component cannot install anything there, so a later
+        sibling replaying against a captured path is not detected — it continues
+        with the recorded result, and nothing notices that the directory it came
+        from is gone. Resuming a document that captures a temporary path is
+        unsupported.
       </p>
 
       <h2>How it renders</h2>

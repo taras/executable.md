@@ -40,7 +40,7 @@ import {
   importComponent,
   raise,
 } from "./component-api.ts";
-import { AmbientErrorPolicy, DocumentationError } from "./errors.ts";
+import { AmbientErrorPolicy, fatalCause } from "./errors.ts";
 import type { ErrorPolicy } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -589,10 +589,9 @@ export function* expandSegments(
           }
           // If output is empty and exit code is 0, nothing added (e.g., silent)
         } catch (error) {
-          // A DocumentationError from nested expansion (e.g. renderChildren
-          // inside an eval block) is our own fail-fast — never swallow it.
-          if (error instanceof DocumentationError) {
-            throw error;
+          const fatal = fatalCause(error);
+          if (fatal !== undefined) {
+            throw fatal;
           }
           result.push(
             yield* raise({
@@ -852,6 +851,12 @@ function* expandComponent(
   try {
     imported = yield* importComponent(name);
   } catch (error) {
+    // Import is a durable effect, so it is the other place a stale journal
+    // entry can surface.
+    const fatal = fatalCause(error);
+    if (fatal !== undefined) {
+      throw fatal;
+    }
     return [
       yield* raise({
         type: "error",
@@ -1068,8 +1073,9 @@ function* expandComponent(
     } catch (error) {
       // Body fail-fast propagates unchanged; a return-value failure is the
       // component's own diagnostic and follows the caller's policy.
-      if (error instanceof DocumentationError) {
-        throw error;
+      const fatal = fatalCause(error);
+      if (fatal !== undefined) {
+        throw fatal;
       }
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
@@ -1292,10 +1298,9 @@ function* expandFunctionComponent(
     }
     return [{ type: "text", content: asText(output) }];
   } catch (error) {
-    // A DocumentationError from a content-rendering path (useContent) is
-    // fail-fast — propagate it unchanged.
-    if (error instanceof DocumentationError) {
-      throw error;
+    const fatal = fatalCause(error);
+    if (fatal !== undefined) {
+      throw fatal;
     }
     // A return that failed its schema already names the component and carries
     // its issues; wrapping it would bury both.

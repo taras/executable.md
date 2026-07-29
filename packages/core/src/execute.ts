@@ -60,6 +60,7 @@ import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
+import { builtInComponent } from "./components/registry.ts";
 import type { EvalEnv } from "./types.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
@@ -86,6 +87,14 @@ function* durableImportComponent(
   rootDocPath: string | undefined,
   searchPaths: string[],
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
+  // A built-in resolves no path and reads no file, so there is nothing to
+  // journal and nothing a replay could restore differently: it is already in
+  // the module graph and is created fresh on every execution.
+  const builtIn = builtInComponent(name);
+  if (builtIn) {
+    return builtIn;
+  }
+
   const result = (yield createDurableOperation<ImportResult>(
     { type: "import_component", name },
     function* (): Operation<ImportResult> {
