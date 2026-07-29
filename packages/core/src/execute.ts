@@ -211,6 +211,7 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
       function* (): Operation<Json> {
         const execResult = yield* exec({
           command,
+          cwd: yield* cwd(),
           timeout: 30_000,
         });
         return execResult as unknown as Json;

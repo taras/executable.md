@@ -115,8 +115,32 @@ Runtime operations (`readTextFile`, `stat`, `exec`, `glob`) all resolve
 paths relative to cwd. Runtime helpers never see
 absolute paths. Component search directories
 (`["./components", "./"]`) are relative. Resolved paths in the
-journal (`"components/Greeting.md"`) are relative. Code block `exec`
-commands run with cwd as the working directory.
+journal (`"components/Greeting.md"`) are relative.
+
+#### The contextual working directory
+
+`exec` and `daemon` blocks launch their processes in the **contextual working
+directory** — `Env.cwd`, read where the block runs. Its default is the
+process's own working directory, so a document that rebinds nothing behaves as
+it always has.
+
+A component rebinds it for its content by installing `Env.cwd` middleware on
+its own invocation:
+
+```typescript
+yield* API.Env.around({ *cwd() { return directory; } }, { at: "min" });
+return yield* useContent();
+```
+
+Everything expanded inside then observes that directory, including nested
+components and the processes their blocks start, and the binding ends with the
+invocation (§4.4). A nested rebinding shadows the enclosing one for its own
+content; siblings share nothing.
+
+A `daemon` block reads the directory on the expansion frame, before entering
+the eval scope that anchors the process. The eval-scope loop task is on a
+different context chain, so a directory read from inside it would be the
+process's own rather than the document's.
 
 ---
 
@@ -4494,6 +4518,15 @@ visible warning blocks, collect into a separate error report).
 | O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
 | O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
 | O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
+
+### Tier CW — Contextual working directory
+
+| # | Test | Verify |
+|---|------|--------|
+| CW1 | Inside a rebinding component | An `exec` block reports the contextual directory, from the shell rather than from the engine |
+| CW2 | After the boundary | A later `exec` block reports the process's own directory again |
+| CW3 | Daemon inheritance and teardown | A daemon records its own `pwd` as the contextual directory, and its pid is gone once the execution ends |
+| CW5 | No override | With nothing rebinding `Env.cwd`, both `exec` and `daemon` run in the process's directory |
 
 ### Tier IS — Invocation shape
 
