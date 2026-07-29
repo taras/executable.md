@@ -5,6 +5,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
+import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -692,5 +693,88 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
 
     const selected = yield* runProbe(true);
     expect(selected.output).toContain("[then]");
+  });
+});
+
+/**
+ * `<If>` must not add an observation boundary (spec §6.9). Every ErrorSegment
+ * passes through `Component.raise` exactly once, where it is created — so an
+ * error inside a selected branch settles once, exactly as the same error would
+ * inline, and an error `<If>` creates itself settles once too.
+ */
+describe("Tier IF — error observation", () => {
+  interface RaiseProbe {
+    observed: string[];
+    output: string;
+  }
+
+  function runRaiseProbe(source: string): Operation<RaiseProbe> {
+    return scoped(function* () {
+      const observed: string[] = [];
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error.message);
+          return yield* next(error);
+        },
+      });
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *expand([element], next) {
+          if (element.name === "Broken") {
+            return {
+              segments: [{ type: "error", message: "broken thing", source: "Broken" }],
+            };
+          }
+          return yield* next(element);
+        },
+      });
+      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
+      const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      return { observed, output: renderSegments(segments) };
+    });
+  }
+
+  it("IF49: an inline error is observed once", function* () {
+    const probe = yield* runRaiseProbe("<Broken />");
+    expect(probe.observed).toEqual(["broken thing"]);
+  });
+
+  it("IF50: the same error inside a selected branch is observed once", function* () {
+    const probe = yield* runRaiseProbe("<If condition={true}><Broken /></If>");
+    expect(probe.observed).toEqual(["broken thing"]);
+    expect(probe.output).toContain("broken thing");
+  });
+
+  it("IF51: an error in an unselected branch is observed zero times", function* () {
+    const probe = yield* runRaiseProbe("<If condition={false}><Broken /><Else>alt</Else></If>");
+    expect(probe.observed).toEqual([]);
+    expect(probe.output).toBe("alt");
+  });
+
+  it("IF52: an <If>-owned validation error is observed once", function* () {
+    const missing = yield* runRaiseProbe("<If>body</If>");
+    expect(missing.observed).toHaveLength(1);
+    expect(missing.observed[0]).toContain('requires a "condition" prop');
+
+    const nonBoolean = yield* runRaiseProbe("<If condition={1}>body</If>");
+    expect(nonBoolean.observed).toHaveLength(1);
+    expect(nonBoolean.observed[0]).toContain("must be a boolean");
+
+    const structure = yield* runRaiseProbe('<If condition={true}>a<Else when="x">b</Else></If>');
+    expect(structure.observed).toHaveLength(1);
+    expect(structure.observed[0]).toContain("accepts no props");
+  });
+
+  it("IF53: a throwing policy still aborts on a selected-branch error", function* () {
+    let thrown: unknown;
+    yield* scoped(function* () {
+      yield* AmbientErrorPolicy.set("throw");
+      try {
+        yield* runRaiseProbe("<If condition={true}><Broken /></If>");
+      } catch (error) {
+        thrown = error;
+      }
+    });
+    expect(thrown).toBeInstanceOf(DocumentationError);
   });
 });

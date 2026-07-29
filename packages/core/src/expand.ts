@@ -518,14 +518,11 @@ export function* expandSegments(
         }
 
         if (segment.name === "If") {
-          const ifResult = yield* expandIf(segment, parentMeta, parentProps, hideSet, counter);
-          for (const ifSegment of ifResult) {
-            if (ifSegment.type === "error") {
-              result.push(yield* raise(ifSegment));
-            } else {
-              result.push(ifSegment);
-            }
-          }
+          // `<If>` is not an observation boundary. It reports the errors it
+          // creates itself, and the selected branch's segments already passed
+          // through the ambient policy where they were produced, so they are
+          // appended as they are (spec §6.9: one observation per segment).
+          result.push(...(yield* expandIf(segment, parentMeta, parentProps, hideSet, counter)));
           break;
         }
 
@@ -1007,6 +1004,12 @@ const IF_PROPS = new Set(["condition"]);
  * `<If>` opens no binding scope: the selected branch expands in the enclosing
  * environment, so a `<Capture>` it creates behaves like inline content and
  * stays available after `</If>`.
+ *
+ * It is not an observation boundary either. Errors it creates itself — an
+ * invalid condition, an unknown prop, a malformed `<Else>` — are reported here,
+ * exactly once. Everything the selected branch returns was already reported
+ * where it was produced and is handed back untouched, so a `<Broken />` inside
+ * a selected branch settles once, exactly as it would inline.
  */
 function* expandIf(
   segment: ComponentElement,
@@ -1019,12 +1022,20 @@ function* expandIf(
     (name) => !IF_PROPS.has(name),
   );
   if (unknownProp !== undefined) {
-    return [ifError(segment, `<If> only accepts a "condition" prop. Got: "${unknownProp}".`)];
+    return [
+      yield* raise(
+        ifError(segment, `<If> only accepts a "condition" prop. Got: "${unknownProp}".`),
+      ),
+    ];
   }
 
   const structure = ifStructure(segment);
   if (structure.violations.length > 0) {
-    return structure.violations;
+    const reported: Segment[] = [];
+    for (const violation of structure.violations) {
+      reported.push(yield* raise(violation));
+    }
+    return reported;
   }
 
   let condition: Json;
@@ -1040,18 +1051,22 @@ function* expandIf(
       );
       condition = resolved.condition;
     } catch (error) {
-      return [ifError(segment, error instanceof Error ? error.message : String(error))];
+      return [
+        yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
+      ];
     }
   } else {
-    return [ifError(segment, '<If> requires a "condition" prop (a boolean).')];
+    return [yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).'))];
   }
 
   if (typeof condition !== "boolean") {
     return [
-      ifError(
-        segment,
-        `Prop "condition" on <If /> must be a boolean, not ${jsonKind(condition)}. ` +
-          "<If> does not coerce truthy or falsy values.",
+      yield* raise(
+        ifError(
+          segment,
+          `Prop "condition" on <If /> must be a boolean, not ${jsonKind(condition)}. ` +
+            "<If> does not coerce truthy or falsy values.",
+        ),
       ),
     ];
   }

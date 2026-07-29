@@ -3026,6 +3026,14 @@ segments that are spliced into the surrounding output, so `ErrorSegment` and
 `execOutput` segments survive and the ambient raise policy applies to them
 exactly as elsewhere.
 
+`<If>` is **not an observation boundary**. Under the one-observation rule
+(§6.9), it reports only the errors it creates itself — an invalid condition, an
+unknown prop, a malformed `<Else>` — and hands back the selected branch's
+segments untouched, because they were already reported where they were
+produced. A failing element inside a selected branch therefore settles exactly
+once, as it would inline, and an ambient `throw` policy still aborts at the
+first error.
+
 Diagnostics from `<If>` and `<Else>` carry the source location of the element
 that caused them, as `path:line:column` when the element came from a file and
 `line:column` for text scanned without an origin.
@@ -5032,6 +5040,11 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF46 | Process runtime | `exec` is never invoked for an unselected block |
 | IF47 | Durable events | The unselected branch writes no exec or eval event |
 | IF48 | Bindings (execution) | Later content sees no binding from the unselected branch |
+| IF49 | Inline observation baseline | An `ErrorSegment` outside any `<If>` passes through `Component.raise` once |
+| IF50 | Selected branch observed once | The same error inside a selected branch is observed once, not twice |
+| IF51 | Unselected branch unobserved | An error in the unselected branch is observed zero times |
+| IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
+| IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
 
 ### Tier SC — Sample component (integration)
 
