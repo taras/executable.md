@@ -89,12 +89,14 @@ function provideEvalScope(value: EvalScope): Operation<void> {
  * invocation. Nothing about the scope reaches the component: it hands over a
  * factory and gets back a value.
  *
- * An invocation with no ambient eval scope installs nothing, and the default
- * handler explains that only invocation lifetime is available.
+ * Every invocation installs a provider, including one with no site to retain
+ * into. Leaving that case uninstalled would let whatever `retain` provider
+ * happens to be inherited answer for this invocation, and a resource would be
+ * created in a scope with no relationship to the call site.
  */
 function provideRetain(site: EvalScope | undefined): Operation<void> {
   if (!site) {
-    return noRetain();
+    return Component.around({ retain: rejectRetain }, { at: "min" });
   }
   return Component.around(
     {
@@ -107,7 +109,13 @@ function provideRetain(site: EvalScope | undefined): Operation<void> {
 }
 
 // deno-lint-ignore require-yield
-function* noRetain(): Operation<void> {}
+function* rejectRetain(): Operation<never> {
+  throw new Error(
+    "retain() has no invocation-site eval scope to own the resource. Expansion driven " +
+      "without one — no document scope and no enclosing invocation — can only create " +
+      "resources with invocation lifetime.",
+  );
+}
 
 /**
  * Offer an element to extensions, with this expansion's recursion — its

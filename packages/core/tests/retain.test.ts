@@ -12,7 +12,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { race, scoped, sleep, spawn, suspend } from "effection";
 import type { Operation } from "effection";
-import { useEvalScope } from "@effectionx/scope-eval";
+import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -40,9 +40,12 @@ function retainer(name: string, timeline: string[], label: string) {
 }
 
 describe("Tier RT — Retained resources", () => {
-  // RT1: the value comes back to the call site like any other rendered result.
-  it("RT1: a retained resource's value reaches a downstream sibling", function* () {
+  // RT1: the contract self-closing components are for — capture the value with
+  // `as`, then have a later sibling read the binding while the resource behind
+  // it is still alive.
+  it("RT1: a captured value is consumed by a downstream sibling", function* () {
     const timeline: string[] = [];
+    const observed: string[] = [];
     const definitions = {
       Dir: component("Dir", () =>
         (function* () {
@@ -54,11 +57,29 @@ describe("Tier RT — Retained resources", () => {
           );
         })(),
       ),
+      // Reads the binding the earlier element captured, and reports whether
+      // the resource behind it is still live at that point.
+      Reader: component("Reader", () =>
+        (function* () {
+          observed.push(timeline.includes("stop:dir") ? "released" : "live");
+          return yield* useContent();
+        })(),
+      ),
     };
 
-    const expanded = yield* expandAll(`<Dir />\n\nafter`, definitions, timeline);
+    const expanded = yield* expandAll(
+      `<Dir as="dir" />\n\n<Reader>path is {dir}</Reader>`,
+      definitions,
+      timeline,
+    );
 
-    expect(renderSegments(expanded)).toContain("/retained/path");
+    const output = renderSegments(expanded);
+    // The capture renders nothing at the call site, and the sibling resolves
+    // the binding it wrote.
+    expect(output).not.toContain("<Dir");
+    expect(output).toContain("path is /retained/path");
+    expect(observed).toEqual(["live"]);
+    expect(timeline).toEqual(["start:dir", "stop:dir"]);
   });
 
   // RT2: the whole point — the resource is still live once the invocation that
@@ -189,6 +210,37 @@ describe("Tier RT — Retained resources", () => {
     });
 
     expect(renderSegments(expanded)).toContain("invocation-site eval scope");
+    expect(timeline).toEqual([]);
+  });
+
+  // RT8b: the missing-site answer is this invocation's, not something it
+  // inherited. An unrelated `retain` provider installed further out must not
+  // answer for an invocation that has no site of its own — it would create the
+  // resource in a scope with no relationship to the call site.
+  it("RT8b: a missing site does not fall through to an inherited provider", function* () {
+    const timeline: string[] = [];
+    const definitions = { Holder: retainer("Holder", timeline, "retained") };
+
+    const expanded = yield* scoped(function* () {
+      // A stray provider in an enclosing context, of the shape an embedding
+      // host or an outer expansion could leave behind.
+      const stray = yield* useEvalScope();
+      yield* Component.around(
+        {
+          *retain([resource], _next) {
+            timeline.push("stray");
+            return unbox(yield* stray.eval(resource));
+          },
+        },
+        { at: "min" },
+      );
+      yield* useHarness(definitions, timeline);
+      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
+      return yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set());
+    });
+
+    expect(renderSegments(expanded)).toContain("invocation-site eval scope");
+    // The stray provider never ran, so nothing was acquired anywhere.
     expect(timeline).toEqual([]);
   });
 

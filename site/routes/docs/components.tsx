@@ -51,6 +51,21 @@ export default function*(props) {
   return \`## \${props.title}\\n\\n\${body}\`;
 }`;
 
+const RETAIN_COMPONENT = `import { hasContent, retain, useContent } from "@executablemd/core";
+
+export default function*() {
+  if (yield* hasContent()) {
+    // A wrapper: whatever it holds is as long-lived as the content.
+    return yield* useContent();
+  }
+  // Standalone: the caller uses this after the invocation is over.
+  return yield* retain(useToken);
+}`;
+
+const RETAIN_USAGE = `<Probe as="token" />
+
+The token {token} is still live here.`;
+
 export default define.page(function Components() {
   return (
     <>
@@ -127,6 +142,50 @@ export default define.page(function Components() {
         stopped — so a component can hold something open for its children
         without managing a scope itself. Durable effects it performs are
         journaled and replayed as usual.
+      </p>
+
+      <h3>Which form am I?</h3>
+      <p>
+        <code>hasContent()</code>{" "}
+        answers from how the element was written, not from what it renders:
+        {" "}
+        <code>&lt;Probe&gt;…&lt;/Probe&gt;</code> and{" "}
+        <code>&lt;Probe&gt;&lt;/Probe&gt;</code> both have content — content
+        that renders an empty string is still content — and only{" "}
+        <code>&lt;Probe /&gt;</code>{" "}
+        does not. Asking never renders the children, so a component whose two
+        forms mean different things can branch before projecting anything.
+      </p>
+
+      <h3>Outliving the invocation</h3>
+      <p>
+        Invocation lifetime is right for a wrapper, and wrong for a component
+        that hands something back. A self-closing component returns a value the
+        caller uses <em>after</em>{" "}
+        the invocation is over — releasing the resource behind it at the
+        boundary would return a name for something that no longer exists.
+      </p>
+      <p>
+        <code>retain()</code>{" "}
+        gives that resource invocation-site lifetime instead. The factory runs
+        in the scope that invoked the component, so what it acquires belongs to
+        that scope from the beginning: it stays alive for the caller and its
+        later siblings.
+      </p>
+      <CodeBlock filename="components/Probe.ts">{RETAIN_COMPONENT}</CodeBlock>
+      <CodeBlock>{RETAIN_USAGE}</CodeBlock>
+      <p>
+        Retaining delays release; it does not opt out of it. The invocation
+        site is an ordinary scope, so when it finishes, fails, or is cancelled,
+        everything retained into it is torn down, innermost first. Nothing
+        escapes structured concurrency and nothing needs an explicit release.
+      </p>
+      <p>
+        <code>retain()</code> belongs to TypeScript components. An{" "}
+        <code>eval</code>{" "}
+        block is durable — a replay restores its values without running it — so
+        a resource retained from one would have nothing to re-establish it, and
+        the call is refused rather than silently succeeding.
       </p>
 
       <h2>How it renders</h2>
