@@ -1978,10 +1978,11 @@ deterministic from the content, so it needs no separate journal entry.
 
 #### Built-in components
 
-Some components are core's own — `<TempDir>` (§6.11) is the first. A built-in
-resolves no path and reads no file: it is already in the module graph, so it
-ships in the compiled binary and every published package without a search path
-or a bundling step, and a document invokes it with no `--component-dir`.
+Some components are core's own: `<TempDir>` (§6.11), `<Parse>`, and
+`<SafeParse>` (§6.12). A built-in resolves no path and reads no file: it is
+already in the module graph, so it ships in the compiled binary and every
+published package without a search path or a bundling step, and a document
+invokes it with no `--component-dir`.
 
 Because there is no resolution and no read, a built-in produces **no
 `import_component` journal entry**: there is no path to resolve and no file to
@@ -3703,6 +3704,88 @@ wrapping form the directory is the invocation's own resource, so §4.4's teardow
 stops everything the content created — including daemons started inside it —
 before the directory is removed. No filesystem operation is fire-and-forget.
 
+### 6.12 Parsing JSON: `<Parse>` and `<SafeParse>`
+
+Generated content becomes a value a document can act on by being parsed against
+a schema. `<Parse>` binds the validated value or fails; `<SafeParse>` binds a
+result the document can inspect. Both are core's own components (§5.3), and
+neither calls an agent: parsing is provider-neutral, and repair is written in
+Markdown where a reader can see it.
+
+```md
+<Parse schema={schema} as="verdict">
+  <Content />
+</Parse>
+
+<SafeParse schema={schema} as="result">
+  <Content />
+</SafeParse>
+```
+
+Both require `schema` and `as`, render nothing, and bind one JSON value.
+Children expand to the text being parsed.
+
+#### The schema
+
+`schema` is either captured JSON text or an already structured JSON Schema
+value. Both forms normalize through the same draft-07 compilation, so a schema
+held in a code fence and one written as a prop accept and reject the same
+content.
+
+The complete schema compiles **before** child content expands. Schema text that
+is not JSON, a schema that is not a JSON Schema object, a schema Ajv rejects,
+and an asynchronous schema (`$async: true`) all fail before any child effect
+runs — so a document never does work whose result an unusable schema would then
+refuse to judge.
+
+Only references contained within the supplied schema resolve. An external file
+or HTTP(S) `$ref` fails at compilation with a diagnostic naming the limit;
+resolving them is issue #192.
+
+#### What each one binds
+
+`<Parse>` binds the validated JSON value directly — any JSON value, including an
+object, an array, a scalar, and `null`. Malformed JSON and content the schema
+rejects both fail, naming the component and carrying the normalized issues.
+
+`<SafeParse>` binds one of two shapes:
+
+```json
+{ "ok": true, "value": "<validated JSON value>" }
+```
+
+```json
+{
+  "ok": false,
+  "input": "<original rendered text>",
+  "errors": [
+    { "instancePath": "", "schemaPath": "", "keyword": "parse", "params": {}, "message": "…" }
+  ]
+}
+```
+
+Schema failures use the normalized validation issue shape of §6.5. Malformed
+JSON produces one issue with `keyword: "parse"`, so a document reads both kinds
+of failure the same way. A failed result preserves the rendered input exactly,
+which is what lets a corrective prompt quote what was actually said.
+
+`<SafeParse>` absorbs JSON syntax and schema-validation failures, and nothing
+else. An unusable schema still fails, and a child execution failure propagates
+unchanged.
+
+#### Validation does not transform
+
+Parsing and validation judge the value; they never edit it. A declared `default`
+is not inserted, a type is not coerced, an undeclared property is not removed.
+What a document binds is exactly what its content said.
+
+#### Repair stays in the document
+
+Neither component repairs content. A document may inspect a `<SafeParse>`
+failure, render its errors into a corrective prompt, and finish with `<Parse>`
+after a bounded retry. That loop is ordinary Markdown, so it is visible and
+testable like anything else.
+
 ---
 
 ## 7. Entry point
@@ -4675,6 +4758,26 @@ visible warning blocks, collect into a separate error report).
 | TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
 | TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
 | TD17 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
+
+### Tier PC — `<Parse>` and `<SafeParse>`
+
+| # | Test | Verify |
+|---|------|--------|
+| PC1 | Required schema | Omitting `schema` fails prop validation naming the component |
+| PC2 | Required capture name | A value component invoked without `as` fails before its body runs |
+| PC3 | Invalid schema text | Schema text that is not JSON fails, naming the syntax error |
+| PC4 | Invalid schema | A schema Ajv rejects fails at compilation |
+| PC5 | Asynchronous schema | `$async: true` is rejected |
+| PC6 | Non-object schema | A boolean or scalar `schema` is rejected |
+| PC7 | Ordering | With an unusable schema, an `exec` child of `<Parse>` never runs |
+| PC8 | Ordering under SafeParse | The same holds for `<SafeParse>` — an unusable schema is not a safe failure |
+| PC9 | Child failures propagate | A failing child of `<SafeParse>` fails the document; no result is bound |
+| PC10 | Failure diagnostics | A `<Parse>` schema failure names the component and carries its normalized issues |
+| PC11 | Malformed JSON | Content that is not JSON fails `<Parse>` as a parse failure |
+| PC12 | No rendered output | Neither component contributes to the rendering |
+| PC13 | External reference | An external `$ref` fails with a diagnostic naming the #192 limit |
+| PC14 | Capture and replay | A replay reproduces the bound value and appends no journal entry |
+| PC15 | Colocated documents | `xmd test packages/core/src/components` runs `Parse.test.md` and `SafeParse.test.md` beside `TempDir.test.md`, with no search path and no JavaScript: both schema forms, every JSON result kind, a local `$ref`, both `<SafeParse>` variants, the preserved input, and the three non-transformation guarantees |
 
 ### Tier FA — Fatal error discovery
 

@@ -78,6 +78,40 @@ const TEMPDIR_STANDALONE = `<TempDir as="workspace" />
 
 Files written under {workspace} live until the document ends.`;
 
+const PARSE = `<Capture as="schema" select="code[lang=json]">
+\`\`\`json
+{
+  "type": "object",
+  "properties": { "passed": { "type": "boolean" } },
+  "required": ["passed"]
+}
+\`\`\`
+</Capture>
+
+<Parse schema={schema} as="verdict">
+  <Prompt>Answer with JSON only: did the change pass review?</Prompt>
+</Parse>
+
+Review passed: {verdict.passed}`;
+
+const SAFE_PARSE = `<SafeParse schema={schema} as="result">
+  <Prompt>Answer with JSON only: did the change pass review?</Prompt>
+</SafeParse>`;
+
+const REPAIR = `That first answer was not usable:
+
+\`\`\`
+{result.input}
+\`\`\`
+
+<Each in={result.errors} let="issue">
+- {issue.instancePath} {issue.message}
+</Each>
+
+<Parse schema={schema} as="verdict">
+  <Prompt>Correct the JSON above so it satisfies every point.</Prompt>
+</Parse>`;
+
 export default define.page(function Components() {
   return (
     <>
@@ -250,6 +284,73 @@ export default define.page(function Components() {
         with the recorded result, and nothing notices that the directory it came
         from is gone. Resuming a document that captures a temporary path is
         unsupported.
+      </p>
+
+      <h2>Parsing generated JSON</h2>
+      <p>
+        <code>&lt;Parse&gt;</code> and <code>&lt;SafeParse&gt;</code>{" "}
+        are built into core as well. They turn content into a value the rest of
+        the document can branch on, validated against a schema. Both take{" "}
+        <code>schema</code> and{" "}
+        <code>as</code>, render nothing, and parse whatever their children
+        expand to — an agent's reply, a captured fence, a file's contents.
+      </p>
+      <p>
+        <code>&lt;Parse&gt;</code>{" "}
+        is the strict one: it binds the validated value, or fails.
+      </p>
+      <CodeBlock>{PARSE}</CodeBlock>
+      <p>
+        The schema is either captured JSON text, as above, or an already
+        structured value — both compile the same way. It compiles{" "}
+        <em>before</em>{" "}
+        the children expand, so an unusable schema fails before the document
+        spends a model call on content it could never judge.
+      </p>
+      <p>
+        Neither component transforms what it validates. A declared{" "}
+        <code>default</code>{" "}
+        is not inserted, a type is not coerced, an undeclared property is not
+        removed. What you bind is exactly what the content said. Parsing is also
+        provider-neutral: no agent is involved, and no repair happens behind
+        your back.
+      </p>
+
+      <h3>Inspecting a failure</h3>
+      <p>
+        <code>&lt;SafeParse&gt;</code>{" "}
+        binds a result instead of failing. On success that is{" "}
+        <code>{"{ ok: true, value }"}</code>; on failure,{" "}
+        <code>{"{ ok: false, input, errors }"}</code>{" "}
+        — the text that failed, kept exactly as it arrived, and what was wrong
+        with it. Malformed JSON arrives as a single issue with{" "}
+        <code>keyword: "parse"</code>, so both kinds of failure read the same
+        way.
+      </p>
+      <CodeBlock>{SAFE_PARSE}</CodeBlock>
+      <p>
+        It absorbs JSON syntax and schema failures, and nothing else. An
+        unusable schema still fails, and so does a failing child.
+      </p>
+
+      <h3>A bounded repair prompt</h3>
+      <p>
+        Because the failure is a value, repair is ordinary Markdown rather than
+        something hidden in the component. The fragment below is the{" "}
+        <strong>failure branch</strong> — it assumes <code>result</code>{" "}
+        has already come back failed. It quotes the input, renders every issue
+        into one corrective prompt, and validates the reply strictly.
+      </p>
+      <CodeBlock>{REPAIR}</CodeBlock>
+      <p>
+        Core ships no conditional component today — the{" "}
+        <code>&lt;Show&gt;</code>{" "}
+        in the value-component example above is an author's own component, not a
+        core one. So this fragment is not yet an executable branch on its own:
+        choosing it only when <code>result.ok</code>{" "}
+        is false is what issue #78 adds. Until then, treat it as the shape a
+        bounded retry takes: inspect, prompt once with the errors, then{" "}
+        <code>&lt;Parse&gt;</code>.
       </p>
 
       <h2>How it renders</h2>
