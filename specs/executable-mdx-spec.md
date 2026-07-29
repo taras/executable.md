@@ -1976,6 +1976,34 @@ Parsing the current content into frontmatter and segments is a **runtime
 operation** that runs after the journaled operation returns. It is
 deterministic from the content, so it needs no separate journal entry.
 
+#### Built-in components
+
+Some components are core's own — `<TempDir>` (§6.11) is the first. A built-in
+resolves no path and reads no file: it is already in the module graph, so it
+ships in the compiled binary and every published package without a search path
+or a bundling step, and a document invokes it with no `--component-dir`.
+
+Because there is no resolution and no read, a built-in produces **no
+`import_component` journal entry**: there is no path to resolve and no file to
+re-read, so a replay has nothing to restore differently.
+
+The definition itself is module-resident and reused — one object, held by the
+registry for the life of the process. That is not what varies between runs.
+What each `<TempDir>` invocation creates fresh is the directory (§6.11); the
+component describing it is the same one every time.
+
+A definition still carries a `path`, which every consumer of the shape expects.
+For a built-in that field is a synthetic identity — `<built-in>/TempDir` — that
+names no file and resolves against no directory. It appears in diagnostics, not
+in the journal, and nothing reads it back.
+
+What is specified is that core can resolve a built-in with no filesystem path
+and no search directory. What happens when a repository-local component shares
+a built-in name is **unspecified** — a document must not rely on either
+resolving. That question, along with what a host may add and how inspection
+reports the choice, is owned by issue #202.
+
+
 ```typescript
 interface ImportResult {
   path: string;           // Workspace-relative, from Resolve Api
@@ -3579,6 +3607,104 @@ command line through the JSON result contract of `xmd run` (§9.6).
 
 ---
 
+### 6.11 Temporary working directories: `<TempDir>`
+
+A test needs a filesystem it can dirty without coordinating with anything else.
+`<TempDir>` gives its content one:
+
+```markdown
+<TempDir>
+```sh exec
+pwd
+```
+</TempDir>
+```
+
+The block prints a fresh directory, and by the time the document finishes that
+directory is gone.
+
+#### The two forms
+
+Written **with content**, `<TempDir>` is a working directory. It creates a
+unique directory, installs its canonical path as the contextual `Env.cwd` for
+everything expanded inside, renders the content, and removes the directory when
+the content finishes, fails, or is cancelled. Nested components, code blocks,
+processes, and agents inherit it without being handed a path.
+
+Written **self-closing**, `<TempDir />` is an allocation. There is nothing to
+wrap, so it renders its canonical path and retains the directory at the
+invocation site (§4.4) — long enough for the siblings that follow to use it,
+and removed when that scope ends. `<TempDir as="workspace" />` captures the
+path through the ordinary `as` mechanism and renders nothing.
+
+Passing the path onward is the document's business. Cleanup is not: both forms
+remove the directory through structured concurrency, and there is no `retain`
+prop and no retention after failure. A future execution-level inspection policy
+may keep scoped resources without changing this component's contract.
+
+#### Why the path is canonical
+
+`<TempDir>` renders the directory's resolved path, not the one the host's
+temporary root reports. On macOS those differ — `/var/folders/…` against
+`/private/var/…` — and a subprocess reports the resolved one. Canonicalizing
+makes the rendered path, `Env.cwd`, and a subprocess's own working directory
+the same string, so a document can compare them.
+
+#### Resuming from a partial journal
+
+A document containing a wrapping `<TempDir>` does not resume from a partial
+journal. Every execution creates a new directory, but a recorded effect is
+matched by its description, so replaying one recorded under an earlier run
+returns output naming a directory that has since been removed and skips the
+filesystem work the effect stands for. Neither is visible to anything
+downstream.
+
+`<TempDir>` refuses that replay where it is recognisable. An effect consumed
+from the journal inside its content raises `StaleInputError`, naming both the
+directory this run created and the reason, and that **ends the execution**: the
+`DocumentExecution` completes `Err`, nothing after the component runs, and the
+document must be re-run from the beginning.
+
+The refusal does not settle under the ambient error policy (§6.9). A policy
+that collects would turn a durability failure into a comment and let later
+siblings run on top of work that never happened, so `StaleInputError` joins
+`DocumentationError` as an error the engine's generic catches rethrow rather
+than convert — including through a teardown aggregate, which must not launder
+it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
+unaffected and remain diagnostics.
+
+This is a limitation of the current durable model, not of the component. The
+absence of an `import_component` entry for a built-in (§5.3) says nothing about
+it — the risk lies with the effects *inside* the directory, not with resolving
+the component. Re-executing recorded effects inside a freshly established
+environment is issue #218.
+
+The standalone form is outside this gate, and cannot be brought inside it. A
+directory it retains belongs to the invocation site, and `retain()` gives a
+component no way to install anything there (§4.4) — the isolation that makes
+retention a lifetime rather than authority over the caller. A sibling replaying
+an effect that uses a captured path is therefore **not detected**: it continues
+with the recorded result, and nothing observes that the directory that result
+came from has been removed. Resuming a document that captures a temporary path
+is unsupported for that reason, and #218 owns closing the gap.
+
+#### Isolation and cleanup
+
+Nested and sibling instances are separate directories. A nested `<TempDir>`
+shadows the enclosing one for its own content and restores it on exit; siblings
+share nothing.
+
+The directory is created synchronously, so nothing can suspend between
+creating it and owning its removal: a cancellation arriving mid-acquisition
+cannot leave one behind.
+
+Cleanup participates in structured shutdown rather than racing it. For the
+wrapping form the directory is the invocation's own resource, so §4.4's teardown
+stops everything the content created — including daemons started inside it —
+before the directory is removed. No filesystem operation is fire-and-forget.
+
+---
+
 ## 7. Entry point
 
 ### 8.1 `execute`
@@ -4527,6 +4653,38 @@ visible warning blocks, collect into a separate error report).
 | CW2 | After the boundary | A later `exec` block reports the process's own directory again |
 | CW3 | Daemon inheritance and teardown | A daemon records its own `pwd` as the contextual directory, and its pid is gone once the execution ends |
 | CW5 | No override | With nothing rebinding `Env.cwd`, both `exec` and `daemon` run in the process's directory |
+
+### Tier TD — `<TempDir>`
+
+| # | Test | Verify |
+|---|------|--------|
+| TD1 | Built-in resolution | The name resolves with no component directory and no file on disk, and the journal records no `import_component` entry for it |
+| TD2 | Contextual working directory | An `exec` block inside reports the temporary directory, canonical on both sides |
+| TD3 | Restoration | A block after the element reports the previous working directory |
+| TD4 | Isolation | Nested and sibling instances are distinct, and the inner one restores the outer's |
+| TD5 | Cleanup on success | The directory is gone once the content finishes |
+| TD6 | Cleanup on failure | A failing block inside still leaves no directory behind |
+| TD7 | Cleanup on cancellation | Halting mid-expansion removes it |
+| TD8 | Daemon inheritance and ordering | A daemon runs in the directory and is stopped before the directory is removed |
+| TD9 | Bare form renders its path | `<TempDir />` renders the canonical path and nothing else |
+| TD10 | Captured form | `<TempDir as>` renders nothing at the site and the directory is still live for a later sibling |
+| TD11 | Retention ends | A captured directory is gone once the execution that owned it finishes |
+| TD12 | Prop validation | An undeclared prop is rejected by ordinary validation |
+| TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err` under a collecting policy, and the block after `</TempDir>` never runs |
+| TD14 | Ordinary failures are unchanged | A failing block inside a `<TempDir>` still renders a diagnostic and the following sibling still runs |
+| TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
+| TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
+| TD17 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
+
+### Tier FA — Fatal error discovery
+
+| # | Test | Verify |
+|---|------|--------|
+| FA1–FA4 | Cyclic cause graphs | A self-referential cause, a two-error cycle, and cyclic aggregate and teardown graphs all terminate instead of recursing |
+| FA5 | Discovery through a wrapper | A fatal error is found inside a teardown aggregate, an `AggregateError`, and an ordinary `cause` |
+| FA6 | Both at once | A fatal error is still found when the wrapper holding it is itself cyclic |
+| FA7 | Documentation failures | A `DocumentationError` is discovered the same way |
+| FA8 | Ordinary errors are unaffected | A cyclic ordinary error is collected as a diagnostic and the next block still runs |
 
 ### Tier IS — Invocation shape
 

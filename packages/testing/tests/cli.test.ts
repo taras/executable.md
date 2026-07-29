@@ -23,6 +23,18 @@ describe("xmd CLI", () => {
     expect(result.stdout).toContain("Regular content stays.");
   });
 
+  // The colocated story for a core-owned component. No --component-dir: a
+  // built-in resolves from the module graph, not from a search path.
+  it("test runs a core component's colocated document with no search path", function* () {
+    const result = yield* runCli(
+      ["test", "packages/core/src/components/TempDir.test.md"],
+      RUN,
+    ).join();
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("**AssertStringIncludes** passed");
+    expect(result.stdout).toContain("xmd-tempdir-");
+  });
+
   it("test exits 1 and prints the failure diagnostic when a test fails", function* () {
     const result = yield* runCli(
       ["test", "packages/testing/tests/fixtures/failing.md"],
