@@ -3129,6 +3129,27 @@ exists only for the three ways a loop reaches an end, and `outcome` says which:
 on its final iteration and one that exhausts the same bound have identical
 iteration entries and differ only in `outcome`.
 
+**A replayed terminal entry is validated.** An iteration entry names its own
+number, so replay's identity match already checks it. A terminal entry names
+only the loop, so replay would match it whatever this run derived, and the
+protocol's default is that the journal is authoritative — the stored value would
+be handed back and the derived one discarded. Recording a terminal entry
+therefore compares the two. A stored `outcome` or `iterations` that disagrees
+with what this run reached means the journal no longer describes this run, and
+raises a `StaleInputError` (§6.11): a document that resumes from such a journal
+stops rather than continuing under an outcome it did not reach. Live, the value
+compared is the one just written, so the check costs nothing.
+
+**A durability failure is never a loop outcome.** A stale recorded input or a
+divergence says the journal is already wrong about this run, so the loop records
+nothing for it and the durability failure stays the primary error. Writing an
+`error` outcome there would append to a journal known to be wrong and, on a
+resumed run, consume a terminal entry an earlier run wrote — the exact path by
+which a stale journal could hand a loop an outcome it never reached. Only an
+ordinary document failure produces the `error` outcome; where a stale entry is
+what that recording runs into, the `StaleInputError` becomes the primary error
+and carries the document failure as its cause.
+
 A collecting policy is not a loop failure. The diagnostic is content, the loop
 keeps iterating, and the outcome is `exhausted` or `break` as usual.
 
@@ -5291,6 +5312,10 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP46 | Interrupted state | Iteration entries for the iterations entered, no terminal loop record, and no root `Close` — observably different from a completed run (`ok`) and a failed one (`err`), without saying why it stopped |
 | LOOP47 | Nested identities | Each entry into a nested loop records its own distinct identity |
 | LOOP48 | Identity is internal | `{iteration}` resolves to nothing in the body |
+| LOOP50 | Stale terminal record — derived `break` | A journal holding `exhausted` for the same iteration count raises `StaleInputError` rather than replaying its outcome onto a run that broke |
+| LOOP51 | Stale terminal record — derived `error` | The same holds for a run that fails, and the document failure is the `StaleInputError`'s cause |
+| LOOP52 | Durability failure is not an outcome | A stale `<TempDir>` replay inside a loop stays a `StaleInputError`; the loop records no `error` outcome and the stored terminal entry is untouched |
+| LOOP53 | Agreeing partial replay | A journal whose terminal record matches what the run derives replays cleanly and closes `ok` |
 | LOOP49 | Resumption | An interrupted journal is accepted by a new execution: the recorded iteration entries replay in order, the interrupted iteration's body reruns live because it journaled nothing, the remaining iterations run live, the loop and iteration identities are unchanged, exactly one terminal record is written with `exhausted` and the right count, and the run ends with root `Close(ok)` |
 
 ### Tier SC — Sample component (integration)

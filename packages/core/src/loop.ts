@@ -1,7 +1,12 @@
 import { createContext, useScope } from "effection";
 import type { Context, Operation } from "effection";
-import { createDurableOperation, DurableCtx } from "@executablemd/durable-streams";
-import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
+import { createDurableOperation, DurableCtx, StaleInputError } from "@executablemd/durable-streams";
+import type {
+  DurableContext,
+  EffectDescription,
+  Json,
+  Workflow,
+} from "@executablemd/durable-streams";
 
 /**
  * The loop a `<Break>` exits (spec §6.5 `<Loop>`).
@@ -83,12 +88,55 @@ function describe(identity: LoopIdentity, suffix?: string): EffectDescription {
   };
 }
 
-// A Workflow is an Operation whose only instructions are durable effects, so
-// this is how an expansion operation appends one entry to the journal.
-function* append(description: EffectDescription, value: Json): Workflow<void> {
-  yield createDurableOperation(description, function* () {
+/**
+ * Append one entry to the journal and return what the entry holds.
+ *
+ * A Workflow is an Operation whose only instructions are durable effects, so
+ * this is how an expansion operation reaches the journal. The return value
+ * matters: live it is the value passed in, and on replay it is the value the
+ * journal already held, which is the only way a caller can tell the two apart.
+ */
+function* append(description: EffectDescription, value: Json): Workflow<unknown> {
+  return yield createDurableOperation(description, function* () {
     return value;
   });
+}
+
+function isLoopOutcome(value: unknown): value is LoopOutcome {
+  return value === "exhausted" || value === "break" || value === "error";
+}
+
+/** The terminal record a journal entry holds, or undefined if it holds anything else. */
+function readLoopRecord(value: unknown): LoopRecord | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const fields: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  const { iterations, outcome } = fields;
+  if (typeof iterations !== "number" || !isLoopOutcome(outcome)) {
+    return undefined;
+  }
+  return { iterations, outcome };
+}
+
+function staleTerminalRecord(
+  description: EffectDescription,
+  coroutineId: string,
+  derived: LoopRecord,
+  stored: unknown,
+): StaleInputError {
+  const held = readLoopRecord(stored);
+  const describeHeld =
+    held === undefined
+      ? JSON.stringify(stored)
+      : `${held.outcome} after ${held.iterations} iterations`;
+  return new StaleInputError(
+    `The journal records "${description.name}" finishing as ${describeHeld}, but this run ` +
+      `finished it as ${derived.outcome} after ${derived.iterations} iterations. A recorded ` +
+      "loop outcome cannot be replayed onto a run that reached a different one. Re-run the " +
+      "document from the start rather than resuming from this journal.",
+    { coroutineId, description },
+  );
 }
 
 /**
@@ -102,22 +150,42 @@ function* append(description: EffectDescription, value: Json): Workflow<void> {
  * records nothing and behaves identically otherwise.
  */
 export function* recordIteration(identity: LoopIdentity, iteration: number): Operation<void> {
-  if (!(yield* journaling())) {
+  if (!(yield* durableContext())) {
     return;
   }
   const record: IterationRecord = { iteration };
   yield* append(describe(identity, `iteration:${iteration}`), record);
 }
 
-/** Record that the loop finished, and how. */
+/**
+ * Record that the loop finished, and how.
+ *
+ * A terminal entry is identified by the loop, not by the outcome, so replay
+ * matches it whatever this run derived — and `createDurableOperation` hands back
+ * the stored value without running its executor. The entry is therefore
+ * **validated**: a stored outcome or iteration count that disagrees with what
+ * this run reached means the journal no longer describes this run, and it fails
+ * as a `StaleInputError` rather than quietly standing in for the truth. Live,
+ * the value compared is the one just written, so the check is free.
+ */
 export function* recordOutcome(identity: LoopIdentity, record: LoopRecord): Operation<void> {
-  if (!(yield* journaling())) {
+  const durable = yield* durableContext();
+  if (!durable) {
     return;
   }
-  yield* append(describe(identity), record);
+  const description = describe(identity);
+  const stored = yield* append(description, record);
+  const held = readLoopRecord(stored);
+  if (
+    held === undefined ||
+    held.outcome !== record.outcome ||
+    held.iterations !== record.iterations
+  ) {
+    throw staleTerminalRecord(description, durable.coroutineId, record, stored);
+  }
 }
 
-function* journaling(): Operation<boolean> {
+function* durableContext(): Operation<DurableContext | undefined> {
   const scope = yield* useScope();
-  return scope.get(DurableCtx) !== undefined;
+  return scope.get(DurableCtx);
 }

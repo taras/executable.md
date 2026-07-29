@@ -1,6 +1,11 @@
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
-import { StaleInputError } from "@executablemd/durable-streams";
+import {
+  ContinuePastCloseDivergenceError,
+  DivergenceError,
+  EarlyReturnDivergenceError,
+  StaleInputError,
+} from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "./invocation.ts";
 import type { ErrorSegment } from "./types.ts";
 
@@ -92,6 +97,44 @@ function findFatal(
     const fatal = findFatal(cause, seen);
     if (fatal !== undefined) {
       return fatal;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The durability failure this one carries, if any.
+ *
+ * A durability failure says the journal no longer describes this run — a stale
+ * recorded input (§6.11), or a divergence between what the journal holds and
+ * what the run reached. It is not something the document did, so nothing may
+ * record it as an outcome of the document's own work: doing that would append
+ * or consume a journal entry on top of a journal already known to be wrong.
+ * The original failure is what a caller reports.
+ *
+ * Looks through the same wrappers as `fatalCause`, for the same reason.
+ */
+export function durabilityFailure(error: unknown): Error | undefined {
+  return findDurability(error, new Set());
+}
+
+function findDurability(error: unknown, seen: Set<unknown>): Error | undefined {
+  if (
+    error instanceof StaleInputError ||
+    error instanceof DivergenceError ||
+    error instanceof EarlyReturnDivergenceError ||
+    error instanceof ContinuePastCloseDivergenceError
+  ) {
+    return error;
+  }
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return undefined;
+  }
+  seen.add(error);
+  for (const cause of causesOf(error)) {
+    const durability = findDurability(cause, seen);
+    if (durability !== undefined) {
+      return durability;
     }
   }
   return undefined;

@@ -9,7 +9,7 @@ import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
@@ -1042,7 +1042,6 @@ describe("Tier LOOP — execution records", () => {
       "</Loop>",
     ].join("\n");
 
-    // ── Run one: interrupted inside iteration 2 ──
     const interrupted = yield* scoped(function* () {
       const stream = new InMemoryStream();
       const enteredThird = withResolvers<void>();
@@ -1075,7 +1074,7 @@ describe("Tier LOOP — execution records", () => {
     expect(outcomeRecords(interrupted)).toHaveLength(0);
     expect(closeResults(interrupted)).toEqual([]);
 
-    // ── Run two: the incomplete journal, read back and resumed ──
+    // The incomplete journal, read back and handed to a new execution.
     const resumed = yield* scoped(function* () {
       const stream = new InMemoryStream(interrupted);
       yield* useStubFs({ "test.md": DOC });
@@ -1137,6 +1136,172 @@ describe("Tier LOOP — execution records", () => {
     const run = yield* runDoc("<Loop max={2}>({iteration})</Loop>");
     expect(run.output).toContain("({iteration})");
     expect(run.output).not.toContain("(0)");
+  });
+});
+
+/**
+ * A terminal record is identified by the loop, not by the outcome, so replay
+ * matches it whatever the recovering run derived. Nothing may accept a stored
+ * outcome the run disagrees with, and a durability failure is never recorded as
+ * the loop's own.
+ */
+describe("Tier LOOP — replay validates the terminal record", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** Complete a run, then hand its journal back without the root Close. */
+  function completeThenCut(
+    doc: string,
+    props: Record<string, Json>,
+    files: Record<string, string> = {},
+  ) {
+    return scoped(function* () {
+      const stream = new InMemoryStream();
+      yield* useStubFs({ "test.md": doc, ...files });
+      yield* useEchoExec();
+      yield* collect(yield* execute({ path: "test.md", stream, props }));
+      const complete = stream.snapshot();
+      expect(closeResults(complete)).toEqual(["ok"]);
+      return complete.filter((event) => event.type !== "close");
+    });
+  }
+
+  function resume(
+    doc: string,
+    journal: DurableEvent[],
+    props: Record<string, Json>,
+    files: Record<string, string> = {},
+  ) {
+    return scoped(function* () {
+      const stream = new InMemoryStream(journal);
+      yield* useStubFs({ "test.md": doc, ...files });
+      yield* useEchoExec();
+      let failure: unknown;
+      let output = "";
+      try {
+        output = asText(yield* collect(yield* execute({ path: "test.md", stream, props })));
+      } catch (error) {
+        failure = error;
+      }
+      return { failure, output, events: stream.snapshot() };
+    });
+  }
+
+  const SWITCHABLE = [
+    "---",
+    "props:",
+    "  type: object",
+    "  properties:",
+    "    breakNow:",
+    "      type: boolean",
+    "  required: [breakNow]",
+    "  additionalProperties: false",
+    "---",
+    "",
+    "<Loop max={1}>",
+    "step",
+    "<If condition={breakNow}>",
+    "<Break />",
+    "</If>",
+    "</Loop>",
+  ].join("\n");
+
+  it("LOOP50: a stored exhausted record cannot replay as a derived break", function* () {
+    const cut = yield* completeThenCut(SWITCHABLE, { breakNow: false });
+    expect(outcomeRecords(cut)).toEqual([
+      { name: "loop:0", status: "ok", iterations: 1, outcome: "exhausted" },
+    ]);
+
+    // Same iteration count, so the terminal entry is exactly what the recovering
+    // run's own terminal operation reaches. Only its value disagrees.
+    const replayed = yield* resume(SWITCHABLE, cut, { breakNow: true });
+
+    expect(replayed.failure).toBeInstanceOf(StaleInputError);
+    expect(String(replayed.failure)).toContain("finishing as exhausted after 1 iterations");
+    expect(String(replayed.failure)).toContain("finished it as break after 1 iterations");
+    // The stored record stands; nothing rewrote or reinterpreted it.
+    expect(outcomeRecords(replayed.events).map((entry) => entry.outcome)).toEqual(["exhausted"]);
+  });
+
+  it("LOOP51: a stored exhausted record cannot replay as a derived error", function* () {
+    const FAILING = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    condition: {}",
+      "  required: [condition]",
+      "  additionalProperties: false",
+      "---",
+      "",
+      "<Loop max={1}>",
+      "<If condition={condition}>step</If>",
+      "</Loop>",
+      "",
+      "<Output>",
+      "done",
+      "</Output>",
+    ].join("\n");
+
+    const cut = yield* completeThenCut(FAILING, { condition: true });
+    expect(outcomeRecords(cut).map((entry) => entry.outcome)).toEqual(["exhausted"]);
+
+    // A non-boolean condition makes the body fail under the documentation
+    // policy, so this run derives `error` where the journal holds `exhausted`.
+    const replayed = yield* resume(FAILING, cut, { condition: 1 });
+
+    expect(replayed.failure).toBeInstanceOf(StaleInputError);
+    expect(outcomeRecords(replayed.events).map((entry) => entry.outcome)).toEqual(["exhausted"]);
+    // The document failure that reached the stale record is kept as its cause.
+    const failure = replayed.failure;
+    expect(failure instanceof Error && failure.cause).toBeInstanceOf(DocumentationError);
+  });
+
+  it("LOOP52: a stale resource replay inside a loop stays a durability failure", function* () {
+    const HELD = [
+      "<Loop max={2}>",
+      "<TempDir>",
+      "",
+      "```js eval",
+      "output('INSIDE');",
+      "```",
+      "",
+      "</TempDir>",
+      "</Loop>",
+    ].join("\n");
+
+    const cut = yield* scoped(function* () {
+      const stream = new InMemoryStream();
+      yield* useStubFs({ "test.md": HELD });
+      yield* useEchoExec();
+      yield* collect(yield* execute({ path: "test.md", stream }));
+      const complete = stream.snapshot();
+      expect(closeResults(complete)).toEqual(["ok"]);
+      expect(outcomeRecords(complete).map((entry) => entry.outcome)).toEqual(["exhausted"]);
+      return complete.filter((event) => event.type !== "close");
+    });
+
+    // Every run creates a new temporary directory, so the recorded work inside
+    // the old one cannot be replayed. <TempDir> refuses it.
+    const replayed = yield* resume(HELD, cut, {});
+
+    expect(replayed.failure).toBeInstanceOf(StaleInputError);
+    expect(String(replayed.failure)).toContain("<TempDir> cannot replay");
+    // The loop did not settle this as its own `error` outcome, so the stored
+    // terminal record was neither consumed nor joined by a second one.
+    expect(outcomeRecords(replayed.events).map((entry) => entry.outcome)).toEqual(["exhausted"]);
+  });
+
+  it("LOOP53: a partial journal whose outcome still agrees replays cleanly", function* () {
+    const cut = yield* completeThenCut(SWITCHABLE, { breakNow: false });
+
+    const replayed = yield* resume(SWITCHABLE, cut, { breakNow: false });
+
+    expect(replayed.failure).toBeUndefined();
+    expect(replayed.output).toContain("step");
+    expect(outcomeRecords(replayed.events)).toEqual([
+      { name: "loop:0", status: "ok", iterations: 1, outcome: "exhausted" },
+    ]);
+    expect(closeResults(replayed.events)).toEqual(["ok"]);
   });
 });
 

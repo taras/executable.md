@@ -40,7 +40,7 @@ import {
   importComponent,
   raise,
 } from "./component-api.ts";
-import { AmbientErrorPolicy, fatalCause } from "./errors.ts";
+import { AmbientErrorPolicy, durabilityFailure, fatalCause } from "./errors.ts";
 import type { ErrorPolicy } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -1271,10 +1271,29 @@ function* expandLoop(
       }
     });
   } catch (error) {
-    // Recorded from the catch rather than a destructor: this frame is still
-    // live here, so the entry lands in the journal before the failure leaves
-    // the loop.
-    yield* recordOutcome(identity, { iterations: started, outcome: "error" });
+    // A durability failure is not an outcome of the loop's work, and recording
+    // one would reach the journal twice over: it appends an entry on top of a
+    // journal already known not to describe this run, and on replay it consumes
+    // a terminal entry an earlier run wrote — which is how a stale journal
+    // would quietly hand this loop a different outcome. The durability failure
+    // stays the primary error.
+    if (durabilityFailure(error) !== undefined) {
+      throw error;
+    }
+    // An ordinary document failure is the loop's own outcome. Recorded from the
+    // catch rather than a destructor: this frame is still live here, so the
+    // entry lands in the journal before the failure leaves the loop.
+    try {
+      yield* recordOutcome(identity, { iterations: started, outcome: "error" });
+    } catch (recording) {
+      // Recording found the journal recording a different outcome. That is the
+      // more fundamental failure and becomes the primary one, but the document
+      // failure that reached it is what the author has to fix.
+      if (recording instanceof Error && recording.cause === undefined) {
+        recording.cause = error;
+      }
+      throw recording;
+    }
     throw error;
   }
 
@@ -1542,10 +1561,11 @@ function* expandComponent(
     invocation.evalScope.scope.set(ActiveProjection, handle);
     claimProjection = handle.claim;
 
-    // The loop boundary is lexical: a `<Break>` in this body, or in the
-    // content projected through it, belongs to a `<Loop>` written here and
-    // never to the one that invoked the component. Set on the body task, which
-    // the content scope descends from, so both see it.
+    // The component's own body is isolated from the loop that invoked it: a
+    // `<Break>` written here belongs to a `<Loop>` written here. Set on the body
+    // task, which the content scope descends from — so each projection restores
+    // the caller's frame for the caller's own text (createProjectionHandle),
+    // and anything the body does outside a projection finds none.
     yield* ActiveLoop.set(undefined);
 
     // Installed on the invocation's own body task rather than a nested

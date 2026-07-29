@@ -245,6 +245,24 @@ export default define.page(function ControlFlow() {
         your document can read. It exists so a run can resume into the iteration
         it stopped in, not so the body can branch on it.
       </p>
+      <p>
+        When a run resumes, the terminal entry is <strong>validated</strong>
+        {" "}
+        rather than trusted. An iteration entry names its own number, so
+        replaying it already checks it; a terminal entry names only the loop, so
+        a recorded <code>exhausted</code>{" "}
+        would otherwise stand in for a resumed run that actually broke. If the
+        stored outcome or count disagrees with what the resumed run reached, the
+        run stops with a stale-input error instead of continuing under an
+        outcome it never reached.
+      </p>
+      <p>
+        And a durability failure is never recorded as a loop outcome. If the
+        journal is already wrong about this run — a resource it recorded is
+        gone, or the replay diverged — the loop writes nothing and that failure
+        is what you see. Only an ordinary document failure produces the{" "}
+        <code>error</code> outcome.
+      </p>
 
       <h2>Interrupted runs</h2>
       <p>
