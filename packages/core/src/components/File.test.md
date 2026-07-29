@@ -51,42 +51,58 @@ and writing the same content twice leaves the same file.
 </TempDir>
 </Test>
 
-The text written is what the children rendered, with the line break after the
-opening tag and the one before the closing tag removed — those belong to the
-markup. Nothing else is touched: no trailing newline is added, and nothing is
-reformatted. So the two ways of writing the same file write the same bytes.
+What gets written is exactly what the children rendered. Nothing is added,
+trimmed, normalized, or reformatted — so where the tags sit is where the file's
+first and last bytes come from. Put the content on the same line as the tags
+and that is the whole file:
 
-<Test name="The two authoring forms write the same bytes">
+<Test name="Inline content is the whole file">
 <TempDir>
 <File path="tight.txt">one line</File>
 <File path="tight.txt" as="tight" />
 <AssertEquals actual={tight} expected={"one line"} />
+</TempDir>
+</Test>
 
+Put it on its own line and the line breaks around it are content too, because
+they are inside the element. The file starts with a newline and ends with one.
+
+<Test name="Content on its own line keeps the newlines around it">
+<TempDir>
 <File path="spread.txt">
 one line
 </File>
 <File path="spread.txt" as="spread" />
-<AssertEquals actual={spread} expected={"one line"} />
+<AssertEquals actual={spread} expected={"\none line\n"} />
 </TempDir>
 </Test>
 
-A blank line before the closing tag is content, so that is how a file ends
-with a newline. Indentation inside the element survives too.
+Indentation survives for the same reason, and so does a blank line.
 
-<Test name="Nothing beyond the framing newlines is trimmed">
+<Test name="Whitespace inside the element is preserved exactly">
 <TempDir>
-<File path="trailing.txt">
-one line
-
-</File>
-<File path="trailing.txt" as="trailing" />
-<AssertEquals actual={trailing} expected={"one line\n"} />
-
 <File path="indented.txt">
     indented
 </File>
 <File path="indented.txt" as="indented" />
-<AssertEquals actual={indented} expected={"    indented"} />
+<AssertEquals actual={indented} expected={"\n    indented\n"} />
+
+<File path="blank.txt">
+one line
+
+</File>
+<File path="blank.txt" as="blank" />
+<AssertEquals actual={blank} expected={"\none line\n\n"} />
+</TempDir>
+</Test>
+
+A name that merely begins with two dots is an ordinary file, not an escape.
+
+<Test name="A name beginning with dots is an ordinary file">
+<TempDir>
+<File path="..notes.md">dotted</File>
+<File path="..notes.md" as="dotted" />
+<AssertEquals actual={dotted} expected={"dotted"} />
 </TempDir>
 </Test>
 

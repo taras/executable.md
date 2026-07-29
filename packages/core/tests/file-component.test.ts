@@ -14,7 +14,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
+import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -54,30 +54,64 @@ function useFixture(): Operation<Fixture> {
 }
 
 /**
- * Run `source` as a document whose contextual working directory is the
- * workspace.
+ * Install the workspace as the contextual working directory.
  *
- * The document itself lives in the workspace too, but nothing depends on that:
+ * The document lives in the workspace too, but nothing depends on that:
  * `<File>` resolves against `Env.cwd`, which this installs explicitly rather
  * than inheriting from the process.
  */
+function* useWorkspaceCwd(fixture: Fixture): Operation<void> {
+  yield* API.Env.around(
+    {
+      // deno-lint-ignore require-yield
+      *cwd() {
+        return fixture.workspace;
+      },
+    },
+    { at: "min" },
+  );
+}
+
 function run(fixture: Fixture, source: string): Operation<Json> {
+  return runWith(fixture, source, new InMemoryStream());
+}
+
+/**
+ * Run `source` as a document whose contextual working directory is the
+ * workspace, against a caller-supplied journal.
+ *
+ * `install` runs inside the execution scope, before `execute()`, which is what
+ * lets a test wrap the Fs Api to make a write fail or hang.
+ */
+function runWith(
+  fixture: Fixture,
+  source: string | undefined,
+  stream: InMemoryStream,
+  install?: () => Operation<void>,
+): Operation<Json> {
   return scoped(function* () {
     const path = join(fixture.workspace, "doc.md");
-    yield* writeTextFile(path, source);
-    yield* API.Env.around(
-      {
-        // deno-lint-ignore require-yield
-        *cwd() {
-          return fixture.workspace;
-        },
-      },
-      { at: "min" },
-    );
-    return yield* collect(
-      yield* execute({ path, stream: new InMemoryStream(), componentDirs: [fixture.workspace] }),
-    );
+    if (source !== undefined) {
+      yield* writeTextFile(path, source);
+    }
+    yield* useWorkspaceCwd(fixture);
+    if (install) {
+      yield* install();
+    }
+    return yield* collect(yield* execute({ path, stream, componentDirs: [fixture.workspace] }));
   });
+}
+
+/**
+ * The journal without the root's close, which is what makes the next run
+ * replay what is there and then continue live rather than restoring a
+ * completed execution.
+ */
+function* partial(stream: InMemoryStream): Operation<InMemoryStream> {
+  const events = yield* stream.readAll();
+  return new InMemoryStream(
+    events.filter((event) => !(event.type === "close" && event.coroutineId === "root")),
+  );
 }
 
 function text(output: Json): string {
@@ -91,6 +125,15 @@ function read(fixture: Fixture, relative: string): Operation<string> {
 /** Everything in the workspace except the document each test writes there. */
 function* entries(directory: string): Operation<string[]> {
   return (yield* until(readdir(directory))).filter((entry) => entry !== "doc.md").sort();
+}
+
+/**
+ * A containment diagnostic may name the path the document wrote and nothing
+ * else — not the resolved workspace, and not what a symlink pointed at (§1.2).
+ */
+function expectNoAbsolutePaths(output: string, fixture: Fixture): void {
+  expect(output).not.toContain(fixture.workspace);
+  expect(output).not.toContain(fixture.outside);
 }
 
 describe("Tier FL — File", () => {
@@ -182,8 +225,12 @@ describe("Tier FL — File", () => {
 
     const output = text(yield* run(fixture, `<File path="${secret}" />`));
 
-    expect(output).toContain("cannot use the absolute path");
+    expect(output).toContain("an absolute path is not accepted");
     expect(output).not.toContain("SECRET");
+    // The rejected path is absolute, so echoing it back would leak it just as
+    // surely as resolving it would (§1.2).
+    expectNoAbsolutePaths(output, fixture);
+    expect(output).not.toContain(secret);
   });
 
   // FL8: the lexical escape, and the content it aimed at never appears.
@@ -195,6 +242,7 @@ describe("Tier FL — File", () => {
 
     expect(output).toContain("resolves outside the working directory");
     expect(output).not.toContain("SECRET");
+    expectNoAbsolutePaths(output, fixture);
   });
 
   // FL9: a symlink that stays inside is ordinary. The write follows it to the
@@ -231,8 +279,10 @@ describe("Tier FL — File", () => {
 
     const output = text(yield* run(fixture, '<File path="escape.txt" />'));
 
-    expect(output).toContain("leads through a symlink to");
+    expect(output).toContain("leads through a symlink outside the working directory");
     expect(output).not.toContain("SECRET");
+    // Naming where the link pointed would report the escape by performing it.
+    expectNoAbsolutePaths(output, fixture);
   });
 
   // FL11: the same, one level up — the file does not exist yet, so only
@@ -244,8 +294,9 @@ describe("Tier FL — File", () => {
 
     const output = text(yield* run(fixture, '<File path="escape/planted.txt">planted</File>'));
 
-    expect(output).toContain("leads through a symlink to");
+    expect(output).toContain("leads through a symlink outside the working directory");
     expect(yield* exists(join(fixture.outside, "planted.txt"))).toBe(false);
+    expectNoAbsolutePaths(output, fixture);
   });
 
   // FL12: a failing block is an ordinary diagnostic, which for a component
@@ -308,47 +359,68 @@ describe("Tier FL — File", () => {
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
 
-  // FL15: `<File>` performs no durable effect of its own, so a replay
-  // re-reads and appends nothing — the same contract `<Parse>` has.
-  it("FL15: a replay reproduces the read and journals nothing new", function* () {
+  // FL15: a journal with the root's close is a finished execution. Replaying
+  // it restores that result without expanding anything, so `<File>` does not
+  // run at all — proven by removing the file it read and getting the same
+  // output anyway. This says nothing about the component; it is the root
+  // contract, and it is what FL15b and FL15c have to be distinguished from.
+  it("FL15: a completed-root replay restores the result without running File", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "request.md"), "Request content");
 
     const stream = new InMemoryStream();
     const source = '<File path="request.md" as="request" />\n\nread: {request}';
-    const path = join(fixture.workspace, "doc.md");
 
-    const live = yield* scoped(function* () {
-      yield* writeTextFile(path, source);
-      yield* API.Env.around(
-        {
-          // deno-lint-ignore require-yield
-          *cwd() {
-            return fixture.workspace;
-          },
-        },
-        { at: "min" },
-      );
-      return yield* collect(yield* execute({ path, stream }));
-    });
+    const live = yield* runWith(fixture, source, stream);
     const appended = stream.appendCount;
 
-    const replay = yield* scoped(function* () {
-      yield* API.Env.around(
-        {
-          // deno-lint-ignore require-yield
-          *cwd() {
-            return fixture.workspace;
-          },
-        },
-        { at: "min" },
-      );
-      return yield* collect(yield* execute({ path, stream }));
-    });
+    // Nothing on disk for a re-read to find.
+    yield* rm(join(fixture.workspace, "request.md"));
+
+    const replay = yield* runWith(fixture, undefined, stream);
 
     expect(text(live)).toContain("read: Request content");
     expect(replay).toEqual(live);
     expect(stream.appendCount).toBe(appended);
+  });
+
+  // FL15b: a partial journal replays what it holds and continues live, so
+  // expansion reaches `<File>`. It performs no durable effect, so there is
+  // nothing recorded to restore and the read happens again — against whatever
+  // the file says now, which is how the repetition is observable.
+  it("FL15b: a partial replay re-reads the file", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "request.md"), "first content");
+
+    const stream = new InMemoryStream();
+    const source = '<File path="request.md" as="request" />\n\nread: {request}';
+
+    const live = yield* runWith(fixture, source, stream);
+    expect(text(live)).toContain("read: first content");
+
+    yield* writeTextFile(join(fixture.workspace, "request.md"), "second content");
+
+    const replay = yield* runWith(fixture, undefined, yield* partial(stream));
+
+    // The read really ran again: a restored result would still say "first".
+    expect(text(replay)).toContain("read: second content");
+  });
+
+  // FL15c: the same for the write form. The file is removed between runs, so
+  // finding it again can only mean the write repeated.
+  it("FL15c: a partial replay re-writes the file", function* () {
+    const fixture = yield* useFixture();
+
+    const stream = new InMemoryStream();
+    yield* runWith(fixture, '<File path="notes.md">content</File>', stream);
+    expect(yield* read(fixture, "notes.md")).toBe("content");
+
+    yield* rm(join(fixture.workspace, "notes.md"));
+
+    yield* runWith(fixture, undefined, yield* partial(stream));
+
+    expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(true);
+    expect(yield* read(fixture, "notes.md")).toBe("content");
   });
 
   // FL16: props are validated like any component's — no name-specific check.
@@ -360,5 +432,104 @@ describe("Tier FL — File", () => {
 
     const extra = text(yield* run(fixture, '<File path="a.md" encoding="utf16" />'));
     expect(extra).toContain("additional properties");
+  });
+
+  // FL17: only a complete `..` segment leaves the directory. A prefix test
+  // would refuse an ordinary file whose name happens to start with two dots.
+  it("FL17: a name beginning with dots is an ordinary file", function* () {
+    const fixture = yield* useFixture();
+
+    const output = text(
+      yield* run(
+        fixture,
+        [
+          '<File path="..notes.md">dotted</File>',
+          '<File path="..config/settings.json">nested</File>',
+          '<File path="..notes.md" />',
+        ].join("\n"),
+      ),
+    );
+
+    expect(output).toContain("dotted");
+    expect(yield* read(fixture, "..notes.md")).toBe("dotted");
+    expect(yield* read(fixture, "..config/settings.json")).toBe("nested");
+  });
+
+  // FL18: the destination is resolved after the children finish, because they
+  // can change what the path means. Here the block swaps a real directory for
+  // a symlink out of the workspace — resolving before expansion would have
+  // validated the directory and then written through the link.
+  it("FL18: a child replacing the parent with an escaping symlink is caught", function* () {
+    const fixture = yield* useFixture();
+    yield* until(mkdir(join(fixture.workspace, "out")));
+
+    const output = text(
+      yield* run(
+        fixture,
+        [
+          '<File path="out/planted.txt">',
+          "```sh exec",
+          `rmdir out && ln -s ${fixture.outside} out`,
+          "```",
+          "</File>",
+        ].join("\n"),
+      ),
+    );
+
+    expect(output).toContain("leads through a symlink outside the working directory");
+    expect(yield* exists(join(fixture.outside, "planted.txt"))).toBe(false);
+    expect(yield* entries(fixture.outside)).toEqual([]);
+    expectNoAbsolutePaths(output, fixture);
+  });
+
+  // FL19: the temporary's removal is registered before it is written, so a
+  // failure in the write itself — the likeliest place for one — is covered.
+  it("FL19: a failure during the temporary write leaves nothing behind", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const output = text(
+      yield* runWith(
+        fixture,
+        '<File path="notes.md">second</File>',
+        new InMemoryStream(),
+        function* () {
+          yield* API.Fs.around({
+            // The temporary is created and then the write fails, which is the
+            // case a cleanup registered afterwards would miss entirely.
+            *writeTextFile([path, content], next) {
+              yield* next(path, content);
+              throw new Error("disk full");
+            },
+          });
+        },
+      ),
+    );
+
+    expect(output).toContain("disk full");
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  // FL20: the same window, closed by cancellation rather than failure. The
+  // write suspends after creating the temporary and the run is halted there.
+  it("FL20: cancellation during the temporary write leaves nothing behind", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    yield* race([
+      runWith(fixture, '<File path="notes.md">second</File>', new InMemoryStream(), function* () {
+        yield* API.Fs.around({
+          *writeTextFile([path, content], next) {
+            yield* next(path, content);
+            yield* suspend();
+          },
+        });
+      }),
+      sleep(500),
+    ]);
+
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
 });

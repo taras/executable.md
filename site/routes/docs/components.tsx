@@ -94,9 +94,9 @@ cat fixtures/request.md
 \`\`\`
 </TempDir>`;
 
-const FILE_FORMS = `<File path="a.txt">one line</File>
+const FILE_INLINE = `<File path="a.txt">one line</File>`;
 
-<File path="a.txt">
+const FILE_BLOCK = `<File path="a.txt">
 one line
 </File>`;
 
@@ -337,18 +337,23 @@ export default define.page(function Components() {
 
       <h3>What gets written</h3>
       <p>
-        Exactly what the children rendered, minus the line break after the
-        opening tag and the one before the closing tag — both are inside the
-        element, but they belong to the markup. So these two write the same
-        bytes.
+        Exactly what the children rendered. Nothing is added, trimmed,
+        normalized, or reformatted — so where you put the tags is where the
+        file's first and last bytes come from. On one line, that is the whole
+        file:
       </p>
-      <CodeBlock>{FILE_FORMS}</CodeBlock>
+      <CodeBlock>{FILE_INLINE}</CodeBlock>
       <p>
-        Nothing else is touched: whitespace is not normalized, content is not
-        reformatted, and no trailing newline is added. A file ends with a
-        newline because you left a blank line before the closing tag. The
-        initial component is UTF-8 text only — no binary data, no configurable
-        encodings, no append or patch modes.
+        writes <code>one line</code>{" "}
+        — no trailing newline. On its own line, the breaks around it are inside
+        the element, so they are content too:
+      </p>
+      <CodeBlock>{FILE_BLOCK}</CodeBlock>
+      <p>
+        writes <code>{"\\none line\\n"}</code>{" "}
+        . If you want a file to start or end a particular way, say so with where
+        the tags go; the component never guesses. It is UTF-8 text only — no
+        binary data, no configurable encodings, no append or patch modes.
       </p>
 
       <h3>Staying inside the workspace</h3>
@@ -357,7 +362,9 @@ export default define.page(function Components() {
         touches stays inside the working directory. An absolute path and a path
         that escapes with <code>..</code>{" "}
         are refused before any filesystem call, so the failure says nothing
-        about what the path named.
+        about what the path named. Only a whole <code>..</code>{" "}
+        segment escapes — <code>..notes.md</code>{" "}
+        is just a file with an odd name.
       </p>
       <p>
         A lexical check alone would not be enough, because a symlink inside the
@@ -369,12 +376,25 @@ export default define.page(function Components() {
         or changed.
       </p>
       <p>
+        For a write that check happens <em>after</em>{" "}
+        the children finish, not before, because a child can change what the
+        path means — swapping a directory for a symlink out of the workspace,
+        say. Validating first would approve one destination and write to
+        another.
+      </p>
+      <p>
         A write never half-happens. Children expand completely first, so a
         failing block leaves the existing file exactly as it was — and because
         the write has nowhere to render a diagnostic, it fails the invocation
         rather than writing the diagnostic into your file. The write itself
         lands through a rename, so a failure partway leaves the previous content
         in place rather than a truncated file.
+      </p>
+      <p>
+        When a path is refused, the message names the path you wrote and nothing
+        else — not the resolved working directory, and not where a symlink
+        pointed. Reporting where an escape led would perform the disclosure the
+        refusal exists to prevent.
       </p>
 
       <h2>Parsing generated JSON</h2>

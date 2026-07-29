@@ -9,18 +9,28 @@
  * part of it has been resolved, so a symlink cannot carry a read or a write
  * outside the workspace.
  *
+ * The write form resolves its destination *after* its children have finished,
+ * because a child can change what the path means — replacing a directory with
+ * a symlink out of the workspace, for instance. Resolving first would validate
+ * somewhere other than where the write lands.
+ *
  * Writes go through a sibling temporary file and a rename. That is what makes
  * a failed or cancelled write leave the previous content in place, and it is
  * what closes the one containment hole resolution cannot: a dangling symlink
  * has nothing to resolve, and `rename` replaces the link rather than following
  * it wherever it points.
  *
+ * Diagnostics name only the path the document wrote. A resolved workspace
+ * path, the destination a symlink pointed at, and a rejected absolute path are
+ * all withheld — §1.2 keeps absolute paths out of diagnostics, and a
+ * containment failure is the last place to start reporting them.
+ *
  * Every filesystem call goes through the contextual `API.Fs`, so a host can
  * observe or sandbox a document's own file access on the same terms as the
  * engine's component resolution.
  */
 
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -57,14 +67,16 @@ export class FileAccessError extends Error {
 
 export default function* (props: Record<string, Json>): Operation<string> {
   const requested = String(props.path);
-  const target = yield* destination(requested);
 
   if (yield* hasContent()) {
-    yield* write(requested, target, framed(yield* content(requested)));
+    // Children first, then the destination: what gets validated has to be
+    // where the write actually lands, and a child can move that.
+    const text = yield* content(requested);
+    yield* write(requested, yield* destination(requested), text);
     return "";
   }
 
-  return yield* read(requested, target);
+  return yield* read(requested, yield* destination(requested));
 }
 
 /**
@@ -101,32 +113,6 @@ function* content(requested: string): Operation<string> {
 }
 
 /**
- * The rendered children with their framing newlines removed.
- *
- * A block-form invocation renders the line break that follows the opening tag
- * and the one that precedes the closing tag, because both are inside the
- * element. They are markup, not content: dropping exactly one at each end is
- * what makes the two ways of writing the same file produce the same bytes.
- *
- * ```md
- * <File path="a.txt">one line</File>
- * <File path="a.txt">
- * one line
- * </File>
- * ```
- *
- * Nothing else is touched. Indentation survives, a deliberate blank line
- * before the closing tag still ends the file with a newline, and no newline is
- * added to content that does not have one.
- */
-function framed(content: string): string {
-  const start = content.startsWith("\n") ? 1 : 0;
-  const end =
-    content.length > start && content.endsWith("\n") ? content.length - 1 : content.length;
-  return content.slice(start, end);
-}
-
-/**
  * The absolute path this invocation may touch, or a failure naming why not.
  *
  * Two checks, because they catch different things. The lexical one runs before
@@ -144,7 +130,7 @@ function* destination(requested: string): Operation<string> {
   }
   if (isAbsolute(requested)) {
     throw new FileAccessError(
-      `cannot use the absolute path "${requested}": give a path relative to the working directory.`,
+      "an absolute path is not accepted; give a path relative to the working directory.",
     );
   }
 
@@ -152,23 +138,32 @@ function* destination(requested: string): Operation<string> {
   const base = (yield* realpath(directory)) ?? directory;
   const lexical = resolve(base, requested);
   if (!within(base, lexical)) {
-    throw new FileAccessError(`"${requested}" resolves outside the working directory ${base}.`);
+    throw new FileAccessError(`"${requested}" resolves outside the working directory.`);
   }
 
   const effective = yield* resolveExisting(lexical);
   if (!within(base, effective)) {
     throw new FileAccessError(
-      `"${requested}" leads through a symlink to ${effective}, outside the working directory ${base}.`,
+      `"${requested}" leads through a symlink outside the working directory.`,
     );
   }
 
   return effective;
 }
 
-/** Whether `path` names something strictly inside `base`. */
+/**
+ * Whether `path` names something strictly inside `base`.
+ *
+ * Only a complete `..` segment leaves the directory. A name that merely starts
+ * with two dots — `..notes.md`, `..config/settings.json` — is an ordinary file
+ * inside it, and a prefix test would refuse it.
+ */
 function within(base: string, path: string): boolean {
   const rel = relative(base, path);
-  return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);
+  if (rel.length === 0 || isAbsolute(rel)) {
+    return false;
+  }
+  return rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
 /**
@@ -219,8 +214,13 @@ function* read(requested: string, target: string): Operation<string> {
  * so a child that failed never reaches the filesystem at all. What remains is
  * the write itself, and the temporary file is what keeps that atomic: the
  * rename either publishes the complete text or leaves the previous file
- * exactly as it was. The temporary is removed on every exit, including
- * cancellation, and is already gone after a successful rename.
+ * exactly as it was.
+ *
+ * Removal is registered before the temporary is written rather than after.
+ * `writeTextFile` is where an interruption is most likely to land, and a
+ * cleanup installed on the far side of it would not run for the one failure it
+ * exists to handle. `remove` is forced, so registering it for a file that was
+ * never created — or one the rename has already consumed — is a no-op.
  */
 function* write(requested: string, target: string, content: string): Operation<void> {
   const info = yield* stat(target);
@@ -235,8 +235,8 @@ function* write(requested: string, target: string, content: string): Operation<v
 
   yield* scoped(function* () {
     const temporary = `${target}.xmd-${randomUUID().slice(0, 8)}.tmp`;
-    yield* writeTextFile(temporary, content);
     yield* ensure(() => remove(temporary, { force: true }));
+    yield* writeTextFile(temporary, content);
     yield* rename(temporary, target);
   });
 }

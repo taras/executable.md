@@ -3833,22 +3833,26 @@ writing the same content twice leaves the same file.
 
 #### What gets written
 
-The text written is what the children rendered, minus the line break that
-follows the opening tag and the one that precedes the closing tag. Both are
-inside the element but belong to the markup, so the two ways of writing the
-same file write the same bytes:
+Exactly what the children rendered. Nothing is added, trimmed, normalized, or
+reformatted, so where the tags sit is where the file's first and last bytes
+come from. Content on the same line as the tags is the whole file:
 
 ```md
 <File path="a.txt">one line</File>
+```
 
+writes `one line`, with no trailing newline. Content on its own line is
+surrounded by line breaks that are themselves inside the element:
+
+```md
 <File path="a.txt">
 one line
 </File>
 ```
 
-Nothing else is touched. Whitespace is not normalized, content is not
-reformatted, and no trailing newline is added — a file ends with a newline
-because the author left a blank line before the closing tag.
+writes `\none line\n`. That is the exact-content contract: a document that
+needs a file to start or end a particular way says so by where it puts the
+tags, and the component never guesses.
 
 #### A failed child writes nothing
 
@@ -3866,7 +3870,9 @@ which is the only place a reader would otherwise learn what went wrong.
 
 Everything `<File>` touches stays inside `Env.cwd`. An absolute path and a
 path that escapes lexically are refused before any filesystem call, so the
-failure reveals nothing about what the path named.
+failure reveals nothing about what the path named. Only a complete `..`
+segment escapes: a name that merely begins with two dots — `..notes.md` — is
+an ordinary file inside the directory.
 
 A lexical check is not enough on its own, because a symlink inside the
 directory can point anywhere. `<File>` resolves the part of the path that
@@ -3876,23 +3882,44 @@ destination is still inside the directory is ordinary and is followed to the
 file it names; one that leaves is refused, before the content outside is read
 or changed.
 
+The write form resolves its destination **after** its children have finished,
+not before. A child can change what a path means — replacing a directory with
+a symlink out of the workspace — and a destination validated before expansion
+would not be the one the write lands on.
+
 Writes land through a sibling temporary file and a rename. That is what makes
 a failed or cancelled write leave the previous content in place, and it closes
 the one case resolution cannot: a **dangling** symlink has nothing to resolve,
 and `rename` replaces the link rather than following it wherever it points.
-The temporary is removed on every exit, including cancellation.
+Removal of the temporary is registered before it is written, so the write is
+covered by it rather than the other way round, and it runs on every exit
+including cancellation.
 
 Reading a path that does not exist, or a directory, fails naming which it was.
+
+A containment diagnostic names the path the document wrote, and nothing else.
+The resolved working directory, the destination a symlink pointed at, and a
+rejected absolute path are all withheld: §1.2 keeps absolute paths out of
+diagnostics, and reporting where an escape led would perform the disclosure
+the refusal exists to prevent.
 
 #### Scope
 
 The initial component is UTF-8 text only. Binary data, configurable encodings,
 structured file handles, and append, patch, or streaming modes are outside it.
 
-`<File>` performs no durable effect of its own: nothing is journaled, and a
-replay re-reads and re-writes rather than restoring a recorded result. Inside
-a wrapping `<TempDir>` that is the behavior the directory's replay refusal
-depends on (§6.11).
+`<File>` performs no durable effect of its own — nothing is journaled — so what
+a replay does depends on whether expansion reaches the component at all.
+
+A journal containing the root's close is a **completed execution**. Replaying
+it restores that result without expanding anything, so `<File>` does not run
+and the filesystem is not touched.
+
+A **partial** journal replays what it holds and then continues live, so
+expansion does reach `<File>`. Having recorded nothing, it has nothing to
+restore: the read happens again against whatever the file says now, and the
+write happens again. Inside a wrapping `<TempDir>` that repetition is what the
+directory's replay refusal depends on (§6.11).
 
 ---
 
@@ -4897,17 +4924,23 @@ visible warning blocks, collect into a separate error report).
 | FL4 | Replacement | A second write replaces the content, and rewriting the same content changes nothing |
 | FL5 | Missing file | Reading a missing path is a diagnostic, and the sibling after it still runs |
 | FL6 | Directory target | Reading a directory fails naming what it is |
-| FL7 | Absolute path | Rejected before the filesystem is touched; the target's content never appears |
-| FL8 | Lexical escape | `..` out of the working directory is rejected, and the content it aimed at never appears |
+| FL7 | Absolute path | Rejected before the filesystem is touched; neither the target's content nor the supplied path appears in the diagnostic |
+| FL8 | Lexical escape | `..` out of the working directory is rejected, the content it aimed at never appears, and no absolute path reaches the diagnostic |
 | FL9 | Internal symlink | Followed for both reads and writes; the write updates the linked file and leaves the link a link |
-| FL10 | Escaping file symlink | Rejected, and the outside content never appears |
-| FL11 | Escaping parent symlink | Rejected for a file that does not exist yet, and nothing is created outside |
+| FL10 | Escaping file symlink | Rejected, the outside content never appears, and the destination it pointed at is not named |
+| FL11 | Escaping parent symlink | Rejected for a file that does not exist yet, nothing is created outside, and no absolute path is named |
 | FL12 | Failing child | The invocation fails instead of writing, carries the block's own failure, and the existing file is unchanged |
 | FL13 | Failed replacement | A directory that refuses new files stops the write with the previous content in place |
 | FL14 | No temporary left behind | A successful write leaves only the target |
-| FL15 | Capture and replay | A replay reproduces the read and appends no journal entry |
+| FL15 | Completed-root replay | A journal with the root's close restores the result without running `<File>`: the file it read is removed first and the output is unchanged |
+| FL15b | Partial replay, read | Expansion reaches `<File>`, which re-reads — the file's content is changed between runs and the second output follows it |
+| FL15c | Partial replay, write | Expansion reaches `<File>`, which re-writes — the target is removed between runs and is recreated |
 | FL16 | Prop validation | A missing `path` and an undeclared prop are both rejected |
-| FL17 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, the two authoring forms writing the same bytes, and isolation between temporary directories — with no search path and no JavaScript |
+| FL17 | Leading dots | `..notes.md` and `..config/settings.json` are ordinary files, not escapes |
+| FL18 | Destination resolved after children | A child that replaces the parent directory with an escaping symlink is caught, and nothing is created outside |
+| FL19 | Failure inside the temporary write | The temporary is removed and the existing target is unchanged |
+| FL20 | Cancellation inside the temporary write | The same, when the run is halted rather than failed |
+| FL21 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
 

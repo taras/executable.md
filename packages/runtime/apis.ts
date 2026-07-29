@@ -116,6 +116,21 @@ export interface RuntimeFetchResponse {
   text(): Operation<string>;
 }
 
+/**
+ * The `errno` string a failed filesystem call carries, when it carries one.
+ *
+ * Read rather than asserted: `catch` gives back `unknown`, and what arrives
+ * there is only conventionally an `ErrnoException`. Narrowing says what is
+ * actually known about the value instead of claiming a shape it may not have.
+ */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  const { code } = error;
+  return typeof code === "string" ? code : undefined;
+}
+
 function* withTimeout<T>(
   label: string,
   timeout: number | undefined,
@@ -259,7 +274,7 @@ export const API: {
           isDirectory: s.isDirectory(),
         };
       } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        if (errorCode(err) === "ENOENT") {
           return { exists: false, isFile: false, isDirectory: false };
         }
         throw err;
@@ -323,7 +338,7 @@ export const API: {
       try {
         return yield* until(fsRealpath(path));
       } catch (err: unknown) {
-        const code = (err as NodeJS.ErrnoException).code;
+        const code = errorCode(err);
         if (code === "ENOENT" || code === "ENOTDIR") {
           return undefined;
         }
