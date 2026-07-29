@@ -3093,15 +3093,49 @@ where it stands. Resources an iteration acquires are released at their own
 invocation boundary (§4.4), so an iteration's resources are gone before the
 next one begins and none of them outlive the loop.
 
-**Iteration identity.** The runtime identifies iterations deterministically
-through the block ID counter (§6.1), which advances monotonically across them:
-each iteration's blocks journal under their own entries, in the same order on
-every run, so a truncated journal replays into the same iteration it was cut
-from. The identity is internal — it is not exposed as a binding, a prop, or a
-value the body can read. An execution's records therefore distinguish how a
-loop finished: a break leaves entries for the iterations that ran and none
-after, exhaustion leaves exactly `max` iterations' worth, a failure leaves an
-`err` result, and cancellation a `cancelled` one.
+**Execution records.** A loop writes its own journal entries rather than
+leaving its behavior to be inferred from whatever the body happened to record.
+Two kinds, both ordinary durable entries on the document's coroutine:
+
+| Entry | Description | Value |
+| --- | --- | --- |
+| Iteration | `{ type: "loop_iteration", name: "loop:<id>:iteration:<n>", loop? }` | `{ iteration: <n> }` |
+| Outcome | `{ type: "loop", name: "loop:<id>", loop? }` | `{ iterations, outcome }` |
+
+`<id>` comes from the block ID counter (§6.1), so every `<Loop>` an execution
+enters has a distinct identity — including each entry into a loop nested in
+another one — and lands on the same identity when the document replays. The
+optional `loop` field carries the author's `name`; like every field beyond
+`type` and `name` it is stored for readers and never compared during divergence
+detection.
+
+An iteration entry is written **before** the body, so the record does not
+depend on what the body contains: an iteration whose body is empty is on the
+record exactly like a busy one. `iteration` is the iteration's **zero-based
+identity**. It is internal — it is not a binding, a prop, or a value the body
+can read.
+
+The outcome entry is written when the loop finishes, and `outcome` is how it
+finished:
+
+| `outcome` | Means |
+| --- | --- |
+| `exhausted` | The loop reached `max`. |
+| `break` | A `<Break>` ended it. |
+| `error` | A failure left the loop, under a throwing policy. |
+
+`iterations` counts the iterations that began, so a loop that breaks on its
+final iteration and one that exhausts the same bound have identical iteration
+entries and differ only in `outcome`.
+
+**Cancellation writes no outcome entry**, deliberately. An entry appended while
+the loop is being torn down would sit after the iteration entries a resumed run
+still has to replay, and would make that run diverge. Absence is the record: a
+loop with iteration entries and no outcome entry did not finish, and the
+execution's own `Close` says whether that was cancellation or a crash.
+
+A collecting policy is not a loop failure. The diagnostic is content, the loop
+keeps iterating, and the outcome is `exhausted` or `break` as usual.
 
 #### `<Break>` loop exit
 
@@ -3127,16 +3161,27 @@ the direct way to test that. Everything the iteration produced before the
 A nested `<Loop>` handles its own `<Break>`: the inner loop exits and the outer
 one keeps running. There is no way to break a named outer loop.
 
-The loop boundary is **lexical**. A component invoked from a loop body — and
-the content projected through it — cannot break the loop that invoked it, and a
-`<Break>` written there is an error unless that body has a `<Loop>` of its own.
-How often a component renders `<Content />`, if at all, is the component's
-decision, so a `<Break>` there has no defined relationship to the caller's
-loop.
+**Which loop a `<Break>` means is decided by where the author wrote it.** A
+component's own body is isolated from the loop that invoked it: a `<Break>`
+written there belongs to a `<Loop>` in that body, and is a diagnostic when the
+body has none. Content the caller projects **through** a component is the
+caller's text, written where the caller can see the loop, so a `<Break>` in it
+ends the caller's loop — whether the component renders it through `<Content />`,
+`useContent()`, or `renderChildren()`. Markdown the component itself produces
+with `render()` is the component's own text and follows the body's rule.
+
+A projected `<Break>` stops the projected content and marks the caller's loop.
+The component's own body still finishes: the loop has no authority over how a
+component renders. The break takes effect where it was written — at the
+invocation site, once the invocation returns — so the rest of that iteration and
+the iterations that were left do not expand.
 
 A `<Break>` outside any `<Loop>` is a diagnostic rather than a component
-invocation. A malformed `<Break>` inside one is reported and still exits the
-loop, so the same diagnostic is not repeated once per remaining iteration.
+invocation. **A malformed `<Break>` performs no control action**: props or
+content on the element mean it does not carry the author's instruction, so the
+diagnostic settles under the ambient policy — aborting under a throwing one,
+rendering under a collecting one while the loop runs to its bound — rather than
+a rejected element also ending the loop.
 
 Diagnostics from `<Loop>` and `<Break>` carry source locations on the same
 terms as `<If>`.
@@ -5198,8 +5243,12 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | BREAK15 | Stray break resolves nothing | No component named `Break` is imported |
 | BREAK16 | Props on `<Break>` | Literal and expression props are both rejected |
 | BREAK17 | Content on `<Break>` | Rejected |
-| BREAK18 | Malformed break exits | The diagnostic reports once rather than once per remaining iteration |
-| BREAK19 | Lexical boundary | A `<Break>` in a component body is diagnosed and the caller's loop keeps running |
+| BREAK18 | Malformed break performs no control action | Under a collecting policy the diagnostic renders and the loop still runs to its bound, with each iteration intact |
+| BREAK18b | Malformed break under a throwing policy | The diagnostic aborts through the ambient policy |
+| BREAK19 | Component body boundary | A `<Break>` a component writes is diagnosed and the caller's loop keeps running |
+| BREAK20 | Projection through `<Content />` | A `<Break>` the caller projects exits the caller's loop; the component still finishes rendering |
+| BREAK21 | Component-written break end to end | Diagnosed, and every iteration keeps its trailing content |
+| BREAK22 | Projection through `useContent()` | The same holds for a component that renders content from a code block |
 | LOOP26 | Throwing policy | The first failing iteration aborts the loop |
 | LOOP27 | Collecting policy | The diagnostic renders and the next iteration runs |
 | LOOP28 | Cancellation | Halting mid-loop stops it where it stands |
@@ -5209,12 +5258,20 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP32 | Origin position | A scanned origin adds `path:` to the diagnostic |
 | LOOP33 | `<Break>` position | A stray `<Break>` reports its own location |
 | LOOP34 | No position | An element built without scanning diagnoses without a location |
-| LOOP35 | Iteration identities | Each iteration journals a distinct, deterministic eval entry |
+| LOOP35 | Body entries per iteration | Each iteration journals a distinct, deterministic eval entry |
 | LOOP36 | Journal after a break | Skipped content writes no eval entry |
 | LOOP37 | Accumulation | A binding grows across iterations end to end |
 | LOOP38 | Repeated import (execution) | The body's component runs once per iteration end to end |
-| LOOP39 | Partial replay | From a journal prefix without the root Close, the remaining iterations run live onto the same identities and reproduce the output |
+| LOOP39 | Partial replay | Truncated at the loop's second iteration entry, the journal replays exactly one iteration, runs the remaining two live onto the same identities, reproduces the output, and records `exhausted` |
 | LOOP40 | Break from a binding | A condition computed in the body ends the document's loop |
+| LOOP41 | Empty-body records | Three iteration entries and an `exhausted` outcome, with no body to journal |
+| LOOP42 | Immediate break records | One iteration entry and a `break` outcome — distinct from empty exhaustion |
+| LOOP43 | Final-iteration break | Identical iteration entries to an exhausted loop; only `outcome` differs |
+| LOOP44 | Failure records | A throwing policy records `error` with the iterations reached, and the execution Close is `err` |
+| LOOP45 | Collecting policy is not failure | The diagnostic renders and the outcome is `exhausted` |
+| LOOP46 | Cancellation | Iteration entries for what began, and no outcome entry |
+| LOOP47 | Nested identities | Each entry into a nested loop records its own distinct identity |
+| LOOP48 | Identity is internal | `{iteration}` resolves to nothing in the body |
 
 ### Tier SC — Sample component (integration)
 

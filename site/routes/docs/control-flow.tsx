@@ -67,6 +67,20 @@ Five revisions were not enough — escalating.
 </Else>
 </If>`;
 
+const RECORDS = `loop_iteration  loop:4:iteration:0   { "iteration": 0 }
+loop_iteration  loop:4:iteration:1   { "iteration": 1 }
+loop_iteration  loop:4:iteration:2   { "iteration": 2 }
+loop            loop:4               { "iterations": 3, "outcome": "break" }`;
+
+const PROJECTED_BREAK = `<Loop max={3}>
+<Panel title="Attempt">
+<Attempt as="attempt" />
+<If condition={attempt.ok}>
+<Break />
+</If>
+</Panel>
+</Loop>`;
+
 const LOOP_BINDING = `<Capture as="log">attempts:</Capture>
 
 <Loop max={3}>
@@ -175,10 +189,26 @@ export default define.page(function ControlFlow() {
         iteration — content after it does not expand, so it imports no
         component, runs no block, and reaches no provider — and skips the
         iterations that were left. A nested <code>&lt;Loop&gt;</code>{" "}
-        handles its own break, and a component invoked from a loop body cannot
-        break the loop that invoked it.
+        handles its own break.
       </p>
       <CodeBlock>{REVIEW_LOOP}</CodeBlock>
+      <p>
+        Which loop a <code>&lt;Break /&gt;</code>{" "}
+        means is decided by where you wrote it. Content you hand to a component
+        is still your text, so a break in it ends your loop — the component
+        finishes rendering, and the break lands when the invocation returns. A
+        {" "}
+        <code>&lt;Break /&gt;</code>{" "}
+        a component writes in its own body belongs to a loop in that body, never
+        to the loop that invoked the component.
+      </p>
+      <CodeBlock>{PROJECTED_BREAK}</CodeBlock>
+      <p>
+        A malformed <code>&lt;Break /&gt;</code>{" "}
+        — one carrying props or content — does no control action at all. It is
+        not an instruction the loop can act on, so it reports and the loop keeps
+        its own course.
+      </p>
 
       <h2>Exhaustion is not failure</h2>
       <p>
@@ -190,11 +220,29 @@ export default define.page(function ControlFlow() {
         limit is explicit document policy, never something{" "}
         <code>&lt;Loop&gt;</code> decides on your behalf.
       </p>
+      <h2>What the journal records</h2>
       <p>
-        The loop keeps no counter you can read. Iterations do have a
-        deterministic identity — it is what lets a run replay into the same
-        iteration it was interrupted in — but that identity is internal, not a
-        binding the body can branch on.
+        A loop writes its own entries rather than leaving you to reconstruct
+        what it did from whatever the body happened to record. Each iteration
+        gets an entry before it runs, carrying its zero-based identity, so an
+        empty iteration is on the record exactly like a busy one. When the loop
+        finishes it writes one more entry saying how: <code>exhausted</code>,
+        {" "}
+        <code>break</code>, or <code>error</code>{" "}
+        — with the number of iterations that began.
+      </p>
+      <CodeBlock>{RECORDS}</CodeBlock>
+      <p>
+        That is what separates a loop that broke on its final iteration from one
+        that exhausted the same bound: identical iteration entries, different
+        outcome. A cancelled loop writes no outcome entry at all — its absence
+        is the record, and the execution's own close says whether the run was
+        cancelled or crashed.
+      </p>
+      <p>
+        The identity is internal. The loop keeps no counter your document can
+        read — it exists so a run can replay into the iteration it was
+        interrupted in, not so the body can branch on it.
       </p>
     </>
   );

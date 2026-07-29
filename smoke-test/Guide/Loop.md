@@ -12,6 +12,12 @@ stay available after `</Loop>`. `<Break />` ends the loop it is written in: the
 rest of that iteration never expands, and the iterations that were left never
 run.
 
+Which loop a `<Break>` means is decided by where the author wrote it. Content
+handed to a component is the caller's text, so a `<Break>` there ends the
+caller's loop. A `<Break>` a component writes in its own body belongs to a loop
+in that body — a loop the caller wrote is not the component's to end, and a
+component-written `<Break>` with no loop of its own is stray.
+
 </Section>
 
 <Test name="Loop expands its body once per iteration">
@@ -60,4 +66,16 @@ reached
 <Break />
 <AssertEquals actual={"content after Break ran"} expected={"it must not run"} />
 </Loop>
+</Test>
+
+<Test name="A Break the caller hands to a component exits the caller's loop">
+<Capture as="projectedBreak"><Loop max={3}>kept<Section title="Held"><Break /></Section>dropped</Loop></Capture>
+<AssertStringIncludes actual={projectedBreak} expected={"kept"} />
+<AssertNotMatch actual={projectedBreak} expected={/dropped/} />
+</Test>
+
+<Test name="A Break a component writes belongs to the component's own loop">
+<Capture as="ownBreak"><Loop max={2}>kept<OwnLoop />tail</Loop></Capture>
+<AssertStringIncludes actual={ownBreak} expected={"tail"} />
+<AssertNotMatch actual={ownBreak} expected={/xx/} />
 </Test>

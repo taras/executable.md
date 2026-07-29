@@ -83,6 +83,8 @@ const EMBEDDED_TESTS = [
   "Break inside If exits only when the condition selects it",
   "Break exits only the nearest loop",
   "Content after Break never runs",
+  "A Break the caller hands to a component exits the caller's loop",
+  "A Break a component writes belongs to the component's own loop",
 ];
 
 interface SmokeSession {

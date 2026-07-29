@@ -46,8 +46,8 @@ import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
-import { ActiveLoop } from "./loop.ts";
-import type { LoopFrame } from "./loop.ts";
+import { ActiveLoop, recordIteration, recordOutcome } from "./loop.ts";
+import type { LoopFrame, LoopIdentity, LoopOutcome } from "./loop.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
@@ -198,6 +198,13 @@ interface ProjectionState {
   props: Record<string, Json>;
   hideSet: Set<string>;
   counter: BlockCounter;
+  /**
+   * The loop active where the caller wrote the content it projects, read at
+   * the invocation site before the invocation cleared it for its own body.
+   * Projected content is the caller's text, so a `<Break>` in it means the
+   * loop the author could see.
+   */
+  callerLoop: LoopFrame | undefined;
   /** Where a string projection records the errors it renders away. */
   collect: Segment[];
 }
@@ -249,6 +256,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     props: Record<string, Json>;
     hideSet: Set<string>;
     inner: ProjectionHandle | undefined;
+    loop: LoopFrame | undefined;
     errors: Segment[];
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
@@ -270,6 +278,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             yield* provideEnv(options.env);
           }
           yield* ActiveProjection.set(options.inner);
+          yield* ActiveLoop.set(options.loop);
           outcome.resolve({
             segments: yield* expandSegments(
               options.segments,
@@ -322,6 +331,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           yield* provideEnv(projectionEnv);
         }
         yield* ActiveProjection.set(inner);
+        // Dynamic markdown is the component's own text, so it is not written
+        // where the caller's loop is and cannot break it.
+        yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
         const rendered = yield* expandSegments(
           project(segments),
           state.meta,
@@ -363,6 +375,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         props,
         hideSet,
         inner: state.enclosing,
+        loop: state.callerLoop,
         errors: [],
       });
     },
@@ -1192,6 +1205,14 @@ function* loopBound(segment: ComponentElement): Operation<LoopBound> {
  * error policy either — under a throwing policy the first failure ends the
  * loop by propagating out of it, and under a collecting one the diagnostic
  * renders and the next iteration runs.
+ *
+ * The loop writes its own execution records: one entry per iteration that
+ * begins, carrying that iteration's zero-based identity, and one entry for how
+ * the loop finished. They are written by the loop rather than derived from
+ * whatever the body happened to journal, so an empty body is on the record
+ * exactly like a busy one, and exhaustion, `<Break>` and failure are read from
+ * the outcome entry instead of inferred. Cancellation is the one outcome with
+ * no entry — see `LoopOutcome`.
  */
 function* expandLoop(
   segment: ComponentElement,
@@ -1226,19 +1247,39 @@ function* expandLoop(
     return [yield* raise(bound.error)];
   }
 
+  // Taken from the shared block counter, so every `<Loop>` an execution enters
+  // — including each entry into a nested one — has a distinct identity that
+  // lands the same way on replay.
+  const identity: LoopIdentity = { id: counter.next(), ...(name === undefined ? {} : { name }) };
+
   const frame: LoopFrame = { broken: false };
   const out: Segment[] = [];
-  yield* scoped(function* () {
-    yield* ActiveLoop.set(frame);
-    for (let iteration = 0; iteration < bound.max; iteration++) {
-      out.push(
-        ...(yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter)),
-      );
-      if (frame.broken) {
-        break;
+  let started = 0;
+
+  try {
+    yield* scoped(function* () {
+      yield* ActiveLoop.set(frame);
+      for (let iteration = 0; iteration < bound.max; iteration++) {
+        yield* recordIteration(identity, iteration);
+        started = iteration + 1;
+        out.push(
+          ...(yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter)),
+        );
+        if (frame.broken) {
+          break;
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    // Recorded from the catch rather than a destructor: this frame is still
+    // live here, so the entry lands in the journal before the failure leaves
+    // the loop.
+    yield* recordOutcome(identity, { iterations: started, outcome: "error" });
+    throw error;
+  }
+
+  const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
+  yield* recordOutcome(identity, { iterations: started, outcome });
   return out;
 }
 
@@ -1262,29 +1303,34 @@ function breakElementViolations(segment: ComponentElement): string[] {
  * imports no component, runs no block, and writes no journal entry. Everything
  * the iteration produced before the mark stands.
  *
- * A malformed `<Break>` inside a loop still exits it. The author asked the
- * loop to end, and continuing would repeat the same diagnostic once per
- * remaining iteration.
+ * A malformed `<Break>` performs no control action. Only a well-formed one
+ * carries the author's instruction, so the diagnostic settles under the
+ * ambient policy — aborting under a throwing one, rendering under a collecting
+ * one while the loop runs on — rather than a rejected element also ending the
+ * loop.
  */
 function* expandBreak(
   segment: ComponentElement,
   loop: LoopFrame | undefined,
 ): Operation<Segment[]> {
   const violations = breakElementViolations(segment);
+
+  if (loop && violations.length === 0) {
+    loop.broken = true;
+    return [];
+  }
+
   if (!loop) {
     violations.unshift(
       "<Break> must be written inside a <Loop>. <Break> is reserved: it never resolves a " +
-        "component, and a component invoked from a loop body cannot break the loop that " +
-        "invoked it.",
+        "component, and a <Break> a component writes in its own body cannot break the loop " +
+        "that invoked it.",
     );
   }
 
   const reported: Segment[] = [];
   for (const violation of violations) {
     reported.push(yield* raise(breakError(segment, violation)));
-  }
-  if (loop) {
-    loop.broken = true;
   }
   return reported;
 }
@@ -1467,8 +1513,11 @@ function* expandComponent(
   const bodyContentErrors: Segment[] = [];
 
   // Read before the invocation exists: the eval scope ambient here is the
-  // caller's, and it is what `retain()` creates resources in.
+  // caller's, and it is what `retain()` creates resources in. The loop is read
+  // here for the same reason — it is the one the caller's content was written
+  // in, and the invocation is about to clear it for the component's own body.
   const siteEvalScope = yield* evalScope;
+  const siteLoop = yield* ActiveLoop.get();
 
   // Both bodies run inside one invocation, so a value component owns its
   // resources exactly like a rendered one.
@@ -1485,6 +1534,7 @@ function* expandComponent(
       props: validatedProps,
       hideSet,
       counter,
+      callerLoop: siteLoop,
       collect: bodyContentErrors,
     });
     // Published on the eval scope, which every task the invocation owns
@@ -1712,8 +1762,10 @@ function* expandFunctionComponent(
   const contentErrors: Segment[] = [];
 
   // Read before the invocation exists: the eval scope ambient here is the
-  // caller's, and it is what `retain()` creates resources in.
+  // caller's, and it is what `retain()` creates resources in. The loop is read
+  // here for the same reason — see expandComponent.
   const siteEvalScope = yield* evalScope;
+  const siteLoop = yield* ActiveLoop.get();
 
   // Call the function component inside its invocation, with content middleware
   // in scope so it can render children via `yield* useContent()`.
@@ -1731,6 +1783,7 @@ function* expandFunctionComponent(
         props: {},
         hideSet,
         counter,
+        callerLoop: siteLoop,
         collect: contentErrors,
       });
       invocation.evalScope.scope.set(ActiveProjection, handle);

@@ -56,6 +56,15 @@ outer one running.
 <AssertEquals actual={nested} expected={"(i)(i)"} />
 </Test>
 
+Content handed to a component is still the caller's text, written where the
+caller can see the loop. A `<Break>` there ends the caller's loop, even though
+the component decides when to render it.
+
+<Test name="A Break the caller hands to a component exits the caller's loop">
+<Capture as="projected"><Loop max={3}>a<TempDir><Break /></TempDir>b</Loop></Capture>
+<AssertEquals actual={projected} expected={"a"} />
+</Test>
+
 "Does not render" is weaker than what actually happens: content after a
 `<Break>` never expands at all. An assertion placed there would fail this
 document if it ran — the test passes only because that content is never
