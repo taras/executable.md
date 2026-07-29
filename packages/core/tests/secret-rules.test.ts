@@ -15,6 +15,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
+import type { Operation } from "effection";
+import type { SecretFinding } from "../src/secrets/findings.ts";
 import { createSecretScanner } from "../src/secrets/scanner.ts";
 import {
   isPlaceholder,
@@ -418,4 +420,66 @@ describe("escapes inside a quoted credential field", () => {
       assertOpaque(findings, secret);
     });
   }
+});
+
+/**
+ * One credential, three encodings, one scanner.
+ *
+ * A finding's fingerprint is derived from the text its reported range covers,
+ * so the range has to start at the credential itself. An offset left pointing
+ * at an opening quote hashes a different slice, and the same credential then
+ * carries two fingerprints depending on whether it happened to be quoted —
+ * which defeats the one thing a fingerprint is for.
+ */
+describe("reported offsets locate the credential itself", () => {
+  const CRED = "aB3xK9mQ7pL2wR5t";
+
+  const unquoted = `password=${CRED}`;
+  const quoted = `{"password":"${CRED}"}`;
+  const serialized = serializeDurableEvent({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { path: "README.md", content: quoted } },
+  });
+
+  /** The XMD field finding, which is the one whose offset is under test. */
+  function* fieldFinding(
+    scanner: { scan: (c: string) => Operation<SecretFinding[]> },
+    content: string,
+  ) {
+    const findings = (yield* scanner.scan(content)).filter(
+      (finding) => finding.ruleId === "@executablemd/secretlint-rule-credentials",
+    );
+    expect(findings).toHaveLength(1);
+    return findings[0]!;
+  }
+
+  it("gives one credential one fingerprint across all three encodings", function* () {
+    // One scanner, so one HMAC key — fingerprints are only comparable within
+    // a single execution by design.
+    const scanner = createSecretScanner();
+
+    const fromUnquoted = yield* fieldFinding(scanner, unquoted);
+    const fromQuoted = yield* fieldFinding(scanner, quoted);
+    const fromSerialized = yield* fieldFinding(scanner, serialized);
+
+    expect(fromQuoted.fingerprint).toBe(fromUnquoted.fingerprint);
+    expect(fromSerialized.fingerprint).toBe(fromUnquoted.fingerprint);
+  });
+
+  it("reports the credential's own index, not the quote or escape in front of it", function* () {
+    const scanner = createSecretScanner();
+
+    for (const content of [unquoted, quoted, serialized]) {
+      const finding = yield* fieldFinding(scanner, content);
+
+      // Every fixture is one line, so the column is the index in the string.
+      expect(finding.location.line).toBe(1);
+      expect(finding.location.column).toBe(content.indexOf(CRED));
+      expect(content.slice(finding.location.column, finding.location.column + CRED.length)).toBe(
+        CRED,
+      );
+    }
+  });
 });

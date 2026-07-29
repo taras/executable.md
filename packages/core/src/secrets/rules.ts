@@ -210,7 +210,7 @@ const BARE_VALUE = /^[^\s,}"'\\]+/;
 function readQuotedValue(
   content: string,
   openAt: number,
-): { value: string; end: number } | undefined {
+): { value: string; at: number } | undefined {
   const escaped = content[openAt] === "\\";
   const mark = content[openAt + (escaped ? 1 : 0)];
   if (mark !== '"' && mark !== "'") {
@@ -233,7 +233,7 @@ function readQuotedValue(
     if (closes) {
       // A doubly-escaped delimiter owns the backslash in front of its quote.
       const valueEnd = escaped ? at - 1 : at;
-      return { value: content.slice(bodyStart, valueEnd), end: at + 1 };
+      return { value: content.slice(bodyStart, valueEnd), at: bodyStart };
     }
   }
 
@@ -241,13 +241,25 @@ function readQuotedValue(
 }
 
 /**
- * The complete value of a credential-named field.
+ * The complete value of a credential-named field, and where it begins.
  *
  * A quoted value runs to its actual closing quote — spaces, punctuation, and
  * escape sequences included. Only an unquoted value ends at whitespace.
+ *
+ * The offset is the first character of the credential itself, past any
+ * opening quote or escape. It is not cosmetic: a finding's fingerprint is
+ * derived from the text the reported range covers, so an offset pointing at
+ * the quote would hash a different slice and give the same credential two
+ * fingerprints depending on whether it happened to be quoted.
  */
-function readFieldValue(content: string, at: number): string | undefined {
-  return readQuotedValue(content, at)?.value ?? BARE_VALUE.exec(content.slice(at))?.[0];
+function readFieldValue(content: string, at: number): { value: string; at: number } | undefined {
+  const quoted = readQuotedValue(content, at);
+  if (quoted) {
+    return quoted;
+  }
+
+  const bare = BARE_VALUE.exec(content.slice(at))?.[0];
+  return bare === undefined ? undefined : { value: bare, at };
 }
 
 /** An auth scheme in front of the value it carries. */
@@ -303,17 +315,14 @@ export const xmdCredentialRule: SecretLintRuleCreator = {
             if (head.index === undefined) {
               continue;
             }
-            const at = head.index + head[0].length;
-            const value = readFieldValue(content, at);
-            if (value !== undefined) {
-              report(value, at, "CREDENTIAL_FIELD");
+            const found = readFieldValue(content, head.index + head[0].length);
+            if (found !== undefined) {
+              report(found.value, found.at, "CREDENTIAL_FIELD");
             }
           }
         }
 
         function report(value: string, at: number, messageId: keyof typeof messages): void {
-          // `authorization: Bearer <token>` carries its scheme into the field
-          // value; the credential is what follows it.
           const credential = value.replace(SCHEME, "");
           const start = at + (value.length - credential.length);
 
