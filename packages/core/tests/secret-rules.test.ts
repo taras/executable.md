@@ -221,3 +221,133 @@ describe("placeholder recognition", () => {
     expect(findings.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A value is a placeholder only when the *whole* value is one. These are the
+ * cases where an earlier version let a credential through: one segment equal
+ * to a placeholder word was enough to excuse the rest.
+ */
+describe("a placeholder word in one segment does not excuse the value", () => {
+  const SEGMENTED = ["aB1cD2e-test-F3gH4iJ5", "aB1cD2e-example-F3gH4iJ5"];
+
+  for (const value of SEGMENTED) {
+    // deno-lint-ignore require-yield
+    it(`does not treat ${value} as a placeholder`, function* () {
+      expect(isPlaceholder(value)).toBe(false);
+      expect(looksLikeSecret(value)).toBe(true);
+    });
+
+    it(`detects ${value} in a credential field`, function* () {
+      const findings = yield* createSecretScanner().scan(`{"apiKey":"${value}"}`);
+
+      expect(findings.length).toBeGreaterThan(0);
+      expect(JSON.stringify(findings)).not.toContain(value);
+    });
+
+    it(`detects ${value} in a Bearer header`, function* () {
+      const findings = yield* createSecretScanner().scan(`Authorization: Bearer ${value}`);
+
+      expect(findings.length).toBeGreaterThan(0);
+      expect(JSON.stringify(findings)).not.toContain(value);
+    });
+  }
+
+  const DOCUMENTATION = [
+    "your-api-key-here",
+    "example-key-for-documentation",
+    "${GITHUB_TOKEN}",
+    "$GITHUB_TOKEN",
+    "<your-token>",
+    "{{ api_key }}",
+  ];
+
+  for (const value of DOCUMENTATION) {
+    it(`still leaves ${value} alone in a credential field`, function* () {
+      expect(yield* createSecretScanner().scan(`{"apiKey":"${value}"}`)).toEqual([]);
+    });
+  }
+});
+
+describe("OpenAI-shaped documentation values", () => {
+  const DOCUMENTED = ["sk-your-openai-api-key-here", "sk-proj-example-placeholder-key"];
+  const REAL = [`sk-${A.slice(0, 48)}`, `sk-proj-${A.slice(0, 48)}`];
+
+  for (const value of DOCUMENTED) {
+    it(`leaves ${value} alone as raw text`, function* () {
+      expect(yield* createSecretScanner().scan(`key: ${value}`)).toEqual([]);
+    });
+
+    it(`leaves ${value} alone inside a serialized root import`, function* () {
+      const event: DurableEvent = {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "import_component", name: "__root__" },
+        result: {
+          status: "ok",
+          value: { path: "README.md", content: `Set OPENAI_API_KEY to ${value}.\n` },
+        },
+      };
+
+      expect(yield* createSecretScanner().scan(serializeDurableEvent(event))).toEqual([]);
+    });
+  }
+
+  for (const value of REAL) {
+    it(`still detects a synthetic OpenAI key as raw text`, function* () {
+      expect((yield* createSecretScanner().scan(`key: ${value}`)).length).toBeGreaterThan(0);
+    });
+
+    it(`still detects a synthetic OpenAI key inside a serialized root import`, function* () {
+      const event: DurableEvent = {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "import_component", name: "__root__" },
+        result: { status: "ok", value: { path: "README.md", content: `key: ${value}\n` } },
+      };
+
+      const findings = yield* createSecretScanner().scan(serializeDurableEvent(event));
+
+      expect(findings.length).toBeGreaterThan(0);
+      expect(JSON.stringify(findings)).not.toContain(value);
+    });
+  }
+});
+
+describe("complete quoted field values", () => {
+  // Stopping at the first space truncates this to `correct`, which is short
+  // enough to fall under every threshold and be waved through.
+  const PASSPHRASE = "correct horse Battery 123!";
+
+  it("detects a passphrase with spaces and punctuation", function* () {
+    const findings = yield* createSecretScanner().scan(`{"password":"${PASSPHRASE}"}`);
+
+    expect(findings.length).toBeGreaterThan(0);
+    expect(JSON.stringify(findings)).not.toContain(PASSPHRASE);
+    expect(JSON.stringify(findings)).not.toContain("horse");
+  });
+
+  it("detects the same passphrase inside a serialized event", function* () {
+    const event: DurableEvent = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: "__root__" },
+      result: {
+        status: "ok",
+        value: { path: "README.md", content: `{"password": "${PASSPHRASE}"}\n` },
+      },
+    };
+
+    const record = serializeDurableEvent(event);
+    expect(record).toContain('\\"password\\"');
+
+    const findings = yield* createSecretScanner().scan(record);
+
+    expect(findings.length).toBeGreaterThan(0);
+    expect(JSON.stringify(findings)).not.toContain(PASSPHRASE);
+    expect(JSON.stringify(findings)).not.toContain("horse");
+  });
+
+  it("leaves a quoted documentation value alone", function* () {
+    expect(yield* createSecretScanner().scan('{"password":"your-password-here"}')).toEqual([]);
+  });
+});

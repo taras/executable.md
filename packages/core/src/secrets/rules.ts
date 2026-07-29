@@ -51,45 +51,68 @@ const FIELD_NAMES = CREDENTIAL_FIELDS.map((parts) => parts.join("[-_ ]?")).join(
  * happened to contain `test` — the substring check was a hole, not a
  * convenience.
  */
-const PLACEHOLDER_WORDS =
-  "example|placeholder|redacted|dummy|sample|changeme|change|todo|fixme|test|fake|your|my|the|here|value|goes|xxx";
+const PLACEHOLDER_WORDS = new Set([
+  "example",
+  "placeholder",
+  "redacted",
+  "dummy",
+  "sample",
+  "changeme",
+  "change",
+  "todo",
+  "fixme",
+  "test",
+  "fake",
+  "your",
+  "my",
+  "the",
+  "here",
+  "value",
+  "goes",
+  "xxx",
+]);
 
-const PLACEHOLDER = new RegExp(
-  [
-    // Deliberate placeholder syntax, whole value only.
-    "^\\$\\{[^}]*\\}$", // ${GITHUB_TOKEN}
-    "^\\$[A-Za-z_][A-Za-z0-9_]*$", // $GITHUB_TOKEN
-    "^<[^>]*>$", // <redacted>
-    "^\\{\\{[^}]*\\}\\}$", // {{token}}
-    "^x+$",
-    "^\\*+$",
-    "^\\.+$",
-    "^-+$",
-    "^(none|null|undefined|empty|unset|omitted|redacted)$",
-    // Documentation prose: lowercase *words* joined by one separator, at
-    // least one of which is a placeholder word. `your-api-key-here` and
-    // `example-key-for-documentation` qualify.
-    //
-    // Segments are length-bounded because that is what separates a word from
-    // a credential: `dummyabcdefghijklmnopqrstuvwx` and
-    // `sk-live-test-abcdefghijklmnopqrstuvwx` both contain a placeholder word
-    // but carry a random run no word ever looks like, and neither may be
-    // waved through.
-    `^[a-z0-9]{1,15}(?:[-_ .][a-z0-9]{1,15})*$(?<=(?:^|[-_ .])(?:${PLACEHOLDER_WORDS})(?:[-_ .].*)?)`,
-  ].join("|"),
-  "i",
-);
+/** Deliberate placeholder syntax. The whole value, never a fragment of one. */
+const EXPLICIT_FORMS = [
+  /^\$\{[^}]*\}$/, // ${GITHUB_TOKEN}
+  /^\$[A-Za-z_][A-Za-z0-9_]*$/, // $GITHUB_TOKEN
+  /^<[^>]*>$/, // <redacted>
+  /^\{\{[^}]*\}\}$/, // {{ api_key }}
+  /^x+$/i,
+  /^\*+$/,
+  /^\.+$/,
+  /^-+$/,
+  /^(none|null|undefined|empty|unset|omitted|redacted)$/i,
+];
 
 /**
- * Whether a value is a placeholder rather than a credential.
+ * Documentation prose: lowercase words joined by single separators.
  *
- * Split out so the contract is testable directly: the boundary between
- * "documented placeholder" and "secret that happens to contain a word like
- * test" is the difference between usable default-on detection and a rule that
- * either blocks fixtures or misses real credentials.
+ * Every segment must be lowercase letters only. That is the line between
+ * prose and a credential, and it has to be enforced case-sensitively — an
+ * earlier version applied the `i` flag to this pattern, which quietly made
+ * `[a-z]` match uppercase and let `aB1cD2e-test-F3gH4iJ5` pass as words.
+ * Digits are excluded for the same reason.
+ */
+const WORDS = /^[a-z]{1,15}(?:[-_ .][a-z]{1,15})*$/;
+
+/**
+ * Whether a value names a credential instead of being one.
+ *
+ * A value qualifies only as a *complete* placeholder: deliberate syntax, or
+ * prose in which every segment is a word and at least one is a placeholder
+ * word. Containing a placeholder word is never enough on its own — treating
+ * it as enough is a hole a real credential walks through as soon as it
+ * happens to include `test`.
  */
 export function isPlaceholder(value: string): boolean {
-  return PLACEHOLDER.test(value);
+  if (EXPLICIT_FORMS.some((form) => form.test(value))) {
+    return true;
+  }
+  if (!WORDS.test(value)) {
+    return false;
+  }
+  return value.split(/[-_ .]/).some((segment) => PLACEHOLDER_WORDS.has(segment));
 }
 
 /** The minimum length a value must reach before it can be a credential. */
@@ -160,8 +183,22 @@ const BEARER = new RegExp(
 /** `sk-` and `sk-proj-` keys, with or without the preset's `T3BlbkFJ` marker. */
 const OPENAI = /(?<![A-Za-z0-9_-])sk-(?:proj-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g;
 
-/** A credential-named field and its value, in JSON, YAML, env, or escaped JSON. */
-const FIELD = new RegExp(`${Q}\\b(?:${FIELD_NAMES})\\b${Q}\\s*[:=]\\s*${Q}([^"'\\s,}\\\\]+)`, "gi");
+/**
+ * A credential-named field and its complete value.
+ *
+ * A quoted value runs to its closing quote, spaces and punctuation included —
+ * stopping at the first space truncates `"correct horse Battery 123!"` to
+ * `correct`, which is short enough to fall under every threshold and be
+ * waved through. Only an unquoted value ends at whitespace.
+ */
+const FIELD = new RegExp(
+  `${Q}\\b(?:${FIELD_NAMES})\\b${Q}\\s*[:=]\\s*` +
+    `(?:\\\\?"([^"\\\\]+)\\\\?"|\\\\?'([^'\\\\]+)\\\\?'|([^\\s,}"'\\\\]+))`,
+  "gi",
+);
+
+/** An auth scheme in front of the value it carries. */
+const SCHEME = /^(?:Bearer|Token|Basic|ApiKey)\s+/i;
 
 /**
  * The XMD rule. Registered alongside the recommended preset; the two are
@@ -183,32 +220,41 @@ export const xmdCredentialRule: SecretLintRuleCreator = {
 
     return {
       file(source) {
-        report(source.content, BEARER, 1, "BEARER_TOKEN");
-        report(source.content, OPENAI, 0, "OPENAI_KEY");
-        report(source.content, FIELD, 1, "CREDENTIAL_FIELD");
+        report(source.content, BEARER, "BEARER_TOKEN");
+        report(source.content, OPENAI, "OPENAI_KEY");
+        report(source.content, FIELD, "CREDENTIAL_FIELD");
 
-        function report(
-          content: string,
-          pattern: RegExp,
-          group: number,
-          messageId: keyof typeof messages,
-        ): void {
+        function report(content: string, pattern: RegExp, messageId: keyof typeof messages): void {
           // A /g regex carries lastIndex across calls; each scan starts fresh.
           pattern.lastIndex = 0;
 
           for (const match of content.matchAll(pattern)) {
-            const value = group === 0 ? match[0] : match[group];
+            // The value is the first capture that participated, or the whole
+            // match for a pattern that captures nothing (OpenAI).
+            const value = match.slice(1).find((group) => group !== undefined) ?? match[0];
             if (value === undefined || match.index === undefined) {
               continue;
             }
-            if (messageId !== "OPENAI_KEY" && !looksLikeSecret(value)) {
+
+            // `authorization: Bearer <token>` carries its scheme into the
+            // field value; the credential is what follows it.
+            const credential = value.replace(SCHEME, "");
+
+            if (messageId === "OPENAI_KEY") {
+              // An OpenAI-shaped value still has to be a value. A documented
+              // `sk-your-openai-api-key-here` is prose that happens to wear
+              // the prefix, and rejecting it would block documentation.
+              if (isPlaceholder(credential.replace(/^sk-(?:proj-)?/, ""))) {
+                continue;
+              }
+            } else if (!looksLikeSecret(credential)) {
               continue;
             }
 
-            const start = match.index + match[0].lastIndexOf(value);
+            const start = match.index + match[0].lastIndexOf(credential);
             context.report({
               message: t(messageId),
-              range: [start, start + value.length],
+              range: [start, start + credential.length],
             });
           }
         }
