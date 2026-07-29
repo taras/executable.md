@@ -156,6 +156,17 @@ const READ_DOC = '<File path="request.md" />';
 const WRITE_DOC = '<File path="request.md">content</File>';
 
 /**
+ * What a rename that threw may say about the target.
+ *
+ * `around` middleware works on both sides of `next()`, so a throw from `rename`
+ * may arrive before the underlying call or after it succeeded, and the component
+ * cannot tell which. FL21 and FL21b are those two runs; both get this sentence.
+ */
+const UNCERTAIN =
+  "Whether the replacement committed is unknown: the target holds either the " +
+  "complete previous content or the complete replacement, never a partial write.";
+
+/**
  * Errors built to defeat sanitization rather than to resemble a real failure.
  *
  * `code` is as much middleware's to choose as `message` is, and a class is not
@@ -728,6 +739,9 @@ describe("Tier FL — File", () => {
     );
 
     expect(output).toContain('cannot write "notes.md": no space left on the device.');
+    // Preparation is the one step whose outcome is a conclusion: the commit was
+    // never reached, so the previous file certainly stands.
+    expect(output).toContain("The previous file is unchanged.");
     expect(output).not.toContain(PLANTED);
     expect(yield* read(fixture, "notes.md")).toBe("first");
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
@@ -756,9 +770,11 @@ describe("Tier FL — File", () => {
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
 
-  // FL21: the commit itself failing. Nothing has replaced the target yet, so
-  // the previous content stands and the temporary goes with the scope.
-  it("FL21: a failed commit leaves the previous content and removes the temporary", function* () {
+  // FL21: the commit throwing before it reached the filesystem. The old file
+  // stands, but the diagnostic cannot say so — a handler may equally throw
+  // *after* committing (FL21b), and from inside the component the two are the
+  // same event. So the wording is conservative for both.
+  it("FL21: a rename that throws before next leaves the previous content", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
 
@@ -777,9 +793,51 @@ describe("Tier FL — File", () => {
       ),
     );
 
-    expect(output).toContain('cannot write "notes.md"');
-    expect(output).not.toContain(PLANTED);
+    expect(output).toContain(
+      'cannot write "notes.md": the destination is on a different filesystem.',
+    );
+    expect(output).toContain(UNCERTAIN);
+    // Not claimed, because it is not knowable — but true here.
     expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(output).not.toContain(PLANTED);
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  // FL21b: the same throw, on the far side of `next()`. `around` middleware may
+  // do work either side of it, so this is the error twin of FL22 — and it is
+  // why FL21's wording cannot claim the previous file survived. Here it did
+  // not: the replacement is committed and the diagnostic is still correct.
+  it("FL21b: a rename that throws after next leaves the replacement committed", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const output = text(
+      yield* runWith(
+        fixture,
+        '<File path="notes.md">second</File>',
+        new InMemoryStream(),
+        function* () {
+          yield* API.Fs.around({
+            *rename([from, to], next) {
+              yield* next(from, to);
+              throw planted("EXDEV");
+            },
+          });
+        },
+      ),
+    );
+
+    expect(output).toContain(
+      'cannot write "notes.md": the destination is on a different filesystem.',
+    );
+    // The identical sentence to FL21, and it has to be: "the previous file is
+    // unchanged" would be a false statement about this run.
+    expect(output).toContain(UNCERTAIN);
+    expect(output).not.toContain("The previous file is unchanged.");
+    // The commit did happen.
+    expect(yield* read(fixture, "notes.md")).toBe("second");
+    expect(output).not.toContain(PLANTED);
+    // Cleanup succeeded either way: the rename consumed the temporary.
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
 
@@ -851,7 +909,10 @@ describe("Tier FL — File", () => {
     expect(output).toContain('cannot clean up "request.md": permission denied.');
     // The commit succeeded, and saying so is the difference between this and a
     // write that failed.
-    expect(output).toContain("The file was written, but a temporary file beside it may remain.");
+    // The rename returned, so the commit is a conclusion — and the leftover
+    // sentence composes with it rather than replacing it.
+    expect(output).toContain("The file was written.");
+    expect(output).toContain("A temporary file beside it may remain.");
     expect(output).not.toContain(PLANTED);
     expectNoAbsolutePaths(output, fixture);
     expect(yield* read(fixture, "request.md")).toBe("content");
@@ -863,8 +924,8 @@ describe("Tier FL — File", () => {
   });
 
   // FL23c: both halves fail. Neither may hide the other: the write's failure
-  // says the previous file stands, and the cleanup's says something was left
-  // behind — a reader needs both to know what the directory now holds.
+  // says what is known about the target, and the cleanup's says something was
+  // left behind — a reader needs both to know what the directory now holds.
   it("FL23c: a failed commit and a failed cleanup are reported together", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
@@ -891,13 +952,13 @@ describe("Tier FL — File", () => {
       'cannot write "notes.md": the destination is on a different filesystem.',
     );
     expect(output).toContain('cannot clean up "notes.md": permission denied.');
-    expect(output).toContain(
-      "The previous file is unchanged, and a temporary file beside it may remain.",
-    );
+    // The target's outcome, then the leftover — orthogonal, and both present.
+    expect(output).toContain(UNCERTAIN);
+    expect(output).toContain("A temporary file beside it may remain.");
     expect(output).not.toContain(PLANTED);
     expectNoAbsolutePaths(output, fixture);
 
-    // The old file survived the failed commit...
+    // The old file did survive this run's failed commit...
     expect(yield* read(fixture, "notes.md")).toBe("first");
     // ...and the temporary remains, which is what the diagnostic warned about.
     expect(yield* temporaries(fixture)).toHaveLength(1);

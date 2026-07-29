@@ -3902,8 +3902,8 @@ Writes land through a sibling temporary file and a rename, which also closes
 the one case resolution cannot: a **dangling** symlink has nothing to resolve,
 and `rename` replaces the link rather than following it wherever it points.
 Removal of the temporary is registered before it is written, so the write is
-covered by it rather than the other way round, and it runs on every exit
-including cancellation.
+covered by it rather than the other way round, and removal is attempted on every
+exit including cancellation.
 
 Reading a path that does not exist, or a directory, fails naming which it was.
 
@@ -3914,14 +3914,39 @@ it:
 
 - A failure or a cancellation **before** the rename leaves the previous target
   exactly as it was. Nothing has replaced it yet.
-- The rename **is** the commit. Once it begins, what an observer sees is the
-  complete old file or the complete new one — never a partial write.
+- The rename **is** the commit. What an observer sees is the complete old file
+  or the complete new one — never a partial write.
 - A commit is not a transaction. `rename` is a single filesystem call that
   cannot be interrupted once started, and a cancellation arriving after it has
   completed does not undo it.
 
 What is guaranteed is that no write is ever half visible, not that a finished
 write can be taken back.
+
+##### What a failed write can say about the target
+
+`rename` is an operation on the contextual Fs Api, and an `around` handler may
+do work on both sides of `next()`. So a rename that **throws** may have thrown
+before the underlying rename ran, or after it succeeded, and the component
+cannot tell which. The three outcomes it reports are exactly what it can
+observe:
+
+| Where the write stopped | What is reported |
+|---|---|
+| Preparation — writing the temporary | `The previous file is unchanged.` |
+| The rename threw | `Whether the replacement committed is unknown: the target holds either the complete previous content or the complete replacement, never a partial write.` |
+| The rename returned | `The file was written.` |
+
+Only the first and third are conclusions. The middle one is the honest answer:
+atomicity still holds, so it is one of two whole files, but which one is not
+knowable from here. Reporting that the previous file survived would be a guess,
+and wrong in exactly the case where a handler failed after committing.
+
+A failed cleanup is orthogonal and composes with any of the three, appending:
+
+```text
+A temporary file beside it may remain.
+```
 
 #### Diagnostics
 
@@ -3947,24 +3972,28 @@ implementation choose the text of a diagnostic by choosing what to throw.
 
 #### When cleanup fails
 
-The temporary is removed on every exit. If that removal fails, the document is
-told — a file it did not create may be sitting next to one it did, and that is
-its directory. The report names the document's own path, never the generated
-temporary:
+Removal of the temporary is attempted on every exit. If that removal fails the
+document is told — a file it did not create may be sitting next to one it did,
+and that is its directory. The report names the document's own path, never the
+generated temporary:
 
 ```text
-cannot clean up "request.md": permission denied.
+cannot clean up "request.md": permission denied. The file was written.
+A temporary file beside it may remain.
 ```
 
 A cleanup failure never replaces the write failure it may accompany. Both are
 collected rather than thrown — a destructor that threw would displace the
-failure it was unwinding — and reported together, followed by a sentence saying
-what the directory now holds. With both a failed commit and a failed cleanup:
+failure it was unwinding — and reported together, followed by the target's
+outcome and then the leftover sentence. With a rename that threw and a cleanup
+that failed:
 
 ```text
 cannot write "notes.md": the destination is on a different filesystem.
-cannot clean up "notes.md": permission denied. The previous file is unchanged,
-and a temporary file beside it may remain.
+cannot clean up "notes.md": permission denied. Whether the replacement
+committed is unknown: the target holds either the complete previous content or
+the complete replacement, never a partial write. A temporary file beside it may
+remain.
 ```
 
 "May remain" rather than "remains": the removal failing is exactly the evidence
@@ -5025,13 +5054,14 @@ visible warning blocks, collect into a separate error report).
 | FL18 | Destination resolved after children | A child that replaces the parent directory with an escaping symlink is caught, and nothing is created outside |
 | FL18b | Absolute path decided before children | A content-form absolute path is refused with the child's marker never written, the child's own failure absent from the output, and the rejected path unnamed |
 | FL18c | Lexical escape decided before children | The same for `..`, with nothing created outside |
-| FL19 | Failure inside the temporary write | The temporary is removed and the existing target is unchanged |
+| FL19 | Failure inside the temporary write | The temporary is removed, the existing target is unchanged, and the outcome says so |
 | FL20 | Cancellation before the commit | The same, when the run is halted rather than failed |
-| FL21 | Failed commit | A failing `rename` leaves the previous content and removes the temporary |
+| FL21 | Rename throws before `next` | The previous content stands, and the diagnostic reports the outcome as unknown rather than claiming it |
+| FL21b | Rename throws after `next` | The replacement is committed, and the same diagnostic is still factually correct — the error twin of FL22 |
 | FL22 | Cancellation after the commit | A completed replacement is not rolled back |
 | FL23 | Platform errors carry no path | `realpath`, `stat`, `readTextFile`, `ensureDir`, `writeTextFile`, and `rename` each throw an error whose message names an absolute path; the document receives an allowlisted phrase and no path |
-| FL23b | Cleanup failure is reported | A failing `remove` is reported against the document's own path, says the file was written, and names no temporary |
-| FL23c | Cleanup composes with the write failure | A failing `rename` and a failing `remove` are both reported, with the outcome sentence, and the temporary is observably left behind |
+| FL23b | Cleanup failure is reported | A failing `remove` is reported against the document's own path, says the file was written, appends the leftover sentence, and names no temporary |
+| FL23c | Cleanup composes with the write failure | A failing `rename` and a failing `remove` are both reported, followed by the unknown-outcome sentence and the leftover sentence, and the temporary is observably left behind |
 | FL24 | Regular file as a path component | `parent/child.txt` with `parent` a file fails for both forms without naming the resolved path |
 | FL25 | The working directory itself | `.` and a path normalizing to it are contained, and fail as a directory rather than as an escape |
 | FL26 | Adversarial error shapes | A `code` holding an absolute path, markup and a newline, an inherited key (`toString`), a planted path in both message and code, and an externally thrown `FileAccessError` all produce the generic phrase; nothing planted reaches the document and the diagnostic stays one line |

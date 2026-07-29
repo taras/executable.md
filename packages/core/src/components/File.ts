@@ -354,6 +354,12 @@ function* read(requested: string, target: string): Operation<string> {
 }
 
 /**
+ * Which step a write failed at, which is what decides what can be said about
+ * the target afterwards.
+ */
+type Step = "preparation" | "commit";
+
+/**
  * Replace `target` with exactly `content`.
  *
  * The content is whole by the time this runs — the children expanded first —
@@ -362,12 +368,20 @@ function* read(requested: string, target: string): Operation<string> {
  *
  * Everything up to the rename is preparation: a failure or a cancellation
  * there leaves the previous file untouched, because nothing has replaced it
- * yet. The rename is the commit. Once it begins the outcome is the complete
- * old file or the complete new one — never a partial write — but it is a
- * commit rather than a transaction. `rename` is a single filesystem call that
- * cannot be interrupted once started, and a cancellation arriving after it has
- * completed does not undo it. What is promised is that no write is ever half
- * visible, not that a finished write can be taken back.
+ * yet. The rename is the commit, and it is a commit rather than a transaction —
+ * `rename` is a single filesystem call that cannot be interrupted once started,
+ * and a cancellation arriving after it has completed does not undo it. What is
+ * promised is that no write is ever half visible, not that a finished write can
+ * be taken back.
+ *
+ * A rename that *throws* is the one case where the outcome cannot be inferred.
+ * `rename` is an operation on the contextual Fs Api, and an `around` handler
+ * legitimately does work on both sides of `next()` — so a throw may arrive
+ * before the underlying rename ran or after it succeeded, and there is no way
+ * from here to tell which. What still holds is atomicity: the target is the
+ * complete previous content or the complete replacement, never a partial write.
+ * Claiming the previous file survived would be a guess, and it would be wrong
+ * exactly when a handler failed after committing.
  *
  * Removal of the temporary is registered before it is written rather than
  * after. `writeTextFile` is where an interruption is most likely to land, and
@@ -397,12 +411,14 @@ function* write(requested: string, target: string, content: string): Operation<v
   // failure must not hide the fact that a temporary was left behind.
   const failed: string[] = [];
   const uncleaned: string[] = [];
+  let step: Step = "preparation";
 
   yield* scoped(function* () {
     const temporary = `${target}.xmd-${randomUUID().slice(0, 8)}.tmp`;
     yield* ensure(() => discard(requested, temporary, uncleaned));
     try {
       yield* writeTextFile(temporary, content);
+      step = "commit";
       yield* rename(temporary, target);
     } catch (error) {
       failed.push(sentence(requested, "write", error));
@@ -413,27 +429,41 @@ function* write(requested: string, target: string, content: string): Operation<v
     return;
   }
   throw new FileAccessError(
-    [...failed, ...uncleaned, outcome(failed.length > 0, uncleaned.length > 0)].join(" "),
+    [
+      ...failed,
+      ...uncleaned,
+      outcome(failed.length > 0 ? step : undefined),
+      ...(uncleaned.length > 0 ? [LEFTOVER] : []),
+    ].join(" "),
   );
 }
 
 /**
- * What a document is left with, which is not implied by the failures above.
+ * What can be said about the target, given where the write stopped.
  *
- * A write that failed before the commit changed nothing; one that failed after
- * it cannot have, because there is nothing after it. Either way the previous
- * file stands. A temporary that could not be removed is the part a reader would
- * otherwise have to infer from an unexplained file appearing beside their own.
+ * Only two of these are conclusions. A preparation failure changed nothing,
+ * and a rename that returned committed. A rename that threw is the honest
+ * "unknown": atomicity still holds, so the answer is one of two whole files,
+ * but which one is not observable from here.
  */
-function outcome(failed: boolean, uncleaned: boolean): string {
-  if (failed && uncleaned) {
-    return "The previous file is unchanged, and a temporary file beside it may remain.";
+function outcome(failedAt: Step | undefined): string {
+  if (failedAt === undefined) {
+    return "The file was written.";
   }
-  if (failed) {
+  if (failedAt === "preparation") {
     return "The previous file is unchanged.";
   }
-  return "The file was written, but a temporary file beside it may remain.";
+  return (
+    "Whether the replacement committed is unknown: the target holds either the " +
+    "complete previous content or the complete replacement, never a partial write."
+  );
 }
+
+/**
+ * Orthogonal to `outcome`: a temporary that could not be removed is a separate
+ * fact about the directory, and composes with any of the three.
+ */
+const LEFTOVER = "A temporary file beside it may remain.";
 
 /**
  * Remove the temporary, recording a sanitized sentence if it cannot be.

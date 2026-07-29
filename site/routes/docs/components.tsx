@@ -97,7 +97,9 @@ cat fixtures/request.md
 const FILE_BOTH_FAIL =
   `cannot write "notes.md": the destination is on a different filesystem.
 cannot clean up "notes.md": permission denied.
-The previous file is unchanged, and a temporary file beside it may remain.`;
+Whether the replacement committed is unknown: the target holds either the
+complete previous content or the complete replacement, never a partial write.
+A temporary file beside it may remain.`;
 
 const FILE_INLINE = `<File path="a.txt">one line</File>`;
 
@@ -422,6 +424,30 @@ export default define.page(function Components() {
         So the promise is that no write is ever half visible — not that a
         finished write can be taken back.
       </p>
+      <p>
+        Which means a failure can say three different things about your file,
+        and only two of them are conclusions. If <code>rename</code>{" "}
+        itself throws, the component genuinely cannot tell whether the commit
+        happened: filesystem middleware may do work on either side of the call
+        it wraps, so the throw may have arrived before the rename or after it
+        succeeded. It says so rather than guessing.
+      </p>
+      <ul>
+        <li>
+          Preparation failed — <em>The previous file is unchanged.</em>
+        </li>
+        <li>
+          The rename threw —{" "}
+          <em>
+            Whether the replacement committed is unknown: the target holds
+            either the complete previous content or the complete replacement,
+            never a partial write.
+          </em>
+        </li>
+        <li>
+          The rename returned — <em>The file was written.</em>
+        </li>
+      </ul>
 
       <h3>What a failure tells you</h3>
       <p>
