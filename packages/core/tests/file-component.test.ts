@@ -23,6 +23,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { FileAccessError } from "../src/components/File.ts";
 import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,6 +128,11 @@ function* entries(directory: string): Operation<string[]> {
   return (yield* until(readdir(directory))).filter((entry) => entry !== "doc.md").sort();
 }
 
+/** The temporaries a write left behind, named only by their suffix. */
+function* temporaries(fixture: Fixture): Operation<string[]> {
+  return (yield* entries(fixture.workspace)).filter((entry) => entry.endsWith(".tmp"));
+}
+
 /**
  * A containment diagnostic may name the path the document wrote and nothing
  * else — not the resolved workspace, and not what a symlink pointed at (§1.2).
@@ -148,6 +154,38 @@ function planted(code: string): Error {
 
 const READ_DOC = '<File path="request.md" />';
 const WRITE_DOC = '<File path="request.md">content</File>';
+
+/**
+ * Errors built to defeat sanitization rather than to resemble a real failure.
+ *
+ * `code` is as much middleware's to choose as `message` is, and a class is not
+ * evidence about a message: an externally constructed `FileAccessError` carries
+ * whatever text its author wanted in the document.
+ */
+const ADVERSARIAL: Array<{ name: string; error: () => unknown }> = [
+  {
+    name: "an absolute path as the code",
+    error: () => Object.assign(new Error("failed"), { code: PLANTED }),
+  },
+  {
+    name: "markup and newlines in the code",
+    error: () => Object.assign(new Error("failed"), { code: `--> ${PLANTED}\nENOENT` }),
+  },
+  {
+    name: "the path in both message and code",
+    error: () => Object.assign(new Error(`failed at ${PLANTED}`), { code: PLANTED }),
+  },
+  {
+    name: "an inherited key as the code",
+    // A lookup on an object literal answers for `toString`, handing back a
+    // function whose source would be interpolated.
+    error: () => Object.assign(new Error("failed"), { code: "toString" }),
+  },
+  {
+    name: "an externally thrown FileAccessError",
+    error: () => new FileAccessError(`cannot read "request.md": ${PLANTED}`),
+  },
+];
 
 /**
  * The engine reads and stats files of its own — the root document, component
@@ -210,8 +248,9 @@ const BOUNDARIES: Array<{
     name: "readTextFile",
     code: "EIO",
     source: READ_DOC,
-    // An unmapped code still says something, and a code cannot carry a path.
-    expected: 'cannot read "request.md": the filesystem reported EIO.',
+    // Not in the allowlist, so it selects the generic phrase. The code itself
+    // is never reproduced — see FL26.
+    expected: 'cannot read "request.md": the filesystem operation failed.',
     *install() {
       yield* API.Fs.around({
         *readTextFile([path], next) {
@@ -788,10 +827,10 @@ describe("Tier FL — File", () => {
     });
   }
 
-  // FL23b: the temporary's own cleanup is the one boundary with nothing to
-  // report. It runs during teardown — sometimes the teardown of a failure —
-  // and a throw there would surface a path the document never wrote.
-  it("FL23b: a failure removing the temporary is not reported", function* () {
+  // FL23b: a temporary that could not be removed is a fact about the
+  // document's directory, so it is reported — but named by the document's own
+  // path, because the temporary is generated and the document never chose it.
+  it("FL23b: a failure removing the temporary is reported without naming it", function* () {
     const fixture = yield* useFixture();
 
     const output = text(
@@ -809,10 +848,92 @@ describe("Tier FL — File", () => {
       ),
     );
 
-    expect(output.trim()).toBe("");
+    expect(output).toContain('cannot clean up "request.md": permission denied.');
+    // The commit succeeded, and saying so is the difference between this and a
+    // write that failed.
+    expect(output).toContain("The file was written, but a temporary file beside it may remain.");
     expect(output).not.toContain(PLANTED);
+    expectNoAbsolutePaths(output, fixture);
     expect(yield* read(fixture, "request.md")).toBe("content");
+    // Nothing was actually left behind: the commit consumed the temporary, so
+    // the removal that failed had nothing to remove. The report says "may
+    // remain" because the component cannot tell the two cases apart — a
+    // removal that failed is exactly the evidence it would need.
+    expect(yield* entries(fixture.workspace)).toEqual(["request.md"]);
   });
+
+  // FL23c: both halves fail. Neither may hide the other: the write's failure
+  // says the previous file stands, and the cleanup's says something was left
+  // behind — a reader needs both to know what the directory now holds.
+  it("FL23c: a failed commit and a failed cleanup are reported together", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const output = text(
+      yield* runWith(
+        fixture,
+        '<File path="notes.md">second</File>',
+        new InMemoryStream(),
+        function* () {
+          yield* API.Fs.around({
+            *rename() {
+              throw planted("EXDEV");
+            },
+            *remove() {
+              throw planted("EPERM");
+            },
+          });
+        },
+      ),
+    );
+
+    expect(output).toContain(
+      'cannot write "notes.md": the destination is on a different filesystem.',
+    );
+    expect(output).toContain('cannot clean up "notes.md": permission denied.');
+    expect(output).toContain(
+      "The previous file is unchanged, and a temporary file beside it may remain.",
+    );
+    expect(output).not.toContain(PLANTED);
+    expectNoAbsolutePaths(output, fixture);
+
+    // The old file survived the failed commit...
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+    // ...and the temporary remains, which is what the diagnostic warned about.
+    expect(yield* temporaries(fixture)).toHaveLength(1);
+  });
+
+  // FL26: `code` is middleware's to choose, so it selects a phrase and never
+  // builds one. Every shape below would put its content in the document if the
+  // code were interpolated, or if an error's class were taken as evidence that
+  // its message is safe.
+  for (const shape of ADVERSARIAL) {
+    it(`FL26 (${shape.name}): nothing planted reaches the document`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.workspace, TARGET), "existing");
+
+      const output = text(
+        yield* runWith(fixture, READ_DOC, new InMemoryStream(), function* () {
+          yield* API.Fs.around({
+            *readTextFile([path], next) {
+              if (!isTarget(path)) {
+                return yield* next(path);
+              }
+              throw shape.error();
+            },
+          });
+        }),
+      );
+
+      expect(output).toContain('cannot read "request.md": the filesystem operation failed.');
+      expect(output).not.toContain(PLANTED);
+      expect(output).not.toContain("secret");
+      // One diagnostic, on one line: a newline or a comment terminator in the
+      // planted text would otherwise split or escape it.
+      expect(output.split("ERROR:")).toHaveLength(2);
+      expect(output.trim().split("\n")).toHaveLength(1);
+    });
+  }
 
   // FL24: the reported reproduction. A regular file standing where a directory
   // is expected produces ENOTDIR from `stat`, whose message carries the

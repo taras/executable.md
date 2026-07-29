@@ -3933,11 +3933,44 @@ refusal exists to prevent.
 
 A platform error carries the path it failed on — `ENOTDIR: not a directory,
 stat '/private/var/…'` — so forwarding one would leak exactly what the rest of
-this withholds. Every filesystem call is wrapped, and what survives a failure is
-the errno code's meaning. A code is a short token from a fixed vocabulary and
-cannot contain a path. The temporary file's own removal reports nothing at all:
-it runs during teardown, sometimes the teardown of a failure already being
-reported, and the file is not one the document named.
+this withholds. Every filesystem call is wrapped, and nothing from the error it
+caught is reproduced: the errno code **selects** a phrase from a fixed
+allowlist, and an unrecognized code selects `the filesystem operation failed`.
+The code itself is never emitted. It is supplied by whatever implements the Fs
+Api, so it can hold a path, a newline, or a comment terminator as easily as
+`ENOENT` can.
+
+The error's class carries no authority either. A `FileAccessError` arriving
+from a wrapped call is replaced like any other, because a class says nothing
+about whether a message is safe to show — trusting one would let an Fs
+implementation choose the text of a diagnostic by choosing what to throw.
+
+#### When cleanup fails
+
+The temporary is removed on every exit. If that removal fails, the document is
+told — a file it did not create may be sitting next to one it did, and that is
+its directory. The report names the document's own path, never the generated
+temporary:
+
+```text
+cannot clean up "request.md": permission denied.
+```
+
+A cleanup failure never replaces the write failure it may accompany. Both are
+collected rather than thrown — a destructor that threw would displace the
+failure it was unwinding — and reported together, followed by a sentence saying
+what the directory now holds. With both a failed commit and a failed cleanup:
+
+```text
+cannot write "notes.md": the destination is on a different filesystem.
+cannot clean up "notes.md": permission denied. The previous file is unchanged,
+and a temporary file beside it may remain.
+```
+
+"May remain" rather than "remains": the removal failing is exactly the evidence
+the component would need to say which. A successful commit consumes the
+temporary, so a cleanup failure after one usually means there was nothing left
+to remove.
 
 #### Threat model
 
@@ -4996,11 +5029,13 @@ visible warning blocks, collect into a separate error report).
 | FL20 | Cancellation before the commit | The same, when the run is halted rather than failed |
 | FL21 | Failed commit | A failing `rename` leaves the previous content and removes the temporary |
 | FL22 | Cancellation after the commit | A completed replacement is not rolled back |
-| FL23 | Platform errors carry no path | `realpath`, `stat`, `readTextFile`, `ensureDir`, `writeTextFile`, and `rename` each throw an error whose message names an absolute path; the document receives the errno code's meaning and no path |
-| FL23b | Temporary cleanup is silent | A failing `remove` of the temporary produces no diagnostic and does not disturb the write |
+| FL23 | Platform errors carry no path | `realpath`, `stat`, `readTextFile`, `ensureDir`, `writeTextFile`, and `rename` each throw an error whose message names an absolute path; the document receives an allowlisted phrase and no path |
+| FL23b | Cleanup failure is reported | A failing `remove` is reported against the document's own path, says the file was written, and names no temporary |
+| FL23c | Cleanup composes with the write failure | A failing `rename` and a failing `remove` are both reported, with the outcome sentence, and the temporary is observably left behind |
 | FL24 | Regular file as a path component | `parent/child.txt` with `parent` a file fails for both forms without naming the resolved path |
 | FL25 | The working directory itself | `.` and a path normalizing to it are contained, and fail as a directory rather than as an escape |
-| FL26 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
+| FL26 | Adversarial error shapes | A `code` holding an absolute path, markup and a newline, an inherited key (`toString`), a planted path in both message and code, and an externally thrown `FileAccessError` all produce the generic phrase; nothing planted reaches the document and the diagnostic stays one line |
+| FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
 

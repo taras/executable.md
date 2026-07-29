@@ -32,9 +32,16 @@
  * path, the destination a symlink pointed at, a temporary file, and a rejected
  * absolute path are all withheld — §1.2 keeps absolute paths out of
  * diagnostics, and a containment failure is the last place to start reporting
- * them. Since a platform error carries the path it failed on, every filesystem
- * call is wrapped: what survives is the errno code, which is a fixed
- * vocabulary that cannot contain a path.
+ * them. A platform error carries the path it failed on, so every filesystem
+ * call is wrapped and nothing from the error it caught is reproduced: the
+ * errno code *selects* a phrase written here, and an unrecognized one selects
+ * the generic phrase. The code is never emitted, because whatever implements
+ * the Fs Api chooses it.
+ *
+ * A failed cleanup of the temporary is the one thing reported that the document
+ * did not ask for, and it is reported alongside the write's own outcome rather
+ * than instead of it — a file the document did not create may be sitting in its
+ * directory, which it cannot learn any other way.
  *
  * Every filesystem call goes through the contextual `API.Fs`, so a host can
  * observe or sandbox a document's own file access on the same terms as the
@@ -88,30 +95,37 @@ export class FileAccessError extends Error {
 }
 
 /**
- * What a failed filesystem call may be reported as.
+ * Every phrase a failed filesystem call may be reported as.
  *
- * The errno code and nothing else. A platform error message names the path it
- * failed on — `ENOTDIR: not a directory, stat '/private/var/…'` — which is the
- * resolved path §1.2 keeps out of diagnostics, and for a write it can be the
- * temporary file the document never named. A code is a short token from a
- * fixed vocabulary, so it says what went wrong while carrying nothing.
+ * An allowlist, and the whole vocabulary. A platform error message names the
+ * path it failed on — `ENOTDIR: not a directory, stat '/private/var/…'` — which
+ * is the resolved path §1.2 keeps out of diagnostics, and for a write it can be
+ * the temporary file the document never named. Nothing from the error is
+ * reproduced: the code selects a phrase written here, and an unrecognized code
+ * selects the generic one.
+ *
+ * A `Map` rather than an object, because a lookup on an object literal answers
+ * for inherited keys — `REASONS["toString"]` would hand back a function whose
+ * source would then be interpolated into a diagnostic.
  */
-const REASONS: Readonly<Record<string, string>> = {
-  ENOENT: "no such file or directory",
-  ENOTDIR: "a component of the path is not a directory",
-  EISDIR: "it is a directory",
-  ENOTEMPTY: "the directory is not empty",
-  EACCES: "permission denied",
-  EPERM: "the operation is not permitted",
-  EROFS: "the filesystem is read-only",
-  ELOOP: "too many levels of symbolic links",
-  ENAMETOOLONG: "the path is too long",
-  ENOSPC: "no space left on the device",
-  EDQUOT: "the disk quota is exhausted",
-  EXDEV: "the destination is on a different filesystem",
-  EBUSY: "the file is in use",
-  EMFILE: "too many open files",
-};
+const REASONS: ReadonlyMap<string, string> = new Map([
+  ["ENOENT", "no such file or directory"],
+  ["ENOTDIR", "a component of the path is not a directory"],
+  ["EISDIR", "it is a directory"],
+  ["ENOTEMPTY", "the directory is not empty"],
+  ["EACCES", "permission denied"],
+  ["EPERM", "permission denied"],
+  ["EROFS", "the filesystem is read-only"],
+  ["ELOOP", "too many levels of symbolic links"],
+  ["ENAMETOOLONG", "the path is too long"],
+  ["ENOSPC", "no space left on the device"],
+  ["EDQUOT", "the disk quota is exhausted"],
+  ["EXDEV", "the destination is on a different filesystem"],
+  ["EBUSY", "the file is in use"],
+  ["EMFILE", "too many open files"],
+]);
+
+const UNRECOGNIZED = "the filesystem operation failed";
 
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) {
@@ -121,21 +135,35 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+/**
+ * A phrase for a failure, chosen from `REASONS` or the generic one.
+ *
+ * `code` is attacker-supplied as far as this component is concerned — anything
+ * installed as Fs middleware can put a path, markup, or a newline in it — so it
+ * is used to select a phrase and never to build one.
+ */
 function reason(error: unknown): string {
   const code = errorCode(error);
   if (code === undefined) {
-    return "the filesystem operation failed";
+    return UNRECOGNIZED;
   }
-  return REASONS[code] ?? `the filesystem reported ${code}`;
+  return REASONS.get(code) ?? UNRECOGNIZED;
+}
+
+/** One sanitized sentence: the document's own path, and an allowlisted phrase. */
+function sentence(requested: string, verb: string, error: unknown): string {
+  return `cannot ${verb} "${requested}": ${reason(error)}.`;
 }
 
 /**
- * Run a filesystem operation, converting whatever it throws into a diagnostic
- * that names only the path the document wrote.
+ * Run a filesystem operation, replacing whatever it throws with a diagnostic
+ * built only from the path the document wrote and an allowlisted phrase.
  *
- * A `FileAccessError` passes through: it was raised by this component and is
- * already safe. Anything else came from the platform and is replaced rather
- * than wrapped, because wrapping would keep the message that motivated this.
+ * Nothing is passed through, including a `FileAccessError`. This component's
+ * own checks throw outside guarded calls, so an error surfacing from inside one
+ * came from the Api — and an error's class says nothing about whether its
+ * message is safe to show. Trusting one would let middleware choose the text of
+ * a diagnostic by choosing what to throw.
  *
  * Cancellation is not a thrown error in Effection — halting resumes the
  * generator through `return()` — so this never converts a halt into a failure.
@@ -144,10 +172,7 @@ function* guard<T>(requested: string, verb: string, operation: Operation<T>): Op
   try {
     return yield* operation;
   } catch (error) {
-    if (error instanceof FileAccessError) {
-      throw error;
-    }
-    throw new FileAccessError(`cannot ${verb} "${requested}": ${reason(error)}.`);
+    throw new FileAccessError(sentence(requested, verb, error));
   }
 }
 
@@ -349,6 +374,11 @@ function* read(requested: string, target: string): Operation<string> {
  * a cleanup installed on the far side of it would not run for the one failure
  * it exists to handle. `remove` is forced, so registering it for a file that
  * was never created — or one the rename has already consumed — is a no-op.
+ *
+ * A removal that does fail is reported, because a file the document did not
+ * create may be left in its directory. It is reported *alongside* whatever the
+ * write did rather than instead of it: both outcomes are collected here and
+ * raised together, so neither hides the other.
  */
 function* write(requested: string, target: string, content: string): Operation<void> {
   const info = yield* guard(requested, "write", stat(target));
@@ -361,27 +391,62 @@ function* write(requested: string, target: string, content: string): Operation<v
 
   yield* guard(requested, "write", ensureDir(dirname(target)));
 
+  // Both halves are collected rather than thrown, then reported together. A
+  // destructor that threw would replace the failure it is unwinding, or be
+  // aggregated into it in a shape a document cannot read; and the write's own
+  // failure must not hide the fact that a temporary was left behind.
+  const failed: string[] = [];
+  const uncleaned: string[] = [];
+
   yield* scoped(function* () {
     const temporary = `${target}.xmd-${randomUUID().slice(0, 8)}.tmp`;
-    yield* ensure(() => discard(temporary));
-    yield* guard(requested, "write", writeTextFile(temporary, content));
-    yield* guard(requested, "write", rename(temporary, target));
+    yield* ensure(() => discard(requested, temporary, uncleaned));
+    try {
+      yield* writeTextFile(temporary, content);
+      yield* rename(temporary, target);
+    } catch (error) {
+      failed.push(sentence(requested, "write", error));
+    }
   });
+
+  if (failed.length === 0 && uncleaned.length === 0) {
+    return;
+  }
+  throw new FileAccessError(
+    [...failed, ...uncleaned, outcome(failed.length > 0, uncleaned.length > 0)].join(" "),
+  );
 }
 
 /**
- * Remove the temporary, and stay quiet about it either way.
+ * What a document is left with, which is not implied by the failures above.
  *
- * This runs during teardown, including the teardown of a write that is already
- * failing. A throw here would replace or aggregate that failure with one whose
- * message names the temporary file — a path the document never wrote and this
- * component does not report. There is nothing a document could do about it in
- * any case: the temporary is not its file.
+ * A write that failed before the commit changed nothing; one that failed after
+ * it cannot have, because there is nothing after it. Either way the previous
+ * file stands. A temporary that could not be removed is the part a reader would
+ * otherwise have to infer from an unexplained file appearing beside their own.
  */
-function* discard(temporary: string): Operation<void> {
+function outcome(failed: boolean, uncleaned: boolean): string {
+  if (failed && uncleaned) {
+    return "The previous file is unchanged, and a temporary file beside it may remain.";
+  }
+  if (failed) {
+    return "The previous file is unchanged.";
+  }
+  return "The file was written, but a temporary file beside it may remain.";
+}
+
+/**
+ * Remove the temporary, recording a sanitized sentence if it cannot be.
+ *
+ * Runs during teardown, sometimes the teardown of a write that is already
+ * failing, so it records rather than throws — see `write`. What it records
+ * names the document's own path: the temporary is generated, and a document
+ * that never chose that name cannot be shown it.
+ */
+function* discard(requested: string, temporary: string, uncleaned: string[]): Operation<void> {
   try {
     yield* remove(temporary, { force: true });
-  } catch {
-    // Deliberately unreported — see above.
+  } catch (error) {
+    uncleaned.push(sentence(requested, "clean up", error));
   }
 }

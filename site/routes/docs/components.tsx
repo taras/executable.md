@@ -94,6 +94,11 @@ cat fixtures/request.md
 \`\`\`
 </TempDir>`;
 
+const FILE_BOTH_FAIL =
+  `cannot write "notes.md": the destination is on a different filesystem.
+cannot clean up "notes.md": permission denied.
+The previous file is unchanged, and a temporary file beside it may remain.`;
+
 const FILE_INLINE = `<File path="a.txt">one line</File>`;
 
 const FILE_BLOCK = `<File path="a.txt">
@@ -427,13 +432,24 @@ export default define.page(function Components() {
       </p>
       <p>
         That includes errors from the filesystem itself, which name the path
-        they failed on. Every call is wrapped, so what reaches your document is
-        what the error code means —{" "}
+        they failed on. Every call is wrapped, and nothing from the error is
+        reproduced: its code <em>selects</em> a phrase from a fixed list —{" "}
         <em>
           a component of the path is not a directory
         </em>{" "}
-        — rather than the platform's own message.
+        — and an unrecognized code selects{" "}
+        <em>the filesystem operation failed</em>. The code is never printed,
+        because whatever implements the filesystem can put a path or a newline
+        in it as easily as <code>ENOENT</code>.
       </p>
+      <p>
+        If removing the temporary fails, you are told — a file you did not
+        create may be sitting next to one you did. That report names the path
+        you wrote, never the generated temporary, and it never replaces a write
+        failure it accompanies. When both fail you get both, plus a sentence
+        saying what the directory now holds:
+      </p>
+      <CodeBlock>{FILE_BOTH_FAIL}</CodeBlock>
 
       <h3>What this is not</h3>
       <p>
