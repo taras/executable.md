@@ -136,6 +136,10 @@ interface OutcomeEntry {
   outcome: Json;
 }
 
+function closeResults(events: DurableEvent[]): string[] {
+  return events.filter((event) => event.type === "close").map((event) => event.result.status);
+}
+
 function outcomeRecords(events: DurableEvent[]): OutcomeEntry[] {
   return events
     .filter((event) => event.type === "yield" && event.description.type === "loop")
@@ -944,7 +948,7 @@ describe("Tier LOOP — execution records", () => {
     expect(outcomeRecords(run.events)[0]?.outcome).toBe("exhausted");
   });
 
-  it("LOOP46: cancellation records the iterations it reached and no outcome", function* () {
+  it("LOOP46: an interrupted loop has iteration entries and no terminal record", function* () {
     const DOC = [
       "```js eval",
       "const seen = [];",
@@ -978,9 +982,145 @@ describe("Tier LOOP — execution records", () => {
       return stream.snapshot();
     });
 
+    // Both entered iterations are on the record, under their zero-based
+    // identities. The second one's body never completed — an iteration entry
+    // records entry, not completion.
     expect(iterationRecords(events).map((entry) => entry.iteration)).toEqual([0, 1]);
-    // Absence is the record: an interrupted loop never reached its outcome.
+    expect(evalNames(events)).toHaveLength(2);
+
+    // The loop never finished, so it wrote no terminal record, and the
+    // execution never finished, so it wrote no root Close.
     expect(outcomeRecords(events)).toHaveLength(0);
+    expect(events.filter((event) => event.type === "close")).toHaveLength(0);
+
+    // Observably different from both kinds of finished execution. What the
+    // journal does not say is why this one stopped: a cancellation and a
+    // crashed process leave exactly this state.
+    const completed = yield* runDoc("<Loop max={2}>x</Loop>");
+    const failed = yield* runDoc(
+      ["<Loop max={2}>", "<Missing />", "</Loop>", "", "<Output>", "d", "</Output>"].join("\n"),
+    );
+
+    expect(outcomeRecords(completed.events)[0]?.outcome).toBe("exhausted");
+    expect(closeResults(completed.events)).toEqual(["ok"]);
+    expect(outcomeRecords(failed.events)[0]?.outcome).toBe("error");
+    expect(closeResults(failed.events)).toEqual(["err"]);
+    expect(closeResults(events)).toEqual([]);
+  });
+
+  /**
+   * Resumption from an interrupted loop, through the supported recovery path:
+   * the incomplete journal is read back and handed to a new execution.
+   *
+   * `stall` arms the interruption on the first run and disarms it on the
+   * second, so the cut lands inside a known iteration without the document
+   * having to behave differently when it resumes.
+   */
+  it("LOOP49: an interrupted loop resumes and finishes on the recorded identities", function* () {
+    const DOC = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    stall:",
+      "      type: boolean",
+      "  required: [stall]",
+      "  additionalProperties: false",
+      "---",
+      "",
+      "```js eval",
+      "const entered = [];",
+      "```",
+      '<Loop name="repair" max={4}>',
+      "",
+      "```js eval",
+      "entered.push(1);",
+      "output('STEP');",
+      "if (stall && entered.length === 3) { yield* suspend(); }",
+      "```",
+      "",
+      "</Loop>",
+    ].join("\n");
+
+    // ── Run one: interrupted inside iteration 2 ──
+    const interrupted = yield* scoped(function* () {
+      const stream = new InMemoryStream();
+      const enteredThird = withResolvers<void>();
+      stream.onAppend = (event) => {
+        if (
+          event.type === "yield" &&
+          event.description.type === "loop_iteration" &&
+          recordedValue(event).iteration === 2
+        ) {
+          enteredThird.resolve();
+        }
+      };
+      yield* useStubFs({ "test.md": DOC });
+      yield* useEchoExec();
+
+      const task = yield* spawn(function* () {
+        yield* collect(yield* execute({ path: "test.md", stream, props: { stall: true } }));
+      });
+      yield* enteredThird.operation;
+      yield* task.halt();
+      return stream.snapshot();
+    });
+
+    const cutIterations = iterationRecords(interrupted);
+    expect(cutIterations.map((entry) => entry.iteration)).toEqual([0, 1, 2]);
+    expect(cutIterations.every((entry) => entry.loop === "repair")).toBe(true);
+    // Iteration 2 was entered but its body never completed, so it journaled
+    // nothing: one binding block plus two finished iterations.
+    expect(evalNames(interrupted)).toHaveLength(3);
+    expect(outcomeRecords(interrupted)).toHaveLength(0);
+    expect(closeResults(interrupted)).toEqual([]);
+
+    // ── Run two: the incomplete journal, read back and resumed ──
+    const resumed = yield* scoped(function* () {
+      const stream = new InMemoryStream(interrupted);
+      yield* useStubFs({ "test.md": DOC });
+      yield* useEchoExec();
+      const execution = yield* execute({
+        path: "test.md",
+        stream,
+        props: { stall: false },
+      });
+      const output = asText(yield* collect(execution));
+      return {
+        output,
+        events: stream.snapshot(),
+        appended: stream.appendCount,
+      };
+    });
+
+    // The incomplete journal was accepted: a divergence or a stale entry would
+    // have failed the execution rather than producing output.
+    expect(resumed.output.match(/STEP/g)).toHaveLength(4);
+    expect(resumed.appended).toBeGreaterThan(0);
+
+    // Recorded iteration entries replayed in order, and the loop kept the same
+    // identity it was interrupted under.
+    const finalIterations = iterationRecords(resumed.events);
+    expect(finalIterations.map((entry) => entry.name)).toEqual([
+      ...cutIterations.map((entry) => entry.name),
+      `${cutIterations[0]?.name.replace(":iteration:0", ":iteration:3")}`,
+    ]);
+    expect(finalIterations.map((entry) => entry.iteration)).toEqual([0, 1, 2, 3]);
+
+    // The interrupted iteration's body reran live, because an interrupted
+    // durable operation journals nothing to replay from.
+    expect(evalNames(resumed.events)).toHaveLength(5);
+    expect(evalNames(resumed.events).slice(0, 3)).toEqual(evalNames(interrupted));
+
+    // Exactly one terminal record, with the correct outcome and count, on the
+    // identity the interrupted run established.
+    const loopId = cutIterations[0]?.name.replace(":iteration:0", "") ?? "";
+    expect(outcomeRecords(resumed.events)).toEqual([
+      { name: loopId, status: "ok", iterations: 4, outcome: "exhausted" },
+    ]);
+
+    // The resumed execution finished.
+    expect(closeResults(resumed.events)).toEqual(["ok"]);
   });
 
   it("LOOP47: nested loops record distinct identities per entry", function* () {

@@ -72,6 +72,11 @@ loop_iteration  loop:4:iteration:1   { "iteration": 1 }
 loop_iteration  loop:4:iteration:2   { "iteration": 2 }
 loop            loop:4               { "iterations": 3, "outcome": "break" }`;
 
+const INTERRUPTED =
+  `Completed    terminal entry, exhausted or break   root close ok
+Failed       terminal entry, error                root close err
+Interrupted  iteration entries only               no root close`;
+
 const PROJECTED_BREAK = `<Loop max={3}>
 <Panel title="Attempt">
 <Attempt as="attempt" />
@@ -224,25 +229,47 @@ export default define.page(function ControlFlow() {
       <p>
         A loop writes its own entries rather than leaving you to reconstruct
         what it did from whatever the body happened to record. Each iteration
-        gets an entry before it runs, carrying its zero-based identity, so an
-        empty iteration is on the record exactly like a busy one. When the loop
-        finishes it writes one more entry saying how: <code>exhausted</code>,
-        {" "}
-        <code>break</code>, or <code>error</code>{" "}
-        — with the number of iterations that began.
+        gets an entry <em>before</em>{" "}
+        it runs, carrying its zero-based identity — so the entry means the
+        iteration was entered, not that its body finished, and an empty
+        iteration is on the record exactly like a busy one. When the loop
+        finishes it writes one terminal entry saying how:{" "}
+        <code>exhausted</code>, <code>break</code>, or <code>error</code>{" "}
+        — with the number of iterations entered.
       </p>
       <CodeBlock>{RECORDS}</CodeBlock>
       <p>
         That is what separates a loop that broke on its final iteration from one
         that exhausted the same bound: identical iteration entries, different
-        outcome. A cancelled loop writes no outcome entry at all — its absence
-        is the record, and the execution's own close says whether the run was
-        cancelled or crashed.
+        terminal outcome. The identity is internal — the loop keeps no counter
+        your document can read. It exists so a run can resume into the iteration
+        it stopped in, not so the body can branch on it.
+      </p>
+
+      <h2>Interrupted runs</h2>
+      <p>
+        A terminal entry means the loop finished. A loop that is{" "}
+        <strong>interrupted</strong>{" "}
+        — the run was cancelled, or the process died — has iteration entries and
+        no terminal entry. Nothing is written on the way down on purpose: an
+        entry appended during teardown would land after the iteration entries a
+        resumed run still has to replay, and would break the resume.
       </p>
       <p>
-        The identity is internal. The loop keeps no counter your document can
-        read — it exists so a run can replay into the iteration it was
-        interrupted in, not so the body can branch on it.
+        The same holds one level up. A run that finishes ends with a root close:
+        {" "}
+        <code>ok</code> on success, <code>err</code>{" "}
+        for a document failure, which a loop's <code>error</code>{" "}
+        outcome precedes. An interrupted run has no root close at all.
+      </p>
+      <CodeBlock>{INTERRUPTED}</CodeBlock>
+      <p>
+        So the journal tells you whether a run finished, and deliberately does
+        not tell you why an unfinished one stopped — a cancellation and a crash
+        leave the same durable state. They mean the same thing to a reader and
+        take the same recovery path: hand the journal to a new run, which
+        replays what completed and executes the rest live. Which one happened is
+        runtime knowledge, not journal state.
       </p>
     </>
   );

@@ -1206,13 +1206,13 @@ function* loopBound(segment: ComponentElement): Operation<LoopBound> {
  * loop by propagating out of it, and under a collecting one the diagnostic
  * renders and the next iteration runs.
  *
- * The loop writes its own execution records: one entry per iteration that
- * begins, carrying that iteration's zero-based identity, and one entry for how
- * the loop finished. They are written by the loop rather than derived from
- * whatever the body happened to journal, so an empty body is on the record
+ * The loop writes its own execution records: one entry per iteration entered,
+ * carrying that iteration's zero-based identity, and one terminal entry saying
+ * the loop finished and how. They are written by the loop rather than derived
+ * from whatever the body happened to journal, so an empty body is on the record
  * exactly like a busy one, and exhaustion, `<Break>` and failure are read from
- * the outcome entry instead of inferred. Cancellation is the one outcome with
- * no entry — see `LoopOutcome`.
+ * the terminal entry instead of inferred. An interrupted loop has no terminal
+ * entry — see `LoopOutcome`.
  */
 function* expandLoop(
   segment: ComponentElement,

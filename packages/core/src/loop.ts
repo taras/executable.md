@@ -28,22 +28,36 @@ export const ActiveLoop: Context<LoopFrame | undefined> = createContext<LoopFram
 );
 
 /**
- * How a loop finished. Cancellation is deliberately absent: a cancelled loop
- * writes no outcome record at all, because a record appended during teardown
- * would sit after the iteration entries a resumed run still has to replay and
- * would make that run diverge. Absence is the record — an execution whose loop
- * has iteration entries and no outcome entry was interrupted, and the
- * execution's own Close says whether that was cancellation or a crash.
+ * How a loop finished. The three values are the only ways a loop reaches an
+ * end, so a `loop` record is terminal: writing one means the loop finished.
+ *
+ * A loop that is interrupted — the document was cancelled, or the process died
+ * — writes no terminal record. That is not a gap to fill. A record appended
+ * while the loop is being torn down would sit after the iteration records a
+ * resumed run still has to replay, and would make that run diverge, so
+ * interrupting a loop deliberately leaves the journal without one. The durable
+ * journal does not say why a loop was interrupted, and does not need to:
+ * cancellation and a crash mean the same thing to a reader — the execution did
+ * not finish — and take the same recovery path.
  */
 export type LoopOutcome = "exhausted" | "break" | "error";
 
+/** A loop's terminal record. */
 export interface LoopRecord extends Record<string, Json> {
-  /** Iterations that began, so a break and an exhaustion of the same length differ only in `outcome`. */
+  /**
+   * Iterations **entered**, not iterations that ran to completion. A loop that
+   * breaks on its final iteration and one that exhausts the same bound record
+   * the same count and differ only in `outcome`.
+   */
   iterations: number;
   outcome: LoopOutcome;
 }
 
-/** One iteration's zero-based identity, as it appears in the journal. */
+/**
+ * That an iteration was **entered**, under its zero-based identity. It says
+ * nothing about whether the body completed: the record is written before the
+ * body runs, so an iteration the document was interrupted in has one too.
+ */
 export interface IterationRecord extends Record<string, Json> {
   iteration: number;
 }
@@ -78,11 +92,11 @@ function* append(description: EffectDescription, value: Json): Workflow<void> {
 }
 
 /**
- * Record that an iteration began, under its zero-based identity.
+ * Record that an iteration was entered, under its zero-based identity.
  *
- * Written before the body, so every iteration is on the record whatever the
- * body contains — an empty body still produces an entry, and an exhausted loop
- * is distinguishable from one that broke immediately.
+ * Written before the body, so the record never depends on what the body
+ * contains: an iteration with an empty body produces one, and so does an
+ * iteration the document was interrupted in.
  *
  * Expansion driven without a journal — no durable context on the scope —
  * records nothing and behaves identically otherwise.
@@ -95,7 +109,7 @@ export function* recordIteration(identity: LoopIdentity, iteration: number): Ope
   yield* append(describe(identity, `iteration:${iteration}`), record);
 }
 
-/** Record how the loop finished. */
+/** Record that the loop finished, and how. */
 export function* recordOutcome(identity: LoopIdentity, record: LoopRecord): Operation<void> {
   if (!(yield* journaling())) {
     return;

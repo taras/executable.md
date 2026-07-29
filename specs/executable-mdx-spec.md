@@ -3099,8 +3099,8 @@ Two kinds, both ordinary durable entries on the document's coroutine:
 
 | Entry | Description | Value |
 | --- | --- | --- |
-| Iteration | `{ type: "loop_iteration", name: "loop:<id>:iteration:<n>", loop? }` | `{ iteration: <n> }` |
-| Outcome | `{ type: "loop", name: "loop:<id>", loop? }` | `{ iterations, outcome }` |
+| Iteration entry | `{ type: "loop_iteration", name: "loop:<id>:iteration:<n>", loop? }` | `{ iteration: <n> }` |
+| Terminal | `{ type: "loop", name: "loop:<id>", loop? }` | `{ iterations, outcome }` |
 
 `<id>` comes from the block ID counter (§6.1), so every `<Loop>` an execution
 enters has a distinct identity — including each entry into a loop nested in
@@ -3109,14 +3109,15 @@ optional `loop` field carries the author's `name`; like every field beyond
 `type` and `name` it is stored for readers and never compared during divergence
 detection.
 
-An iteration entry is written **before** the body, so the record does not
-depend on what the body contains: an iteration whose body is empty is on the
-record exactly like a busy one. `iteration` is the iteration's **zero-based
-identity**. It is internal — it is not a binding, a prop, or a value the body
-can read.
+**An iteration entry records that an iteration was entered.** It does not mean
+the body completed: the entry is written *before* the body runs, so the record
+never depends on what the body contains. An iteration whose body is empty has
+one, and so does the iteration an interrupted document stopped inside.
+`iteration` is the iteration's **deterministic, zero-based identity**, and it is
+internal — not a binding, not a prop, not a value the body can read.
 
-The outcome entry is written when the loop finishes, and `outcome` is how it
-finished:
+**The `loop` entry is terminal.** It is written when the loop finishes, it
+exists only for the three ways a loop reaches an end, and `outcome` says which:
 
 | `outcome` | Means |
 | --- | --- |
@@ -3124,18 +3125,36 @@ finished:
 | `break` | A `<Break>` ended it. |
 | `error` | A failure left the loop, under a throwing policy. |
 
-`iterations` counts the iterations that began, so a loop that breaks on its
-final iteration and one that exhausts the same bound have identical iteration
-entries and differ only in `outcome`.
-
-**Cancellation writes no outcome entry**, deliberately. An entry appended while
-the loop is being torn down would sit after the iteration entries a resumed run
-still has to replay, and would make that run diverge. Absence is the record: a
-loop with iteration entries and no outcome entry did not finish, and the
-execution's own `Close` says whether that was cancellation or a crash.
+`iterations` counts the iterations that were **entered**, so a loop that breaks
+on its final iteration and one that exhausts the same bound have identical
+iteration entries and differ only in `outcome`.
 
 A collecting policy is not a loop failure. The diagnostic is content, the loop
 keeps iterating, and the outcome is `exhausted` or `break` as usual.
+
+**An interrupted loop has iteration entries and no terminal entry.** This is
+deliberate rather than a gap: an entry appended while the loop is being torn
+down would sit after the iteration entries a resumed run still has to replay,
+and would make that run diverge — so nothing is written, and the journal stays
+resumable.
+
+At execution level the same shape holds. A run that finishes ends with a root
+`Close`: `ok` on success, `err` for a document failure, which a loop's `error`
+outcome precedes. **An interrupted execution has no root `Close` at all.**
+
+| Durable state | Loop entries | Root `Close` |
+| --- | --- | --- |
+| Completed | terminal entry, `exhausted` or `break` | `ok` |
+| Failed | terminal entry, `error` | `err` |
+| Interrupted | iteration entries only | absent |
+
+The journal therefore says whether an execution finished, and does **not** say
+why an unfinished one stopped. Cancellation and a process crash leave the same
+durable state, because they mean the same thing to a reader — the execution did
+not finish — and take the same recovery path: resume from the journal, which
+replays what completed and runs the rest live. Which of the two happened is
+runtime knowledge held by whoever cancelled or observed the process, not
+journal state.
 
 #### `<Break>` loop exit
 
@@ -5264,14 +5283,15 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP38 | Repeated import (execution) | The body's component runs once per iteration end to end |
 | LOOP39 | Partial replay | Truncated at the loop's second iteration entry, the journal replays exactly one iteration, runs the remaining two live onto the same identities, reproduces the output, and records `exhausted` |
 | LOOP40 | Break from a binding | A condition computed in the body ends the document's loop |
-| LOOP41 | Empty-body records | Three iteration entries and an `exhausted` outcome, with no body to journal |
-| LOOP42 | Immediate break records | One iteration entry and a `break` outcome — distinct from empty exhaustion |
+| LOOP41 | Empty-body records | Three iteration entries and an `exhausted` terminal record, with no body to journal |
+| LOOP42 | Immediate break records | One iteration entry and a `break` terminal record — distinct from empty exhaustion |
 | LOOP43 | Final-iteration break | Identical iteration entries to an exhausted loop; only `outcome` differs |
-| LOOP44 | Failure records | A throwing policy records `error` with the iterations reached, and the execution Close is `err` |
-| LOOP45 | Collecting policy is not failure | The diagnostic renders and the outcome is `exhausted` |
-| LOOP46 | Cancellation | Iteration entries for what began, and no outcome entry |
+| LOOP44 | Failure records | A throwing policy records an `error` terminal record with the iterations entered, and the execution ends with root `Close(err)` |
+| LOOP45 | Collecting policy is not failure | The diagnostic renders and the terminal outcome is `exhausted` |
+| LOOP46 | Interrupted state | Iteration entries for the iterations entered, no terminal loop record, and no root `Close` — observably different from a completed run (`ok`) and a failed one (`err`), without saying why it stopped |
 | LOOP47 | Nested identities | Each entry into a nested loop records its own distinct identity |
 | LOOP48 | Identity is internal | `{iteration}` resolves to nothing in the body |
+| LOOP49 | Resumption | An interrupted journal is accepted by a new execution: the recorded iteration entries replay in order, the interrupted iteration's body reruns live because it journaled nothing, the remaining iterations run live, the loop and iteration identities are unchanged, exactly one terminal record is written with `exhausted` and the right count, and the run ends with root `Close(ok)` |
 
 ### Tier SC — Sample component (integration)
 
