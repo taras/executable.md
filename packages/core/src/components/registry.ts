@@ -26,6 +26,9 @@ const BUILT_IN: ReadonlyMap<string, FunctionComponentDefinition> = new Map<
     {
       kind: "function",
       name: "TempDir",
+      // Synthetic: the definition shape carries a path, but a built-in has
+      // no file to name. Nothing resolves against it and nothing reads it
+      // back — it exists so diagnostics can say where the component came from.
       path: "<built-in>/TempDir",
       props: parseJsonObject(tempDirProps),
       fn: TempDir,

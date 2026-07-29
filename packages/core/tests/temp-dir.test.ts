@@ -8,15 +8,26 @@
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, resource, scoped, sleep, until } from "effection";
+import {
+  ensure,
+  race,
+  resource,
+  scoped,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 import type { Operation } from "effection";
 import { cwd, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
+import { useTemporaryDirectory } from "../src/components/TempDir.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, readdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -59,6 +70,29 @@ function directories(output: Json): string[] {
   return [...String(output).matchAll(/\S*xmd-tempdir-\S+/g)].map((match) => match[0]);
 }
 
+/** The component names the journal recorded an import for, in order. */
+function* imported(stream: InMemoryStream): Operation<string[]> {
+  const events = yield* stream.readAll();
+  const names: string[] = [];
+  for (const event of events) {
+    if (event.type === "yield" && event.description.type === "import_component") {
+      names.push(String(event.description.name));
+    }
+  }
+  return names;
+}
+
+/**
+ * Every temporary directory currently on disk. The leak this guards against is
+ * a directory nobody holds a reference to, so the only way to see one is to
+ * look at the root they are all created under.
+ */
+function* temporaries(): Operation<string[]> {
+  const root = yield* until(realpath(tmpdir()));
+  const entries = yield* until(readdir(root));
+  return entries.filter((entry) => entry.startsWith("xmd-tempdir-")).sort();
+}
+
 /** The lines a block wrote to the fixture before it failed or was killed. */
 function* recorded(dir: string, name: string): Operation<string[]> {
   return (yield* readTextFile(join(dir, name))).trim().split("\n");
@@ -69,12 +103,22 @@ const PWD = "```sh exec\npwd\n```";
 describe("Tier TD — TempDir", () => {
   beforeAll(() => useTempFileCompiler());
 
-  // TD1: the component is core's, not the document's — no search path, no file.
-  it("TD1: resolves with no component directory and no file on disk", function* () {
+  // TD1: the component is core's, not the document's — no search path, no file,
+  // and nothing to journal. The root document is still imported, so the
+  // assertion is about which names appear, not that the entry type is absent.
+  it("TD1: resolves with no component directory and journals no import", function* () {
     const dir = yield* useFixture();
     yield* writeDocument(dir, "<TempDir>inside</TempDir>");
 
-    expect(String(yield* run(dir))).toContain("inside");
+    const stream = new InMemoryStream();
+    const output = yield* scoped(function* () {
+      return yield* collect(
+        yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+      );
+    });
+
+    expect(String(output)).toContain("inside");
+    expect(yield* imported(stream)).toEqual(["__root__"]);
   });
 
   // TD2: the whole process contract, asserted from inside the subprocess.
@@ -361,6 +405,87 @@ describe("Tier TD — TempDir", () => {
     expect(error).toBeInstanceOf(StaleInputError);
     expect(String(error?.message)).toContain("cannot replay the recorded exec effect");
     // And expansion stopped: the block after </TempDir> never ran.
+    expect(yield* exists(after)).toBe(false);
+  });
+
+  // TD15: acquisition and its cleanup are one step. A halt cannot land between
+  // creating the directory and owning its removal, so no cancellation leaves
+  // one behind — whether it arrives while the directory is in use or before
+  // the acquiring task has run at all.
+  it("TD15: a cancelled acquisition leaves no directory behind", function* () {
+    const before = yield* temporaries();
+
+    // Halted while the directory is live: the path is observed first, so the
+    // assertion names the directory that actually existed.
+    const observed = withResolvers<string>();
+    const live = yield* spawn(function* () {
+      const directory = yield* useTemporaryDirectory();
+      observed.resolve(directory);
+      yield* suspend();
+    });
+    const directory = yield* observed.operation;
+    expect(yield* exists(directory)).toBe(true);
+    yield* live.halt();
+    expect(yield* exists(directory)).toBe(false);
+
+    // Halted mid-acquisition, then given time to settle. An acquisition that
+    // suspended on a pending creation would finish here, after the task that
+    // asked for it is gone, and leave a directory nothing owns.
+    const early = yield* spawn(() => useTemporaryDirectory());
+    yield* early.halt();
+    yield* sleep(50);
+
+    // Whatever either task created, nothing survives it.
+    expect(yield* temporaries()).toEqual(before);
+  });
+
+  // TD16: the other durable effect a `<TempDir>` can consume. A nested
+  // component's import is journaled, so on a partial replay it is the first
+  // entry the directory's content would restore — and it goes through
+  // expansion's import catch rather than the code-block one.
+  it("TD16: a replayed component import inside TempDir fails the execution", function* () {
+    const dir = yield* useFixture();
+    const after = join(dir, "sibling-ran.txt");
+    yield* writeTextFile(join(dir, "Nested.md"), "nested content");
+    yield* writeDocument(
+      dir,
+      ["<TempDir>", "<Nested />", "</TempDir>", "", "```sh exec", `touch ${after}`, "```"].join(
+        "\n",
+      ),
+    );
+
+    const stream = new InMemoryStream();
+    const first = String(
+      yield* scoped(function* () {
+        return yield* collect(
+          yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+        );
+      }),
+    );
+    expect(first).toContain("nested content");
+    // The import this replay will consume.
+    expect(yield* imported(stream)).toContain("Nested");
+    expect(yield* exists(after)).toBe(true);
+    yield* rm(after);
+
+    const events = yield* stream.readAll();
+    const partial = events.filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+    const outcome = yield* scoped(function* () {
+      const execution = yield* execute({
+        path: join(dir, "doc.md"),
+        stream: new InMemoryStream(partial),
+        componentDirs: [dir],
+      });
+      return yield* execution;
+    });
+
+    expect(outcome.ok).toBe(false);
+    const error = outcome.ok ? undefined : outcome.error;
+    expect(error).toBeInstanceOf(StaleInputError);
+    expect(String(error?.message)).toContain("import_component");
+    // Expansion stopped: the block after the component never ran.
     expect(yield* exists(after)).toBe(false);
   });
 

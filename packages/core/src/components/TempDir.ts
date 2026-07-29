@@ -8,12 +8,12 @@
  * the path it renders, and removed with that scope.
  */
 
-import { ensure, resource, until } from "effection";
+import { ensure, resource } from "effection";
 import type { Operation } from "effection";
 import { rm } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { ReplayGuard, StaleInputError } from "@executablemd/durable-streams";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { retain } from "../component-api.ts";
@@ -28,22 +28,29 @@ export const props = {
 /**
  * A directory this call created, named by its canonical path.
  *
- * `mkdtemp` creates and names in one step, so the directory cannot already
- * exist and cannot be claimed between the two — which generating a name and
- * then creating it does not rule out.
+ * Creation is synchronous so that nothing can suspend between it and the
+ * `ensure` that removes it. `until()` cannot cancel the promise it is waiting
+ * on, so an asynchronous `mkdtemp` halted mid-flight would go on to create a
+ * directory after the generator had already stopped — one nothing owns and
+ * nothing removes. Reading the directory does not suspend either, so the whole
+ * acquisition is a single uninterruptible step.
  *
- * The path is then canonicalized: on macOS `tmpdir()` is a symlink
- * (`/var/folders/…`) while a child process resolves it (`/private/var/…`).
- * Canonicalizing is what makes the rendered path, `Env.cwd`, and a
- * subprocess's own `cwd` the same string, so a document can compare them.
+ * `mkdtemp` names and creates at once, so the directory is never one an
+ * earlier run left behind. The path is then canonicalized: on macOS `tmpdir()`
+ * is a symlink (`/var/folders/…`) while a child process resolves it
+ * (`/private/var/…`), and canonicalizing is what makes the rendered path,
+ * `Env.cwd`, and a subprocess's own `cwd` the same string.
  *
  * `@effectionx/fs` has neither operation, so both come from Node.
+ *
+ * Exported for the lifetime tests, which drive acquisition directly. Not part
+ * of the package's public surface — `mod.ts` does not re-export it.
  */
-function useTemporaryDirectory(): Operation<string> {
+export function useTemporaryDirectory(): Operation<string> {
   return resource(function* (provide) {
-    const created = yield* until(mkdtemp(join(tmpdir(), "xmd-tempdir-")));
+    const created = mkdtempSync(join(tmpdir(), "xmd-tempdir-"));
     yield* ensure(() => rm(created, { recursive: true, force: true }));
-    yield* provide(yield* until(realpath(created)));
+    yield* provide(realpathSync(created));
   });
 }
 

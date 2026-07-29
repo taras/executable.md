@@ -1984,9 +1984,14 @@ ships in the compiled binary and every published package without a search path
 or a bundling step, and a document invokes it with no `--component-dir`.
 
 Because there is no resolution and no read, a built-in produces **no
-`import_component` journal entry**. Nothing about it could be restored
-differently on a replay, and no path is fabricated to make the trace look
-uniform: it is an ephemeral definition created fresh on every execution.
+`import_component` journal entry**: nothing about it could be restored
+differently on a replay, and it is an ephemeral definition created fresh on
+every execution.
+
+A definition still carries a `path`, which every consumer of the shape expects.
+For a built-in that field is a synthetic identity — `<built-in>/TempDir` — that
+names no file and resolves against no directory. It appears in diagnostics, not
+in the journal, and nothing reads it back.
 
 What is specified is that core can resolve a built-in with no filesystem path
 and no search directory. What happens when a repository-local component shares
@@ -3685,6 +3690,10 @@ Nested and sibling instances are separate directories. A nested `<TempDir>`
 shadows the enclosing one for its own content and restores it on exit; siblings
 share nothing.
 
+The directory is created synchronously, so nothing can suspend between
+creating it and owning its removal: a cancellation arriving mid-acquisition
+cannot leave one behind.
+
 Cleanup participates in structured shutdown rather than racing it. For the
 wrapping form the directory is the invocation's own resource, so §4.4's teardown
 stops everything the content created — including daemons started inside it —
@@ -4645,7 +4654,7 @@ visible warning blocks, collect into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| TD1 | Built-in resolution | The name resolves with no component directory and no file on disk |
+| TD1 | Built-in resolution | The name resolves with no component directory and no file on disk, and the journal records no `import_component` entry for it |
 | TD2 | Contextual working directory | An `exec` block inside reports the temporary directory, canonical on both sides |
 | TD3 | Restoration | A block after the element reports the previous working directory |
 | TD4 | Isolation | Nested and sibling instances are distinct, and the inner one restores the outer's |
@@ -4659,7 +4668,9 @@ visible warning blocks, collect into a separate error report).
 | TD12 | Prop validation | An undeclared prop is rejected by ordinary validation |
 | TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err` under a collecting policy, and the block after `</TempDir>` never runs |
 | TD14 | Ordinary failures are unchanged | A failing block inside a `<TempDir>` still renders a diagnostic and the following sibling still runs |
-| TD15 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
+| TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
+| TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
+| TD17 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
 
