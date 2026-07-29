@@ -124,7 +124,7 @@ function* captureAs(
   }
   const parsed = validateBindingName(element.props.as);
   if (!parsed.ok) {
-    return [errorSegment(source, `the "as" prop ${parsed.error}`)];
+    return [errorSegment(source, `the "as" prop ${parsed.error.message}`)];
   }
   if (parsed.value === undefined) {
     return [errorSegment(source, 'the "as" prop must be a non-empty string.')];

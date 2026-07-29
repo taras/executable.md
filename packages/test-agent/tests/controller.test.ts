@@ -33,14 +33,14 @@ interface TestClient {
 function* useClient(route: string): Operation<TestClient> {
   const parsed = parseRoute(route);
   if (!parsed.ok) {
-    throw new Error(parsed.error);
+    throw parsed.error;
   }
   const client = yield* useLineClient<ControllerMessage>(
-    parsed.message.host,
-    parsed.message.port,
+    parsed.value.host,
+    parsed.value.port,
     (line) => {
       const result = parseControllerMessage(line);
-      return result.ok ? result.message : undefined;
+      return result.ok ? result.value : undefined;
     },
   );
   return {
@@ -61,7 +61,7 @@ describe("Tier TC — controller", () => {
     }
 
     const client = yield* useClient(controller.probeRoute);
-    client.send({ t: "attach", token: parsed.message.token, instance: "probe" });
+    client.send({ t: "attach", token: parsed.value.token, instance: "probe" });
     expect(yield* client.next()).toEqual({ t: "config", mode: "probe" });
 
     const intruder = yield* useClient(controller.probeRoute);
@@ -90,7 +90,7 @@ describe("Tier TC — controller", () => {
       }
 
       const client = yield* useClient(scenario.route);
-      client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
+      client.send({ t: "attach", token: parsed.value.token, instance: scenario.id });
       const config = yield* client.next();
       expect(config).toMatchObject({ t: "config", mode: "scenario" });
       if (config.t === "config" && config.mode === "scenario") {
@@ -162,7 +162,7 @@ describe("Tier TC — controller", () => {
       if (!parsed.ok) {
         return;
       }
-      ready.resolve({ route: scenario.route, token: parsed.message.token, id: scenario.id });
+      ready.resolve({ route: scenario.route, token: parsed.value.token, id: scenario.id });
       yield* release.operation;
     });
     const info = yield* ready.operation;
@@ -206,7 +206,7 @@ describe("Tier TC — controller", () => {
     }
 
     const clientA = yield* useClient(a.route);
-    clientA.send({ t: "attach", token: token.message.token, instance: a.id });
+    clientA.send({ t: "attach", token: token.value.token, instance: a.id });
     const configA = yield* clientA.next();
     expect(configA).toMatchObject({ t: "config", mode: "scenario" });
     if (configA.t === "config" && configA.mode === "scenario") {
@@ -215,11 +215,11 @@ describe("Tier TC — controller", () => {
 
     // A second concurrent worker for the same scenario is refused.
     const intruder = yield* useClient(a.route);
-    intruder.send({ t: "attach", token: token.message.token, instance: a.id });
+    intruder.send({ t: "attach", token: token.value.token, instance: a.id });
     expect((yield* intruder.next()).t).toBe("error");
 
     const clientB = yield* useClient(b.route);
-    clientB.send({ t: "attach", token: token.message.token, instance: b.id });
+    clientB.send({ t: "attach", token: token.value.token, instance: b.id });
     expect((yield* clientB.next()).t).toBe("config");
 
     clientA.send({
@@ -266,7 +266,7 @@ describe("Tier TC — controller", () => {
         return;
       }
       const client = yield* useClient(scenario.route);
-      client.send({ t: "attach", token: parsed.message.token, instance: scenario.id });
+      client.send({ t: "attach", token: parsed.value.token, instance: scenario.id });
       expect((yield* client.next()).t).toBe("config");
 
       // A normal in-root Markdown read succeeds.
@@ -304,7 +304,7 @@ describe("Tier TC — controller", () => {
     expect((yield* malformed.next()).t).toBe("error");
 
     const unknown = yield* useClient(controller.probeRoute);
-    unknown.send({ t: "attach", token: parsed.message.token, instance: "no-such-instance" });
+    unknown.send({ t: "attach", token: parsed.value.token, instance: "no-such-instance" });
     expect((yield* unknown.next()).t).toBe("error");
   });
 
@@ -331,9 +331,9 @@ describe("Tier TC — controller", () => {
       }
       ready.resolve({
         route: scenario.route,
-        token: parsed.message.token,
-        port: parsed.message.port,
-        host: parsed.message.host,
+        token: parsed.value.token,
+        port: parsed.value.port,
+        host: parsed.value.host,
         scenario,
       });
       yield* suspend();

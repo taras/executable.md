@@ -13,8 +13,8 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, scoped, useScope, withResolvers } from "effection";
-import type { Operation } from "effection";
+import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
 import { parse } from "acorn";
 import type {
   Segment,
@@ -707,7 +707,7 @@ function* expandCapture(
 
   const asBinding = validateBindingName(segment.props.as);
   if (!asBinding.ok) {
-    return [captureError(asBinding.error)];
+    return [captureError(asBinding.error.message)];
   }
   const bindingName = asBinding.value;
   if (bindingName === undefined) {
@@ -785,7 +785,7 @@ function* expandEach(
   }
   const letBinding = validateBindingName(segment.props.let);
   if (!letBinding.ok) {
-    return [eachError(`Prop "let" on <Each /> ${letBinding.error}`)];
+    return [eachError(`Prop "let" on <Each /> ${letBinding.error.message}`)];
   }
   const name = letBinding.value;
   if (name === undefined) {
@@ -797,7 +797,7 @@ function* expandEach(
   }
   const asResult = validateBindingName(segment.props.as);
   if (!asResult.ok) {
-    return [eachError(`Prop "as" on <Each /> ${asResult.error}`)];
+    return [eachError(`Prop "as" on <Each /> ${asResult.error.message}`)];
   }
   const asBinding = asResult.value;
 
@@ -1136,10 +1136,11 @@ function breakError(segment: ComponentElement, message: string): ErrorSegment {
 
 const LOOP_PROPS = new Set(["max", "name"]);
 
-/** The bound a `<Loop>` runs to, or the diagnostic that rejects it. */
-type LoopBound = { ok: true; max: number } | { ok: false; error: ErrorSegment };
-
-function* loopBound(segment: ComponentElement): Operation<LoopBound> {
+/**
+ * The bound a `<Loop>` runs to, or why the prop rejects it. The caller turns
+ * the failure into a positioned diagnostic, because it is the one that raises.
+ */
+function* loopBound(segment: ComponentElement): Operation<Result<number>> {
   let max: Json;
   if ("max" in segment.props) {
     max = segment.props.max;
@@ -1153,41 +1154,32 @@ function* loopBound(segment: ComponentElement): Operation<LoopBound> {
       );
       max = resolved.max;
     } catch (error) {
-      return {
-        ok: false,
-        error: loopError(segment, error instanceof Error ? error.message : String(error)),
-      };
+      return Err(error);
     }
   } else {
-    return {
-      ok: false,
-      error: loopError(
-        segment,
+    return Err(
+      new Error(
         `${loopTag(segment)} requires a "max" prop (a positive integer). Repetition is ` +
           "always bounded — there is no unbounded loop.",
       ),
-    };
+    );
   }
 
   if (typeof max !== "number") {
-    return {
-      ok: false,
-      error: loopError(
-        segment,
+    return Err(
+      new Error(
         `Prop "max" on ${loopTag(segment)} must be a positive integer, not ${jsonKind(max)}.`,
       ),
-    };
+    );
   }
   if (!Number.isInteger(max) || max < 1) {
-    return {
-      ok: false,
-      error: loopError(
-        segment,
+    return Err(
+      new Error(
         `Prop "max" on ${loopTag(segment)} must be a positive integer. Got: ${JSON.stringify(max)}.`,
       ),
-    };
+    );
   }
-  return { ok: true, max };
+  return Ok(max);
 }
 
 /**
@@ -1244,7 +1236,7 @@ function* expandLoop(
 
   const bound = yield* loopBound(segment);
   if (!bound.ok) {
-    return [yield* raise(bound.error)];
+    return [yield* raise(loopError(segment, bound.error.message))];
   }
 
   // Taken from the shared block counter, so every `<Loop>` an execution enters
@@ -1259,7 +1251,7 @@ function* expandLoop(
   try {
     yield* scoped(function* () {
       yield* ActiveLoop.set(frame);
-      for (let iteration = 0; iteration < bound.max; iteration++) {
+      for (let iteration = 0; iteration < bound.value; iteration++) {
         yield* recordIteration(identity, iteration);
         started = iteration + 1;
         out.push(
@@ -1472,7 +1464,7 @@ function* expandComponent(
   try {
     const binding = validateBindingName(resolvedProps.as);
     if (!binding.ok) {
-      throw new Error(`Prop "as" on <${name} /> ${binding.error}`);
+      throw new Error(`Prop "as" on <${name} /> ${binding.error.message}`);
     }
     asBinding = binding.value;
 
@@ -1751,7 +1743,7 @@ function* expandFunctionComponent(
     return [
       yield* raise({
         type: "error",
-        message: `Prop "as" on <${name} /> ${asBindingResult.error}`,
+        message: `Prop "as" on <${name} /> ${asBindingResult.error.message}`,
         source: name,
       }),
     ];
@@ -1878,35 +1870,27 @@ function* expandFunctionComponent(
   }
 }
 
-export function validateBindingName(
-  value: Json | undefined,
-): { ok: true; value?: string } | { ok: false; error: string } {
+export function validateBindingName(value: Json | undefined): Result<string | undefined> {
   if (value === undefined) {
-    return { ok: true };
+    return Ok(undefined);
   }
   if (typeof value !== "string") {
-    return { ok: false, error: "must be a non-empty string literal." };
+    return Err(new Error("must be a non-empty string literal."));
   }
   if (value.length === 0) {
-    return { ok: false, error: "must be non-empty." };
+    return Err(new Error("must be non-empty."));
   }
   if (!IDENTIFIER_RE.test(value)) {
-    return {
-      ok: false,
-      error: `must be a valid JavaScript identifier. Got: "${value}"`,
-    };
+    return Err(new Error(`must be a valid JavaScript identifier. Got: "${value}"`));
   }
   // The identifier shape is not sufficient: reserved and contextual words
   // (in, let, await, ...) match the regex but cannot form an ES-module
   // binding, which is where these names end up (eval preamble destructures
   // `const { name } = env;`). Parse the destructuring shape to reject them.
   if (!isModuleBindingName(value)) {
-    return {
-      ok: false,
-      error: `must be a valid JavaScript binding name. Got: "${value}"`,
-    };
+    return Err(new Error(`must be a valid JavaScript binding name. Got: "${value}"`));
   }
-  return { ok: true, value };
+  return Ok(value);
 }
 
 function isModuleBindingName(name: string): boolean {

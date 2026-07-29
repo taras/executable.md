@@ -16,7 +16,7 @@
  */
 
 import { race, scoped, spawn, suspend, useScope, withResolvers } from "effection";
-import type { Operation, Scope, Subscription, Task } from "effection";
+import type { Operation, Result, Scope, Subscription, Task } from "effection";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { Component, DocumentOutput, execute } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -24,7 +24,8 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, parseControllerMessage, parseRoute, PROBE_INSTANCE } from "../protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "../protocol.ts";
 import { createTurnBridge, collectTurn } from "./bridge.ts";
-import type { TemplateMatchResult } from "../template.ts";
+import type { Captures } from "../template.ts";
+import { PromptMismatchError } from "../template.ts";
 import type { BridgeEvent } from "./bridge.ts";
 import { useLineClient } from "../net.ts";
 import { installWhenPromptComponent } from "./when-prompt.ts";
@@ -45,7 +46,7 @@ interface ControllerClient {
 function* useControllerClient(host: string, port: number): Operation<ControllerClient> {
   const client = yield* useLineClient<ControllerMessage>(host, port, (line) => {
     const parsed = parseControllerMessage(line);
-    return parsed.ok ? parsed.message : undefined;
+    return parsed.ok ? parsed.value : undefined;
   });
   return {
     send: (message) => client.send(encodeMessage(message)),
@@ -57,7 +58,7 @@ interface ScenarioRuntime {
   task: Task<void>;
   turnEvents: Subscription<BridgeEvent, never>;
   ready: Operation<void>;
-  offer(text: string): Operation<TemplateMatchResult>;
+  offer(text: string): Operation<Result<Captures>>;
   flush(): Operation<void>;
   isExhausted(): boolean;
   markExhausted(): void;
@@ -66,9 +67,9 @@ interface ScenarioRuntime {
 export function* runTestAgentWorker(options: { connect: string }): Operation<void> {
   const route = parseRoute(options.connect);
   if (!route.ok) {
-    throw new Error(route.error);
+    throw route.error;
   }
-  const { host, port, token, instance } = route.message;
+  const { host, port, token, instance } = route.value;
   const client = yield* useControllerClient(host, port);
   client.send({ t: "attach", token, instance });
   const config = yield* client.next();
@@ -285,20 +286,24 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
             (function* (): Operation<TurnResult> {
               const match = yield* runtime.offer(text);
               if (!match.ok) {
+                // Only matchPrompt fails an offer, so the mismatch detail is
+                // always there; `text` is the prompt it compared against.
+                const mismatch =
+                  match.error instanceof PromptMismatchError ? match.error : undefined;
                 const failure: WorkerMessage = {
                   t: "turn-failure",
-                  kind: match.kind === "config" ? "config" : "mismatch",
-                  actual: match.actual,
+                  kind: mismatch?.kind === "config" ? "config" : "mismatch",
+                  actual: mismatch?.actual ?? text,
                 };
-                if (match.kind === "mismatch") {
-                  failure.expected = match.expected;
+                if (mismatch?.kind === "mismatch") {
+                  failure.expected = mismatch.expected;
                 }
                 // Terminal outcome: close cancellation before the diagnostic
                 // round-trip so a later cancel cannot strand the recorded ack
                 // in the shared controller response queue.
                 cancelRequested = undefined;
                 yield* report(failure);
-                throw new RequestError(-32603, match.message);
+                throw new RequestError(-32603, match.error.message);
               }
               const collected = yield* collectTurn(runtime.turnEvents);
               // Commit is transactional: once the turn reaches its terminal

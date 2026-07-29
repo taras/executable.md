@@ -168,11 +168,11 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
       for (const line of yield* each(connection.lines)) {
         const parsed = parseWorkerMessage(line);
         if (!parsed.ok) {
-          send(connection, { t: "error", message: parsed.error });
+          send(connection, { t: "error", message: parsed.error.message });
           connection.end();
           return;
         }
-        const message = parsed.message;
+        const message = parsed.value;
         if (attached === undefined) {
           if (message.t !== "attach" || message.token !== token) {
             send(connection, { t: "error", message: "unauthorized or out-of-order attach" });

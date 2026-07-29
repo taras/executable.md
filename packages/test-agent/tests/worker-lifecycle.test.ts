@@ -194,11 +194,11 @@ function* useGatedController(doc: { path: string; source: string }): Operation<G
     for (const line of yield* each(conn.lines)) {
       const parsed = parseWorkerMessage(line);
       if (!parsed.ok) {
-        conn.send(encodeMessage({ t: "error", message: parsed.error }));
+        conn.send(encodeMessage({ t: "error", message: parsed.error.message }));
         conn.end();
         return;
       }
-      const message = parsed.message;
+      const message = parsed.value;
       if (!attached) {
         attached = true;
         conn.send(encodeMessage({ t: "config", mode: "scenario", doc, journal: [...journal] }));

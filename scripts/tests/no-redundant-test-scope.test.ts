@@ -4,38 +4,15 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { oxlint, ROOT, violations } from "./oxlint.ts";
-
-const FIXTURES = path.join(ROOT, "scripts", "tests", "fixtures");
+import { fixed, violations } from "./oxlint.ts";
 
 function reported(fixture: string): Operation<number[]> {
   return violations(`scripts/tests/fixtures/${fixture}`, "no-redundant-test-scope");
 }
 
-/** The fixture as oxlint rewrites it, run to a fixed point in a temp copy. */
-function* fixed(fixture: string): Operation<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "no-redundant-test-scope-"));
-  const copy = path.join(dir, "fixture.test.ts");
-
-  try {
-    fs.copyFileSync(path.join(FIXTURES, fixture), copy);
-
-    let previous = "";
-    let current = fs.readFileSync(copy, "utf8");
-
-    while (current !== previous) {
-      yield* oxlint(["--fix", copy]);
-      previous = current;
-      current = fs.readFileSync(copy, "utf8");
-    }
-
-    return current;
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+/** The rule is enabled for test files only, so the copy has to be named one. */
+function rewritten(fixture: string): Operation<string> {
+  return fixed(fixture, "fixture.test.ts");
 }
 
 describe("local/no-redundant-test-scope", () => {
@@ -60,7 +37,7 @@ describe("local/no-redundant-test-scope", () => {
   });
 
   it("unwraps a redundant scope and keeps the body indentation", function* () {
-    const source = yield* fixed("whole-body.ts");
+    const source = yield* rewritten("whole-body.ts");
 
     expect(source).toContain(
       [
@@ -81,7 +58,7 @@ describe("local/no-redundant-test-scope", () => {
   });
 
   it("unwraps a doubled scope over repeated fixes", function* () {
-    const source = yield* fixed("doubled.ts");
+    const source = yield* rewritten("doubled.ts");
 
     expect(source).toContain(
       [`  it("wraps the body twice", function* () {`, `    expect(1).toBe(1);`, `  });`].join("\n"),
@@ -89,7 +66,7 @@ describe("local/no-redundant-test-scope", () => {
   });
 
   it("reports without fixing when unwrapping would change control flow", function* () {
-    const source = yield* fixed("whole-body.ts");
+    const source = yield* rewritten("whole-body.ts");
 
     expect(source).toContain(
       [

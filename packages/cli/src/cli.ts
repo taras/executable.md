@@ -436,7 +436,7 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
   // test failures, assertion aborts, and any document abort fail the run.
   const result = yield* execution;
   if (!result.ok) {
-    return Err(result.error);
+    return result;
   }
 
   // Written straight to stdout, so the result never passes through markdown

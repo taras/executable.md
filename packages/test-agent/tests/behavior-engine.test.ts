@@ -7,8 +7,8 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, spawn } from "effection";
-import type { Operation, Subscription } from "effection";
+import { ensure, Ok, spawn } from "effection";
+import type { Operation, Result, Subscription } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
@@ -17,7 +17,7 @@ import { Component, DocumentOutput, execute } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collectTurn, createTurnBridge } from "../src/worker/bridge.ts";
 import type { BridgeEvent } from "../src/worker/bridge.ts";
-import type { TemplateMatchResult } from "../src/template.ts";
+import type { Captures } from "../src/template.ts";
 import { installWhenPromptComponent } from "../src/worker/when-prompt.ts";
 
 const REVIEW = [
@@ -36,7 +36,7 @@ const REVIEW = [
 
 interface Engine {
   turnEvents: Subscription<BridgeEvent, never>;
-  offer(text: string): Operation<TemplateMatchResult>;
+  offer(text: string): Operation<Result<Captures>>;
 }
 
 function* useEngine(source: string): Operation<Engine> {
@@ -87,10 +87,7 @@ describe("Tier BE — behavior engine", () => {
     expect(init.stage).toContain("Review {?subject} at revision {?revision}");
 
     const first = yield* engine.offer("Review packages/core at revision abc123");
-    expect(first).toEqual({
-      ok: true,
-      captures: { subject: "packages/core", revision: "abc123" },
-    });
+    expect(first).toEqual(Ok({ subject: "packages/core", revision: "abc123" }));
 
     const turn1 = yield* collectTurn(engine.turnEvents);
     expect(turn1.end).toBe("suspended");
@@ -105,7 +102,8 @@ describe("Tier BE — behavior engine", () => {
     yield* collectTurn(engine.turnEvents);
 
     const mismatch = yield* engine.offer("Do something unrelated");
-    expect(mismatch).toMatchObject({ ok: false, kind: "mismatch" });
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch).toMatchObject({ error: { kind: "mismatch" } });
 
     const second = yield* engine.offer("Summarize packages/core");
     expect(second.ok).toBe(true);
