@@ -518,10 +518,8 @@ export function* expandSegments(
         }
 
         if (segment.name === "If") {
-          // `<If>` is not an observation boundary. It reports the errors it
-          // creates itself, and the selected branch's segments already passed
-          // through the ambient policy where they were produced, so they are
-          // appended as they are (spec §6.9: one observation per segment).
+          // No raise() here, unlike the branches above: expandIf reports the
+          // errors it creates, and the selected branch settled its own (§6.9).
           result.push(...(yield* expandIf(segment, parentMeta, parentProps, hideSet, counter)));
           break;
         }

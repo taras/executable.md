@@ -16,6 +16,8 @@ import type { StatResult } from "@executablemd/runtime";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { Sample } from "../src/sample-api.ts";
+import { readTextFile } from "@effectionx/fs";
 import type { ComponentElement, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
@@ -776,5 +778,59 @@ describe("Tier IF — error observation", () => {
       }
     });
     expect(thrown).toBeInstanceOf(DocumentationError);
+  });
+});
+
+/**
+ * The provider boundary specifically. An unselected branch that never imports
+ * a component and never runs a block cannot reach a provider either, but that
+ * is an inference from two other mechanisms — #78 asks for the provider itself
+ * to be observed, so this counts calls at the Sample Api.
+ */
+describe("Tier IF — provider boundary", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  function runSampleProbe(condition: boolean): Operation<{ calls: string[]; output: string }> {
+    return scoped(function* () {
+      const calls: string[] = [];
+      // Read the real component before the stub filesystem replaces it.
+      const sampleMd = yield* readTextFile("packages/core/components/Sample.md");
+
+      yield* useStubFs({
+        "components/Sample.md": sampleMd,
+        "test.md": [
+          `<If condition={${condition}}>`,
+          '<Sample prompt="BRANCH_PROMPT" />',
+          "<Else>alternative</Else>",
+          "</If>",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
+      yield* Sample.around({
+        // deno-lint-ignore require-yield
+        *sample([context], _next) {
+          calls.push(context.content);
+          return "[sampled]";
+        },
+      });
+
+      const output = asText(
+        yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
+      );
+      return { calls, output };
+    });
+  }
+
+  it("IF54: an unselected branch makes zero provider calls", function* () {
+    const skipped = yield* runSampleProbe(false);
+    expect(skipped.calls).toEqual([]);
+    expect(skipped.output).toContain("alternative");
+    expect(skipped.output).not.toContain("[sampled]");
+
+    // The same probe records a call when the branch is selected, so the empty
+    // result above is non-execution rather than a probe that stopped working.
+    const selected = yield* runSampleProbe(true);
+    expect(selected.calls).toEqual(["BRANCH_PROMPT"]);
+    expect(selected.output).toContain("[sampled]");
   });
 });

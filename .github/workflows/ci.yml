@@ -77,11 +77,13 @@ jobs:
             --component-dir packages/core/components \
             --raw
 
-      # A built-in component resolves from the module graph rather than a
-      # search path. Only the compiled binary proves it survives `deno compile`.
-      # The directory target runs every built-in's colocated document at once.
-      - name: Smoke test the built-in components with no search path
-        run: ./dist/xmd test packages/core/src/components --raw
+      # A built-in resolves from the module graph rather than a search path.
+      # Only the compiled binary proves it survives `deno compile`. The
+      # directory target discovers every colocated document beneath core's
+      # source at once — the built-in components under `components/`, and the
+      # structural directives, which resolve no file at all.
+      - name: Smoke test the built-ins with no search path
+        run: ./dist/xmd test packages/core/src --raw
 
       # The guide documents this command and its output; running it keeps the
       # value-root contract executable rather than described.

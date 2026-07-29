@@ -5045,6 +5045,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF51 | Unselected branch unobserved | An error in the unselected branch is observed zero times |
 | IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
 | IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
+| IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
 
 ### Tier SC — Sample component (integration)
 
