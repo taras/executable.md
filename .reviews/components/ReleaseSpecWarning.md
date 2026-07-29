@@ -38,7 +38,7 @@ const changedList = releaseChanged.join(", ");
 
 <Output>
 
-<If condition={releaseChanged.length > 0 && !files.includes("specs/release-process-spec.md")}>
+<Show when={releaseChanged.length > 0 && !files.includes("specs/release-process-spec.md")}>
 
 > [!WARNING]
 > This PR changes release configuration ({changedList}) without touching
@@ -46,6 +46,6 @@ const changedList = releaseChanged.join(", ");
 > state `spec-reviewed: no changes needed` in the PR description (AGENTS.md
 > rule 8).
 
-</If>
+</Show>
 
 </Output>

@@ -871,6 +871,39 @@ function isElse(segment: Segment): segment is ComponentElement {
   return segment.type === "component" && segment.name === "Else";
 }
 
+/** Markdown puts newlines between block elements; they are not a third branch. */
+function isBlankText(segment: Segment): boolean {
+  return segment.type === "text" && segment.content.trim() === "";
+}
+
+function describeSegment(segment: Segment): string {
+  if (segment.type === "component") {
+    return `<${segment.name}>`;
+  }
+  if (segment.type === "codeBlock") {
+    return `a \`${segment.language}\` code block`;
+  }
+  if (segment.type === "execOutput") {
+    return "command output";
+  }
+  if (segment.type === "error") {
+    return "an error";
+  }
+  const text = segment.content.trim().replace(/\s+/g, " ");
+  return `text "${text.length > 30 ? `${text.slice(0, 30)}…` : text}"`;
+}
+
+function trailingContentError(segment: Segment, elseElement: ComponentElement): ErrorSegment {
+  // A component carries its own position; anything else is anchored to the
+  // `<Else>` it follows, which is the boundary the author crossed.
+  const anchor = segment.type === "component" ? segment : elseElement;
+  return elseError(
+    anchor,
+    `<Else> must be the final substantive child of <If>. Found ${describeSegment(segment)} ` +
+      "after </Else>.",
+  );
+}
+
 function jsonKind(value: Json): string {
   if (value === null) {
     return "null";
@@ -929,23 +962,35 @@ interface IfStructure {
  * Split an `<If>` body at its `<Else>` and validate the split. Structure is
  * read from source, before either branch expands, so a malformed `<Else>` is
  * diagnosed even when it sits in the branch the condition does not select.
+ *
+ * `<If>` has exactly two branches, so `<Else>` is the final substantive child:
+ * content after `</Else>` belongs to neither branch and is rejected rather than
+ * silently folded into the true one.
  */
 function ifStructure(segment: ComponentElement): IfStructure {
   const violations: ErrorSegment[] = [];
   const whenTrue: Segment[] = [];
   let whenFalse: Segment[] | undefined;
+  let elseElement: ComponentElement | undefined;
 
   for (const child of segment.children) {
-    if (!isElse(child)) {
+    if (isElse(child)) {
+      if (elseElement) {
+        violations.push(elseError(child, "<If> accepts at most one <Else> branch."));
+        continue;
+      }
+      violations.push(...elseElementViolations(child));
+      elseElement = child;
+      whenFalse = child.children;
+      continue;
+    }
+    if (!elseElement) {
       whenTrue.push(child);
       continue;
     }
-    if (whenFalse !== undefined) {
-      violations.push(elseError(child, "<If> accepts at most one <Else> branch."));
-      continue;
+    if (!isBlankText(child)) {
+      violations.push(trailingContentError(child, elseElement));
     }
-    violations.push(...elseElementViolations(child));
-    whenFalse = child.children;
   }
 
   violations.push(...misplacedElseViolations(segment.children));

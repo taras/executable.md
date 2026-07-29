@@ -2998,6 +2998,14 @@ filesystem. `<Else>` structure is validated against the source before either
 branch expands, so a malformed `<Else>` is reported even when it sits in the
 branch the condition does not select.
 
+`<Else>` is also the **final substantive child** of its `<If>`. An `<If>` has
+exactly two branches, so content between `</Else>` and `</If>` belongs to
+neither: whitespace there is Markdown formatting and is ignored, and any text,
+component, or executable block is a source-positioned error rather than a third
+region silently folded into the true branch. Like every other structural
+violation this is decided before the condition is evaluated, so neither branch
+runs.
+
 A true condition expands the children before `<Else>`; a false one expands the
 `<Else>` children, or nothing when there is no `<Else>`.
 
@@ -4970,22 +4978,60 @@ visible warning blocks, collect into a separate error report).
 | EA8 | Prop contract | Missing/non-array `in`, missing `let`, `let={expr}`, `as={expr}`, reserved-word/unknown props rejected; `as` without env rejected |
 | EA9 | Projection | `<Each>` through `<Content />` resolves `in`, the item, and other caller bindings |
 
-### Tier If — `<If>` / `<Else>` conditional directive
+### Tier IF — `<If>` / `<Else>` conditional directive
+
+Identifiers match `packages/core/tests/if.test.ts` one to one.
 
 | # | Test | Verify |
 |---|------|--------|
-| IF1 | Branch selection | `condition={true}` renders the children before `<Else>`; `condition={false}` renders the `<Else>` children |
-| IF2 | No `<Else>` | `condition={false}` without `<Else>` renders nothing, with no error |
-| IF3 | Expression conditions | `condition={binding}` and computed booleans resolve from the evaluation environment |
-| IF4 | Ordering | Content before and after the directive keeps its position around the selected branch |
-| IF5 | No binding scope | A `<Capture>` in the selected branch is readable after `</If>`; the unselected branch creates no binding |
-| IF6 | Nesting | Nested `<If>` blocks select independently; a nested `<If>` owns the `<Else>` beneath it |
-| IF7 | Condition contract | Missing `condition`, a non-boolean value (string, number, `null`, array, object), and unknown props are rejected |
-| IF8 | `<Else>` contract | `<Else>` outside `<If>`, duplicated, below the direct children, self-closing, or bearing props is rejected — including in the unselected branch |
-| IF9 | Non-execution | The unselected branch imports no component, runs no code block, produces no effect, and writes no journal entry |
-| IF10 | Diagnostics | `<If>` and `<Else>` errors carry the source position of the offending element |
-| IF11 | Replay | The selected branch replays deterministically from the journal |
-| IF12 | Projection | An `<If>` through `<Content />` resolves its condition from the caller's bindings |
+| IF1 | True condition renders its children | `condition={true}` expands the children before `<Else>` |
+| IF2 | False without `<Else>` | No output and no error |
+| IF3 | False selects `<Else>` | The `<Else>` children render in place of the leading branch |
+| IF4 | True ignores `<Else>` | Only the children before `<Else>` render |
+| IF5 | Condition from a binding | `condition={ok}` resolves from the evaluation environment, both ways |
+| IF6 | Computed boolean | `condition={findings.length === 0}` and `condition={!passed}` resolve |
+| IF7 | Ordering | Content before and after the directive keeps its position |
+| IF8 | Capture survives the block | A `<Capture>` in the selected branch is readable after `</If>` |
+| IF9 | Unselected branch binds nothing | Its `<Capture>` leaves the name unset and the reference verbatim |
+| IF10 | Independent nesting | An inner `<If>` selects without affecting the outer one |
+| IF11 | Nested `<If>` in the unselected branch | It never runs |
+| IF12 | Self-closing `<If>` | Renders nothing, with no error |
+| IF13 | Missing `condition` | Rejected; the body does not render |
+| IF14 | No coercion | String, number (including `0`/`1`), `null`, array, and object are rejected |
+| IF15 | Non-boolean expression result | A numeric binding is rejected with its kind named |
+| IF16 | Unresolvable expression | The failing expression is quoted in the diagnostic |
+| IF17 | Unknown props | Literal and expression props other than `condition` are rejected |
+| IF18 | `<Else>` outside `<If>` | Diagnosed; no component named `Else` is imported |
+| IF19 | Duplicate `<Else>` | A second `<Else>` is rejected |
+| IF20 | `<Else>` below the direct children | An `<Else>` nested inside another element is rejected |
+| IF21 | `<Else>` inside `<Else>` | Rejected |
+| IF22 | Self-closing `<Else>` | Rejected — `<Else>` takes content |
+| IF23 | Prop-bearing `<Else>` | Literal and expression props are both rejected |
+| IF24 | Structure precedes selection | A malformed `<Else>` in the unselected branch is still diagnosed |
+| IF25 | Nested `<If>` owns its `<Else>` | A valid inner `<Else>` is not attributed to the outer `<If>` |
+| IF26 | Whitespace after `</Else>` | Formatting between `</Else>` and `</If>` is ignored |
+| IF27 | Text after `</Else>` | Substantive trailing text is rejected; neither branch renders |
+| IF28 | Component after `</Else>` | Rejected, and the component is never imported |
+| IF29 | Executable block after `</Else>` | Rejected, and the block never runs |
+| IF30 | Trailing content with `<Else>` selected | Rejected regardless of which branch the condition picks |
+| IF31 | No import from the unselected branch | `importComponent` is never called for it |
+| IF32 | No code block from the unselected branch | The modifier chain is never applied |
+| IF33 | Selected control | The selected branch does run its code block |
+| IF34 | Unselected `<Else>` | A component in an unselected `<Else>` is never imported |
+| IF35 | Local position | A diagnostic carries `line:column` |
+| IF36 | Origin position | A scanned origin adds `path:` to the diagnostic |
+| IF37 | `<Else>` position | A stray `<Else>` reports its own location |
+| IF38 | No position | An element built without scanning diagnoses without a location |
+| IF39 | Journal | Only the selected branch's eval entry reaches the journal |
+| IF40 | Unselected effect | A throwing block in the unselected branch never runs |
+| IF41 | Unselected import (execution) | A component in the unselected branch is never imported end to end |
+| IF42 | Partial replay | From a journal prefix without the root Close, `<If>` is reached live, selects from the restored binding, and reproduces the output |
+| IF43 | Projection | An `<If>` through `<Content />` resolves its condition from the caller's bindings |
+| IF44 | Expand hook | No element in the unselected branch is offered to `Component.expand` |
+| IF45 | Filesystem | No `stat` or read happens for the unselected branch's component |
+| IF46 | Process runtime | `exec` is never invoked for an unselected block |
+| IF47 | Durable events | The unselected branch writes no exec or eval event |
+| IF48 | Bindings (execution) | Later content sees no binding from the unselected branch |
 
 ### Tier SC — Sample component (integration)
 

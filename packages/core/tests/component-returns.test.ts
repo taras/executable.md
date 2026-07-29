@@ -139,21 +139,6 @@ function valueComponent(declaration: string, expression: string): string {
   ].join("\n");
 }
 
-const SHOW = [
-  "---",
-  "props:",
-  "  when: { type: boolean }",
-  "required: [when]",
-  "---",
-  "",
-  "```ts eval",
-  "if (when) {",
-  "  return yield* renderChildren();",
-  "}",
-  "```",
-  "",
-].join("\n");
-
 /** A body effect that must not run when structural validation fails. */
 const BODY_EFFECT = "```sh exec\necho BODY_RAN\n```";
 
@@ -199,21 +184,19 @@ describe("Tier RV — component return values", () => {
         "doc.md": [
           '<Verdict as="verdict" />',
           "",
-          "<Show when={verdict.passed}>",
+          "<If condition={verdict.passed}>",
           "",
           "REVIEW PASSED",
           "",
-          "</Show>",
-          "",
-          "<Show when={!verdict.passed}>",
+          "<Else>",
           "",
           "REVIEW FAILED",
           "",
-          "</Show>",
+          "</Else>",
+          "</If>",
           "",
         ].join("\n"),
         "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
-        "Show.md": SHOW,
       });
       expect(asText(result.value ?? "")).toContain("REVIEW PASSED");
       expect(asText(result.value ?? "")).not.toContain("REVIEW FAILED");
@@ -439,12 +422,11 @@ describe("Tier RV — component return values", () => {
           "",
           BODY_EFFECT,
           "",
-          "<Show when={true}>",
+          "<If condition={true}>",
           '<Return value="one" />',
-          "</Show>",
+          "</If>",
           "",
         ].join("\n"),
-        "Show.md": SHOW,
       });
       expect(asText(result.value ?? "")).toContain("not a direct top-level child");
       expect(result.commands).toEqual([]);
@@ -646,15 +628,14 @@ describe("Tier RV — component return values", () => {
         "Report.md": [
           '<Verdict as="verdict" />',
           "",
-          "<Show when={verdict.passed}>",
+          "<If condition={verdict.passed}>",
           "",
           "REPORT PASSED",
           "",
-          "</Show>",
+          "</If>",
           "",
         ].join("\n"),
         "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
-        "Show.md": SHOW,
       });
       expect(asText(result.value ?? "")).toContain("REPORT PASSED");
     });

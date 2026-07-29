@@ -9,10 +9,14 @@ import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { API } from "@executablemd/runtime";
+import type { StatResult } from "@executablemd/runtime";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { ComponentElement, Segment } from "../src/types.ts";
+import { asText } from "./helpers.ts";
 
 interface IfRun {
   segments: Segment[];
@@ -63,30 +67,38 @@ function errorMessages(segments: Segment[]): string[] {
   return segments.filter((s) => s.type === "error").map((s) => s.message);
 }
 
-describe("Tier If — structural conditional directive", () => {
-  it("I1: a true condition renders its children", function* () {
+function isEvalYield(event: DurableEvent): boolean {
+  return event.type === "yield" && event.description.type === "eval";
+}
+
+function isExecYield(event: DurableEvent): boolean {
+  return event.type === "yield" && event.description.type === "exec";
+}
+
+describe("Tier IF — structural conditional directive", () => {
+  it("IF1: a true condition renders its children", function* () {
     const run = yield* runIf("<If condition={true}>rendered</If>");
     expect(run.output).toBe("rendered");
     expect(errorMessages(run.segments)).toHaveLength(0);
   });
 
-  it("I2: a false condition without <Else> renders nothing", function* () {
+  it("IF2: a false condition without <Else> renders nothing", function* () {
     const run = yield* runIf("<If condition={false}>hidden</If>");
     expect(run.output).toBe("");
     expect(errorMessages(run.segments)).toHaveLength(0);
   });
 
-  it("I3: a false condition renders the <Else> branch", function* () {
+  it("IF3: a false condition renders the <Else> branch", function* () {
     const run = yield* runIf("<If condition={false}>then<Else>otherwise</Else></If>");
     expect(run.output).toBe("otherwise");
   });
 
-  it("I4: a true condition renders only the children before <Else>", function* () {
+  it("IF4: a true condition renders only the children before <Else>", function* () {
     const run = yield* runIf("<If condition={true}>then<Else>otherwise</Else></If>");
     expect(run.output).toBe("then");
   });
 
-  it("I5: the condition resolves from an eval binding expression", function* () {
+  it("IF5: the condition resolves from an eval binding expression", function* () {
     const passing = yield* runIf("<If condition={ok}>yes<Else>no</Else></If>", {
       env: { ok: true },
     });
@@ -98,7 +110,7 @@ describe("Tier If — structural conditional directive", () => {
     expect(failing.output).toBe("no");
   });
 
-  it("I6: expressions may compute the boolean from bindings", function* () {
+  it("IF6: expressions may compute the boolean from bindings", function* () {
     const run = yield* runIf("<If condition={findings.length === 0}>clean<Else>dirty</Else></If>", {
       env: { findings: [] },
     });
@@ -110,12 +122,12 @@ describe("Tier If — structural conditional directive", () => {
     expect(negated.output).toBe("passed");
   });
 
-  it("I7: content around the directive keeps its order", function* () {
+  it("IF7: content around the directive keeps its order", function* () {
     const run = yield* runIf("before|<If condition={true}>mid<Else>alt</Else></If>|after");
     expect(run.output).toBe("before|mid|after");
   });
 
-  it("I8: a capture from the selected branch stays available afterward", function* () {
+  it("IF8: a capture from the selected branch stays available afterward", function* () {
     const run = yield* runIf(
       '<If condition={true}><Capture as="picked">chosen</Capture></If>[{picked}]',
     );
@@ -123,7 +135,7 @@ describe("Tier If — structural conditional directive", () => {
     expect(run.env?.picked).toBe("chosen");
   });
 
-  it("I9: the unselected branch creates no binding", function* () {
+  it("IF9: the unselected branch creates no binding", function* () {
     const run = yield* runIf(
       '<If condition={false}><Capture as="skipped">never</Capture><Else>alt</Else></If>[{skipped}]',
     );
@@ -131,35 +143,35 @@ describe("Tier If — structural conditional directive", () => {
     expect(run.env?.skipped).toBeUndefined();
   });
 
-  it("I10: nested conditionals select independently", function* () {
+  it("IF10: nested conditionals select independently", function* () {
     const run = yield* runIf(
       "<If condition={true}>outer:<If condition={false}>inner<Else>alt</Else></If>:end<Else>skipped</Else></If>",
     );
     expect(run.output).toBe("outer:alt:end");
   });
 
-  it("I11: a nested <If> in the unselected branch never runs", function* () {
+  it("IF11: a nested <If> in the unselected branch never runs", function* () {
     const run = yield* runIf(
       "<If condition={false}><If condition={true}>inner</If><Else>alt</Else></If>",
     );
     expect(run.output).toBe("alt");
   });
 
-  it("I12: a self-closing <If> renders nothing", function* () {
+  it("IF12: a self-closing <If> renders nothing", function* () {
     const run = yield* runIf("<If condition={true} />after");
     expect(run.output).toBe("after");
     expect(errorMessages(run.segments)).toHaveLength(0);
   });
 });
 
-describe("Tier If — condition validation", () => {
-  it("I13: a missing condition is rejected", function* () {
+describe("Tier IF — condition validation", () => {
+  it("IF13: a missing condition is rejected", function* () {
     const run = yield* runIf("<If>body</If>");
     expect(errorMessages(run.segments)[0]).toContain('requires a "condition" prop');
     expect(run.output).not.toContain("body");
   });
 
-  it("I14: a non-boolean condition is rejected without coercion", function* () {
+  it("IF14: a non-boolean condition is rejected without coercion", function* () {
     const cases: Array<[string, string]> = [
       ['<If condition="yes">x</If>', "a string"],
       ["<If condition={1}>x</If>", "a number"],
@@ -177,17 +189,17 @@ describe("Tier If — condition validation", () => {
     }
   });
 
-  it("I15: a non-boolean expression result is rejected", function* () {
+  it("IF15: a non-boolean expression result is rejected", function* () {
     const run = yield* runIf("<If condition={count}>x</If>", { env: { count: 3 } });
     expect(errorMessages(run.segments)[0]).toContain("must be a boolean, not a number");
   });
 
-  it("I16: an unresolvable condition expression is rejected", function* () {
+  it("IF16: an unresolvable condition expression is rejected", function* () {
     const run = yield* runIf("<If condition={missing}>x</If>");
     expect(errorMessages(run.segments)[0]).toContain("condition={missing}");
   });
 
-  it("I17: unknown props are rejected", function* () {
+  it("IF17: unknown props are rejected", function* () {
     const literal = yield* runIf('<If condition={true} when="x">body</If>');
     expect(errorMessages(literal.segments)[0]).toContain('only accepts a "condition" prop');
 
@@ -198,35 +210,35 @@ describe("Tier If — condition validation", () => {
   });
 });
 
-describe("Tier If — <Else> structure", () => {
-  it("I18: <Else> outside <If> is rejected", function* () {
+describe("Tier IF — <Else> structure", () => {
+  it("IF18: <Else> outside <If> is rejected", function* () {
     const run = yield* runIf("<Else>orphan</Else>");
     expect(errorMessages(run.segments)[0]).toContain("must be a direct child of <If>");
     expect(run.imports).toHaveLength(0);
   });
 
-  it("I19: a second <Else> is rejected", function* () {
+  it("IF19: a second <Else> is rejected", function* () {
     const run = yield* runIf("<If condition={true}>a<Else>b</Else><Else>c</Else></If>");
     expect(errorMessages(run.segments)[0]).toContain("at most one <Else>");
   });
 
-  it("I20: an <Else> below the direct children is rejected", function* () {
+  it("IF20: an <Else> below the direct children is rejected", function* () {
     const run = yield* runIf("<If condition={true}><Wrapper><Else>nested</Else></Wrapper></If>");
     expect(errorMessages(run.segments)[0]).toContain("must be a direct child of <If>");
     expect(run.imports).toHaveLength(0);
   });
 
-  it("I21: an <Else> inside <Else> is rejected", function* () {
+  it("IF21: an <Else> inside <Else> is rejected", function* () {
     const run = yield* runIf("<If condition={true}>a<Else>b<Else>c</Else></Else></If>");
     expect(errorMessages(run.segments)[0]).toContain("must be a direct child of <If>");
   });
 
-  it("I22: a self-closing <Else> is rejected", function* () {
+  it("IF22: a self-closing <Else> is rejected", function* () {
     const run = yield* runIf("<If condition={false}>a<Else /></If>");
     expect(errorMessages(run.segments)[0]).toContain("must have content");
   });
 
-  it("I23: a prop-bearing <Else> is rejected", function* () {
+  it("IF23: a prop-bearing <Else> is rejected", function* () {
     const literal = yield* runIf('<If condition={false}>a<Else when="x">b</Else></If>');
     expect(errorMessages(literal.segments)[0]).toContain("accepts no props");
 
@@ -236,29 +248,92 @@ describe("Tier If — <Else> structure", () => {
     expect(errorMessages(expression.segments)[0]).toContain("accepts no props");
   });
 
-  it("I24: a malformed <Else> in the unselected branch is still diagnosed", function* () {
+  it("IF24: a malformed <Else> in the unselected branch is still diagnosed", function* () {
     const run = yield* runIf('<If condition={true}>SELECTED<Else when="x">OTHER</Else></If>');
     expect(errorMessages(run.segments)[0]).toContain("accepts no props");
     expect(run.output).not.toContain("SELECTED");
   });
 
-  it("I25: a nested <If> owns the <Else> beneath it", function* () {
+  it("IF25: a nested <If> owns the <Else> beneath it", function* () {
     const run = yield* runIf(
       "<If condition={true}><If condition={false}>x<Else>y</Else></If><Else>z</Else></If>",
     );
     expect(errorMessages(run.segments)).toHaveLength(0);
     expect(run.output).toBe("y");
   });
+
+  it("IF26: whitespace after </Else> is formatting, not a third branch", function* () {
+    const run = yield* runIf(
+      ["<If condition={true}>", "SELECTED", "<Else>", "alternative", "</Else>", "</If>"].join("\n"),
+    );
+    expect(errorMessages(run.segments)).toHaveLength(0);
+    expect(run.output.trim()).toBe("SELECTED");
+  });
+
+  it("IF27: substantive text after </Else> is rejected", function* () {
+    const run = yield* runIf(
+      [
+        "<If condition={true}>",
+        "before",
+        "<Else>",
+        "alternative",
+        "</Else>",
+        "after",
+        "</If>",
+      ].join("\n"),
+    );
+    const message = errorMessages(run.segments)[0] ?? "";
+    expect(message).toContain("must be the final substantive child of <If>");
+    expect(message).toContain('text "after"');
+    expect(run.output).not.toContain("before");
+  });
+
+  it("IF28: a component after </Else> is rejected and never imported", function* () {
+    const run = yield* runIf(
+      "<If condition={true}>before<Else>alternative</Else><Trailing /></If>",
+    );
+    expect(errorMessages(run.segments)[0]).toContain("Found <Trailing> after </Else>");
+    expect(run.imports).toHaveLength(0);
+    expect(run.output).not.toContain("before");
+  });
+
+  it("IF29: an executable block after </Else> is rejected and never runs", function* () {
+    const run = yield* runIf(
+      [
+        "<If condition={true}>",
+        "before",
+        "<Else>alternative</Else>",
+        "",
+        "```bash exec",
+        "echo trailing",
+        "```",
+        "",
+        "</If>",
+      ].join("\n"),
+    );
+    expect(errorMessages(run.segments)[0]).toContain("code block after </Else>");
+    expect(run.blocks).toHaveLength(0);
+  });
+
+  it("IF30: trailing content is rejected even when <Else> is the selected branch", function* () {
+    const run = yield* runIf(
+      ["<If condition={false}>", "before", "<Else>", "SELECTED", "</Else>", "after", "</If>"].join(
+        "\n",
+      ),
+    );
+    expect(errorMessages(run.segments)[0]).toContain("must be the final substantive child of <If>");
+    expect(run.output).not.toContain("SELECTED");
+  });
 });
 
-describe("Tier If — the unselected branch performs no work", () => {
-  it("I26: it imports no component", function* () {
+describe("Tier IF — the unselected branch performs no work", () => {
+  it("IF31: it imports no component", function* () {
     const run = yield* runIf("<If condition={false}><Missing /><Else>alt</Else></If>");
     expect(run.output).toBe("alt");
     expect(run.imports).toHaveLength(0);
   });
 
-  it("I27: it runs no code block", function* () {
+  it("IF32: it runs no code block", function* () {
     const source = [
       "<If condition={false}>",
       "",
@@ -274,7 +349,7 @@ describe("Tier If — the unselected branch performs no work", () => {
     expect(run.blocks).toHaveLength(0);
   });
 
-  it("I28: the selected branch does run its code block", function* () {
+  it("IF33: the selected branch does run its code block", function* () {
     const source = [
       "<If condition={true}>",
       "",
@@ -290,34 +365,34 @@ describe("Tier If — the unselected branch performs no work", () => {
     expect(run.output).toContain("ran:echo selected");
   });
 
-  it("I29: a component in the unselected <Else> is never imported", function* () {
+  it("IF34: a component in the unselected <Else> is never imported", function* () {
     const run = yield* runIf("<If condition={true}>then<Else><Missing /></Else></If>");
     expect(run.output).toBe("then");
     expect(run.imports).toHaveLength(0);
   });
 });
 
-describe("Tier If — diagnostics carry source positions", () => {
-  it("I30: a local position anchors the diagnostic", function* () {
+describe("Tier IF — diagnostics carry source positions", () => {
+  it("IF35: a local position anchors the diagnostic", function* () {
     const run = yield* runIf("line one\n<If>body</If>\n");
     expect(errorMessages(run.segments)[0]).toContain("(2:1)");
   });
 
-  it("I31: an origin adds the file path", function* () {
+  it("IF36: an origin adds the file path", function* () {
     const run = yield* runIf("\n<If condition={1}>body</If>", {
       origin: { path: "Doc.md", baseOffset: 40, baseLine: 5 },
     });
     expect(errorMessages(run.segments)[0]).toContain("(Doc.md:6:1)");
   });
 
-  it("I32: a stray <Else> reports its own position", function* () {
+  it("IF37: a stray <Else> reports its own position", function* () {
     const run = yield* runIf("intro\n<Else>orphan</Else>", {
       origin: { path: "Doc.md", baseOffset: 0, baseLine: 1 },
     });
     expect(errorMessages(run.segments)[0]).toContain("(Doc.md:2:1)");
   });
 
-  it("I33: an element with no position diagnoses without one", function* () {
+  it("IF38: an element with no position diagnoses without one", function* () {
     const element: ComponentElement = {
       type: "component",
       name: "If",
@@ -335,10 +410,10 @@ describe("Tier If — diagnostics carry source positions", () => {
   });
 });
 
-describe("Tier If — document execution", () => {
+describe("Tier IF — document execution", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("I34: only the selected branch reaches the journal", function* () {
+  it("IF39: only the selected branch reaches the journal", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "test.md": [
@@ -374,7 +449,7 @@ describe("Tier If — document execution", () => {
     expect(evaluated).not.toContain("UNSELECTED_RAN");
   });
 
-  it("I35: an effect in the unselected branch never happens", function* () {
+  it("IF40: an effect in the unselected branch never happens", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "test.md": [
@@ -395,7 +470,7 @@ describe("Tier If — document execution", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  it("I36: a component in the unselected branch is never imported", function* () {
+  it("IF41: a component in the unselected branch is never imported", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "components/Boom.md": "```js eval\noutput('BOOM_RAN');\n```\n",
@@ -410,32 +485,54 @@ describe("Tier If — document execution", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  it("I37: the selected branch replays deterministically", function* () {
+  it("IF42: <If> selects the same branch from a restored binding on partial replay", function* () {
+    const REPLAY_DOC = [
+      "```js eval",
+      "const findings = ['stale doc'];",
+      "```",
+      "<If condition={findings.length === 0}>",
+      "```js eval",
+      "output('CLEAN_RAN');",
+      "```",
+      "<Else>",
+      "```js eval",
+      "output('NEEDS_WORK_RAN');",
+      "```",
+      "</Else>",
+      "</If>",
+    ].join("\n");
+
     const stream = new InMemoryStream();
-    yield* useStubFs({
-      "test.md": [
-        "```js eval",
-        "const findings = ['stale doc'];",
-        "```",
-        "<If condition={findings.length === 0}>",
-        "clean",
-        "<Else>",
-        "needs work: {findings.length}",
-        "</Else>",
-        "</If>",
-      ].join("\n"),
-    });
+    yield* useStubFs({ "test.md": REPLAY_DOC });
     yield* useEchoExec();
 
     const golden = yield* collect(yield* execute({ path: "test.md", stream }));
-    const replayed = yield* collect(yield* execute({ path: "test.md", stream }));
+    expect(golden).toContain("NEEDS_WORK_RAN");
+    expect(golden).not.toContain("CLEAN_RAN");
 
-    expect(golden).toContain("needs work: 1");
-    expect(golden).not.toContain("clean");
+    // Cut the journal to the root import plus the eval that binds `findings`.
+    // Replaying a stream that still carries the root Close would return the
+    // stored result without running the document at all, which would prove
+    // nothing about branch selection.
+    const events = stream.snapshot();
+    const bindingEval = events.findIndex(isEvalYield);
+    expect(bindingEval).toBeGreaterThanOrEqual(0);
+    const partial = new InMemoryStream(events.slice(0, bindingEval + 1));
+    expect(partial.snapshot().some((event) => event.type === "close")).toBe(false);
+
+    const replayed = yield* collect(yield* execute({ path: "test.md", stream: partial }));
+
+    // The branch was reached live: it appended its own eval entry rather than
+    // replaying one, and the restored boolean still selected <Else>.
     expect(replayed).toBe(golden);
+    expect(partial.appendCount).toBeGreaterThan(0);
+
+    const evaluated = JSON.stringify(partial.snapshot().filter(isEvalYield));
+    expect(evaluated).toContain("NEEDS_WORK_RAN");
+    expect(evaluated).not.toContain("CLEAN_RAN");
   });
 
-  it("I38: an <If> projected through <Content /> resolves the caller's binding", function* () {
+  it("IF43: an <If> projected through <Content /> resolves the caller's binding", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "components/Wrap.md": "<Content />",
@@ -455,5 +552,145 @@ describe("Tier If — document execution", () => {
     expect(output).toContain("WAITING");
     expect(output).not.toContain("READY");
     expect(output).not.toContain("ERROR");
+  });
+});
+
+/**
+ * Direct probes at each mechanism an unselected branch could reach. Rendered
+ * output alone cannot distinguish "never ran" from "ran and rendered nothing",
+ * so every probe counts calls at the API itself and pairs the unselected case
+ * with a selected control that proves the counter would have moved.
+ */
+describe("Tier IF — the unselected branch reaches no external mechanism", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  const PROBE_DOC = (condition: boolean) =>
+    [
+      `<If condition={${condition}}>`,
+      "<Probe />",
+      "",
+      "```bash exec",
+      "echo THEN_RAN",
+      "```",
+      "",
+      "```js eval",
+      'const thenBinding = "then";',
+      "```",
+      "<Else>",
+      "alternative",
+      "</Else>",
+      "</If>",
+      "[{thenBinding}]",
+    ].join("\n");
+
+  interface ProbeRun {
+    output: string;
+    /** Element names offered to the `Component.expand` extension hook. */
+    expanded: string[];
+    /** Every path the document caused the Fs Api to stat or read. */
+    reads: string[];
+    /** Every command handed to the process runtime. */
+    commands: string[];
+    events: DurableEvent[];
+  }
+
+  /**
+   * Each run gets its own scope: `useStubFs` installs a terminal Fs handler, so
+   * two runs in one scope would leave the first document answering for both.
+   * The stub records rather than wrapping for the same reason — a recorder
+   * layered around a terminal handler never sees the call.
+   */
+  function runProbe(condition: boolean): Operation<ProbeRun> {
+    return scoped(function* () {
+      const expanded: string[] = [];
+      const reads: string[] = [];
+      const commands: string[] = [];
+      const stream = new InMemoryStream();
+      const files: Record<string, string> = {
+        "components/Probe.md": "PROBE_BODY",
+        "test.md": PROBE_DOC(condition),
+      };
+
+      yield* API.Fs.around({
+        // deno-lint-ignore require-yield
+        *readTextFile([path], _next) {
+          reads.push(path);
+          const content = files[path];
+          if (content === undefined) {
+            throw new Error(`ENOENT: no such file: ${path}`);
+          }
+          return content;
+        },
+        // deno-lint-ignore require-yield
+        *stat([path], _next): Operation<StatResult> {
+          reads.push(`stat:${path}`);
+          const exists = path in files;
+          return { exists, isFile: exists, isDirectory: false };
+        },
+        // deno-lint-ignore require-yield
+        *glob(_args, _next) {
+          throw new Error("glob not stubbed");
+        },
+      });
+      yield* API.Process.around({
+        // deno-lint-ignore require-yield
+        *exec([options], _next) {
+          commands.push(options.command.join(" "));
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+      yield* Component.around({
+        *expand([element], next) {
+          expanded.push(element.name);
+          return yield* next(element);
+        },
+      });
+
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
+      return { output, expanded, reads, commands, events: stream.snapshot() };
+    });
+  }
+
+  it("IF44: no component element in the unselected branch is offered to expand", function* () {
+    const skipped = yield* runProbe(false);
+    expect(skipped.expanded).not.toContain("Probe");
+
+    const selected = yield* runProbe(true);
+    expect(selected.expanded).toContain("Probe");
+  });
+
+  it("IF45: no component file is looked up or read for the unselected branch", function* () {
+    const skipped = yield* runProbe(false);
+    expect(skipped.reads).toEqual(["test.md"]);
+
+    const selected = yield* runProbe(true);
+    expect(selected.reads).toContain("stat:components/Probe.md");
+    expect(selected.reads).toContain("components/Probe.md");
+  });
+
+  it("IF46: the process runtime is never invoked for an unselected exec block", function* () {
+    const skipped = yield* runProbe(false);
+    expect(skipped.commands).toHaveLength(0);
+
+    const selected = yield* runProbe(true);
+    expect(selected.commands.some((command) => command.includes("THEN_RAN"))).toBe(true);
+  });
+
+  it("IF47: an unselected branch writes no exec or eval durable event", function* () {
+    const skipped = yield* runProbe(false);
+    expect(skipped.events.filter(isExecYield)).toHaveLength(0);
+    expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
+
+    const selected = yield* runProbe(true);
+    expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
+    expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
+  });
+
+  it("IF48: an unselected branch creates no binding for later content", function* () {
+    const skipped = yield* runProbe(false);
+    expect(skipped.output).toContain("[{thenBinding}]");
+
+    const selected = yield* runProbe(true);
+    expect(selected.output).toContain("[then]");
   });
 });

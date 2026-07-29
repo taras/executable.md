@@ -123,7 +123,7 @@ const repliesText = hasRepliesToClassify
   : "";
 ```
 
-<If condition={hasRepliesToClassify}>
+<Show when={hasRepliesToClassify}>
 
 <Capture as="classificationResult">
 
@@ -156,7 +156,7 @@ while ((cm = classPattern.exec(classificationResult)) !== null) {
 }
 ```
 
-</If>
+</Show>
 
 ```ts eval
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ const appliedSet = new Set(
 const hasHistory = previousFindings.length > 0;
 ```
 
-<If condition={hasPairs}>
+<Show when={hasPairs}>
 
 <Capture as="sampleResult">
 
@@ -247,7 +247,7 @@ for (const pf of pendingFindings) {
 
 // Redeclared, not reassigned: bindings from earlier eval blocks arrive in
 // later blocks as consts, so assignment throws. A fresh declaration shadows
-// the injected binding and its export overrides env for the <If> below.
+// the injected binding and its export overrides env for the <Show> below.
 const hasChecklist = checklistItems.length > 0;
 const checklistMd = checklistItems.map(item => {
   const checked = item.status !== "pending" ? "x" : " ";
@@ -263,16 +263,16 @@ const checklistMd = checklistItems.map(item => {
 const newDismissReplies = dismissedReplies.filter(d => !d.alreadyProcessed);
 ```
 
-<If condition={hasFindings}>
+<Show when={hasFindings}>
 
 <SuggestRemoval findings={pendingFindings} dismissedReplies={newDismissReplies} />
 
-</If>
+</Show>
 
-</If>
+</Show>
 
-<If condition={hasChecklist}>
+<Show when={hasChecklist}>
 
 {checklistMd}
 
-</If>
+</Show>

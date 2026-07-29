@@ -13,24 +13,24 @@ props:
 <ReviewSection heading="Static Analysis"
   clean="✅ Oxlint found no issues.">
 
-<If condition={!doctor.oxlintInstalled}>
+<Show when={!doctor.oxlintInstalled}>
 
 🟡 Oxlint not installed. Static analysis skipped.
 
-</If>
+</Show>
 
-<If condition={doctor.oxlintInstalled && diagnostics.total > 0}>
+<Show when={doctor.oxlintInstalled && diagnostics.total > 0}>
 
 {diagnostics.summary}
 
-</If>
+</Show>
 
-<If condition={doctor.bloatRulesMissing.length > 0
-            && doctor.oxlintInstalled}>
+<Show when={doctor.bloatRulesMissing.length > 0
+         && doctor.oxlintInstalled}>
 
 *{doctor.bloatRulesMissing.length} type-aware rules unavailable
 — install `oxlint-tsgolint` for full coverage.*
 
-</If>
+</Show>
 
 </ReviewSection>

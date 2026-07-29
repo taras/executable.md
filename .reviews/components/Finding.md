@@ -17,8 +17,8 @@ props:
 const icon = severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
 ```
 
-<If condition={when}>
+<Show when={when}>
 
 {icon} {message}
 
-</If>
+</Show>

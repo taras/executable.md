@@ -15,6 +15,14 @@ const NO_ELSE = `<If condition={releaseChanged}>
 > Release configuration changed — update the release spec.
 </If>`;
 
+const TRAILING = `<If condition={hasFailures}>
+Failures found.
+<Else>
+All checks passed.
+</Else>
+This line is an error — it belongs to neither branch.
+</If>`;
+
 const NESTED = `<Review as="review" />
 
 <If condition={review.passed}>
@@ -66,6 +74,17 @@ export default define.page(function ControlFlow() {
         Without <code>&lt;Else&gt;</code>, a false condition renders nothing.
       </p>
       <CodeBlock>{NO_ELSE}</CodeBlock>
+
+      <p>
+        An <code>&lt;If&gt;</code> has exactly two branches, so{" "}
+        <code>&lt;Else&gt;</code>{" "}
+        is its final substantive child. Blank lines between{" "}
+        <code>&lt;/Else&gt;</code> and <code>&lt;/If&gt;</code>{" "}
+        are formatting and are ignored, but any content there belongs to neither
+        branch and is an error rather than a third region quietly attached to
+        the true branch.
+      </p>
+      <CodeBlock>{TRAILING}</CodeBlock>
 
       <h2>Only the selected branch expands</h2>
       <p>

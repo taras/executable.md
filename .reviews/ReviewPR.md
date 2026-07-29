@@ -94,8 +94,8 @@ git diff --name-only {BASE_SHA}...{HEAD_SHA} -- '*.ts' '*.tsx' | grep -v '\.test
 
 <Capture as="rawDiagnostics">
 
-<If condition={doctor.recommendation === "type-aware"
-            || doctor.recommendation === "type-aware-filtered"}>
+<Show when={doctor.recommendation === "type-aware"
+         || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
 if [ -n "{changedTsFiles}" ]; then
@@ -105,10 +105,10 @@ else
 fi
 ```
 
-</If>
+</Show>
 
-<If condition={doctor.recommendation === "syntax-only"
-            && doctor.oxlintInstalled}>
+<Show when={doctor.recommendation === "syntax-only"
+         && doctor.oxlintInstalled}>
 
 ```bash exec
 if [ -n "{changedTsFiles}" ]; then
@@ -118,13 +118,13 @@ else
 fi
 ```
 
-</If>
+</Show>
 
-<If condition={!doctor.oxlintInstalled}>
+<Show when={!doctor.oxlintInstalled}>
 
 []
 
-</If>
+</Show>
 
 </Capture>
 
