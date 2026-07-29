@@ -510,8 +510,8 @@ Observable behavior of an `eval` block:
 
 **`daemon`** — spawns a long-running subprocess and immediately
 returns control to the document. The process is alive for the
-duration of component expansion and killed when the component scope
-closes. Unlike `exec`, it produces no journal entry and never waits
+duration of the component invocation and killed when that invocation's
+eval scope closes (§4.4). Unlike `exec`, it produces no journal entry and never waits
 for the process to exit.
 
 `daemon` is a **terminal modifier** — it ignores `next()` and does
@@ -535,7 +535,7 @@ and signals to readers that this block runs a command.
 | Waits for exit | Yes | No |
 | Journal entry | Yes — stdout/stderr/exitCode | No |
 | Crash detection | Via non-zero exit code in result | Via `daemon()` from `@effectionx/process` throwing |
-| Lifetime | Until command exits | Until component scope closes |
+| Lifetime | Until command exits | Until the component invocation completes |
 | Repeated-run behavior | Spawns a fresh subprocess every run | Spawns a fresh subprocess every run |
 
 Observable behavior of a `daemon` block:
@@ -549,9 +549,9 @@ Observable behavior of a `daemon` block:
 
 **Process lifetime.** The forked task calls `daemon(command)` from
 `@effectionx/process`. `daemon` spawns the process and suspends
-indefinitely. When the eval scope closes (component expansion
-completes), the forked task is cancelled, which tears down the daemon
-and terminates the subprocess. No explicit teardown, no finalizer
+indefinitely. When the invocation's eval scope closes — the third stage of
+the invocation teardown in §4.4 — the forked task is cancelled, which tears
+down the daemon and terminates the subprocess. No explicit teardown, no finalizer
 registration, no lifecycle hooks are required — Effection's structured
 concurrency handles it.
 
@@ -562,8 +562,8 @@ to the component expansion, failing it before any child blocks are
 attempted. The error surfaces as an `ErrorSegment`.
 
 **Repeated-run behavior.** `daemon` runs on every document execution. The
-process starts, runs for the duration of expansion, and is terminated when
-the component scope closes.
+process starts, runs for the duration of the component invocation, and is
+terminated when that invocation completes.
 
 #### Built-in wrapping handlers
 
@@ -1052,7 +1052,7 @@ Every generated eval module is prepended with standard imports:
 import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";
 import { when } from "@effectionx/converge";
 import { fetch } from "@effectionx/fetch";
-import { useContent, Sample } from "@executablemd/core";
+import { Sample } from "@executablemd/core";
 import { findFreePort } from "@executablemd/runtime";
 ```
 
@@ -1060,6 +1060,18 @@ These imports resolve through Deno's import map (`deno.json`).
 `@executablemd/core` re-exports executable.md-specific APIs from its root
 barrel (`packages/core/mod.ts`); `findFreePort` comes from `@executablemd/runtime`
 (and is also re-exported by `packages/core/mod.ts`).
+
+`useContent` is **not** among them. It projects content, and a projection
+settles its errors under the policy of the block that started it, which the
+binding environment carries per evaluation (§4.3) and a module import cannot.
+It arrives instead as a bare binding alongside `renderChildren` and `render`. A
+block may still import it explicitly, which shadows the binding and settles
+under the invocation's baseline policy — a low-level escape hatch, not the
+ordinary way to project content.
+
+A name a block imports is treated as already declared, so the preamble never
+destructures it from `env` as well; an explicit import and an injected binding
+of the same name cannot collide.
 
 The exact list lives in the `STANDARD_IMPORTS` constant, which both
 compilers share (`src/data-uri-compiler.ts`, `src/temp-file-compiler.ts`).
@@ -1186,19 +1198,88 @@ scope-locally around each component body, so eval blocks within a
 component share bindings without leaking into parent or sibling
 components.
 
+**Each evaluation runs against a snapshot, and commits its exports.** A block
+receives a plain object holding the bindings as they stood when it started. Its
+declared exports are published to the shared record once it completes
+successfully — which is what carries a function or a live object to later
+blocks, since the journal keeps only the JSON-serializable subset (§4.5).
+
+A block therefore never observes a later block's changes to the shared record,
+and work that outlives its block keeps the values it captured. Nothing is
+written to the invocation's contexts and nothing is swapped on the shared
+record, so evaluations cannot interfere with one another's bindings.
+
+`renderChildren`, `render` and `useContent` project content, and a projection
+settles its errors under the policy of the block that started it (§6.9) — a
+`persist eval` block runs on the invocation's eval-scope loop task, which was
+created before that policy existed and does not inherit it. The snapshot carries
+those three as ordinary closures bound to the policy where the block sits, so
+persistent work keeps projecting under its own.
+
 ### 4.4 Eval scope and resource lifetime
 
-Each document gets a dedicated **eval scope** — an Effection scope whose
-lifetime matches the document's expansion. Resources spawned by `persist`
-blocks are retained in this scope until expansion completes. The current
-eval scope is read contextually via the `evalScope` value (§5.5).
+An **eval scope** anchors resources that outlive the block which created them.
+The current one is read contextually via the `evalScope` value (§5.5). There are
+three, nested:
 
-The eval scope is created in `execute()` (§8.1) **before**
-`durableRun` via `resource(useEvalScope())`. This is critical:
-`evalScope.eval()` sends to a channel whose processor must be
-reachable by the Effection scheduler — this only works when both sender
-and processor share an ancestor scope outside the durable execution
-boundary.
+- the **document** scope, created in `execute()` (§8.1) **before** `durableRun`.
+  This is critical: `evalScope.eval()` sends to a channel whose processor must be
+  reachable by the Effection scheduler, which only works when both sender and
+  processor share an ancestor scope outside the durable execution boundary.
+  Root-level blocks anchor here.
+- an **invocation** scope, one per component invocation (§6.2). `persist` blocks
+  and daemons in a component's body anchor here.
+- a **content** scope, created at an invocation's first projection and shared by
+  the rest of them (§6.3). Everything projected content creates anchors here —
+  Markdown `<Content />`, `useContent()`, `renderChildren()` and `render()`
+  alike.
+
+#### The invocation boundary
+
+A component invocation creates its eval scope on its own expansion frame and
+runs its body inside a task that scope owns:
+
+```
+invocation frame           expansion providers, error policy, DurableCtx
+└─ evalHost
+   └─ A's loop task        the invocation's eval scope
+      └─ body task         the component body, its resources and its middleware
+         └─ content host   the content scope, at the first projection
+```
+
+One context chain therefore carries the expansion providers down to projected
+content and persistent middleware back up: middleware a component installs is
+visible to its projected content, including persistent work created there, and
+ancestor persistent middleware stays visible to nested invocations. The body is
+a child task of the loop task rather than the loop itself, so a block calling
+`evalScope.eval()` never waits on the channel that is running it.
+
+An invocation needs no ambient eval scope to exist. Expansion driven directly
+through `expandSegments` — without the document scope — still gives every
+invocation its own.
+
+#### Teardown
+
+Leaving an invocation runs one destructor with three ordered stages:
+
+1. halt the content scope, to completion — everything projected content created;
+2. halt the body — the resources the component itself acquired;
+3. halt the invocation scope — whatever `persist` and `daemon` retained.
+
+Each stage finishes before the next begins, so projected content has stopped
+before the component releases anything of its own, whichever order the component
+happened to acquire things in. The ordering is the boundary's, not a
+consequence of acquisition order within a scope: a provider that retains a
+resource *after* projecting still releases it after that content stops. Every stage is attempted even when an earlier one
+fails; the failures are reported together as one teardown error.
+
+Success, error and cancellation all leave through that destructor. A body that
+throws has its throw caught at its task boundary, so its resources are still
+alive when the first stage runs.
+
+Nested invocations tear down leaf-first: a component inside projected content
+has its own boundary beneath the content scope, so halting that scope dismantles
+the whole subtree first. Sibling invocations share nothing.
 
 #### The persistent-flag pattern
 
@@ -1213,7 +1294,7 @@ processor. Instead:
 3. When true, only the **compiled VM block** (`fn(env.values)`) runs
    inside `evalScope.eval()` — not the entire modifier chain
 4. Resources spawned during that execution are retained until the
-   eval scope is destroyed (when component expansion completes)
+   invocation's eval scope is destroyed, when the invocation completes
 
 ### 4.5 Eval journal entries
 
@@ -1246,6 +1327,10 @@ run but are absent from the diagnostic trace.
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `useContent()` — content slot access for function components |
+| `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
+| `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
+| `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
+| `src/errors.ts` | `AmbientErrorPolicy`, `settle()`, `DocumentationError` — error settlement (§6.9) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
@@ -1631,8 +1716,14 @@ export default function*(props: Record<string, Json>) {
 **Contract:**
 
 ```typescript
+/**
+ * One run of a component: durable-capable, and free to acquire runtime
+ * resources that belong to the component invocation.
+ */
+export type ComponentExecution<T> = Operation<T>;
+
 export interface FunctionComponent {
-  (props: Record<string, Json>): Operation<Json>;
+  (props: Record<string, Json>): ComponentExecution<Json>;
 }
 
 export interface FunctionComponentDefinition {
@@ -1644,6 +1735,24 @@ export interface FunctionComponentDefinition {
   fn: FunctionComponent;
 }
 ```
+
+**Resources.** A component acquires resources with ordinary operations —
+`yield* useTempDir()` — and needs no wrapper of its own. They belong to the
+invocation and are released when it completes, after the content it projected
+has stopped (§4.4), so a component can hold something open for its children:
+
+```typescript
+export default function*() {
+  const directory = yield* useTempDir();
+  return yield* useContent();
+}
+```
+
+Durable effects a component yields are journaled and replayed as usual, because
+the engine runs it inside the document's durable routine. The two compose: a
+component may perform a durable effect and hold an ordinary resource in the same
+body, and on replay the effect is restored from the journal while the resource
+is re-established.
 
 **Props declaration.** Function components declare their props via
 a named `export const props = { ... }` holding a canonical draft-07
@@ -2018,7 +2127,7 @@ interface, and each operation is also exported directly:
 |---|---|---|
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
-| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9) | returns the supplied segment |
+| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9) | settles it: collected, or thrown inside documentation |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
 | `expand(element)` | Offer a component element to extensions before built-in expansion (§6.1) | returns `undefined` — unclaimed |
@@ -2161,6 +2270,10 @@ Expanding a component invocation proceeds as:
   that binding in the caller's environment and nothing is emitted at the call
   site — capturing only the selected output when the component declares
   `<Output>`.
+- **Resource lifetime.** The whole invocation runs inside its own resource scope
+  (§4.4). Resources it creates — `persist` blocks, daemons, anything a component
+  acquires while its body runs — are released when the invocation completes,
+  after the content it projected has stopped.
 
 Cycle detection and depth limiting are runtime operations — no journal
 entries. They are deterministic from the component dependency graph read in
@@ -2235,7 +2348,27 @@ Invalid slot names (empty strings or names not matching
 `errors` array. These are emitted at the first `<Content />` or
 `<Content slot="..." />` projection point.
 
-#### 6.3.4 Updated `substituteContent`
+#### 6.3.4 Projection and where it executes
+
+Slot resolution happens during body substitution — partitioning, validation and
+the once-only slot errors of §6.3.3 — and the resolved segments ride on the
+`<Content />` element rather than replacing it. Expansion then runs them in the
+invocation's content scope (§4.4), so a resource projected content creates stops
+when that scope is halted, before the component releases its own.
+
+Only the resource scope moves. The binding environment, `{meta.key}` /
+`{props.key}` inputs, cycle-detection hide set and block counter are the body's,
+exactly as they are for content spliced in place, and expression props on
+projected children still resolve against the caller's environment.
+
+The error policy travels with them. A content task does not inherit the
+documentation or `<Output>` frame the `<Content />` sits in, so the policy is
+captured at the expansion site and carried across (§6.9): a projected error in
+documentation stops the body, and the same error inside an output region renders
+as a comment. It is reported once, where it is created, and passes back to the
+caller as an ordinary segment.
+
+`substituteContent` resolves the slots:
 
 ```typescript
 function substituteContent(
@@ -3205,6 +3338,15 @@ An error a nested component renders inside its own output region is a normal
 comment when that component renders normally; but when that component is
 executed as a parent's documentation, the parent's documentation fail-fast
 applies and the error propagates rather than being hidden.
+
+**Reporting and settling are separate.** `Component.raise` is where an error is
+reported: its middleware chain observes each `ErrorSegment` once, where the
+segment is created, which is what lets instrumentation and `<Test>` count
+failures. Its default implementation then *settles* the segment under the
+ambient policy — collected for rendering, or thrown as a documentation failure.
+A documentation chunk and an `<Output>` region select the policy by value rather
+than by installing reporting middleware, so an error crossing from a component's
+own policy into its caller's is settled again without being reported twice.
 
 #### Root and component consistency
 
@@ -4231,7 +4373,7 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | L1 | `persist eval` retains spawned resource | Resource spawned in block survives block completion |
 | L2 | Non-persist eval tears down resource | Resource spawned in block torn down at block end |
-| L3 | Persist resource lifetime matches component | Resource torn down when component expansion completes |
+| L3 | Persist resource lifetime matches component | Resource is observably gone once the invocation completes, while the document still runs |
 | L4 | Persistent flag scoped to chain | `persistent` is `true` only during the persist-wrapped chain |
 | L5 | Multiple persist blocks in one component | Each retains its own resources independently |
 | L6 | Persist on repeated run | Resource is created and retained again for the current component lifetime |
@@ -4254,6 +4396,28 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | O1 | Eval scope created before durableRun | `resource(useEvalScope())` runs in outer scope, not inside durable execution |
 | O2 | Eval scope destroyed on document completion | All retained resources cleaned up when expansion finishes |
+| O3 | Invocation scope destroyed with the invocation | A resource retained by a component stops when it completes, while the document keeps running |
+| O4 | Component resource live during projection | A resource a TypeScript component acquires directly is running while its projected content executes |
+| O5 | Projected content stops first | `start:own, start:projected, stop:projected, stop:own` — no `ephemeral()`, `scoped()` or wrapper in the component |
+| O6 | Ordering is the boundary's | Same order when the resource is acquired after the first projection: `start:projected, start:own, stop:projected, stop:own` |
+| O7 | Markdown `<Content />` lifetime | A provider retaining a resource *after* projecting still releases it after the projected content stops |
+| O11/O12 | Propagated body error | Both component forms stop projected content before releasing their own |
+| O13/O14 | Cancellation | Both forms tear down in the same order when halted mid-projection |
+| O15 | TypeScript nesting | Nested invocations leaf-first; siblings isolated |
+| O25 | Exports commit to shared bindings | A later block reads a declared export, including a live object the journal cannot carry |
+| O26 | Snapshot isolation | A later evaluation rebinding a name does not reach the closure persistent work captured |
+| O28 | `<Content />` in documentation | A projected error stops the body instead of being collected and discarded with the region |
+| O29 | `<Content />` inside `<Output>` | The same error renders once and the region still emits |
+| O30 | Value-component documentation | A projected error fails fast rather than being discarded |
+| O27 | Explicit import | An explicitly imported `useContent` compiles without a duplicate injected declaration |
+| O9 | Content teardown failure | Stages 2 and 3 still run, in order, and the failure is reported |
+| O10 | Body teardown failure | Reported after every stage has run |
+| O18 | Nested and sibling invocations | Nested invocations tear down leaf-first; siblings never interleave |
+| O19 | No ambient eval scope required | A component expands, and projects content, with no `evalScope` provider installed |
+| O21 | Boundary owns its scope | Invocation resources are gone the moment expansion returns, inside a longer-lived parent scope |
+| O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
+| O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
+| O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
 
 ### Tier P — Eval binding interpolation
 
@@ -4276,9 +4440,9 @@ visible warning blocks, collect into a separate error report).
 | Q2 | `daemon` produces no journal entry | Journal has no entry for `daemon` block |
 | Q3 | `daemon` returns empty output | `result.output === ""`, `exitCode === 0` |
 | Q4 | Process forked into eval scope | Process alive during `<children />` expansion |
-| Q5 | Process terminated when component scope closes | After expansion, process is not running |
+| Q5 | Process terminated when the invocation completes | A `kill -0` probe in a block after the component, while the document is still running, reports the process gone |
 | Q6 | Process terminated on component error | If child expansion throws, process still terminated |
-| Q7 | Process terminated on parent cancellation | If parent scope cancelled, process terminated |
+| Q7 | Root cancellation resolves promptly | Cancelling the root resolves instead of waiting on the daemon's blocks; invocation teardown order is covered by Tier O |
 | Q8 | Premature exit propagates as error | Process exits during expansion → `daemon()` throws → `ErrorSegment` in output |
 | Q9 | `{port}` interpolation in daemon content | Binding from preceding `eval` block substituted into command |
 | Q10 | `daemon` without eval scope | No eval scope in scope → clear error |

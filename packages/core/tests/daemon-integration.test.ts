@@ -74,6 +74,50 @@ describe("Tier Q — Daemon integration", () => {
     }
   });
 
+  // Q5: the daemon dies with the component invocation, not with the document.
+  // A probe placed after the component — still inside the same run — is the
+  // only way to tell those two apart.
+  it("Q5: a daemon in a component is gone once the invocation completes", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const pidFile = path.join(tmpDir, "daemon.pid");
+      writeFiles(tmpDir, {
+        "components/Holder.md": [
+          "```bash daemon exec",
+          `sh -c 'echo $$ > ${pidFile}; while true; do sleep 1; done'`,
+          "```",
+          "",
+          "```bash exec",
+          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; echo ready`,
+          "```",
+        ].join("\n"),
+        "doc.md": [
+          "<Holder />",
+          "",
+          "```bash exec",
+          `if kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED; else echo STOPPED; fi`,
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+
+      expect(output).toContain("ready");
+      expect(output).toContain("STOPPED");
+      expect(output).not.toContain("LEAKED");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
   // Q3: daemon returns empty output — no rendered output in document
   it("Q3: daemon produces no rendered output", function* () {
     const tmpDir = makeTempDir();
@@ -297,7 +341,14 @@ describe("Tier Q — Daemon integration", () => {
   // When the parent scope is cancelled (via race with a short sleep),
   // structured concurrency guarantees the daemon subprocess is torn down.
   // Verified by: race resolves without hanging (daemon didn't block teardown).
-  it("Q7: daemon terminated on parent cancellation — race completes", function* () {
+  // Q7: cancelling the root resolves promptly instead of blocking on the
+  // daemon. Invocation-level teardown ORDER is proven deterministically by
+  // Tier O (O13/O14); this row covers only the root-cancellation path.
+  //
+  // Note: a daemon signalled by root cancellation is not reaped by the time
+  // the race resolves. That is pre-existing behaviour — the same probe fails
+  // identically on main — so this row deliberately does not assert it.
+  it("Q7: cancelling the root resolves without waiting for the daemon", function* () {
     const tmpDir = makeTempDir();
 
     try {
@@ -307,7 +358,7 @@ describe("Tier Q — Daemon integration", () => {
           "sleep 300",
           "```",
           "",
-          // This exec block sleeps long enough that we cancel before it finishes
+          // Long enough that cancellation lands mid-document.
           "```bash exec",
           "sleep 300",
           "```",
@@ -316,9 +367,6 @@ describe("Tier Q — Daemon integration", () => {
 
       const stream = new InMemoryStream();
 
-      // Race execute against a short sleep. The sleep wins,
-      // cancelling the execute scope (and the daemon within it).
-      // If daemon cleanup is broken, race would hang for 300s.
       const result = yield* race([
         collect(
           yield* execute({
@@ -329,10 +377,9 @@ describe("Tier Q — Daemon integration", () => {
         sleep(500),
       ]);
 
-      // sleep(500) returns void, collect(execute) returns string.
-      // If sleep won (expected), result is undefined.
-      // Either way, the test passed — race resolved without hanging.
-      expect(true).toBe(true);
+      // The sleep won: execution was cancelled rather than running the two
+      // 300s blocks to completion.
+      expect(result).toBeUndefined();
     } finally {
       cleanup(tmpDir);
     }

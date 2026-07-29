@@ -2,7 +2,6 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { ephemeral } from "@executablemd/durable-streams";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { useContent } from "../src/content-context.ts";
@@ -38,7 +37,7 @@ function echoComponent(name: string, slot?: string): FunctionComponentDefinition
     path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
-      return yield* ephemeral(useContent(slot));
+      return yield* useContent(slot);
     },
   };
 }

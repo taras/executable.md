@@ -115,9 +115,12 @@ export function transformBlock(
   // 3. Collect exports from top-level declarations
   const exports = collectExports(ast);
 
-  // 4. Collect imports — free variables present in env
+  // 4. Collect imports — free variables present in env.
+  // A name the block imports is already declared in the generated module, so
+  // it must never also be destructured from env: that would be a redeclaration.
+  // An explicit import therefore deliberately shadows the injected binding.
   const envKeySet = new Set(currentEnvKeys);
-  const declaredNames = new Set(exports);
+  const declaredNames = new Set([...exports, ...collectImportedNames(importNodes)]);
   const freeVars = collectFreeVariables(ast, declaredNames);
   const imports = freeVars.filter((name) => envKeySet.has(name));
 
@@ -339,6 +342,24 @@ function extractPatternNames(pattern: AstNode): string[] {
  * and is not declared within the block itself. Only names that are in
  * the current env keys set will be injected as imports.
  */
+/** Local names an import declaration binds — default, named and namespace. */
+function collectImportedNames(importNodes: AstNode[]): string[] {
+  const names: string[] = [];
+  for (const node of importNodes) {
+    const specifiers = node.specifiers;
+    if (!Array.isArray(specifiers)) {
+      continue;
+    }
+    for (const specifier of specifiers) {
+      const local = specifier.local;
+      if (local && typeof local.name === "string") {
+        names.push(local.name);
+      }
+    }
+  }
+  return names;
+}
+
 function collectFreeVariables(ast: AstNode, declaredNames: Set<string>): string[] {
   const references = new Set<string>();
   const localDecls = new Set(declaredNames);

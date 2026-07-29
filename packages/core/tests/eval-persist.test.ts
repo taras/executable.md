@@ -132,6 +132,64 @@ describe("Tier T6 — persist modifier", () => {
     expect(threw).toBe(true);
   });
 
+  // L2: without persist, a resource a block spawns is torn down when the block
+  // completes — the negative that gives L3 its meaning.
+  it("L2: a non-persist eval block's resource is gone by the next block", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "test.md": [
+        "```js eval",
+        "const status = { alive: false };",
+        "yield* spawn(function*() {",
+        "  status.alive = true;",
+        "  try { yield* suspend(); } finally { status.alive = false; }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+        "",
+        "```js eval",
+        "const observed = status.alive;",
+        "output(`alive=${observed}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+
+    expect(output).toContain("alive=false");
+  });
+
+  // L3: a persist resource belongs to the invocation, so a block after the
+  // component sees it gone while the document is still running.
+  it("L3: a persist resource stops when the invocation completes", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Holder.md": [
+        "```js persist eval",
+        "globalThis.__l3 = { alive: false };",
+        "yield* spawn(function*() {",
+        "  globalThis.__l3.alive = true;",
+        "  try { yield* suspend(); } finally { globalThis.__l3.alive = false; }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+      ].join("\n"),
+      "doc.md": [
+        "<Holder />",
+        "",
+        "```js eval",
+        "output(`alive=${globalThis.__l3.alive}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    expect(output).toContain("alive=false");
+  });
+
   // T49b: persist eval retains spawned resource across blocks
   // A background task spawned in a persist eval block sets status.ready
   // after 10ms. The next eval block uses when() to converge on it.

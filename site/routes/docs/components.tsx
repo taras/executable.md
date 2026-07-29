@@ -36,6 +36,21 @@ Review passed: {review.summary}
 const VALUE_ROOT = `$ xmd run review.md
 {"passed":true,"summary":"no findings"}`;
 
+const TS_COMPONENT = `import { useContent } from "@executablemd/core";
+
+export const props = {
+  type: "object",
+  properties: { title: { type: "string" } },
+  required: ["title"],
+  additionalProperties: false,
+} as const;
+
+export default function*(props) {
+  const directory = yield* useTempDir();
+  const body = yield* useContent();
+  return \`## \${props.title}\\n\\n\${body}\`;
+}`;
+
 export default define.page(function Components() {
   return (
     <>
@@ -96,6 +111,23 @@ export default define.page(function Components() {
         under <code>--verbose</code>.
       </p>
       <CodeBlock>{VALUE_ROOT}</CodeBlock>
+
+      <h2>TypeScript components</h2>
+      <p>
+        A <code>.ts</code>{" "}
+        file whose default export is a generator function is a component too. It
+        receives validated props, declares them with a named <code>props</code>
+        {" "}
+        export, and reads its children with <code>useContent()</code>.
+      </p>
+      <CodeBlock filename="components/Section.ts">{TS_COMPONENT}</CodeBlock>
+      <p>
+        Resources it acquires belong to the invocation: they stay alive while
+        the content it projects runs, and are released once that content has
+        stopped — so a component can hold something open for its children
+        without managing a scope itself. Durable effects it performs are
+        journaled and replayed as usual.
+      </p>
 
       <h2>How it renders</h2>
       <ul>

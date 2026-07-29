@@ -17,6 +17,7 @@ import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
+import { settle } from "./errors.ts";
 import type {
   CodeBlockContext,
   CodeBlockResult,
@@ -49,9 +50,12 @@ export interface ComponentApi {
   importComponent(name: string): Operation<ComponentDefinition | FunctionComponentDefinition>;
   applyModifiers(modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult>;
   /**
-   * Report an ErrorSegment under the ambient error policy. The default
-   * returns the segment for rendering; suppressed-documentation scopes
-   * install middleware that throws instead (spec §6.9).
+   * Report an ErrorSegment under the ambient error policy (spec §6.9).
+   *
+   * The middleware chain is the observation chain — a segment passes through it
+   * once, where it is created. The default implementation settles it under
+   * `AmbientErrorPolicy`: collected for rendering, or thrown inside
+   * suppressed documentation.
    */
   raise(error: ErrorSegment): Operation<ErrorSegment>;
   env: EvalEnv | undefined;
@@ -97,9 +101,8 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
         `with Component.around({ applyModifiers }, { at: "min" }) before expansion.`,
     );
   },
-  // deno-lint-ignore require-yield
   *raise(error: ErrorSegment): Operation<ErrorSegment> {
-    return error;
+    return yield* settle(error);
   },
   env: undefined,
   evalScope: undefined,

@@ -7,6 +7,9 @@
  */
 
 export type {
+  ComponentExecution,
+  FunctionComponent,
+  FunctionComponentDefinition,
   Segment,
   TextSegment,
   ComponentElement,
@@ -66,6 +69,8 @@ export type { EvalEnv } from "./src/types.ts";
 export { compileBlock } from "./src/eval-context.ts";
 
 export { useContent } from "./src/content-context.ts";
+export { InvocationTeardownError, withInvocation } from "./src/invocation.ts";
+export type { Invocation } from "./src/invocation.ts";
 export { Sample } from "./src/sample-api.ts";
 
 export { evalFactory } from "./src/eval-handler.ts";
