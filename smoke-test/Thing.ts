@@ -1,16 +1,14 @@
 /**
- * One component, written two ways.
+ * One component, one resource, two lifetimes.
  *
- * Both forms acquire the same thing, and for now both own it for the length of
- * the invocation. Written with content that is exactly right — a wrapper's
- * resource should be alive while its content expands and gone afterwards.
- *
- * Written self-closing it is not: the handle it returns is for the caller to
- * use *afterwards*, by which point the resource behind it is already released.
- * The guide observes that rather than hiding it.
+ * Both forms acquire the same thing. What differs is who owns it: written with
+ * content this is a wrapper, so the resource belongs to the invocation and is
+ * released when the wrapping finishes; written self-closing there is nothing
+ * to wrap and the handle is for the caller to use afterwards, so the resource
+ * is retained at the invocation site instead.
  */
 
-import { hasContent, useContent } from "@executablemd/core";
+import { hasContent, retain, useContent } from "@executablemd/core";
 import { ensure, resource } from "effection";
 import type { Operation } from "effection";
 import { hold, nextHandle, release } from "./thing-registry.ts";
@@ -31,9 +29,9 @@ function useThing(): Operation<string> {
 }
 
 export default function* (): Operation<string> {
-  const handle = yield* useThing();
   if (yield* hasContent()) {
+    yield* useThing();
     return yield* useContent();
   }
-  return handle;
+  return yield* retain(useThing);
 }

@@ -115,7 +115,11 @@ export function expandAll(
     const root = yield* useEvalScope();
     yield* useHarness(definitions, timeline, onBlock);
     yield* Component.around({ evalScope: () => root }, { at: "min" });
-    yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
+    // One environment for the whole expansion. A provider returning a fresh
+    // object per read would hand every caller its own, and a binding written
+    // by `as` would be invisible to the next sibling that reads it.
+    const rootEnv = { values: {} };
+    yield* Component.around({ env: () => rootEnv }, { at: "min" });
     return yield* expandSegments(scanSegments(source), {}, {}, new Set());
   });
 }

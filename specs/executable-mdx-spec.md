@@ -1281,6 +1281,74 @@ Nested invocations tear down leaf-first: a component inside projected content
 has its own boundary beneath the content scope, so halting that scope dismantles
 the whole subtree first. Sibling invocations share nothing.
 
+#### Retained resources
+
+A component whose result is only useful while something stays alive — a
+directory a later sibling still has to read, a server a later block still has
+to reach — needs the opposite lifetime: the resource has to outlive the
+invocation that produced it. `retain()` gives it one:
+
+```typescript
+const dir = yield* retain(() => useTemporaryDirectory());
+```
+
+Each call opens an **isolated child of the invocation-site eval scope** — the
+scope that was current where the element was written, read before the
+invocation installs its own — and runs the factory there. The child is owned by
+the site, so the resource lives as long as the site does; nothing is
+transferred, and nothing outlives the tree it was created in. It is released
+when the site succeeds, fails, or is cancelled.
+
+Which scope the site is follows from the nesting above. An element written
+inside another component's projected content retains into that component's
+**content scope**, so it is released by stage 1 of the enclosing invocation's
+teardown — ahead of the resources that component acquired for itself. An
+element at the root retains into the **document scope** and lives for the
+execution.
+
+The child is what keeps retention a lifetime rather than authority over the
+caller. A factory is arbitrary code: run directly on the site it could set a
+context value or install middleware — the same mechanism that lets a `persist`
+block install a provider for the rest of its invocation — and every later
+sibling expanding in that scope would observe it. Inside the child, those
+writes land on the child and stop there. Only the provided value crosses back.
+
+Neither scope is handed to the component. `retain()` takes a factory and
+returns its value; there is no accessor for either, and a component cannot
+inspect or install anything on its caller.
+
+Retaining delays release; it does not opt out of it. The site is an ordinary
+scope, so a retained resource is torn down with it — leaf-first, on success,
+failure, and cancellation alike.
+
+Every invocation answers `retain()` for itself. One with no site to retain into
+reports that rather than falling back to invocation lifetime, which would hand
+the caller a resource that is about to disappear, and rather than deferring to
+whatever provider it happens to inherit, which would create the resource in a
+scope with no relationship to the call site.
+
+#### Retention is component execution, not eval
+
+`retain()` is an operation of TypeScript component execution. A component runs
+in full on every execution, which is what makes invocation-site lifetime
+meaningful: each execution re-establishes what it retained, and each execution's
+site scope releases it.
+
+An eval block does not. Its execution is durable — a replay restores the block's
+exported values from the journal without entering the executor — so a block that
+retained a resource would, on replay, produce a restored value naming a resource
+nothing re-created. Eval execution therefore installs a provider that refuses
+`retain()`; a block that needs a resource to outlive it belongs in a TypeScript
+component. Making eval retention replay-safe is a durability question this
+contract does not answer.
+
+The refusal is installed where the block runs. An ordinary block runs on the
+expansion frame and is refused for the length of the block, so content projected
+later in the same invocation still reaches the invocation's own provider. A
+`persist` block runs on the invocation's eval-scope loop task and is refused
+there, without a nested scope — the work and middleware such a block installs
+belong to that loop task and must outlive the block.
+
 #### The persistent-flag pattern
 
 `persist` does not wrap the entire modifier chain in `evalScope.eval()`.
@@ -2136,6 +2204,7 @@ interface, and each operation is also exported directly:
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
+| `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
 An extension claims component names by wrapping `expand`: it answers
 `{ segments }` for the names it owns and delegates the rest with
@@ -4434,6 +4503,26 @@ visible warning blocks, collect into a separate error report).
 | IS3 | Self-closing has none | `<C />` reports none |
 | IS4 | Asking does not project | A component that only calls `hasContent()` never runs the children it reports on |
 | IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
+
+### Tier RT — Retained resources
+
+| # | Test | Verify |
+|---|------|--------|
+| RT1 | Captured value reaches a sibling | `as` binds the value and a downstream sibling resolves it while the resource is still live |
+| RT2 | Outlives the child invocation | A later sibling invocation starts and stops entirely inside the window where the retained resource is alive |
+| RT3 | Released on site success | `start:retained, stop:retained` when the site scope completes normally |
+| RT4 | Released on site error | The failure propagates and the resource is still released |
+| RT5 | Released on site cancellation | Halting the site scope while the resource is live releases it |
+| RT6 | Nested sites unwind leaf-first | A resource retained inside a component's content stops before that component's own |
+| RT7 | Retention is opt-in | A component that does not call `retain()` keeps invocation lifetime |
+| RT8 | No invocation-site scope | `retain()` reports the missing scope instead of falling back to invocation lifetime |
+| RT8b | Missing site is authoritative | An inherited `retain` provider never answers for an invocation that has no site of its own |
+| RT9 | Root retention | A resource retained at the root outlives every later sibling in the document |
+| RT10 | Halting mid-expansion | Halting while a later block suspends still releases what an earlier element retained |
+| RT15 | Retention under partial replay | The durable effect replays while the retained resource is re-established on each execution that runs |
+| RT16 | Eval cannot retain | An eval block's `retain()` is refused, and the block produces no value |
+| RT17 | Compiled binary, end to end | The guide's standalone scenario: the resource is still live for a later sibling, with no JavaScript in the document |
+| RT18 | Site isolation | A factory that sets a context value and installs middleware: the resource is retained, and a later sibling still observes the caller's own |
 
 ### Tier P — Eval binding interpolation
 

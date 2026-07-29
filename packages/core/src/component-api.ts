@@ -86,6 +86,24 @@ export interface ComponentApi {
   content(slot?: string): Operation<string>;
   /** Whether the invoking element was written with content rather than self-closed. */
   hasContent(): Operation<boolean>;
+  /**
+   * Create a resource owned by the scope that invoked this component
+   * (spec §4.4).
+   *
+   * The factory runs in an isolated child of the invocation-site eval scope,
+   * so what it acquires lives as long as that scope does — staying alive after
+   * the component returns and released when the site succeeds, fails, or is
+   * cancelled — while context and middleware it installs stay inside the
+   * child. Only the provided value crosses back, and neither scope is handed
+   * out: retention is a lifetime, not authority over the caller.
+   *
+   * This is an operation of TypeScript component execution. Eval blocks are
+   * durable — a replay restores a block's exported values without running its
+   * executor — so retaining from one would leave a restored value pointing at
+   * a resource that was never re-established. Eval execution installs a
+   * provider that rejects the call rather than letting it succeed.
+   */
+  retain<T>(resource: () => Operation<T>): Operation<T>;
 }
 
 export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
@@ -141,6 +159,10 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
       "Component.hasContent() has no provider: not inside a function component invocation.",
     );
   },
+  // deno-lint-ignore require-yield
+  *retain<T>(_resource: () => Operation<T>): Operation<T> {
+    throw new Error("Component.retain() has no provider: not inside a component invocation.");
+  },
 });
 
 export const importComponent: Operations<ComponentApi>["importComponent"] =
@@ -157,3 +179,4 @@ export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operat
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
+export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;

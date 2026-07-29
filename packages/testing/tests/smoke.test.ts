@@ -51,7 +51,7 @@ const EMBEDDED_TESTS = [
   "findFreePort allocates a free port",
   "Eval bindings interpolate into exec blocks",
   "A daemon serves requests until its scope closes",
-  "A standalone Thing's resource does not outlive it",
+  "A standalone Thing's resource outlives it",
   "An empty paired Thing renders nothing and keeps nothing",
   "A paired Thing's resource is live only while its content expands",
   "Sample sends its prompt to the provider",

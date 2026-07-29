@@ -57,6 +57,7 @@ export {
   codeBlock,
   persistent,
   content,
+  retain,
 } from "./src/component-api.ts";
 
 export { renderSegments } from "./src/render.ts";
