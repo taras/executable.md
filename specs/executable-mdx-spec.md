@@ -3868,24 +3868,31 @@ which is the only place a reader would otherwise learn what went wrong.
 
 #### Containment
 
-Everything `<File>` touches stays inside `Env.cwd`. An absolute path and a
-path that escapes lexically are refused before any filesystem call, so the
-failure reveals nothing about what the path named. Only a complete `..`
-segment escapes: a name that merely begins with two dots — `..notes.md` — is
-an ordinary file inside the directory.
+Everything `<File>` touches stays inside `Env.cwd`, checked in two stages that
+answer different questions and therefore run at different times.
+
+The **lexical** stage is path arithmetic against `Env.cwd` and nothing else.
+An empty path, an absolute path, and a `..` escape are all decided there,
+before any filesystem call — so the failure reveals nothing about what the
+path named. Only a complete `..` segment escapes: a name that merely begins
+with two dots — `..notes.md` — is an ordinary file inside the directory.
+
+For the write form this stage runs **before the children expand**. An unusable
+path costs nothing, and the diagnostic it produces is about the path rather
+than about whatever the children then did.
 
 A lexical check is not enough on its own, because a symlink inside the
-directory can point anywhere. `<File>` resolves the part of the path that
-already exists — the file itself when it is there, the deepest existing
-ancestor when it is not — and re-checks the result. A symlink whose
+directory can point anywhere. The **resolving** stage takes the part of the
+path that already exists — the file itself when it is there, the deepest
+existing ancestor when it is not — and re-checks the result. A symlink whose
 destination is still inside the directory is ordinary and is followed to the
 file it names; one that leaves is refused, before the content outside is read
 or changed.
 
-The write form resolves its destination **after** its children have finished,
-not before. A child can change what a path means — replacing a directory with
-a symlink out of the workspace — and a destination validated before expansion
-would not be the one the write lands on.
+For the write form this stage runs **after the children have finished**, and
+immediately before the write. A child can change what a path means — replacing
+a directory with a symlink out of the workspace — so a destination resolved
+any earlier would not be the one the write lands on.
 
 Writes land through a sibling temporary file and a rename. That is what makes
 a failed or cancelled write leave the previous content in place, and it closes
@@ -4938,6 +4945,8 @@ visible warning blocks, collect into a separate error report).
 | FL16 | Prop validation | A missing `path` and an undeclared prop are both rejected |
 | FL17 | Leading dots | `..notes.md` and `..config/settings.json` are ordinary files, not escapes |
 | FL18 | Destination resolved after children | A child that replaces the parent directory with an escaping symlink is caught, and nothing is created outside |
+| FL18b | Absolute path decided before children | A content-form absolute path is refused with the child's marker never written, the child's own failure absent from the output, and the rejected path unnamed |
+| FL18c | Lexical escape decided before children | The same for `..`, with nothing created outside |
 | FL19 | Failure inside the temporary write | The temporary is removed and the existing target is unchanged |
 | FL20 | Cancellation inside the temporary write | The same, when the run is halted rather than failed |
 | FL21 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |

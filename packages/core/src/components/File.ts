@@ -4,15 +4,20 @@
  *
  * Both forms take one relative `path`, resolved against `Env.cwd`, so a
  * document composes with `<TempDir>` without choosing where anything lives.
- * Everything the component touches is confined to that directory: the path is
- * checked lexically before any filesystem call, then again once the existing
- * part of it has been resolved, so a symlink cannot carry a read or a write
- * outside the workspace.
+ * Everything the component touches is confined to that directory, checked in
+ * two stages that answer different questions at different times.
  *
- * The write form resolves its destination *after* its children have finished,
- * because a child can change what the path means — replacing a directory with
- * a symlink out of the workspace, for instance. Resolving first would validate
- * somewhere other than where the write lands.
+ * The first stage is pure path arithmetic against `Env.cwd`: an empty path, an
+ * absolute path, and a lexical `..` escape are refused with no filesystem call
+ * at all. It runs **before** the children expand, so an unusable path costs
+ * nothing and its diagnostic is written before there is any child failure to
+ * report alongside it.
+ *
+ * The second stage resolves what is actually on disk and re-checks the result,
+ * which is what catches a symlink leaving the workspace. It runs **after** the
+ * children have finished, because a child can change what a path means —
+ * replacing a directory with a symlink out of the workspace, for instance —
+ * and a destination resolved earlier would not be the one the write lands on.
  *
  * Writes go through a sibling temporary file and a rename. That is what makes
  * a failed or cancelled write leave the previous content in place, and it is
@@ -67,16 +72,17 @@ export class FileAccessError extends Error {
 
 export default function* (props: Record<string, Json>): Operation<string> {
   const requested = String(props.path);
+  const admitted = yield* admissible(requested);
 
   if (yield* hasContent()) {
-    // Children first, then the destination: what gets validated has to be
-    // where the write actually lands, and a child can move that.
+    // The children run only once the path is known to be usable, and the
+    // destination is resolved only once they are done.
     const text = yield* content(requested);
-    yield* write(requested, yield* destination(requested), text);
+    yield* write(requested, yield* destination(admitted), text);
     return "";
   }
 
-  return yield* read(requested, yield* destination(requested));
+  return yield* read(requested, yield* destination(admitted));
 }
 
 /**
@@ -112,19 +118,27 @@ function* content(requested: string): Operation<string> {
   return rendered;
 }
 
+/** A path that has passed the lexical stage, carried to the resolving one. */
+interface Admissible {
+  /** The path the document wrote, for diagnostics. */
+  requested: string;
+  /** `requested` joined onto the contextual directory and normalized. */
+  lexical: string;
+}
+
 /**
- * The absolute path this invocation may touch, or a failure naming why not.
+ * Stage one: what can be decided without touching the filesystem.
  *
- * Two checks, because they catch different things. The lexical one runs before
- * any filesystem call, so `../` and an absolute path are refused without
- * revealing whether what they name exists. The second resolves the part of the
- * path that is already on disk — the file itself when it is there, the deepest
- * existing ancestor when it is not — and re-checks the result, which is what
- * catches a symlink pointing out of the workspace. What comes back is that
- * resolved path, so an internal symlink is followed to the file it names
- * rather than being replaced by the write.
+ * An empty path, an absolute path, and a `..` escape are all answerable from
+ * `Env.cwd` and path arithmetic alone. Deciding them here means an unusable
+ * path is refused before the children of a write run at all, and that the
+ * diagnostic never has to mention a path that was rejected for being absolute.
+ *
+ * `resolve` normalizes `..` lexically, so this holds against the contextual
+ * directory as given — canonicalizing it is stage two's job and would only
+ * move the same comparison onto a different pair of strings.
  */
-function* destination(requested: string): Operation<string> {
+function* admissible(requested: string): Operation<Admissible> {
   if (requested.length === 0) {
     throw new FileAccessError("path is empty; give a path relative to the working directory.");
   }
@@ -135,11 +149,30 @@ function* destination(requested: string): Operation<string> {
   }
 
   const directory = yield* cwd();
-  const base = (yield* realpath(directory)) ?? directory;
-  const lexical = resolve(base, requested);
-  if (!within(base, lexical)) {
+  const lexical = resolve(directory, requested);
+  if (!within(directory, lexical)) {
     throw new FileAccessError(`"${requested}" resolves outside the working directory.`);
   }
+
+  return { requested, lexical };
+}
+
+/**
+ * Stage two: the path as the filesystem currently has it.
+ *
+ * Resolves the part of the path that is already on disk — the file itself when
+ * it is there, the deepest existing ancestor when it is not — and re-checks
+ * the result, which is what catches a symlink pointing out of the workspace.
+ * What comes back is that resolved path, so an internal symlink is followed to
+ * the file it names rather than being replaced by the write.
+ *
+ * Both sides of the comparison are canonical here, so a working directory
+ * reached through a symlink — macOS's `/var` against `/private/var` — does not
+ * read as an escape.
+ */
+function* destination({ requested, lexical }: Admissible): Operation<string> {
+  const directory = yield* cwd();
+  const base = (yield* realpath(directory)) ?? directory;
 
   const effective = yield* resolveExisting(lexical);
   if (!within(base, effective)) {

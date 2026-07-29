@@ -482,6 +482,60 @@ describe("Tier FL — File", () => {
     expectNoAbsolutePaths(output, fixture);
   });
 
+  // FL18b: the lexical half of validation runs before the children, so an
+  // absolute path costs nothing. The block would leave a file behind if it
+  // ran, and the diagnostic would name the rejected path if the failure came
+  // from the content stage instead.
+  it("FL18b: a content-form absolute path is rejected before the children run", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.outside, "planted.txt");
+
+    const output = text(
+      yield* run(
+        fixture,
+        [`<File path="${target}">`, "```sh exec", "touch ran.txt; exit 7", "```", "</File>"].join(
+          "\n",
+        ),
+      ),
+    );
+
+    expect(output).toContain("an absolute path is not accepted");
+    // The block never ran: no marker, and none of its failure in the output.
+    expect(yield* exists(join(fixture.workspace, "ran.txt"))).toBe(false);
+    expect(output).not.toContain("exit 7");
+    expect(output).not.toContain("its content failed to expand");
+    expect(yield* exists(target)).toBe(false);
+    expectNoAbsolutePaths(output, fixture);
+    expect(output).not.toContain(target);
+  });
+
+  // FL18c: the same for a lexical escape. Together with FL18 these fix the
+  // order: `..` and absolute are decided before expansion, and only the
+  // symlink check waits for it.
+  it("FL18c: a content-form lexical escape is rejected before the children run", function* () {
+    const fixture = yield* useFixture();
+
+    const output = text(
+      yield* run(
+        fixture,
+        [
+          '<File path="../outside/planted.txt">',
+          "```sh exec",
+          "touch ran.txt; exit 7",
+          "```",
+          "</File>",
+        ].join("\n"),
+      ),
+    );
+
+    expect(output).toContain("resolves outside the working directory");
+    expect(yield* exists(join(fixture.workspace, "ran.txt"))).toBe(false);
+    expect(output).not.toContain("exit 7");
+    expect(output).not.toContain("its content failed to expand");
+    expect(yield* entries(fixture.outside)).toEqual([]);
+    expectNoAbsolutePaths(output, fixture);
+  });
+
   // FL19: the temporary's removal is registered before it is written, so a
   // failure in the write itself — the likeliest place for one — is covered.
   it("FL19: a failure during the temporary write leaves nothing behind", function* () {

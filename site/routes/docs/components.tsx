@@ -359,28 +359,31 @@ export default define.page(function Components() {
       <h3>Staying inside the workspace</h3>
       <p>
         Everything <code>&lt;File&gt;</code>{" "}
-        touches stays inside the working directory. An absolute path and a path
-        that escapes with <code>..</code>{" "}
-        are refused before any filesystem call, so the failure says nothing
-        about what the path named. Only a whole <code>..</code>{" "}
-        segment escapes — <code>..notes.md</code>{" "}
-        is just a file with an odd name.
+        touches stays inside the working directory, checked in two stages that
+        run at different times.
       </p>
       <p>
-        A lexical check alone would not be enough, because a symlink inside the
-        directory can point anywhere. <code>&lt;File&gt;</code>{" "}
-        resolves whichever part of the path already exists and checks{" "}
-        <em>that</em>{" "}
+        The first is pure path arithmetic: an absolute path and a{" "}
+        <code>..</code>{" "}
+        escape are refused with no filesystem call at all, so the failure says
+        nothing about what the path named. Only a whole <code>..</code>{" "}
+        segment escapes — <code>..notes.md</code>{" "}
+        is just a file with an odd name. For a write this happens{" "}
+        <em>before</em>{" "}
+        the children expand, so an unusable path costs nothing and its message
+        is about the path rather than about what the children then did.
+      </p>
+      <p>
+        Path arithmetic alone would not be enough, because a symlink inside the
+        directory can point anywhere. The second stage resolves whichever part
+        of the path already exists and checks <em>that</em>{" "}
         — so a symlink staying inside is ordinary and gets followed to the file
         it names, and one that leaves is refused before anything outside is read
-        or changed.
-      </p>
-      <p>
-        For a write that check happens <em>after</em>{" "}
-        the children finish, not before, because a child can change what the
-        path means — swapping a directory for a symlink out of the workspace,
-        say. Validating first would approve one destination and write to
-        another.
+        or changed. For a write it runs <em>after</em>{" "}
+        the children finish and immediately before writing, because a child can
+        change what the path means — swapping a directory for a symlink out of
+        the workspace, say. Resolving any earlier would approve one destination
+        and write to another.
       </p>
       <p>
         A write never half-happens. Children expand completely first, so a
