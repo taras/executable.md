@@ -139,7 +139,7 @@ describe("Tier CW — Contextual working directory", () => {
     expect(reported[1]).toBe(yield* until(realpath(process.cwd())));
   });
 
-  // CW3/CW4: a daemon starts in the contextual directory and is stopped by
+  // CW3: a daemon starts in the contextual directory and is stopped by
   // structured teardown. Both answers come from the process: it records its
   // own `pwd` and pid outside the directory under test, and the pid is probed
   // once the execution has finished.
@@ -168,9 +168,9 @@ describe("Tier CW — Contextual working directory", () => {
     expect(() => process.kill(Number(pid), 0)).toThrow();
   });
 
-  // CW5: with no boundary in the document, both kinds of process run where
+  // CW4: with no boundary in the document, both kinds of process run where
   // they always did.
-  it("CW5: without an override both exec and daemon use the process directory", function* () {
+  it("CW4: without an override both exec and daemon use the process directory", function* () {
     const fixture = yield* useFixture();
     const marker = join(fixture.root, "plain.txt");
     yield* writeDocument(

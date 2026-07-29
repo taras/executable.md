@@ -4526,7 +4526,7 @@ visible warning blocks, collect into a separate error report).
 | CW1 | Inside a rebinding component | An `exec` block reports the contextual directory, from the shell rather than from the engine |
 | CW2 | After the boundary | A later `exec` block reports the process's own directory again |
 | CW3 | Daemon inheritance and teardown | A daemon records its own `pwd` as the contextual directory, and its pid is gone once the execution ends |
-| CW5 | No override | With nothing rebinding `Env.cwd`, both `exec` and `daemon` run in the process's directory |
+| CW4 | No override | With nothing rebinding `Env.cwd`, both `exec` and `daemon` run in the process's directory |
 
 ### Tier IS — Invocation shape
 
