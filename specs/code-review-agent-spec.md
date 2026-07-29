@@ -168,33 +168,11 @@ Zero dependencies beyond Deno stdlib.
 
 ## 4. Standard Library Components
 
-### 4.1 `Show.md`
+Conditional rendering is not among them. `<If>` and `<Else>` are expansion-engine
+directives (executable-mdx-spec §6.5), so the components below branch with them
+directly instead of wrapping a conditional of their own.
 
-````markdown
----
-props:
-  type: object
-  properties:
-    when:
-      type: boolean
-    fallback:
-      type: string
-      default: ""
-  required: [when]
-  additionalProperties: false
----
-
-```ts eval
-if (when) {
-  return yield* renderChildren();
-}
-if (fallback) {
-  return fallback;
-}
-```
-````
-
-### 4.2 `ReviewSection.md`
+### 4.1 `ReviewSection.md`
 
 ````markdown
 ---
@@ -218,7 +196,7 @@ return content.trim().length > 0
 ```
 ````
 
-### 4.3 `Finding.md`
+### 4.2 `Finding.md`
 
 ````markdown
 ---
@@ -240,14 +218,14 @@ props:
 const icon = severity === "error" ? "🔴" : "🟡";
 ```
 
-<Show when={when}>
+<If condition={when}>
 
 {icon} {message}
 
-</Show>
+</If>
 ````
 
-### 4.4 `Instructions.md`
+### 4.3 `Instructions.md`
 
 ````markdown
 ---
@@ -273,7 +251,7 @@ scope.around(Sample, function* ([context], next) {
 <Content />
 ````
 
-### 4.5 `GitHubComment.md`
+### 4.4 `GitHubComment.md`
 
 ````markdown
 ---
@@ -327,7 +305,7 @@ return content;
 ```
 ````
 
-### 4.6 `DeepInfraProvider.md`
+### 4.5 `DeepInfraProvider.md`
 
 ````markdown
 ---
@@ -371,7 +349,7 @@ scope.around(Sample, function* ([context], next) {
 <Content />
 ````
 
-### 4.7 `OllamaProvider.md`
+### 4.6 `OllamaProvider.md`
 
 ````markdown
 ---
@@ -620,7 +598,7 @@ const summary = icon + " " + message
   .replace("{count}", String(unused.length));
 ```
 
-<Show when={hasUnused}>
+<If condition={hasUnused}>
 
 <details>
 <summary>{summary}</summary>
@@ -632,7 +610,7 @@ const summary = icon + " " + message
 
 </details>
 
-</Show>
+</If>
 ````
 
 Findings render as a `<details>` disclosure: the summary carries the terse
@@ -831,7 +809,7 @@ const pairsText = hasPairs
   : "";
 ```
 
-<Show when={hasPairs}>
+<If condition={hasPairs}>
 
 <Sample>
 
@@ -846,7 +824,7 @@ If none are obvious: "No obvious comments found."
 
 </Sample>
 
-</Show>
+</If>
 ````
 
 ---
@@ -996,8 +974,7 @@ props:
   additionalProperties: false
 ---
 
-<Show when={pr.stats.totalChanges > 20}
-  fallback="✅ Small PR — semantic review skipped.">
+<If condition={pr.stats.totalChanges > 20}>
 
 <Sample>
 
@@ -1023,7 +1000,12 @@ DIFF:
 
 </Sample>
 
-</Show>
+<Else>
+
+✅ Small PR — semantic review skipped.
+
+</Else>
+</If>
 ```
 
 Zero eval blocks.
@@ -1230,7 +1212,6 @@ These block merges. The executable.md review is advisory.
 
   components/
     # Standard library
-    Show.md                      Conditional rendering
     Finding.md                   Severity icon + message
     ReviewSection.md             Heading + children or clean message
     Instructions.md              System prompt middleware
@@ -1254,7 +1235,7 @@ These block merges. The executable.md review is advisory.
     ScopeCheck.md                Composes Threshold, Finding checks
     StructuralBloat.md           Composes Pattern, Ratio, UnusedInDiff
     VerbosityCheck.md            Composes Ratio, CommentReview
-    SemanticReview.md            Prompt template + Show + Sample
+    SemanticReview.md            Prompt template + If + Sample
     ReviewBody.md                Composes all four checks
 ```
 
@@ -1264,7 +1245,6 @@ These block merges. The executable.md review is advisory.
 
 | Document | Eval blocks | Why |
 |---|---|---|
-| `Show.md` | 1 | Conditional rendering |
 | `Finding.md` | 1 | Icon selection |
 | `ReviewSection.md` | 1 | renderChildren + heading |
 | `Instructions.md` | 1 persist | Middleware install |

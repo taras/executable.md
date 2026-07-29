@@ -51,7 +51,7 @@ const summary = icon + " " + message
   .replace("{count}", String(unused.length));
 ```
 
-<Show when={hasUnused}>
+<If condition={hasUnused}>
 
 <details>
 <summary>{summary}</summary>
@@ -63,4 +63,4 @@ const summary = icon + " " + message
 
 </details>
 
-</Show>
+</If>

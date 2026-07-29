@@ -29,9 +29,9 @@ const verdict = { passed: true, summary: "no findings" };
 
 const VALUE_CAPTURE = `<Review as="review" />
 
-<Show when={review.passed}>
+<If condition={review.passed}>
 Review passed: {review.summary}
-</Show>`;
+</If>`;
 
 const VALUE_ROOT = `$ xmd run review.md
 {"passed":true,"summary":"no findings"}`;

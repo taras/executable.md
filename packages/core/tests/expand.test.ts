@@ -694,8 +694,8 @@ describe("component-declared output", () => {
     expect(output).toContain("two");
   });
 
-  it("diagnoses a nested <Output> inside <Show when={false}>", function* () {
-    const comp = makeComponent("Hidden", "<Show when={false}>\n<Output>hidden</Output>\n</Show>");
+  it("diagnoses a nested <Output> inside <If condition={false}>", function* () {
+    const comp = makeComponent("Hidden", "<If condition={false}>\n<Output>hidden</Output>\n</If>");
     const ctx = { Hidden: comp };
     const output = yield* expand(scanSegments("<Hidden />"), ctx);
     expect(output).toContain("must be a direct top-level");

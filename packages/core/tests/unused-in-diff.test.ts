@@ -36,11 +36,9 @@ function doc(lines: AddedLine[], construct: string): string {
 // the tests exercise the shipped .reviews sources rather than a copy.
 function* render(lines: AddedLine[], construct: string): Operation<string> {
   const unusedInDiff = yield* readTextFile(".reviews/components/UnusedInDiff.md");
-  const show = yield* readTextFile(".reviews/components/Show.md");
 
   yield* useStubFs({
     "components/UnusedInDiff.md": unusedInDiff,
-    "components/Show.md": show,
     "doc.md": doc(lines, construct),
   });
 

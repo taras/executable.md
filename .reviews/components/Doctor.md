@@ -86,8 +86,7 @@ Running type-aware probe to test Oxlint compatibility...
 
 <Capture as="probeResult">
 
-<Show when={canProbeTypeAware}
-  fallback='{"diagnostics":[],"stderr":""}'>
+<If condition={canProbeTypeAware}>
 
 ```bash exec
 RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
@@ -96,7 +95,12 @@ rm -f .reviews/probe-stderr.tmp
 echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
 ```
 
-</Show>
+<Else>
+
+{"diagnostics":[],"stderr":""}
+
+</Else>
+</If>
 
 </Capture>
 

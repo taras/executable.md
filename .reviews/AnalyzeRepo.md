@@ -78,8 +78,8 @@ const doctor = parseDoctorResult(doctorJson);
 
 <Capture as="rawDiagnostics">
 
-<Show when={doctor.recommendation === "type-aware"
-         || doctor.recommendation === "type-aware-filtered"}>
+<If condition={doctor.recommendation === "type-aware"
+            || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
 OUT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
@@ -90,10 +90,10 @@ else
 fi
 ```
 
-</Show>
+</If>
 
-<Show when={doctor.recommendation === "syntax-only"
-         && doctor.oxlintInstalled}>
+<If condition={doctor.recommendation === "syntax-only"
+            && doctor.oxlintInstalled}>
 
 ```bash exec
 OUT=$(.reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true)
@@ -104,13 +104,13 @@ else
 fi
 ```
 
-</Show>
+</If>
 
-<Show when={!doctor.oxlintInstalled}>
+<If condition={!doctor.oxlintInstalled}>
 
 []
 
-</Show>
+</If>
 
 </Capture>
 

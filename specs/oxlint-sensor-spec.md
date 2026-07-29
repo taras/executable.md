@@ -621,7 +621,7 @@ const jsrCount = specifierLines.filter(l => l.includes("jsr:")).length;
 const npmCount = specifierLines.filter(l => l.includes("npm:")).length;
 ```
 
-<Show when={hasNativeSpecifiers}>
+<If condition={hasNativeSpecifiers}>
 
 Found **{specifierLines.length}** scheme specifiers across
 **{specifierFiles.length}** files ({jsrCount} `jsr:`,
@@ -662,20 +662,20 @@ Files with scheme specifiers:
 
 {specifierFiles.slice(0, 20).map(f => "- `" + f + "`").join("\n")}
 
-<Show when={specifierFiles.length > 20}>
+<If condition={specifierFiles.length > 20}>
 
 ...and {specifierFiles.length - 20} more.
 
-</Show>
+</If>
 
-</Show>
+</If>
 
-<Show when={!hasNativeSpecifiers}>
+<If condition={!hasNativeSpecifiers}>
 
 No scheme specifiers found in source files. All imports use bare
 specifiers — compatible with both Deno and typescript-go.
 
-</Show>
+</If>
 
 **Type-aware probe.** All four prerequisites must pass before
 attempting a type-aware run. Even then, the probe may fail — tsgo
@@ -683,16 +683,15 @@ can't resolve scheme specifiers that Deno handles natively,
 tsgolint may OOM on very large monorepos, or the generated
 tsconfig's include globs may not match the actual source tree.
 
-<Show when={!canProbeTypeAware}>
+<If condition={!canProbeTypeAware}>
 
 Skipping type-aware probe — prerequisites not met.
 
-</Show>
+</If>
 
 <Capture as="probeResult">
 
-<Show when={canProbeTypeAware}
-  fallback='{"diagnostics":[],"stderr":""}'>
+<If condition={canProbeTypeAware}>
 
 ```bash silent exec
 RESULT=$(npx oxlint --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
@@ -701,7 +700,12 @@ rm -f .reviews/probe-stderr.tmp
 echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
 ```
 
-</Show>
+<Else>
+
+{"diagnostics":[],"stderr":""}
+
+</Else>
+</If>
 
 </Capture>
 
@@ -794,28 +798,28 @@ return JSON.stringify(doctor);
 
 **Result:** {recommendation}
 
-<Show when={typeAwareAvailable}>
+<If condition={typeAwareAvailable}>
 
 Type-aware linting available. {bloatRulesAvailable.length} bloat
 rules active across {fileSet.size} files.
 Import noise: {importNoise.length} diagnostics
 ({(noiseRatio * 100).toFixed(1)}%).
 
-</Show>
+</If>
 
-<Show when={!typeAwareAvailable && oxlintInstalled}>
+<If condition={!typeAwareAvailable && oxlintInstalled}>
 
 Falling back to syntax-only mode. {bloatRulesAvailable.length}
 bloat rules active, {bloatRulesMissing.length} type-aware rules
 unavailable.
 
-</Show>
+</If>
 
-<Show when={!oxlintInstalled}>
+<If condition={!oxlintInstalled}>
 
 Oxlint not installed. Static analysis signals unavailable.
 
-</Show>
+</If>
 ````
 
 ### 6.2 `OxlintSignals.md`
@@ -866,25 +870,25 @@ props:
 <ReviewSection heading="Static Analysis"
   clean="✅ Oxlint found no issues.">
 
-<Show when={!doctor.oxlintInstalled}>
+<If condition={!doctor.oxlintInstalled}>
 
 🟡 Oxlint not installed. Static analysis skipped.
 
-</Show>
+</If>
 
-<Show when={doctor.oxlintInstalled && diagnostics.total > 0}>
+<If condition={doctor.oxlintInstalled && diagnostics.total > 0}>
 
 {diagnostics.summary}
 
-</Show>
+</If>
 
-<Show when={doctor.bloatRulesMissing.length > 0
-         && doctor.oxlintInstalled}>
+<If condition={doctor.bloatRulesMissing.length > 0
+            && doctor.oxlintInstalled}>
 
 *{doctor.bloatRulesMissing.length} type-aware rules unavailable
 — install `oxlint-tsgolint` for full coverage.*
 
-</Show>
+</If>
 
 </ReviewSection>
 ```
@@ -1005,8 +1009,7 @@ props:
   additionalProperties: false
 ---
 
-<Show when={pr.stats.totalChanges > 20}
-  fallback="✅ Small PR — semantic review skipped.">
+<If condition={pr.stats.totalChanges > 20}>
 
 <Sample>
 
@@ -1042,7 +1045,12 @@ DIFF:
 
 </Sample>
 
-</Show>
+<Else>
+
+✅ Small PR — semantic review skipped.
+
+</Else>
+</If>
 ```
 
 ---
@@ -1118,22 +1126,22 @@ const doctor = parseDoctorResult(doctorJson);
 
 <Capture as="rawDiagnostics">
 
-<Show when={doctor.recommendation === "type-aware"
-         || doctor.recommendation === "type-aware-filtered"}>
+<If condition={doctor.recommendation === "type-aware"
+            || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
 npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
 ```
 
-</Show>
+</If>
 
-<Show when={doctor.recommendation === "syntax-only"}>
+<If condition={doctor.recommendation === "syntax-only"}>
 
 ```bash exec
 npx oxlint --format json 2>&1 || true
 ```
 
-</Show>
+</If>
 
 </Capture>
 
@@ -1223,22 +1231,22 @@ const doctor = parseDoctorResult(doctorJson);
 
 <Capture as="rawDiagnostics">
 
-<Show when={doctor.recommendation === "type-aware"
-         || doctor.recommendation === "type-aware-filtered"}>
+<If condition={doctor.recommendation === "type-aware"
+            || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
 npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
 ```
 
-</Show>
+</If>
 
-<Show when={doctor.recommendation === "syntax-only"}>
+<If condition={doctor.recommendation === "syntax-only"}>
 
 ```bash exec
 npx oxlint --format json 2>&1 || true
 ```
 
-</Show>
+</If>
 
 </Capture>
 
@@ -1371,7 +1379,6 @@ false positive and false negative rates.
 
   components/
     # Base spec components (unchanged)
-    Show.md
     Finding.md
     ReviewSection.md
     Instructions.md
