@@ -609,3 +609,73 @@ describe("lowercase passphrases containing placeholder words", () => {
     });
   }
 });
+
+/**
+ * YAML single-quoted scalars escape an apostrophe by doubling it.
+ *
+ * XMD documents carry frontmatter, so this is ordinary content rather than a
+ * corner case. Backslash escaping is the only convention the reader modelled,
+ * so the first apostrophe of a pair closed the value and a frontmatter
+ * password truncated to whatever preceded it.
+ *
+ * JSON leaves both the delimiters and the doubling untouched, so the source
+ * text and its serialized form read identically here — unlike a
+ * backslash-escaped apostrophe, whose escape doubles on serialization.
+ */
+describe("YAML doubled apostrophes in single-quoted fields", () => {
+  const TAIL = A.slice(0, 20);
+  const CREDENTIAL = `ab''cd${TAIL}`;
+  const SOURCE = `password: '${CREDENTIAL}'`;
+  const PLACEHOLDER_SOURCE = `password: 'your-password-here'`;
+
+  const asImport = (source: string): DurableEvent => ({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { path: "README.md", content: source } },
+  });
+
+  it("detects the credential directly", function* () {
+    expect((yield* createSecretScanner().scan(SOURCE)).length).toBeGreaterThan(0);
+  });
+
+  it("detects the same source inside a serialized root import", function* () {
+    const record = serializeDurableEvent(asImport(SOURCE));
+
+    // The fixture only proves anything if the doubling survived serialization.
+    expect(record).toContain("ab''cd");
+
+    expect((yield* createSecretScanner().scan(record)).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the credential and its fragments out of the findings", function* () {
+    const scanner = createSecretScanner();
+
+    for (const content of [SOURCE, serializeDurableEvent(asImport(SOURCE))]) {
+      const serialized = JSON.stringify(yield* scanner.scan(content));
+      expect(serialized).not.toContain(CREDENTIAL);
+      expect(serialized).not.toContain(TAIL);
+      expect(serialized).not.toContain(TAIL.slice(0, 8));
+    }
+  });
+
+  it("stops at the real closing apostrophe instead of swallowing later YAML", function* () {
+    const document = `password: '${CREDENTIAL}' owner: someoneelseentirely`;
+
+    const findings = (yield* createSecretScanner().scan(document)).filter(
+      (finding) => finding.ruleId === "@executablemd/secretlint-rule-credentials",
+    );
+
+    expect(findings).toHaveLength(1);
+    const { column } = findings[0]!.location;
+    expect(column).toBe(document.indexOf(CREDENTIAL));
+    expect(document.slice(column, column + CREDENTIAL.length)).toBe(CREDENTIAL);
+  });
+
+  it("leaves a single-quoted placeholder alone, directly and serialized", function* () {
+    const scanner = createSecretScanner();
+
+    expect(yield* scanner.scan(PLACEHOLDER_SOURCE)).toEqual([]);
+    expect(yield* scanner.scan(serializeDurableEvent(asImport(PLACEHOLDER_SOURCE)))).toEqual([]);
+  });
+});

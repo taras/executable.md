@@ -293,6 +293,16 @@ function readAtDepth(
       continue;
     }
 
+    // YAML escapes an apostrophe inside a single-quoted scalar by doubling
+    // it, not with a backslash — and JSON leaves both the doubling and the
+    // delimiters alone, so this reads the same at every depth. Without it the
+    // first apostrophe of a pair closes the value, and a frontmatter password
+    // truncates to whatever preceded it.
+    if (mark === "'" && content[at + 1] === "'") {
+      at++;
+      continue;
+    }
+
     let backslashes = 0;
     for (let back = at - 1; back >= bodyStart && content[back] === "\\"; back--) {
       backslashes++;
