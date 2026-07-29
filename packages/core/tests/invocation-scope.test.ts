@@ -258,12 +258,15 @@ describe("Tier O — Eval scope hierarchy", () => {
   it("O11: Markdown — a body error still stops projected content first", function* () {
     const timeline: string[] = [];
     const definitions = {
-      Provider: markdown("Provider", `<Content />\n\n${BOOM_BLOCK}`),
+      // The provider retains its own resource between projecting and failing,
+      // so the assertion is about ordering rather than only about the
+      // projected watcher being torn down at all.
+      Provider: markdown("Provider", `<Content />\n\n${WATCH_BLOCK_OWN}\n\n${BOOM_BLOCK}`),
     };
 
     yield* expandAll(`<Provider>\n${WATCH_BLOCK}\n</Provider>`, definitions, timeline);
 
-    expect(timeline).toEqual(["start:projected", "stop:projected"]);
+    expect(timeline).toEqual(["start:projected", "start:own", "stop:projected", "stop:own"]);
   });
 
   it("O12: TypeScript — a body error still stops projected content first", function* () {

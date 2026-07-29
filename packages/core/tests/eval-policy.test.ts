@@ -51,6 +51,76 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(String(failure)).toContain("Missing");
   });
 
+  // O28: a claimed <Content /> in a documentation region settles under the
+  // throwing policy — the projected error stops the body instead of being
+  // collected and then discarded with the region's rendered output.
+  it("O28: Markdown <Content /> in documentation fails fast on a projected error", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": ["<Content />", "", "<Output>", "done", "</Output>"].join("\n"),
+      "doc.md": "<Wrap>\n<Missing />\n</Wrap>",
+    });
+    yield* useEchoExec();
+
+    let failure: unknown;
+    try {
+      yield* collect(yield* execute({ path: "doc.md", stream }));
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(DocumentationError);
+    expect(String(failure)).toContain("Missing");
+  });
+
+  // O29: the same projection inside <Output> collects, and the region emits.
+  it("O29: Markdown <Content /> inside <Output> collects a projected error", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": ["<Output>", "<Content />", "", "done", "</Output>"].join("\n"),
+      "doc.md": "<Wrap>\n<Missing />\n</Wrap>",
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    expect(output).toContain("ERROR");
+    expect(output).toContain("done");
+    // Reported once on the way out, not again when it crosses back.
+    expect(String(output).split("Cannot resolve component: Missing").length - 1).toBe(1);
+  });
+
+  // O30: value-component documentation carries the same policy, so a claimed
+  // <Content /> that projects an error fails fast instead of being discarded
+  // along with the documentation's rendered output.
+  it("O30: a projected error in value-component documentation fails fast", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Value.md": [
+        "---",
+        "returns:",
+        "  ok: { type: boolean }",
+        "---",
+        "",
+        "<Content />",
+        "",
+        '<Return value={{ "ok": true }} />',
+      ].join("\n"),
+      "doc.md": '<Value as="result">\n<Missing />\n</Value>\n\nafter',
+    });
+    yield* useEchoExec();
+
+    let failure: unknown;
+    try {
+      yield* collect(yield* execute({ path: "doc.md", stream }));
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(DocumentationError);
+    expect(String(failure)).toContain("Missing");
+  });
+
   // O25: an evaluation sees the bindings that existed when it started, and its
   // declared exports become shared once it completes.
   it("O25: exports are committed to the shared bindings for later blocks", function* () {
@@ -59,11 +129,13 @@ describe("Tier O — Eval scope hierarchy", () => {
       "doc.md": [
         "```js eval",
         "const port = 4321;",
-        "const handle = { id: 7 };",
+        // A function is not JSON, so the journal cannot carry it: only the
+        // explicit commit makes it reachable from the next block.
+        "const describe = (n) => `port-${n}`;",
         "```",
         "",
         "```js eval",
-        "output(`port=${port} id=${handle.id}`);",
+        "output(`port=${port} ${describe(port)}`);",
         "```",
       ].join("\n"),
     });
@@ -71,9 +143,9 @@ describe("Tier O — Eval scope hierarchy", () => {
 
     const output = yield* collect(yield* execute({ path: "doc.md", stream }));
 
-    // `handle` is a live object the journal cannot carry, so this also proves
-    // the commit publishes values rather than only their serialized subset.
-    expect(output).toContain("port=4321 id=7");
+    // `describe` is a function — `serializeExports` drops it, so reaching it
+    // from the next block proves the commit publishes live values.
+    expect(output).toContain("port=4321 port-4321");
   });
 
   // O26: persistent work keeps the values and the policy-bound capabilities it

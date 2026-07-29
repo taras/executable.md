@@ -13,7 +13,7 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, scoped, useScope } from "effection";
+import { ensure, scoped, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { parse } from "acorn";
 import type {
@@ -203,26 +203,42 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       const contentScope = yield* state.invocation.useContentScope();
+      // The projection's failure travels back to the caller rather than into
+      // the content scope. Raising it there would poison the scope, and the
+      // invocation's teardown would then re-report it as a teardown error,
+      // replacing the documentation failure the caller is meant to see.
+      const outcome = withResolvers<{ segments: Segment[] } | { failure: unknown }>();
       const task = contentScope.scope.run(function* () {
-        yield* AmbientErrorPolicy.set(options.policy);
-        if (options.segments.length === 0) {
-          return [];
+        try {
+          yield* AmbientErrorPolicy.set(options.policy);
+          if (options.segments.length === 0) {
+            outcome.resolve({ segments: [] });
+            return;
+          }
+          yield* provideEvalScope(contentScope);
+          if (options.env) {
+            yield* provideEnv(options.env);
+          }
+          yield* ActiveProjection.set(options.inner);
+          outcome.resolve({
+            segments: yield* expandSegments(
+              options.segments,
+              options.meta,
+              options.props,
+              options.hideSet,
+              state.counter,
+            ),
+          });
+        } catch (error) {
+          outcome.resolve({ failure: error });
         }
-        yield* provideEvalScope(contentScope);
-        if (options.env) {
-          yield* provideEnv(options.env);
-        }
-        yield* ActiveProjection.set(options.inner);
-        return yield* expandSegments(
-          options.segments,
-          options.meta,
-          options.props,
-          options.hideSet,
-          state.counter,
-        );
       });
       yield* ensure(() => task.halt());
-      return [...options.errors, ...(yield* task)];
+      const result = yield* outcome.operation;
+      if ("failure" in result) {
+        throw result.failure;
+      }
+      return [...options.errors, ...result.segments];
     });
   }
 
@@ -278,7 +294,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     claims(element: ComponentElement): boolean {
       return claimed.has(element);
     },
-    expandClaimed(
+    *expandClaimed(
       element: ComponentElement,
       meta: Record<string, unknown>,
       props: Record<string, Json>,
@@ -286,9 +302,12 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     ): Operation<Segment[]> {
       // Slots were resolved during substitution, so the environment, meta,
       // props and hide set are the body's own — only the resource scope moves.
-      return runInContentScope({
+      // The policy has to travel with them: the content task does not inherit
+      // the documentation or <Output> frame this `<Content />` sits in.
+      const policy = (yield* AmbientErrorPolicy.get()) ?? "collect";
+      return yield* runInContentScope({
         segments: element.children,
-        policy: "collect",
+        policy,
         env: undefined,
         meta,
         props,
@@ -1938,7 +1957,11 @@ export function* expandBody(
 
 /**
  * Run documentation for its side effects and discard what it renders. The
- * throwing raise policy makes the first error stop the body immediately.
+ * throwing policy makes the first error stop the body immediately.
+ *
+ * Set as a policy value, not as raise middleware: a projection launched from
+ * here runs in the invocation's content scope, which inherits the value but
+ * would never see middleware installed on this frame.
  */
 function runDocumentation(
   segments: Segment[],
@@ -1948,15 +1971,7 @@ function runDocumentation(
   counter: BlockCounter,
 ): Operation<Segment[]> {
   return scoped(function* () {
-    yield* Component.around(
-      {
-        // deno-lint-ignore require-yield
-        *raise([error], _next) {
-          throw new DocumentationError(error);
-        },
-      },
-      { at: "min" },
-    );
+    yield* AmbientErrorPolicy.set("throw");
     return yield* expandSegments(segments, meta, props, hideSet, counter);
   });
 }

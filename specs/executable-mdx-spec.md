@@ -2361,6 +2361,13 @@ Only the resource scope moves. The binding environment, `{meta.key}` /
 exactly as they are for content spliced in place, and expression props on
 projected children still resolve against the caller's environment.
 
+The error policy travels with them. A content task does not inherit the
+documentation or `<Output>` frame the `<Content />` sits in, so the policy is
+captured at the expansion site and carried across (§6.9): a projected error in
+documentation stops the body, and the same error inside an output region renders
+as a comment. It is reported once, where it is created, and passes back to the
+caller as an ordinary segment.
+
 `substituteContent` resolves the slots:
 
 ```typescript
@@ -4399,6 +4406,9 @@ visible warning blocks, collect into a separate error report).
 | O15 | TypeScript nesting | Nested invocations leaf-first; siblings isolated |
 | O25 | Exports commit to shared bindings | A later block reads a declared export, including a live object the journal cannot carry |
 | O26 | Snapshot isolation | A later evaluation rebinding a name does not reach the closure persistent work captured |
+| O28 | `<Content />` in documentation | A projected error stops the body instead of being collected and discarded with the region |
+| O29 | `<Content />` inside `<Output>` | The same error renders once and the region still emits |
+| O30 | Value-component documentation | A projected error fails fast rather than being discarded |
 | O27 | Explicit import | An explicitly imported `useContent` compiles without a duplicate injected declaration |
 | O9 | Content teardown failure | Stages 2 and 3 still run, in order, and the failure is reported |
 | O10 | Body teardown failure | Reported after every stage has run |
