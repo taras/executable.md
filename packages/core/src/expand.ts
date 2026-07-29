@@ -474,6 +474,7 @@ export function* expandSegments(
           segment.props,
           segment.expressions,
           segment.children,
+          segment.selfClosing,
           hideSet,
           counter,
           segment.projectedEnv,
@@ -773,6 +774,7 @@ function* expandComponent(
   props: Record<string, Json>,
   expressions: Record<string, string>,
   children: Segment[],
+  selfClosing: boolean,
   hideSet: Set<string>,
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
@@ -821,6 +823,7 @@ function* expandComponent(
       props,
       expressions,
       children,
+      selfClosing,
       imported,
       hideSet,
       counter,
@@ -1099,6 +1102,7 @@ function* expandFunctionComponent(
   props: Record<string, Json>,
   expressions: Record<string, string>,
   children: Segment[],
+  selfClosing: boolean,
   definition: FunctionComponentDefinition,
   hideSet: Set<string>,
   counter: BlockCounter,
@@ -1194,6 +1198,12 @@ function* expandFunctionComponent(
         {
           *content([slotName], _next) {
             return yield* handle.projectToString({ kind: "slot", name: slotName });
+          },
+          // The element's shape, not its rendered result: content that renders
+          // an empty string is still content.
+          // deno-lint-ignore require-yield
+          *hasContent(_args, _next) {
+            return !selfClosing;
           },
         },
         { at: "min" },

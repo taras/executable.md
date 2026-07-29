@@ -129,6 +129,18 @@ export default define.page(function Components() {
         journaled and replayed as usual.
       </p>
 
+      <h3>Which form am I?</h3>
+      <p>
+        <code>hasContent()</code>{" "}
+        answers from how the element was written, not from what it renders:{" "}
+        <code>&lt;Thing&gt;…&lt;/Thing&gt;</code> and{" "}
+        <code>&lt;Thing&gt;&lt;/Thing&gt;</code>{" "}
+        both have content — content that renders an empty string is still
+        content — and only <code>&lt;Thing /&gt;</code>{" "}
+        does not. Asking never renders the children, so a component whose two
+        forms mean different things can branch before projecting anything.
+      </p>
+
       <h2>How it renders</h2>
       <ul>
         <li>

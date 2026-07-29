@@ -2135,6 +2135,7 @@ interface, and each operation is also exported directly:
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
+| `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 
 An extension claims component names by wrapping `expand`: it answers
 `{ segments }` for the names it owns and delegates the rest with
@@ -2152,6 +2153,12 @@ offer — no expansion is active and the operation reports that.
 invocation (`yield* env`); a provider is middleware returning the value.
 `useCodeBlock()` and `useContent()` remain as ergonomic aliases backed
 by `codeBlock()` and `content(slot?)`.
+
+`hasContent()` reports the shape of the invocation, not a prediction about what
+it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
+an empty string is still content — and only `<C />` does not. A component whose
+two forms mean different things branches on it without projecting, so asking
+the question never runs the children.
 
 **Providers are scope-local middleware.** Behavior is installed with
 `Component.around(middlewares, { at })` and lasts until the installing
@@ -4418,6 +4425,15 @@ visible warning blocks, collect into a separate error report).
 | O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
 | O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
 | O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
+
+### Tier IS — Invocation shape
+
+| # | Test | Verify |
+|---|------|--------|
+| IS1/IS2 | Paired forms have content | `<C>…</C>` and `<C></C>` both report content |
+| IS3 | Self-closing has none | `<C />` reports none |
+| IS4 | Asking does not project | A component that only calls `hasContent()` never runs the children it reports on |
+| IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
 
 ### Tier P — Eval binding interpolation
 
