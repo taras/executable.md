@@ -183,37 +183,72 @@ const BEARER = new RegExp(
 /** `sk-` and `sk-proj-` keys, with or without the preset's `T3BlbkFJ` marker. */
 const OPENAI = /(?<![A-Za-z0-9_-])sk-(?:proj-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g;
 
-/**
- * The body of a quoted value: escape sequences, or anything that is not a
- * quote or a backslash.
- *
- * A secret may legitimately contain `\"` or `\\`. Treating either as the end
- * of the value truncates it to whatever came first — `ab` out of a 26
- * character password — which then falls under every threshold and is waved
- * through. Treating a backslash as invalid is worse: the field stops matching
- * at all.
- *
- * The quantifier is lazy and the closing quote must be followed by a JSON
- * delimiter. Greedy matching cannot tell an escaped quote inside the value
- * from the closing quote of a *serialized* event, where the value arrives
- * escaped twice, and runs past the end of the field.
- */
-const quoted = (mark: string) =>
-  `\\\\?${mark}((?:\\\\.|[^${mark}\\\\])+?)\\\\?${mark}(?=[,}\\s\\\\]|$)`;
+/** A credential-named field and the separator before its value. */
+const FIELD_HEAD = new RegExp(`${Q}\\b(?:${FIELD_NAMES})\\b${Q}\\s*[:=]\\s*`, "gi");
+
+/** An unquoted value ends at the first whitespace or JSON punctuation. */
+const BARE_VALUE = /^[^\s,}"'\\]+/;
 
 /**
- * A credential-named field and its complete value.
+ * Where a quoted value ends, decided by counting the escapes in front of a
+ * candidate quote.
  *
- * A quoted value runs to its actual closing quote, spaces and punctuation
- * included — stopping at the first space truncates
- * `"correct horse Battery 123!"` to `correct`. Only an unquoted value ends at
- * whitespace.
+ * A closing quote cannot be recognized by what follows it. `\",` and `\" `
+ * appear inside perfectly ordinary passwords, so any rule keyed on the next
+ * character ends the value early and keeps only the leading fragment — which
+ * is then short enough to fall under every threshold and be waved through.
+ * What actually distinguishes a delimiter is how many backslashes precede it.
+ *
+ * Two encodings reach this scanner. In a document read from disk a value is
+ * escaped once, so a quote closes the string when an even number of
+ * backslashes precede it. In a serialized event the same text is escaped
+ * again: the delimiter arrives as `\"` and an inner quote as `\\\"`. Writing
+ * the level-1 backslash count as `n`, level 2 shows `2n + 1` — so a delimiter
+ * (`n` even) leaves a count of 1 mod 4, and an escaped quote (`n` odd) leaves
+ * 3 mod 4.
  */
-const FIELD = new RegExp(
-  `${Q}\\b(?:${FIELD_NAMES})\\b${Q}\\s*[:=]\\s*` +
-    `(?:${quoted('"')}|${quoted("'")}|([^\\s,}"'\\\\]+))`,
-  "gi",
-);
+function readQuotedValue(
+  content: string,
+  openAt: number,
+): { value: string; end: number } | undefined {
+  const escaped = content[openAt] === "\\";
+  const mark = content[openAt + (escaped ? 1 : 0)];
+  if (mark !== '"' && mark !== "'") {
+    return undefined;
+  }
+
+  const bodyStart = openAt + (escaped ? 2 : 1);
+
+  for (let at = bodyStart; at < content.length; at++) {
+    if (content[at] !== mark) {
+      continue;
+    }
+
+    let backslashes = 0;
+    for (let back = at - 1; back >= bodyStart && content[back] === "\\"; back--) {
+      backslashes++;
+    }
+
+    const closes = escaped ? backslashes % 4 === 1 : backslashes % 2 === 0;
+    if (closes) {
+      // A doubly-escaped delimiter owns the backslash in front of its quote.
+      const valueEnd = escaped ? at - 1 : at;
+      return { value: content.slice(bodyStart, valueEnd), end: at + 1 };
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The complete value of a credential-named field.
+ *
+ * A quoted value runs to its actual closing quote — spaces, punctuation, and
+ * escape sequences included. Only an unquoted value ends at whitespace.
+ */
+function readFieldValue(content: string, at: number): string | undefined {
+  return readQuotedValue(content, at)?.value ?? BARE_VALUE.exec(content.slice(at))?.[0];
+}
 
 /** An auth scheme in front of the value it carries. */
 const SCHEME = /^(?:Bearer|Token|Basic|ApiKey)\s+/i;
@@ -238,43 +273,65 @@ export const xmdCredentialRule: SecretLintRuleCreator = {
 
     return {
       file(source) {
-        report(source.content, BEARER, "BEARER_TOKEN");
-        report(source.content, OPENAI, "OPENAI_KEY");
-        report(source.content, FIELD, "CREDENTIAL_FIELD");
+        const content = source.content;
 
-        function report(content: string, pattern: RegExp, messageId: keyof typeof messages): void {
+        reportPattern(BEARER, "BEARER_TOKEN");
+        reportPattern(OPENAI, "OPENAI_KEY");
+        reportFields();
+
+        function reportPattern(pattern: RegExp, messageId: keyof typeof messages): void {
           // A /g regex carries lastIndex across calls; each scan starts fresh.
           pattern.lastIndex = 0;
 
           for (const match of content.matchAll(pattern)) {
-            // The value is the first capture that participated, or the whole
-            // match for a pattern that captures nothing (OpenAI).
-            const value = match.slice(1).find((group) => group !== undefined) ?? match[0];
+            const value = match[1] ?? match[0];
             if (value === undefined || match.index === undefined) {
               continue;
             }
+            report(value, match.index + match[0].lastIndexOf(value), messageId);
+          }
+        }
 
-            // `authorization: Bearer <token>` carries its scheme into the
-            // field value; the credential is what follows it.
-            const credential = value.replace(SCHEME, "");
+        /**
+         * Field values are read rather than matched: where a quoted value
+         * ends is a parsing question, not one a pattern can answer.
+         */
+        function reportFields(): void {
+          FIELD_HEAD.lastIndex = 0;
 
-            if (messageId === "OPENAI_KEY") {
-              // An OpenAI-shaped value still has to be a value. A documented
-              // `sk-your-openai-api-key-here` is prose that happens to wear
-              // the prefix, and rejecting it would block documentation.
-              if (isPlaceholder(credential.replace(/^sk-(?:proj-)?/, ""))) {
-                continue;
-              }
-            } else if (!looksLikeSecret(credential)) {
+          for (const head of content.matchAll(FIELD_HEAD)) {
+            if (head.index === undefined) {
               continue;
             }
-
-            const start = match.index + match[0].lastIndexOf(credential);
-            context.report({
-              message: t(messageId),
-              range: [start, start + credential.length],
-            });
+            const at = head.index + head[0].length;
+            const value = readFieldValue(content, at);
+            if (value !== undefined) {
+              report(value, at, "CREDENTIAL_FIELD");
+            }
           }
+        }
+
+        function report(value: string, at: number, messageId: keyof typeof messages): void {
+          // `authorization: Bearer <token>` carries its scheme into the field
+          // value; the credential is what follows it.
+          const credential = value.replace(SCHEME, "");
+          const start = at + (value.length - credential.length);
+
+          if (messageId === "OPENAI_KEY") {
+            // An OpenAI-shaped value still has to be a value. A documented
+            // `sk-your-openai-api-key-here` is prose that happens to wear the
+            // prefix, and rejecting it would block documentation.
+            if (isPlaceholder(credential.replace(/^sk-(?:proj-)?/, ""))) {
+              return;
+            }
+          } else if (!looksLikeSecret(credential)) {
+            return;
+          }
+
+          context.report({
+            message: t(messageId),
+            range: [start, start + credential.length],
+          });
         }
       },
     };

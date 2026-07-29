@@ -393,6 +393,12 @@ describe("escapes inside a quoted credential field", () => {
   const CASES: Record<string, string> = {
     "an escaped quote": WITH_QUOTE,
     "a literal backslash": WITH_BACKSLASH,
+    // A closing quote cannot be recognized by the character after it: both of
+    // these put a JSON delimiter directly after an escaped quote *inside* the
+    // value, so any rule keyed on what follows ends the value here and keeps
+    // only `ab`.
+    "an escaped quote before a comma": `ab",cd${TAIL}`,
+    "an escaped quote before whitespace": `ab" cd${TAIL}`,
   };
 
   for (const [name, secret] of Object.entries(CASES)) {
