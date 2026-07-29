@@ -351,3 +351,65 @@ describe("complete quoted field values", () => {
     expect(yield* createSecretScanner().scan('{"password":"your-password-here"}')).toEqual([]);
   });
 });
+
+/**
+ * A secret may contain the characters JSON uses to delimit and escape.
+ *
+ * Both cases put the escape near the *beginning* of a long value, which is
+ * what makes them adversarial: a rule that stops at the first escape keeps
+ * only the leading fragment, and a two-character fragment falls under every
+ * threshold and is silently waved through.
+ *
+ * Fixtures are built with JSON.stringify so they are valid JSON by
+ * construction rather than by hand-counting backslashes.
+ */
+describe("escapes inside a quoted credential field", () => {
+  const TAIL = A.slice(0, 20);
+  const WITH_QUOTE = `ab"cd${TAIL}`;
+  const WITH_BACKSLASH = `ab\\cd${TAIL}`;
+
+  /** The document text a producer would write. */
+  const rawField = (secret: string): string => JSON.stringify({ password: secret });
+
+  /** That same document text, journalled as a root import event. */
+  const importEvent = (secret: string): DurableEvent => ({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: {
+      status: "ok",
+      value: { path: "README.md", content: `${rawField(secret)}\n` },
+    },
+  });
+
+  /** Nothing that could rebuild the secret may survive into a finding. */
+  function assertOpaque(findings: unknown, secret: string): void {
+    const serialized = JSON.stringify(findings);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain(TAIL);
+    expect(serialized).not.toContain(TAIL.slice(0, 8));
+  }
+
+  const CASES: Record<string, string> = {
+    "an escaped quote": WITH_QUOTE,
+    "a literal backslash": WITH_BACKSLASH,
+  };
+
+  for (const [name, secret] of Object.entries(CASES)) {
+    it(`detects a value containing ${name}, as raw JSON`, function* () {
+      const findings = yield* createSecretScanner().scan(rawField(secret));
+
+      expect(findings.length).toBeGreaterThan(0);
+      assertOpaque(findings, secret);
+    });
+
+    it(`detects a value containing ${name}, inside a serialized root import`, function* () {
+      const findings = yield* createSecretScanner().scan(
+        serializeDurableEvent(importEvent(secret)),
+      );
+
+      expect(findings.length).toBeGreaterThan(0);
+      assertOpaque(findings, secret);
+    });
+  }
+});

@@ -184,16 +184,34 @@ const BEARER = new RegExp(
 const OPENAI = /(?<![A-Za-z0-9_-])sk-(?:proj-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g;
 
 /**
+ * The body of a quoted value: escape sequences, or anything that is not a
+ * quote or a backslash.
+ *
+ * A secret may legitimately contain `\"` or `\\`. Treating either as the end
+ * of the value truncates it to whatever came first — `ab` out of a 26
+ * character password — which then falls under every threshold and is waved
+ * through. Treating a backslash as invalid is worse: the field stops matching
+ * at all.
+ *
+ * The quantifier is lazy and the closing quote must be followed by a JSON
+ * delimiter. Greedy matching cannot tell an escaped quote inside the value
+ * from the closing quote of a *serialized* event, where the value arrives
+ * escaped twice, and runs past the end of the field.
+ */
+const quoted = (mark: string) =>
+  `\\\\?${mark}((?:\\\\.|[^${mark}\\\\])+?)\\\\?${mark}(?=[,}\\s\\\\]|$)`;
+
+/**
  * A credential-named field and its complete value.
  *
- * A quoted value runs to its closing quote, spaces and punctuation included —
- * stopping at the first space truncates `"correct horse Battery 123!"` to
- * `correct`, which is short enough to fall under every threshold and be
- * waved through. Only an unquoted value ends at whitespace.
+ * A quoted value runs to its actual closing quote, spaces and punctuation
+ * included — stopping at the first space truncates
+ * `"correct horse Battery 123!"` to `correct`. Only an unquoted value ends at
+ * whitespace.
  */
 const FIELD = new RegExp(
   `${Q}\\b(?:${FIELD_NAMES})\\b${Q}\\s*[:=]\\s*` +
-    `(?:\\\\?"([^"\\\\]+)\\\\?"|\\\\?'([^'\\\\]+)\\\\?'|([^\\s,}"'\\\\]+))`,
+    `(?:${quoted('"')}|${quoted("'")}|([^\\s,}"'\\\\]+))`,
   "gi",
 );
 
