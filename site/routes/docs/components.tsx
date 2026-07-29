@@ -51,7 +51,8 @@ export default function*(props) {
   return \`## \${props.title}\\n\\n\${body}\`;
 }`;
 
-const RETAIN_COMPONENT = `import { hasContent, retain, useContent } from "@executablemd/core";
+const RETAIN_COMPONENT =
+  `import { hasContent, retain, useContent } from "@executablemd/core";
 
 export default function*() {
   if (yield* hasContent()) {
@@ -147,12 +148,11 @@ export default define.page(function Components() {
       <h3>Which form am I?</h3>
       <p>
         <code>hasContent()</code>{" "}
-        answers from how the element was written, not from what it renders:
-        {" "}
+        answers from how the element was written, not from what it renders:{" "}
         <code>&lt;Probe&gt;…&lt;/Probe&gt;</code> and{" "}
-        <code>&lt;Probe&gt;&lt;/Probe&gt;</code> both have content — content
-        that renders an empty string is still content — and only{" "}
-        <code>&lt;Probe /&gt;</code>{" "}
+        <code>&lt;Probe&gt;&lt;/Probe&gt;</code>{" "}
+        both have content — content that renders an empty string is still
+        content — and only <code>&lt;Probe /&gt;</code>{" "}
         does not. Asking never renders the children, so a component whose two
         forms mean different things can branch before projecting anything.
       </p>
@@ -175,8 +175,8 @@ export default define.page(function Components() {
       <CodeBlock filename="components/Probe.ts">{RETAIN_COMPONENT}</CodeBlock>
       <CodeBlock>{RETAIN_USAGE}</CodeBlock>
       <p>
-        Retaining delays release; it does not opt out of it. The invocation
-        site is an ordinary scope, so when it finishes, fails, or is cancelled,
+        Retaining delays release; it does not opt out of it. The invocation site
+        is an ordinary scope, so when it finishes, fails, or is cancelled,
         everything retained into it is torn down, innermost first. Nothing
         escapes structured concurrency and nothing needs an explicit release.
       </p>
