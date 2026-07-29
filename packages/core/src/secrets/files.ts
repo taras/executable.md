@@ -25,7 +25,7 @@
 
 import { until } from "effection";
 import type { Operation } from "effection";
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import type { SecretFinding } from "./findings.ts";
 import type { SecretScanner } from "./scanner.ts";
@@ -83,9 +83,38 @@ export class CandidateRejectedError extends Error {
  * nothing about what Git would store. Supporting them is a separate design.
  */
 export function* scanFiles(root: string, scanner: SecretScanner): Operation<FileSecretFinding[]> {
+  yield* requireRealDirectory(root);
+
   const findings: FileSecretFinding[] = [];
   yield* scanDirectory(root, root, scanner, findings);
   return findings;
+}
+
+/**
+ * Classify the candidate root before traversing it.
+ *
+ * Refusing links *beneath* the root is not enough: a root that is itself a
+ * directory symlink is dereferenced by the first `readdir`, and the scan then
+ * happily clears a tree that lives somewhere else entirely. The root has to
+ * be classified by the same non-contextual boundary as everything under it,
+ * and `lstat` is what reports the link rather than its target.
+ */
+function* requireRealDirectory(root: string): Operation<void> {
+  let entry;
+  try {
+    entry = yield* until(lstat(root));
+  } catch {
+    // The failure names the path, and a candidate path can carry a
+    // credential, so it is dropped rather than wrapped.
+    throw new CandidateRejectedError("its root does not exist or could not be read");
+  }
+
+  if (entry.isSymbolicLink()) {
+    throw new CandidateRejectedError("its root is a symbolic link");
+  }
+  if (!entry.isDirectory()) {
+    throw new CandidateRejectedError("its root is not a directory");
+  }
 }
 
 function* scanDirectory(

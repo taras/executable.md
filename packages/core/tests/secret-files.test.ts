@@ -252,3 +252,108 @@ describe("symbolic links", () => {
 function* rm(dir: string): Operation<void> {
   fs.rmSync(dir, { recursive: true, force: true });
 }
+
+/**
+ * The candidate root is classified before anything is traversed.
+ *
+ * Refusing links beneath the root is not enough. A root that is itself a
+ * directory symlink is dereferenced by the first `readdir`, and the scan then
+ * clears a tree living somewhere else entirely — reporting "no findings" for
+ * a candidate it never actually looked at.
+ */
+describe("the candidate root", () => {
+  it("refuses a symlinked root pointing at an external clean directory", function* () {
+    const base = makeTmpDir();
+    yield* ensure(() => rm(base));
+
+    const real = path.join(base, "real");
+    fs.mkdirSync(real);
+    fs.writeFileSync(path.join(real, "clean.txt"), "entirely ordinary content\n");
+
+    const candidate = path.join(base, "candidate");
+    fs.symlinkSync(real, candidate);
+
+    let failure: Error | undefined;
+    try {
+      yield* scanFiles(candidate, createSecretScanner());
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    // Clean target, still refused: the objection is structural, not about
+    // what happens to be on the other side of the link.
+    expect(failure).toBeInstanceOf(CandidateRejectedError);
+    expect(failure?.cause).toBeUndefined();
+  });
+
+  it("never exposes a credential-bearing target of a symlinked root", function* () {
+    const base = makeTmpDir();
+    yield* ensure(() => rm(base));
+
+    const real = path.join(base, CANARY);
+    fs.mkdirSync(real);
+    fs.writeFileSync(path.join(real, "clean.txt"), "ordinary\n");
+
+    // A distinctive name: "candidate" would collide with the error's own
+    // wording and make the assertion pass or fail for the wrong reason.
+    const linked = path.join(base, "staged-snapshot-root");
+    fs.symlinkSync(real, linked);
+
+    let failure: Error | undefined;
+    try {
+      yield* scanFiles(linked, createSecretScanner());
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    const rendered = `${failure?.message}${failure?.stack ?? ""}${JSON.stringify(failure)}`;
+    expect(rendered).not.toContain(CANARY);
+    expect(rendered).not.toContain(A.slice(0, 12));
+    expect(rendered).not.toContain(base);
+    expect(rendered).not.toContain("staged-snapshot-root");
+  });
+
+  it("refuses a root that is a file rather than a directory", function* () {
+    const base = makeTmpDir();
+    yield* ensure(() => rm(base));
+
+    const file = path.join(base, "not-a-directory.txt");
+    fs.writeFileSync(file, "ordinary\n");
+
+    let failure: Error | undefined;
+    try {
+      yield* scanFiles(file, createSecretScanner());
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(failure).toBeInstanceOf(CandidateRejectedError);
+  });
+
+  it("refuses a root that does not exist", function* () {
+    const base = makeTmpDir();
+    yield* ensure(() => rm(base));
+
+    let failure: Error | undefined;
+    try {
+      yield* scanFiles(path.join(base, "absent"), createSecretScanner());
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(failure).toBeInstanceOf(CandidateRejectedError);
+    expect(failure?.cause).toBeUndefined();
+  });
+
+  it("still scans an ordinary candidate directory", function* () {
+    const dir = makeTmpDir();
+    yield* ensure(() => rm(dir));
+
+    write(dir, "artifacts/report.md", `token: ${CANARY}\n`);
+
+    const findings = yield* scanFiles(dir, createSecretScanner());
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ subject: "content", path: "artifacts/report.md" });
+  });
+});
