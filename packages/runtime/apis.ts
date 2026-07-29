@@ -63,21 +63,21 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import { relative, sep } from "node:path";
+import { join } from "node:path";
 import process from "node:process";
 import { realpath as fsRealpath, rename as fsRename } from "node:fs/promises";
 import { fetch as effectionFetch } from "@effectionx/fetch";
 import {
   ensureDir as fsEnsureDir,
+  FsApi,
   globToRegExp,
   readTextFile as fsReadTextFile,
   rm as fsRm,
   stat as fsStat,
-  walk,
   writeTextFile as fsWriteTextFile,
 } from "@effectionx/fs";
 import { exec as processExec } from "@effectionx/process";
-import { each, race, sleep, until } from "effection";
+import { race, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeout as contextualTimeout } from "./config.ts";
 
@@ -162,9 +162,83 @@ interface ProcessHandler {
   }): Operation<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
+/**
+ * A glob pattern as a matcher for relative POSIX paths.
+ *
+ * A pattern that cannot be compiled throws here — an unterminated character
+ * class is a `SyntaxError` from `RegExp` — so it surfaces from `glob` itself
+ * rather than silently matching nothing.
+ */
+function toRegExp(pattern: string): RegExp {
+  return globToRegExp(pattern, { extended: true, globstar: true });
+}
+
+interface Traversal {
+  include: RegExp[];
+  exclude: RegExp[];
+  matched: Array<{ path: string; isFile: boolean }>;
+}
+
+/**
+ * Collect matches under `directory`, whose path relative to the glob root is
+ * `prefix`.
+ *
+ * A plain recursive generator rather than `@effectionx/fs`'s `walk()`, whose
+ * producer runs in a spawned task: a `readdir` that fails there tears down the
+ * surrounding scope instead of throwing at the call site, so no caller can
+ * report it. Recursing here makes a failure `glob`'s own, and makes every
+ * directory read a cancellation point.
+ *
+ * Paths are assembled from entry names with `/`, so what patterns match is the
+ * relative POSIX path on every platform. Exclusions are tested before
+ * inclusions and before descending, which is what makes them win.
+ */
+function* descend(directory: string, prefix: string, walk: Traversal): Operation<void> {
+  for (const entry of yield* FsApi.operations.readdirDirents(directory)) {
+    const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+    if (walk.exclude.some((re) => re.test(path))) {
+      continue;
+    }
+
+    // A symlink is reported by its own path and never followed, so traversal
+    // stays under the root and cannot cycle.
+    if (entry.isSymbolicLink()) {
+      if (walk.include.some((re) => re.test(path))) {
+        walk.matched.push({ path, isFile: false });
+      }
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      // An exclusion covering a directory's contents — `.git/**` — does not
+      // match the directory itself, but does match it as a prefix. Testing that
+      // form prunes the subtree instead of walking one that can produce nothing.
+      if (walk.exclude.some((re) => re.test(`${path}/`))) {
+        continue;
+      }
+      yield* descend(join(directory, entry.name), path, walk);
+      continue;
+    }
+
+    if (entry.isFile() && walk.include.some((re) => re.test(path))) {
+      walk.matched.push({ path, isFile: true });
+    }
+  }
+}
+
 interface FsHandler {
   readTextFile(path: string): Operation<string>;
   stat(path: string): Operation<StatResult>;
+  /**
+   * Entries beneath `root` whose path relative to it matches `patterns` and
+   * matches none of `exclude`. Paths come back relative and POSIX-separated,
+   * which is what both patterns are matched against, so a document's patterns
+   * mean the same thing on every platform.
+   *
+   * Symbolic links are reported but never followed: a link's own path can
+   * match, and a link to a directory is not descended into. Traversal
+   * therefore stays inside `root` and cannot cycle.
+   */
   glob(options: {
     patterns: string[];
     root: string;
@@ -287,35 +361,14 @@ export const API: {
       exclude?: string[];
     }): Operation<Array<{ path: string; isFile: boolean }>> {
       const { patterns, root, exclude = [] } = options;
-      const results: Array<{ path: string; isFile: boolean }> = [];
 
-      // Convert include/exclude patterns to RegExp for matching
-      // against relative paths from root
-      const includeRegexes = patterns.map((p) =>
-        globToRegExp(p, { extended: true, globstar: true }),
-      );
-      const excludeRegexes = exclude.map((e) =>
-        globToRegExp(e, { extended: true, globstar: true }),
-      );
-
-      // Walk the directory tree and match relative paths
-      const stream = walk(root, {
-        includeFiles: true,
-        includeDirs: false,
-        skip: excludeRegexes.length > 0 ? excludeRegexes : undefined,
+      const matched: Array<{ path: string; isFile: boolean }> = [];
+      yield* descend(root, "", {
+        include: patterns.map(toRegExp),
+        exclude: exclude.map(toRegExp),
+        matched,
       });
-
-      for (const entry of yield* each(stream)) {
-        // Normalize to POSIX separators for consistent matching across platforms
-        const relPath = relative(root, entry.path).split(sep).join("/");
-        const matches = includeRegexes.some((re) => re.test(relPath));
-        if (matches) {
-          results.push({ path: relPath, isFile: entry.isFile });
-        }
-        yield* each.next();
-      }
-
-      return results;
+      return matched;
     },
 
     *writeTextFile(path: string, content: string): Operation<void> {

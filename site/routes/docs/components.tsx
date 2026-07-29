@@ -107,6 +107,26 @@ const FILE_BLOCK = `<File path="a.txt">
 one line
 </File>`;
 
+const GLOB = `<Glob include={["**/AGENTS.md"]} as="instructionPaths" />`;
+
+const GLOB_EXCLUDE = `<Glob
+  include={["**/*.md"]}
+  exclude={[".git/**", "**/node_modules/**"]}
+  as="docs"
+/>`;
+
+const GLOB_PIPELINE = `<TempDir>
+<File path="docs/guide.md">Guide</File>
+<File path="docs/api/reference.md">Reference</File>
+<File path="README.md">Readme</File>
+
+<Glob include={["docs/**/*.md"]} as="docs" />
+
+<Each in={docs} let="path">
+<File path={path} />
+</Each>
+</TempDir>`;
+
 const PARSE = `<Capture as="schema" select="code[lang=json]">
 \`\`\`json
 {
@@ -503,6 +523,80 @@ export default define.page(function Components() {
         the case your document controls — its own children — but check-then-use
         does not become atomic by being ordered more carefully. Containment that
         does not depend on observed state is tracked in issue #227.
+      </p>
+
+      <h2>Finding files</h2>
+      <p>
+        <code>&lt;Glob&gt;</code>{" "}
+        answers the other half of the question: not "read this file" but "which
+        files are there". It takes <code>include</code>{" "}
+        — at least one glob pattern — and binds the paths it found. It declares
+        a return value, so it renders nothing and <code>as</code> is required.
+      </p>
+      <CodeBlock>{GLOB}</CodeBlock>
+      <p>
+        <code>exclude</code>{" "}
+        is optional and wins over include. An exclusion that covers a
+        directory's contents prunes it, so the subtree is never walked rather
+        than walked and thrown away.
+      </p>
+      <CodeBlock>{GLOB_EXCLUDE}</CodeBlock>
+      <p>
+        Patterns are relative to the same contextual working directory{" "}
+        <code>&lt;File&gt;</code>{" "}
+        uses, and so are the results — which is what lets the three components
+        become a pipeline. Build a fixture, discover it, read every match, all
+        without a path that means something only on your machine:
+      </p>
+      <CodeBlock>{GLOB_PIPELINE}</CodeBlock>
+
+      <h3>What you get back</h3>
+      <p>
+        A <em>set</em>{" "}
+        of relative paths, and each word there is doing work. Paths use{" "}
+        <code>/</code>{" "}
+        on every platform. A file that several patterns match is one result. And
+        they are sorted by code point — not by locale, whose answer depends on
+        how the host is configured, and not in the order the filesystem handed
+        entries back, which is not an order at all. A document that branches on
+        a listing branches the same way everywhere.
+      </p>
+      <p>
+        Finding nothing is a{" "}
+        <em>result</em>: an empty array, and the document carries on.
+      </p>
+      <p>
+        A leading dot is an ordinary character, so there is no hidden-file
+        option. <code>*</code> matches one like anything else —{" "}
+        <code>*.md</code> finds <code>.hidden.md</code>{" "}
+        — and a pattern finds a hidden file exactly when it says so.
+      </p>
+      <p>
+        Only files come back. Directories are not results, and neither are
+        symbolic links: a link is a link, not a file. A link to a directory is
+        not descended into either, which is what keeps a search inside the
+        working directory without having to judge where anything points —
+        traversal follows only real directories, so it cannot leave and cannot
+        cycle.
+      </p>
+
+      <h3>When a pattern is wrong</h3>
+      <p>
+        A pattern that cannot match anything a relative search produces — an
+        absolute one, one starting with <code>..</code>{" "}
+        , or an empty string — fails rather than quietly contributing nothing.
+        An empty result has to keep meaning{" "}
+        <em>there are no such files</em>, so a typo must not also produce one.
+        Only a whole leading <code>..</code> segment counts;{" "}
+        <code>..notes.md</code> is just a file with an odd name.
+      </p>
+      <p>
+        A missing working directory, one that turns out to be a file, and a
+        directory that cannot be read all fail too. That last message names no
+        path at all — what failed is a directory under the working directory
+        that you never wrote — and as with{" "}
+        <code>&lt;File&gt;</code>, nothing from the underlying error is
+        reproduced: its code selects a phrase from a fixed list.
       </p>
 
       <h2>Parsing generated JSON</h2>

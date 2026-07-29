@@ -119,8 +119,9 @@ resolved paths in the journal (`"components/Greeting.md"`) are relative.
 A component that resolves against the **contextual** working directory is the
 exception, because a relative path would resolve against the process's
 directory instead of the one it was given. `<File>` (§6.13) resolves its
-`path` prop against `Env.cwd` itself and hands the Fs Api the absolute result.
-Nothing it resolves reaches a diagnostic or the journal.
+`path` prop against `Env.cwd` itself and hands the Fs Api the absolute result;
+`<Glob>` (§6.14) searches `Env.cwd` and returns relative paths. Nothing either
+resolves reaches a diagnostic or the journal.
 
 #### The contextual working directory
 
@@ -1984,7 +1985,7 @@ deterministic from the content, so it needs no separate journal entry.
 #### Built-in components
 
 Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
-`<SafeParse>` (§6.12), and `<File>` (§6.13). A built-in resolves no path and
+`<SafeParse>` (§6.12), `<File>` (§6.13), and `<Glob>` (§6.14). A built-in resolves no path and
 reads no file: it is already in the module graph, so it ships in the compiled
 binary and every published package without a search path or a bundling step,
 and a document invokes it with no `--component-dir`.
@@ -4327,6 +4328,141 @@ expansion does reach `<File>`. Having recorded nothing, it has nothing to
 restore: the read happens again against whatever the file says now, and the
 write happens again. Inside a wrapping `<TempDir>` that repetition is what the
 directory's replay refusal depends on (§6.11).
+
+---
+
+### 6.14 Finding files: `<Glob>`
+
+A document decides what to work on by looking at what is there. `<Glob>` is
+core's own component (§5.3) and answers one question — which files under the
+contextual `Env.cwd` a set of patterns selects:
+
+```md
+<Glob include={["**/AGENTS.md"]} as="instructionPaths" />
+```
+
+`include` is required and holds at least one pattern. `exclude` is optional and
+defaults to empty. Both are lists of glob patterns, and both are evaluated
+relative to `Env.cwd`, so `<Glob>` composes with `<TempDir>` (§6.11) and with
+`<File>` (§6.13) without any of them knowing about the others — a path `<Glob>`
+returns is a path `<File>` can read:
+
+```md
+<TempDir>
+<File path="docs/guide.md">Guide</File>
+<Glob include={["**/*.md"]} as="docs" />
+</TempDir>
+```
+
+`<Glob>` declares `returns`, so it is a value component (§6.10): it renders
+nothing, must be invoked with `as`, and binds one `string[]`.
+
+#### What comes back
+
+A **set of relative paths**, and everything about that phrase is load-bearing.
+
+Each path is relative to `Env.cwd` and written with `/` on every platform, so a
+document that branches on a listing reads the same on every host. Paths are
+deduplicated, so a file several patterns all match is one result. And they are
+sorted lexically by code point — not by `localeCompare`, whose answer depends on
+the host's locale, and not in the order the filesystem handed entries back,
+which is not an order at all.
+
+Finding nothing is a result. An empty array succeeds and the document carries
+on; it is not a failure and not a diagnostic.
+
+#### The pattern dialect
+
+Patterns are the filesystem glob library's own, and `<Glob>` adds no syntax:
+
+- `*` matches within one path segment;
+- `**` crosses segments, and `**/` matches no directories as readily as many —
+  so `**/AGENTS.md` finds the file at the top and nested at any depth;
+- `?`, `[…]`, and `{a,b}` behave as that library defines them.
+
+A **leading dot is an ordinary character**. `*` matches one like any other, so
+there is no hidden-file prop: `*.md` finds `.hidden.md`, and a pattern finds a
+hidden file exactly when it says so.
+
+**Exclusions win.** A path any `exclude` pattern matches is not a result, whether
+an `include` pattern reached it by wildcard or named it outright. An exclusion
+that covers a directory's contents also prunes it, so `exclude: [".git/**"]`
+means that subtree is not walked rather than walked and discarded.
+
+#### Only files
+
+Directories are never results, and neither are symbolic links. A symlink is a
+link rather than a file — so a link to a file inside `Env.cwd` is not returned,
+and a link to a directory is not descended into.
+
+That last rule is what keeps a search inside `Env.cwd` without judging any
+destination: traversal only ever follows real directories, so it cannot leave the
+working directory and cannot cycle. The filesystem library exposes symlink
+following, but nothing in it confines a resolved destination to the root or
+detects a traversal cycle, so following one cannot be offered safely. A later
+implementation may, if the library guarantees both.
+
+#### Failures
+
+Most of what fails the component is about a pattern rather than about the
+filesystem:
+
+| What | Reported as |
+|---|---|
+| A pattern that is absolute | `include pattern "/etc/**" is absolute; give a pattern relative to the working directory.` |
+| A pattern whose first segment is `..` | `include pattern "../*.md" reaches outside the working directory.` |
+| A pattern that is empty | `include holds an empty pattern, which matches nothing; give a pattern relative to the working directory.` |
+| A pattern the dialect cannot compile | `one of these patterns cannot be used: "*.md", "[bad".` |
+| A missing or non-directory `Env.cwd` | `the working directory does not exist.` / `the working directory is not a directory.` |
+| A failed directory read | `cannot search the working directory: permission denied.` |
+
+The first three are patterns that cannot match anything a relative search
+produces. Returning `[]` for them would make a typo indistinguishable from an
+empty directory, and an empty result has to keep meaning "there are no such
+files". Only a whole leading `..` segment leaves: `..notes.md` is an ordinary
+name, and a `..` further along — `docs/../*.md` — is a path a search never
+produces, so it matches nothing for the ordinary reason.
+
+A pattern that cannot be compiled arrives as a `RegExp` error about a translated
+expression the author never wrote, and which pattern it was is not recoverable
+from it. The candidates are listed rather than one being named; they are the
+document's own text.
+
+#### Diagnostics
+
+A diagnostic names the patterns the document wrote, and nothing else. A
+traversal failure names **no path at all**: what failed is a directory under
+`Env.cwd` that the document never wrote, and §1.2 keeps absolute paths out of
+diagnostics.
+
+As in §6.13, nothing from a caught platform error is reproduced. The errno code
+**selects** a phrase from the fixed allowlist the filesystem components share,
+and an unrecognized code selects `the filesystem operation failed`. The code
+itself is never emitted, and the error's class carries no authority either — a
+`GlobError` arriving from a wrapped call is replaced like any other, because a
+class says nothing about whether a message is safe to show.
+
+#### Threat model
+
+As with `<File>`, the guarantee is about traversal rather than about the
+filesystem being stable. `<Glob>` never follows a symlink, so nothing it reads
+is chosen by one; but a directory that is real when it is read could be replaced
+afterwards, and this is not a sandbox. Containment that does not depend on
+observed filesystem state is issue #227.
+
+#### Scope
+
+`<Glob>` returns paths and nothing else: no directories, no filesystem metadata,
+no sizes or times. The root is `Env.cwd` and is not configurable — a document
+that wants to search elsewhere establishes that directory, which is what
+`<TempDir>` is for.
+
+It records no durable effect, so what a replay does depends on whether expansion
+reaches it. A journal containing the root's close is a completed execution:
+replaying it restores the captured array without expanding anything, and the
+filesystem is not touched. A **partial** journal replays what it holds and then
+continues live, so expansion does reach `<Glob>`. Having recorded nothing, it has
+nothing to restore, and the search runs again against whatever is on disk now.
 
 ---
 

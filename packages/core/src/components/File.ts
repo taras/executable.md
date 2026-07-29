@@ -33,10 +33,8 @@
  * absolute path are all withheld — §1.2 keeps absolute paths out of
  * diagnostics, and a containment failure is the last place to start reporting
  * them. A platform error carries the path it failed on, so every filesystem
- * call is wrapped and nothing from the error it caught is reproduced: the
- * errno code *selects* a phrase written here, and an unrecognized one selects
- * the generic phrase. The code is never emitted, because whatever implements
- * the Fs Api chooses it.
+ * call is wrapped and nothing from the error it caught is reproduced: the errno
+ * code *selects* a phrase from the allowlist in `fs-diagnostics.ts`.
  *
  * A failed cleanup of the temporary is the one thing reported that the document
  * did not ask for, and it is reported alongside the write's own outcome rather
@@ -76,6 +74,7 @@ import {
 import { Component } from "../component-api.ts";
 import { hasContent, useContent } from "../content-context.ts";
 import type { Json } from "../types.ts";
+import { reason } from "./fs-diagnostics.ts";
 
 export const props = {
   type: "object",
@@ -92,62 +91,6 @@ export class FileAccessError extends Error {
     super(message);
     this.name = "FileAccessError";
   }
-}
-
-/**
- * Every phrase a failed filesystem call may be reported as.
- *
- * An allowlist, and the whole vocabulary. A platform error message names the
- * path it failed on — `ENOTDIR: not a directory, stat '/private/var/…'` — which
- * is the resolved path §1.2 keeps out of diagnostics, and for a write it can be
- * the temporary file the document never named. Nothing from the error is
- * reproduced: the code selects a phrase written here, and an unrecognized code
- * selects the generic one.
- *
- * A `Map` rather than an object, because a lookup on an object literal answers
- * for inherited keys — `REASONS["toString"]` would hand back a function whose
- * source would then be interpolated into a diagnostic.
- */
-const REASONS: ReadonlyMap<string, string> = new Map([
-  ["ENOENT", "no such file or directory"],
-  ["ENOTDIR", "a component of the path is not a directory"],
-  ["EISDIR", "it is a directory"],
-  ["ENOTEMPTY", "the directory is not empty"],
-  ["EACCES", "permission denied"],
-  ["EPERM", "permission denied"],
-  ["EROFS", "the filesystem is read-only"],
-  ["ELOOP", "too many levels of symbolic links"],
-  ["ENAMETOOLONG", "the path is too long"],
-  ["ENOSPC", "no space left on the device"],
-  ["EDQUOT", "the disk quota is exhausted"],
-  ["EXDEV", "the destination is on a different filesystem"],
-  ["EBUSY", "the file is in use"],
-  ["EMFILE", "too many open files"],
-]);
-
-const UNRECOGNIZED = "the filesystem operation failed";
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const { code } = error;
-  return typeof code === "string" ? code : undefined;
-}
-
-/**
- * A phrase for a failure, chosen from `REASONS` or the generic one.
- *
- * `code` is attacker-supplied as far as this component is concerned — anything
- * installed as Fs middleware can put a path, markup, or a newline in it — so it
- * is used to select a phrase and never to build one.
- */
-function reason(error: unknown): string {
-  const code = errorCode(error);
-  if (code === undefined) {
-    return UNRECOGNIZED;
-  }
-  return REASONS.get(code) ?? UNRECOGNIZED;
 }
 
 /** One sanitized sentence: the document's own path, and an allowlisted phrase. */
