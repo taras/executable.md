@@ -66,7 +66,7 @@ import {
   resolveProps,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
-import { resolveTestTarget } from "./test-target.ts";
+import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
 const runConfig = object({
@@ -492,8 +492,16 @@ interface TestConfig extends Omit<DocumentConfig, "path"> {
  * heading, no summary.
  */
 function* test(config: TestConfig, args: string[]): Operation<void> {
-  const explicitPatterns = findPatternFlags(args);
-  if (explicitPatterns.some((value) => value.length === 0)) {
+  const patterns = readPatternFlags(args);
+  if (patterns.missingValue) {
+    console.error(
+      `${PATTERN_OPTION} requires a value — write \`${PATTERN_OPTION} <glob>\`, or ` +
+        `\`${PATTERN_OPTION}=<glob>\` for a glob that begins with "-"`,
+    );
+    yield* exit(1);
+    return;
+  }
+  if (patterns.values.some((value) => value.length === 0)) {
     console.error(`${PATTERN_OPTION} requires a glob — an empty pattern matches nothing`);
     yield* exit(1);
     return;
@@ -503,7 +511,7 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
   const target = yield* resolveTestTarget(path, config.pattern);
 
   if (target.kind === "file") {
-    if (explicitPatterns.length > 0) {
+    if (patterns.values.length > 0) {
       console.error(
         `unrecognized option for xmd test: ${PATTERN_OPTION} — ${path} is a single document, ` +
           `so there is nothing to search`,
@@ -535,15 +543,16 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
     return;
   }
 
-  // A suite tests the components beside it: the target root is searched first,
-  // then whatever the caller configured.
-  const componentDir = [target.root, ...config.componentDir];
   const failures: string[] = [];
 
   for (const document of target.documents) {
     process.stdout.write(`\n# ${document.relativePath}\n\n`);
     const result = yield* runScopedDocument(
-      { ...config, path: document.path, componentDir },
+      {
+        ...config,
+        path: document.path,
+        componentDir: componentSearchPath(document, target.root, config.componentDir),
+      },
       { testing: true },
     );
     if (!result.ok) {
@@ -605,27 +614,48 @@ function findPropsFlag(args: string[]): string | undefined {
 
 const PATTERN_OPTION = "--pattern";
 
+interface PatternFlags {
+  /** Values the caller wrote, in the order they wrote them. */
+  values: string[];
+  /** A `--pattern` that ran out of argv or was followed by another option. */
+  missingValue: boolean;
+}
+
 /**
- * The `--pattern` values the caller wrote, in the order they wrote them.
+ * Read `--pattern` from argv.
  *
- * The resolved configuration answers neither question this serves. It cannot
- * say whether the option was given at all — the default is a real value,
- * indistinguishable from a typed one — and it hides an unusable value: the
- * parser picks the last *valid* source, so an empty pattern silently falls
- * back to the default instead of failing.
+ * The resolved configuration answers none of the questions this serves. It
+ * cannot say whether the option was given at all — the default is a real
+ * value, indistinguishable from a typed one — and it hides unusable input: the
+ * parser picks the last *valid* source, so an empty pattern falls back to the
+ * default, and it happily reads the next option as the glob.
+ *
+ * A separated value that begins with `-` is another option, not a glob;
+ * `--pattern=<glob>` expresses a glob that really does begin with one.
  */
-function findPatternFlags(args: string[]): string[] {
+function readPatternFlags(args: string[]): PatternFlags {
   const values: string[] = [];
+  let missingValue = false;
+
   for (const [index, arg] of args.entries()) {
+    if (arg === "--") {
+      break;
+    }
     if (arg === PATTERN_OPTION) {
-      values.push(args[index + 1] ?? "");
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        missingValue = true;
+        continue;
+      }
+      values.push(value);
       continue;
     }
     if (arg.startsWith(`${PATTERN_OPTION}=`)) {
       values.push(arg.slice(PATTERN_OPTION.length + 1));
     }
   }
-  return values;
+
+  return { values, missingValue };
 }
 
 interface PropsPhase {

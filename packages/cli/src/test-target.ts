@@ -6,7 +6,7 @@
  * which patterns are defaults.
  */
 
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Operation } from "effection";
 import { glob, stat } from "@executablemd/runtime";
 
@@ -51,6 +51,35 @@ export function* resolveTestTarget(path: string, patterns: string[]): Operation<
 
   const documents = [...byRelativePath.values()].sort(byCodePoint);
   return { kind: "directory", root: path, documents };
+}
+
+/**
+ * Where one discovered document looks for components.
+ *
+ * Its own directory comes first, so a component beside a nested test wins over
+ * a same-named one elsewhere in the suite; the target root comes next, so a
+ * suite shares what sits at its top; the caller's directories come last. The
+ * first spelling of a directory wins, so a repeat cannot promote a later
+ * entry.
+ */
+export function componentSearchPath(
+  document: TestDocument,
+  root: string,
+  configured: string[],
+): string[] {
+  const search: string[] = [];
+  const seen = new Set<string>();
+
+  for (const directory of [dirname(document.path), root, ...configured]) {
+    const key = resolve(directory);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    search.push(directory);
+  }
+
+  return search;
 }
 
 // Code point order, not `localeCompare`: the report a run prints must not

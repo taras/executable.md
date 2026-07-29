@@ -255,4 +255,54 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     expect(headings(stdout)).toEqual(["Example.test.md"]);
     expect(stdout).toContain("Example component");
   });
+
+  // Neither the target root nor the working directory holds a `Widget.md`, so
+  // each document can only be resolving the one in its own directory.
+  it("DT25: a nested document resolves the component beside it, not a sibling's", function* () {
+    const { code, stdout } = yield* runCli(["test", "nested-components"], {
+      cwd: FIXTURES,
+    }).join();
+    expect(code).toBe(0);
+    expect(headings(stdout)).toEqual(["alpha/Widget.test.md", "beta/Widget.test.md"]);
+    expect(stdout).toContain("Alpha widget");
+    expect(stdout).toContain("Beta widget");
+  });
+
+  it("DT26: a --pattern with no value is rejected", function* () {
+    const { code, stdout, stderr } = yield* runCli(["test", fixture("suite"), "--pattern"]).join();
+    expect(code).toBe(1);
+    expect(stderr).toContain("--pattern requires a value");
+    expect(headings(stdout)).toEqual([]);
+  });
+
+  it("DT27: another option is not read as the glob", function* () {
+    const { code, stdout, stderr } = yield* runCli(["test", "--pattern", "--raw", "."], {
+      cwd: fixture("suite"),
+    }).join();
+    expect(code).toBe(1);
+    expect(stderr).toContain("--pattern requires a value");
+    expect(stderr).not.toContain("no documents matched --raw");
+    expect(headings(stdout)).toEqual([]);
+  });
+
+  it("DT28: --pattern=<glob> expresses a glob that begins with a dash", function* () {
+    const { code, stderr } = yield* runCli([
+      "test",
+      fixture("suite"),
+      "--pattern=-weird.md",
+    ]).join();
+    expect(code).toBe(1);
+    expect(stderr).toContain("no documents matched -weird.md in");
+  });
+
+  it("DT29: argv after -- is not inspected for options", function* () {
+    const { code, stdout } = yield* runCli(["test", fixture("suite"), "--", "--pattern"]).join();
+    expect(code).toBe(0);
+    expect(headings(stdout)).toEqual([
+      "a-binds.test.md",
+      "b-reads.test.md",
+      "nested/deep.test.md",
+      "passing.test.md",
+    ]);
+  });
 });

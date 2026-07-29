@@ -73,9 +73,15 @@ code-point order of their normalized relative paths, whatever order the
 patterns were written in. A pattern chosen deliberately to be broad, such as
 `--pattern "**/*.md"`, selects and runs ordinary Markdown.
 
-A directory target searches itself for components, ahead of the configured
-component directories, so a suite resolves the components sitting beside it
-without `--component-dir`. The working directory does not change.
+Under a directory target each document searches for components in three places,
+in order: its own directory, the target root, then the configured component
+directories. A repeated directory keeps its first position. A component
+therefore resolves beside the test that invokes it however deep in the suite it
+sits, and two directories may hold same-named components without either
+reaching the other. No `--component-dir` is needed, and the working directory
+does not change.
+
+A single-document target keeps the configured component directories exactly.
 
 Each document runs in its own execution and scope: bindings, component
 registrations, and testing sessions belong to one document and are torn down
@@ -89,8 +95,11 @@ of them failed. The run exits `0` only when every discovered document passes,
 and `1` when any document fails or when no document matches.
 
 `--pattern` applies to a directory, so supplying it with a single document is
-rejected. `--journal` writes one trace for one document, so a directory target
-rejects it before any document runs.
+rejected. A `--pattern` with no value, or one followed by another option, is
+rejected rather than read as a glob; `--pattern=<glob>` expresses a glob that
+begins with `-`. Options after `--` are not inspected. `--journal` writes one
+trace for one document, so a directory target rejects it before any document
+runs.
 
 ## Atomic Tests
 
