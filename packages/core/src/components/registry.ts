@@ -16,6 +16,7 @@
 import type { FunctionComponentDefinition } from "../types.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import File, { props as fileProps } from "./File.ts";
+import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
 import { parseJsonObject } from "../json.ts";
@@ -45,6 +46,17 @@ const BUILT_IN: ReadonlyMap<string, FunctionComponentDefinition> = new Map<
       path: "<built-in>/File",
       props: parseJsonObject(fileProps),
       fn: File,
+    },
+  ],
+  [
+    "Glob",
+    {
+      kind: "function",
+      name: "Glob",
+      path: "<built-in>/Glob",
+      props: parseJsonObject(globProps),
+      returns: parseJsonObject(globReturns),
+      fn: Glob,
     },
   ],
   [
