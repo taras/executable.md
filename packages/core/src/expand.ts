@@ -517,6 +517,22 @@ export function* expandSegments(
           break;
         }
 
+        if (segment.name === "If") {
+          // No raise() here, unlike the branches above: expandIf reports the
+          // errors it creates, and the selected branch settled its own (§6.9).
+          result.push(...(yield* expandIf(segment, parentMeta, parentProps, hideSet, counter)));
+          break;
+        }
+
+        if (segment.name === "Else") {
+          // A well-placed <Else> is consumed by its <If> and never expanded on
+          // its own. Reaching this branch means the element sits outside any
+          // <If>, so it names no component and is diagnosed rather than
+          // resolved from the filesystem.
+          result.push(yield* raise(strayElseError(segment)));
+          break;
+        }
+
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -814,6 +830,252 @@ function* expandEach(
   }
   captureEnv.values[asBinding] = renderSegments(out);
   return [];
+}
+
+/**
+ * Anchor a diagnostic to the source location of the element that caused it.
+ * Segments built without scanning a document carry no position; there the
+ * message stands on its own.
+ */
+function positioned(message: string, segment: ComponentElement): string {
+  const { position } = segment;
+  if (!position) {
+    return message;
+  }
+  const file = position.path === undefined ? "" : `${position.path}:`;
+  return `${message} (${file}${position.line}:${position.column})`;
+}
+
+function ifError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "If" };
+}
+
+function elseError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Else" };
+}
+
+function strayElseError(segment: ComponentElement): ErrorSegment {
+  return elseError(
+    segment,
+    "<Else> must be a direct child of <If>. <Else> is reserved: it never resolves a " +
+      "component, and only the <If> it belongs to can select it.",
+  );
+}
+
+function isElse(segment: Segment): segment is ComponentElement {
+  return segment.type === "component" && segment.name === "Else";
+}
+
+/** Markdown puts newlines between block elements; they are not a third branch. */
+function isBlankText(segment: Segment): boolean {
+  return segment.type === "text" && segment.content.trim() === "";
+}
+
+function describeSegment(segment: Segment): string {
+  if (segment.type === "component") {
+    return `<${segment.name}>`;
+  }
+  if (segment.type === "codeBlock") {
+    return `a \`${segment.language}\` code block`;
+  }
+  if (segment.type === "execOutput") {
+    return "command output";
+  }
+  if (segment.type === "error") {
+    return "an error";
+  }
+  const text = segment.content.trim().replace(/\s+/g, " ");
+  return `text "${text.length > 30 ? `${text.slice(0, 30)}…` : text}"`;
+}
+
+function trailingContentError(segment: Segment, elseElement: ComponentElement): ErrorSegment {
+  // A component carries its own position; anything else is anchored to the
+  // `<Else>` it follows, which is the boundary the author crossed.
+  const anchor = segment.type === "component" ? segment : elseElement;
+  return elseError(
+    anchor,
+    `<Else> must be the final substantive child of <If>. Found ${describeSegment(segment)} ` +
+      "after </Else>.",
+  );
+}
+
+function jsonKind(value: Json): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "an array";
+  }
+  if (typeof value === "object") {
+    return "an object";
+  }
+  return `a ${typeof value}`;
+}
+
+function elseElementViolations(segment: ComponentElement): ErrorSegment[] {
+  const violations: ErrorSegment[] = [];
+  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
+  if (names.length > 0) {
+    violations.push(elseError(segment, `<Else> accepts no props. Got: "${names[0]}".`));
+  }
+  if (segment.selfClosing || segment.children.length === 0) {
+    violations.push(elseError(segment, "<Else> must have content. Use <Else>...</Else>."));
+  }
+  return violations;
+}
+
+/**
+ * Every `<Else>` below an `<If>` that is not one of its direct children. The
+ * walk stops at a nested `<If>`, which owns the `<Else>` elements beneath it.
+ */
+function misplacedElseViolations(children: Segment[]): ErrorSegment[] {
+  const violations: ErrorSegment[] = [];
+
+  const walk = (segments: Segment[], depth: number): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component" || segment.name === "If") {
+        continue;
+      }
+      if (segment.name === "Else" && depth > 0) {
+        violations.push(strayElseError(segment));
+      }
+      walk(segment.children, depth + 1);
+    }
+  };
+
+  walk(children, 0);
+  return violations;
+}
+
+interface IfStructure {
+  violations: ErrorSegment[];
+  whenTrue: Segment[];
+  whenFalse: Segment[];
+}
+
+/**
+ * Split an `<If>` body at its `<Else>` and validate the split. Structure is
+ * read from source, before either branch expands, so a malformed `<Else>` is
+ * diagnosed even when it sits in the branch the condition does not select.
+ *
+ * `<If>` has exactly two branches, so `<Else>` is the final substantive child:
+ * content after `</Else>` belongs to neither branch and is rejected rather than
+ * silently folded into the true one.
+ */
+function ifStructure(segment: ComponentElement): IfStructure {
+  const violations: ErrorSegment[] = [];
+  const whenTrue: Segment[] = [];
+  let whenFalse: Segment[] | undefined;
+  let elseElement: ComponentElement | undefined;
+
+  for (const child of segment.children) {
+    if (isElse(child)) {
+      if (elseElement) {
+        violations.push(elseError(child, "<If> accepts at most one <Else> branch."));
+        continue;
+      }
+      violations.push(...elseElementViolations(child));
+      elseElement = child;
+      whenFalse = child.children;
+      continue;
+    }
+    if (!elseElement) {
+      whenTrue.push(child);
+      continue;
+    }
+    if (!isBlankText(child)) {
+      violations.push(trailingContentError(child, elseElement));
+    }
+  }
+
+  violations.push(...misplacedElseViolations(segment.children));
+  return { violations, whenTrue, whenFalse: whenFalse ?? [] };
+}
+
+const IF_PROPS = new Set(["condition"]);
+
+/**
+ * Expand the one branch the condition selects (spec §6.5 `<If>`). The other
+ * branch is never expanded, so nothing in it imports a component, runs a code
+ * block, creates a binding, or reaches a provider.
+ *
+ * `<If>` opens no binding scope: the selected branch expands in the enclosing
+ * environment, so a `<Capture>` it creates behaves like inline content and
+ * stays available after `</If>`.
+ *
+ * It is not an observation boundary either. Errors it creates itself — an
+ * invalid condition, an unknown prop, a malformed `<Else>` — are reported here,
+ * exactly once. Everything the selected branch returns was already reported
+ * where it was produced and is handed back untouched, so a `<Broken />` inside
+ * a selected branch settles once, exactly as it would inline.
+ */
+function* expandIf(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<Segment[]> {
+  const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
+    (name) => !IF_PROPS.has(name),
+  );
+  if (unknownProp !== undefined) {
+    return [
+      yield* raise(
+        ifError(segment, `<If> only accepts a "condition" prop. Got: "${unknownProp}".`),
+      ),
+    ];
+  }
+
+  const structure = ifStructure(segment);
+  if (structure.violations.length > 0) {
+    const reported: Segment[] = [];
+    for (const violation of structure.violations) {
+      reported.push(yield* raise(violation));
+    }
+    return reported;
+  }
+
+  let condition: Json;
+  if ("condition" in segment.props) {
+    condition = segment.props.condition;
+  } else if ("condition" in segment.expressions) {
+    try {
+      const resolved = yield* resolveExpressionProps(
+        {},
+        { condition: segment.expressions.condition },
+        "If",
+        segment.projectedEnv,
+      );
+      condition = resolved.condition;
+    } catch (error) {
+      return [
+        yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
+      ];
+    }
+  } else {
+    return [yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).'))];
+  }
+
+  if (typeof condition !== "boolean") {
+    return [
+      yield* raise(
+        ifError(
+          segment,
+          `Prop "condition" on <If /> must be a boolean, not ${jsonKind(condition)}. ` +
+            "<If> does not coerce truthy or falsy values.",
+        ),
+      ),
+    ];
+  }
+
+  return yield* expandSegments(
+    condition ? structure.whenTrue : structure.whenFalse,
+    parentMeta,
+    parentProps,
+    hideSet,
+    counter,
+  );
 }
 
 function* expandComponent(
@@ -1711,7 +1973,7 @@ function misplacedOutputError(): ErrorSegment {
     type: "error",
     message:
       "<Output> must be a direct top-level child of the component or document " +
-      "that declares it. For conditional rendering, use <Show> inside <Output>.",
+      "that declares it. For conditional rendering, use <If> inside <Output>.",
     source: "Output",
   };
 }
@@ -1775,7 +2037,7 @@ export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment |
     type: "error",
     message:
       "<Output> must be a direct top-level child of the component or document " +
-      "that declares it. For conditional rendering, use <Show> inside " +
+      "that declares it. For conditional rendering, use <If> inside " +
       `<Output>. Misplaced <Output> found:\n${list}`,
     source: "Output",
   };

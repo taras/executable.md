@@ -123,7 +123,25 @@ executable.md treats the root document like a component:
 - JSX tags with capitalized names become component invocations.
 - `<Content />` acts as a slot for child content.
 - Text segments support `{meta.key}` and `{props.key}` interpolation.
+- `<If condition={...}>`, with an optional `<Else>` block, is a structural directive rather than a component.
 - Markdown is healed at execution boundaries with `remend` so formatting does not bleed across components or executable blocks.
+
+## Control flow
+
+`<If>` expands one branch and only one. `condition` must be a boolean — there is no truthy or falsy coercion — and the branch that is not selected never expands, so nothing in it imports a component, runs a block, or creates a binding.
+
+```md
+<If condition={hasFailures}>
+## Test failures
+
+<FailureReport />
+<Else>
+All checks passed.
+</Else>
+</If>
+```
+
+`<Else>` is optional and, when present, is the final substantive child of its `<If>`. See the [control-flow guide](https://executable.md/docs/control-flow) for nesting and binding examples.
 
 ## Executable code blocks
 

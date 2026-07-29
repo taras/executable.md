@@ -64,6 +64,17 @@ const EMBEDDED_TESTS = [
   "A text component returns its rendered markdown",
   "A value component binds its validated value and renders nothing",
   "The caller renders whatever presentation it wants from the value",
+  "If renders its children when the condition is true",
+  "If without Else renders nothing when the condition is false",
+  "If selects the Else branch when the condition is false",
+  "If selects the leading branch when the condition is true",
+  "If resolves its condition from an existing binding",
+  "If resolves a computed boolean expression",
+  "Content around the selected branch keeps its order",
+  "A capture from the selected branch stays available afterward",
+  "The unselected branch creates no binding",
+  "Nested conditionals select independently",
+  "The unselected branch never runs",
 ];
 
 interface SmokeSession {

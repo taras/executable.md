@@ -13,14 +13,14 @@ const ready = true;
 ```
 
 The eval block above runs as documentation, before the `<Output>` region is
-evaluated, so `<Show>` below can depend on the `ready` binding it computed.
+evaluated, so `<If>` below can depend on the `ready` binding it computed.
 
 <Output>
 
-<Show when={ready}>
+<If condition={ready}>
 
 OUTPUTDEMO_SELECTED
 
-</Show>
+</If>
 
 </Output>

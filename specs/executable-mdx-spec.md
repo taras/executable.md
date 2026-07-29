@@ -2966,6 +2966,78 @@ there is no static/lexical analysis. An unknown reference in the body (e.g.
 `{itm.name}` when the binding is `item`) is left verbatim rather than raising
 (§6.6).
 
+#### `<If>` conditional directive
+
+`<If>` selects one branch of a document and expands only that branch. Like
+`<Capture>` and `<Each>` it is a native directive handled by the expansion
+engine, never resolved from the filesystem.
+
+```markdown
+<If condition={hasFailures}>
+## Test failures
+
+<FailureReport />
+<Else>
+All checks passed.
+</Else>
+</If>
+```
+
+`condition` is the only accepted prop; any other prop is an error. It resolves
+in the invocation's evaluation environment — an eval expression
+(`condition={verdict.passed}`) against the caller/projected env at expansion
+time, a JSON literal (`condition={true}`) at scan time — and **must be a
+boolean**. A string, number, `null`, array, or object is an error rather than a
+truthy or falsy value: `<If>` performs no coercion.
+
+`<Else>` holds the alternative branch. It is optional, accepts no props, takes
+content, and may appear once as a **direct child** of its `<If>`. A nested
+`<If>` owns the `<Else>` elements beneath it. An `<Else>` written anywhere else
+is a diagnostic, not a component invocation — the name never resolves from the
+filesystem. `<Else>` structure is validated against the source before either
+branch expands, so a malformed `<Else>` is reported even when it sits in the
+branch the condition does not select.
+
+`<Else>` is also the **final substantive child** of its `<If>`. An `<If>` has
+exactly two branches, so content between `</Else>` and `</If>` belongs to
+neither: whitespace there is Markdown formatting and is ignored, and any text,
+component, or executable block is a source-positioned error rather than a third
+region silently folded into the true branch. Like every other structural
+violation this is decided before the condition is evaluated, so neither branch
+runs.
+
+A true condition expands the children before `<Else>`; a false one expands the
+`<Else>` children, or nothing when there is no `<Else>`.
+
+**Only the selected branch does work.** The other branch is not hidden output:
+it never expands, so nothing in it imports a component, runs an eval or exec
+block, reaches a provider, performs a filesystem effect, creates a binding, or
+writes a journal entry. Placing a deliberately failing assertion in the
+unselected branch is therefore the direct way to test non-execution.
+
+**`<If>` opens no binding scope.** The selected branch expands in the enclosing
+environment, so a `<Capture>` or component `as=` inside it behaves like inline
+content and stays available after `</If>`. Nested `<If>` blocks select
+independently, and `<If>` is otherwise transparent: it neither adds nor removes
+an environment for the content it expands.
+
+Like `<Each>`, `<If>` is **structural** — the selected branch expands to
+segments that are spliced into the surrounding output, so `ErrorSegment` and
+`execOutput` segments survive and the ambient raise policy applies to them
+exactly as elsewhere.
+
+`<If>` is **not an observation boundary**. Under the one-observation rule
+(§6.9), it reports only the errors it creates itself — an invalid condition, an
+unknown prop, a malformed `<Else>` — and hands back the selected branch's
+segments untouched, because they were already reported where they were
+produced. A failing element inside a selected branch therefore settles exactly
+once, as it would inline, and an ambient `throw` policy still aborts at the
+first error.
+
+Diagnostics from `<If>` and `<Else>` carry the source location of the element
+that caused them, as `path:line:column` when the element came from a file and
+`line:column` for text scanned without an origin.
+
 ### 6.6 Eval binding interpolation
 
 Bare `{name}` references (no namespace prefix) resolve against
@@ -3405,12 +3477,12 @@ const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`)
 
 <Output>
 
-<Show when={releaseChanged.length > 0}>
+<If condition={releaseChanged.length > 0}>
 
 > [!WARNING]
 > Release configuration changed — update the release spec.
 
-</Show>
+</If>
 
 </Output>
 ````
@@ -3419,13 +3491,13 @@ const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`)
 
 Only a **direct top-level** `<Output>` is a valid declaration. Placement is
 checked against the component's (or root's) source structure, including regions
-that never render — content inside `<Show when={false}>`, content passed to a
+that never render — content inside `<If condition={false}>`, content passed to a
 component that has no `<Content />`, an `<Output>` nested inside another
 `<Output>`, or the children of any component that declines to render them. An
 `<Output>` anywhere other than the top level is misplaced; all misplaced
 occurrences in a single component are reported together as one diagnostic that
 advises `<Output>` must be a direct top-level declaration and that conditional
-rendering uses `<Show>` inside `<Output>`.
+rendering uses `<If>` inside `<Output>`.
 
 Placement is owned by the declaring component. Child expansion cannot
 introduce, remove, or redefine it, and an `<Output>` a caller passes as content
@@ -3511,9 +3583,9 @@ const verdict = { passed: true, revisionPrompt: "" };
 ```markdown
 <Review as="review" />
 
-<Show when={review.passed}>
+<If condition={review.passed}>
 Review passed.
-</Show>
+</If>
 ```
 
 #### The two modes
@@ -4473,7 +4545,7 @@ visible warning blocks, collect into a separate error report).
 | C38 | `<Output>` props rejected | Props/expression props on `<Output>` produce an ErrorSegment |
 | C39 | `<Content />` in `<Output>` | Caller content projects into a top-level `<Output>` region |
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
-| C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<Show when={false}>` or a content-discarding component) produces one aggregate diagnostic and runs no body side effects |
+| C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate diagnostic and runs no body side effects |
 | C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's policy |
 | C43 | Documentation fail-fast | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; errors inside `<Output>` or with no `<Output>` remain comments |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
@@ -4522,7 +4594,7 @@ visible warning blocks, collect into a separate error report).
 | E10 | Unclosed bold across component boundary | `**text\n<Comp />\nmore` → healed bold in first segment, component expanded, `more` unaffected |
 | E11 | `<Output>` component vs. root consistency | An imported component and a root document apply `<Output>` identically; documentation is suppressed in both |
 | E12 | Root `<Output>` buffering | A root with `<Output>` emits once after success; a later documentation failure yields no partial output; an empty selection emits no event; replay reproduces the result |
-| E13 | `<Show>` inside `<Output>` (smoke) | `smoke-test/OutputDemo.md` renders the conditionally-selected region (its `when` binding computed by preceding documentation eval) while its documentation prose does not appear |
+| E13 | `<If>` inside `<Output>` (smoke) | `smoke-test/OutputDemo.md` renders the conditionally-selected region (its `condition` binding computed by preceding documentation eval) while its documentation prose does not appear |
 
 ### Tier F — Markdown healing (remend)
 
@@ -4914,6 +4986,67 @@ visible warning blocks, collect into a separate error report).
 | EA8 | Prop contract | Missing/non-array `in`, missing `let`, `let={expr}`, `as={expr}`, reserved-word/unknown props rejected; `as` without env rejected |
 | EA9 | Projection | `<Each>` through `<Content />` resolves `in`, the item, and other caller bindings |
 
+### Tier IF — `<If>` / `<Else>` conditional directive
+
+Identifiers match `packages/core/tests/if.test.ts` one to one.
+
+| # | Test | Verify |
+|---|------|--------|
+| IF1 | True condition renders its children | `condition={true}` expands the children before `<Else>` |
+| IF2 | False without `<Else>` | No output and no error |
+| IF3 | False selects `<Else>` | The `<Else>` children render in place of the leading branch |
+| IF4 | True ignores `<Else>` | Only the children before `<Else>` render |
+| IF5 | Condition from a binding | `condition={ok}` resolves from the evaluation environment, both ways |
+| IF6 | Computed boolean | `condition={findings.length === 0}` and `condition={!passed}` resolve |
+| IF7 | Ordering | Content before and after the directive keeps its position |
+| IF8 | Capture survives the block | A `<Capture>` in the selected branch is readable after `</If>` |
+| IF9 | Unselected branch binds nothing | Its `<Capture>` leaves the name unset and the reference verbatim |
+| IF10 | Independent nesting | An inner `<If>` selects without affecting the outer one |
+| IF11 | Nested `<If>` in the unselected branch | It never runs |
+| IF12 | Self-closing `<If>` | Renders nothing, with no error |
+| IF13 | Missing `condition` | Rejected; the body does not render |
+| IF14 | No coercion | String, number (including `0`/`1`), `null`, array, and object are rejected |
+| IF15 | Non-boolean expression result | A numeric binding is rejected with its kind named |
+| IF16 | Unresolvable expression | The failing expression is quoted in the diagnostic |
+| IF17 | Unknown props | Literal and expression props other than `condition` are rejected |
+| IF18 | `<Else>` outside `<If>` | Diagnosed; no component named `Else` is imported |
+| IF19 | Duplicate `<Else>` | A second `<Else>` is rejected |
+| IF20 | `<Else>` below the direct children | An `<Else>` nested inside another element is rejected |
+| IF21 | `<Else>` inside `<Else>` | Rejected |
+| IF22 | Self-closing `<Else>` | Rejected — `<Else>` takes content |
+| IF23 | Prop-bearing `<Else>` | Literal and expression props are both rejected |
+| IF24 | Structure precedes selection | A malformed `<Else>` in the unselected branch is still diagnosed |
+| IF25 | Nested `<If>` owns its `<Else>` | A valid inner `<Else>` is not attributed to the outer `<If>` |
+| IF26 | Whitespace after `</Else>` | Formatting between `</Else>` and `</If>` is ignored |
+| IF27 | Text after `</Else>` | Substantive trailing text is rejected; neither branch renders |
+| IF28 | Component after `</Else>` | Rejected, and the component is never imported |
+| IF29 | Executable block after `</Else>` | Rejected, and the block never runs |
+| IF30 | Trailing content with `<Else>` selected | Rejected regardless of which branch the condition picks |
+| IF31 | No import from the unselected branch | `importComponent` is never called for it |
+| IF32 | No code block from the unselected branch | The modifier chain is never applied |
+| IF33 | Selected control | The selected branch does run its code block |
+| IF34 | Unselected `<Else>` | A component in an unselected `<Else>` is never imported |
+| IF35 | Local position | A diagnostic carries `line:column` |
+| IF36 | Origin position | A scanned origin adds `path:` to the diagnostic |
+| IF37 | `<Else>` position | A stray `<Else>` reports its own location |
+| IF38 | No position | An element built without scanning diagnoses without a location |
+| IF39 | Journal | Only the selected branch's eval entry reaches the journal |
+| IF40 | Unselected effect | A throwing block in the unselected branch never runs |
+| IF41 | Unselected import (execution) | A component in the unselected branch is never imported end to end |
+| IF42 | Partial replay | From a journal prefix without the root Close, `<If>` is reached live, selects from the restored binding, and reproduces the output |
+| IF43 | Projection | An `<If>` through `<Content />` resolves its condition from the caller's bindings |
+| IF44 | Expand hook | No element in the unselected branch is offered to `Component.expand` |
+| IF45 | Filesystem | No `stat` or read happens for the unselected branch's component |
+| IF46 | Process runtime | `exec` is never invoked for an unselected block |
+| IF47 | Durable events | The unselected branch writes no exec or eval event |
+| IF48 | Bindings (execution) | Later content sees no binding from the unselected branch |
+| IF49 | Inline observation baseline | An `ErrorSegment` outside any `<If>` passes through `Component.raise` once |
+| IF50 | Selected branch observed once | The same error inside a selected branch is observed once, not twice |
+| IF51 | Unselected branch unobserved | An error in the unselected branch is observed zero times |
+| IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
+| IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
+| IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
+
 ### Tier SC — Sample component (integration)
 
 | # | Test | Verify |
@@ -4992,7 +5125,7 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | RV1 | Value kinds | String, number, boolean, array, object, and null bind through `as` |
 | RV2 | Renders nothing | A value component contributes no segments to its caller |
-| RV3 | Caller control flow | The captured value drives `<Show>` in the caller |
+| RV3 | Caller control flow | The captured value drives `<If>` in the caller |
 | RV4 | Object-return shorthand | Normalizes with every property required and `additionalProperties: false` |
 | RV5 | Full schema | An optional property is accepted when absent |
 | RV6 | Declaration shape | A non-object or boolean `returns` is rejected in execution and inspection |
@@ -5126,7 +5259,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
 | 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |
-| 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; enables components like `<Show>` where the entire block is conditional rendering |
+| 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; lets a component's whole body be one conditional expression |
 | 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; removes `sampleFactory`, `durableSample`, `callLlamafile`, `callOllama`, `callAnthropic`; simplifies the modifier chain to pure exec/eval concerns |
 | 87 | `SampleContext` simplified to content-centric shape | Changed from exec-centric `{stdout, stderr, exitCode, command, language}` to content-centric `{content, model?, params?, system?, componentName?}`; providers build their own messages directly instead of relying on `buildDefaultMessages` |
 | 91 | Projected children carry caller's eval env | Children substituted via `<Content />` are tagged with `projectedEnv`. Expression props on projected children resolve against merged env (caller + component), with component bindings taking precedence. Follows React's lexical scoping model. |

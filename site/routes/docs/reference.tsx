@@ -47,6 +47,11 @@ export default define.page(function Reference() {
           <code>{"{props.key}"}</code> interpolation.
         </li>
         <li>
+          <code>&lt;If condition={"{...}"}&gt;</code> with an optional{" "}
+          <code>&lt;Else&gt;</code>{" "}
+          expands one branch; the other performs no work.
+        </li>
+        <li>
           A fenced block is executable iff <code>exec</code> or{" "}
           <code>eval</code> appears after the language word.
         </li>

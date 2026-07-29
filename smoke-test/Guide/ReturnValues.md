@@ -25,8 +25,8 @@ caller decides how to present it.
 
 <Test name="The caller renders whatever presentation it wants from the value">
 <Verdict as="failing" findings={["missing test", "stale doc"]} />
-<Capture as="report"><Show when={!failing.passed}>Needs revision: {failing.summary}</Show></Capture>
-<AssertEquals actual={report} expected={"\nNeeds revision: 2 findings"} />
+<Capture as="report"><If condition={!failing.passed}>Needs revision: {failing.summary}</If></Capture>
+<AssertEquals actual={report} expected={"Needs revision: 2 findings"} />
 </Test>
 
 <Section title="Structured root results">

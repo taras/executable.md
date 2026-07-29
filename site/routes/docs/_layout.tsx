@@ -5,6 +5,7 @@ import { Footer } from "../../components/Footer.tsx";
 const NAV: { href: string; label: string }[] = [
   { href: "/docs", label: "Getting started" },
   { href: "/docs/components", label: "Components" },
+  { href: "/docs/control-flow", label: "Control flow" },
   { href: "/docs/exec-eval", label: "Exec & Eval" },
   { href: "/docs/providers", label: "LLM providers" },
   { href: "/docs/agents", label: "Coding agents" },
