@@ -281,24 +281,26 @@ function closesValue(mark: string, depth: number, backslashes: number): boolean 
   return backslashes % 2 ** (depth + 1) === delimiterEscapes(mark, depth);
 }
 
-/** Read a quoted value on the assumption that the text is at `depth`. */
+/**
+ * Read a quoted value under one reading of the text.
+ *
+ * `depth` is the assumed serialization depth. `yamlDoubling` picks which
+ * convention a `''` pair is read under: one escaped apostrophe inside a YAML
+ * scalar, or two characters the backslash rule judges separately.
+ */
 function readAtDepth(
   content: string,
   bodyStart: number,
   mark: string,
   depth: number,
+  yamlDoubling: boolean,
 ): { value: string; at: number } | undefined {
   for (let at = bodyStart; at < content.length; at++) {
     if (content[at] !== mark) {
       continue;
     }
 
-    // YAML escapes an apostrophe inside a single-quoted scalar by doubling
-    // it, not with a backslash — and JSON leaves both the doubling and the
-    // delimiters alone, so this reads the same at every depth. Without it the
-    // first apostrophe of a pair closes the value, and a frontmatter password
-    // truncates to whatever preceded it.
-    if (mark === "'" && content[at + 1] === "'") {
+    if (yamlDoubling && mark === "'" && content[at + 1] === "'") {
       at++;
       continue;
     }
@@ -323,16 +325,23 @@ function readAtDepth(
 /**
  * Every reading of a quoted value that the text admits.
  *
- * A double-quote delimiter announces its own depth: the opening run of
- * backslashes is `2 ** depth - 1`, so the depth is recoverable. An apostrophe
- * does not, because JSON never escapes it — `'ab\'cd'` looks identical
- * whether it came off disk or out of a serialized event, while the escape
- * inside it doubled. Both readings are returned and the caller judges each,
- * which is the right bias for a detector: if any reading of the text is a
- * credential, it must not be persisted.
+ * Two things are unknowable from the text alone, and both are enumerated
+ * rather than guessed.
  *
- * The readings coincide whenever the value contains no backslashes, so this
- * costs nothing on ordinary content.
+ * A double-quote delimiter announces its serialization depth: the opening run
+ * of backslashes is `2 ** depth - 1`, so the depth is recoverable. An
+ * apostrophe does not, because JSON never escapes it.
+ *
+ * A `''` pair is likewise ambiguous — one YAML-escaped apostrophe inside the
+ * scalar, or a backslash-escaped apostrophe followed by the closing
+ * delimiter. Nothing local distinguishes them, so deciding from adjacency
+ * alone gets one of the two wrong every time.
+ *
+ * Every admissible reading is therefore returned and the caller judges each.
+ * If any reading of the text is a credential it must not be persisted, which
+ * is the conservative bias a detector should have. The readings coincide on
+ * ordinary content, where they cost nothing, and a field still reports at
+ * most once.
  */
 function quotedValues(content: string, at: number): Array<{ value: string; at: number }> {
   let open = at;
@@ -353,8 +362,15 @@ function quotedValues(content: string, at: number): Array<{ value: string; at: n
         : []
       : [0, 1];
 
+  // YAML doubling applies to single-quoted scalars only, and at most one of
+  // the two conventions is right for any given text. Which one is not
+  // knowable here, so both are read.
+  const conventions = mark === "'" ? [true, false] : [false];
+
   const readings = depths
-    .map((depth) => readAtDepth(content, open + 1, mark, depth))
+    .flatMap((depth) =>
+      conventions.map((yamlDoubling) => readAtDepth(content, open + 1, mark, depth, yamlDoubling)),
+    )
     .filter((reading) => reading !== undefined);
 
   return readings.filter(

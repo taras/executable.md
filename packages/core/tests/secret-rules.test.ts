@@ -679,3 +679,92 @@ describe("YAML doubled apostrophes in single-quoted fields", () => {
     expect(yield* scanner.scan(serializeDurableEvent(asImport(PLACEHOLDER_SOURCE)))).toEqual([]);
   });
 });
+
+/**
+ * `''` is ambiguous, and the scanner does not get to pick.
+ *
+ * It is either one YAML-escaped apostrophe inside the scalar, or a
+ * backslash-escaped apostrophe followed by the closing delimiter. Nothing
+ * local distinguishes them: `'ab''cd'` is the first and `'abc\''` the second,
+ * and a reader that decides from adjacency gets one of the two wrong every
+ * time — silently, because the wrong reading either truncates the value or
+ * never finds a delimiter at all.
+ *
+ * Both readings are produced and each is judged, so a credential under either
+ * convention is rejected.
+ */
+describe("both apostrophe-escaping conventions", () => {
+  const TAIL = A.slice(0, 20);
+
+  /** YAML: the pair is one escaped apostrophe inside the value. */
+  const YAML_CREDENTIAL = `ab''cd${TAIL}`;
+  /** Backslash: the pair is an escaped apostrophe then the closing quote. */
+  const BACKSLASH_CREDENTIAL = `${TAIL}Q1\\'`;
+
+  const CASES: Record<string, { source: string; credential: string; trailer: string }> = {
+    "a YAML doubled apostrophe": {
+      source: `password: '${YAML_CREDENTIAL}'`,
+      credential: YAML_CREDENTIAL,
+      trailer: " owner: someoneelseentirely",
+    },
+    "a trailing backslash-escaped apostrophe": {
+      source: `password='${BACKSLASH_CREDENTIAL}'`,
+      credential: BACKSLASH_CREDENTIAL,
+      trailer: " owner=someoneelseentirely",
+    },
+  };
+
+  const asImport = (source: string): DurableEvent => ({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { path: "README.md", content: source } },
+  });
+
+  for (const [name, { source, credential, trailer }] of Object.entries(CASES)) {
+    it(`detects a credential ending in ${name}, directly`, function* () {
+      expect((yield* createSecretScanner().scan(source)).length).toBeGreaterThan(0);
+    });
+
+    it(`detects a credential ending in ${name}, inside a serialized root import`, function* () {
+      expect(
+        (yield* createSecretScanner().scan(serializeDurableEvent(asImport(source)))).length,
+      ).toBeGreaterThan(0);
+    });
+
+    it(`terminates ${name} at the right delimiter`, function* () {
+      const document = source + trailer;
+
+      const findings = (yield* createSecretScanner().scan(document)).filter(
+        (finding) => finding.ruleId === "@executablemd/secretlint-rule-credentials",
+      );
+
+      // One field, one finding — the readings are interpretations of a single
+      // value, not separate credentials.
+      expect(findings).toHaveLength(1);
+      const { column } = findings[0]!.location;
+      expect(column).toBe(document.indexOf(credential));
+      expect(document.slice(column, column + credential.length)).toBe(credential);
+    });
+
+    it(`keeps ${name} and its fragments out of the findings`, function* () {
+      const scanner = createSecretScanner();
+
+      for (const content of [source, serializeDurableEvent(asImport(source))]) {
+        const serialized = JSON.stringify(yield* scanner.scan(content));
+        expect(serialized).not.toContain(credential);
+        expect(serialized).not.toContain(TAIL);
+        expect(serialized).not.toContain(TAIL.slice(0, 8));
+      }
+    });
+  }
+
+  it("leaves single-quoted placeholders alone under both conventions", function* () {
+    const scanner = createSecretScanner();
+
+    for (const source of [`password: 'your-password-here'`, `password='your-api-key-here'`]) {
+      expect(yield* scanner.scan(source)).toEqual([]);
+      expect(yield* scanner.scan(serializeDurableEvent(asImport(source)))).toEqual([]);
+    }
+  });
+});
