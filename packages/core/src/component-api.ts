@@ -84,6 +84,8 @@ export interface ComponentApi {
   persistent: boolean;
   /** Render the invoking component's children (optionally a named slot). */
   content(slot?: string): Operation<string>;
+  /** Whether the invoking element was written with content rather than self-closed. */
+  hasContent(): Operation<boolean>;
 }
 
 export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
@@ -133,6 +135,12 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
       "Component.content() has no provider: not inside a function component invocation.",
     );
   },
+  // deno-lint-ignore require-yield
+  *hasContent(): Operation<boolean> {
+    throw new Error(
+      "Component.hasContent() has no provider: not inside a function component invocation.",
+    );
+  },
 });
 
 export const importComponent: Operations<ComponentApi>["importComponent"] =
@@ -148,3 +156,4 @@ export const expandSegments: Operations<ComponentApi>["expandSegments"] =
 export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operations.codeBlock;
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
+export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;

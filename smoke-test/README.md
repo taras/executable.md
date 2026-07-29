@@ -47,6 +47,8 @@ built from the source at [{meta.repo}]({meta.repo}).
 
 <Guide.Daemons />
 
+<Guide.ResourceLifetime />
+
 <Guide.Sampling />
 
 <Guide.NamedSlots />

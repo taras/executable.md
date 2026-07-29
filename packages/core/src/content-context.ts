@@ -1,12 +1,14 @@
 /**
- * useContent() — the function component equivalent of `<Content />` in
- * markdown components. Ergonomic alias for the Component `content()`
- * operation; the expansion engine installs the slot-rendering middleware
- * around each function component invocation.
+ * What a function component asks about the content it was invoked with.
+ *
+ * `useContent()` is the function component equivalent of `<Content />` in
+ * markdown components; `hasContent()` answers whether there is any to render.
+ * Both are ergonomic aliases for Component operations the expansion engine
+ * installs around each function component invocation.
  */
 
 import type { Operation } from "effection";
-import { content } from "./component-api.ts";
+import { content, hasContent as componentHasContent } from "./component-api.ts";
 
 /**
  * Render children content from the invoking component.
@@ -23,4 +25,24 @@ import { content } from "./component-api.ts";
  */
 export function useContent(slotName?: string): Operation<string> {
   return content(slotName);
+}
+
+/**
+ * Whether the invocation was written with content: `<C>…</C>` and `<C></C>`
+ * have content, `<C />` does not.
+ *
+ * This is the shape of the invocation, not a prediction about what it renders:
+ * content that renders an empty string still counts. A component whose two
+ * forms mean different things — a wrapper versus a standalone allocation —
+ * branches on this rather than on the rendered result.
+ *
+ * @example
+ * ```ts
+ * if (yield* hasContent()) {
+ *   return yield* useContent();
+ * }
+ * ```
+ */
+export function hasContent(): Operation<boolean> {
+  return componentHasContent();
 }
