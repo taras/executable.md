@@ -7,7 +7,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createChannel, race, sleep, spawn } from "effection";
+import { createChannel, Ok, race, sleep, spawn } from "effection";
 import { collectTurn, createTurnBridge } from "../src/worker/bridge.ts";
 import type { BridgeEvent } from "../src/worker/bridge.ts";
 
@@ -21,9 +21,9 @@ describe("Tier BR — turn bridge", () => {
     yield* sleep(1);
     const offer = yield* bridge.nextOffer();
     expect(offer.text).toBe("hello");
-    offer.respond({ ok: true, captures: { subject: "core" } });
+    offer.respond(Ok({ subject: "core" }));
     yield* offering;
-    expect(resolved).toEqual({ ok: true, captures: { subject: "core" } });
+    expect(resolved).toEqual(Ok({ subject: "core" }));
   });
 
   it("BR2: a waiting nextOffer receives a subsequent offer", function* () {
@@ -32,7 +32,7 @@ describe("Tier BR — turn bridge", () => {
     const waiting = yield* spawn(function* () {
       const offer = yield* bridge.nextOffer();
       received = offer.text;
-      offer.respond({ ok: true, captures: {} });
+      offer.respond(Ok({}));
     });
     yield* sleep(1);
     yield* bridge.offer("world");
@@ -56,7 +56,7 @@ describe("Tier BR — turn bridge", () => {
     yield* sleep(1);
     const offer = yield* bridge.nextOffer();
     expect(offer.text).toBe("later");
-    offer.respond({ ok: true, captures: {} });
+    offer.respond(Ok({}));
     yield* offering;
     expect(responded).toBe(true);
   });

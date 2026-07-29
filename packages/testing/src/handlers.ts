@@ -299,7 +299,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
       }
       const parsed = validateBindingName(element.props["as"]);
       if (!parsed.ok) {
-        return [validationError("AssertThrows", `the "as" prop ${parsed.error}`)];
+        return [validationError("AssertThrows", `the "as" prop ${parsed.error.message}`)];
       }
       if (parsed.value === undefined) {
         return [validationError("AssertThrows", 'the "as" prop must be a non-empty string.')];

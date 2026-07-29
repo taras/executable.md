@@ -43,7 +43,8 @@
     "typescript/no-unnecessary-boolean-literal-compare": "warn",
 
     "local/no-section-divider-comments": "error",
-    "local/no-yield-in-finally": "error"
+    "local/no-yield-in-finally": "error",
+    "local/prefer-effection-result": "error"
   },
 
   "overrides": [

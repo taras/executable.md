@@ -4,15 +4,27 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { matchPrompt, parseTemplate } from "../src/template.ts";
-import type { ParsedTemplate } from "../src/template.ts";
+import type { Result } from "effection";
+import { matchPrompt, parseTemplate, PromptMismatchError } from "../src/template.ts";
+import type { Captures, ParsedTemplate } from "../src/template.ts";
 
 function parsed(source: string): ParsedTemplate {
   const result = parseTemplate(source);
   if (!result.ok) {
-    throw new Error(result.error);
+    throw result.error;
   }
-  return result.template;
+  return result.value;
+}
+
+/** The mismatch a failed match carries, so a wrong failure fails the test. */
+function mismatch(result: Result<Captures>): PromptMismatchError {
+  if (result.ok) {
+    throw new Error("expected the prompt not to match the template");
+  }
+  if (!(result.error instanceof PromptMismatchError)) {
+    throw result.error;
+  }
+  return result.error;
 }
 
 describe("Tier TT — WhenPrompt templates", () => {
@@ -28,7 +40,7 @@ describe("Tier TT — WhenPrompt templates", () => {
     const result = matchPrompt(template, "Review packages/core at revision abc123", {});
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.captures).toEqual({ subject: "packages/core", revision: "abc123" });
+      expect(result.value).toEqual({ subject: "packages/core", revision: "abc123" });
     }
   });
 
@@ -37,7 +49,7 @@ describe("Tier TT — WhenPrompt templates", () => {
     const same = matchPrompt(template, "alpha equals alpha", {});
     expect(same.ok).toBe(true);
     if (same.ok) {
-      expect(same.captures).toEqual({ word: "alpha" });
+      expect(same.value).toEqual({ word: "alpha" });
     }
     expect(matchPrompt(template, "alpha equals beta", {}).ok).toBe(false);
   });
@@ -46,7 +58,7 @@ describe("Tier TT — WhenPrompt templates", () => {
     const direct = parseTemplate("Review {?a}{?b} now");
     expect(direct.ok).toBe(false);
     if (!direct.ok) {
-      expect(direct.error).toContain("ambiguous");
+      expect(direct.error.message).toContain("ambiguous");
     }
     const viaBinding = parseTemplate("Review {?a}{existing} now");
     expect(viaBinding.ok).toBe(false);
@@ -56,23 +68,17 @@ describe("Tier TT — WhenPrompt templates", () => {
     const template = parsed("Summarize {review.subject}");
     const env = { review: { subject: "packages/core" } };
     expect(matchPrompt(template, "Summarize packages/core", env).ok).toBe(true);
-    const wrong = matchPrompt(template, "Summarize something-else", env);
-    expect(wrong.ok).toBe(false);
-    if (!wrong.ok) {
-      expect(wrong.kind).toBe("mismatch");
-      expect(wrong.expected).toBe("Summarize {review.subject}");
-      expect(wrong.actual).toBe("Summarize something-else");
-    }
+    const wrong = mismatch(matchPrompt(template, "Summarize something-else", env));
+    expect(wrong.kind).toBe("mismatch");
+    expect(wrong.expected).toBe("Summarize {review.subject}");
+    expect(wrong.actual).toBe("Summarize something-else");
   });
 
   it("TT6: an unresolved binding is a configuration error, never a capture", function* () {
     const template = parsed("Summarize {review.subject}");
-    const result = matchPrompt(template, "Summarize anything", {});
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.kind).toBe("config");
-      expect(result.message).toContain("review.subject");
-    }
+    const unresolved = mismatch(matchPrompt(template, "Summarize anything", {}));
+    expect(unresolved.kind).toBe("config");
+    expect(unresolved.message).toContain("review.subject");
   });
 
   it("TT7: binding values are matched literally, not as regex", function* () {
@@ -87,7 +93,7 @@ describe("Tier TT — WhenPrompt templates", () => {
     const result = matchPrompt(template, "Review:\npackages/core\nplease", {});
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.captures.subject).toBe("packages/core");
+      expect(result.value.subject).toBe("packages/core");
     }
   });
 

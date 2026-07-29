@@ -6,8 +6,8 @@
  * simply reuses the prior session id over the rehydrated document.
  */
 
-import { ensure, resource, until, useScope } from "effection";
-import type { Operation } from "effection";
+import { ensure, Err, Ok, resource, until, useScope } from "effection";
+import type { Operation, Result } from "effection";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import * as acp from "@agentclientprotocol/sdk";
@@ -27,8 +27,6 @@ export interface AcpByteStreams {
   input: ReadableStream<Uint8Array>;
   output: WritableStream<Uint8Array>;
 }
-
-type Result<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 function extractText(prompt: ContentBlock[]): string {
   let text = "";
@@ -52,9 +50,9 @@ export function* serveAcp(worker: WorkerAgent, streams: AcpByteStreams): Operati
     return scope
       .run(function* (): Operation<Result<T>> {
         try {
-          return { ok: true, value: yield* op() };
+          return Ok(yield* op());
         } catch (error) {
-          return { ok: false, error };
+          return Err(error);
         }
       })
       .then((result) => {

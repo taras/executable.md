@@ -78,6 +78,12 @@ here:
     detects the active runtime to drive `@std/testing/bdd`, `node:test`, or
     `bun:test` from one BDD surface, and is exempt from this rule. The Oxlint
     rule tracked by issue #156 carries the same path exemption.
+13. Hand an outcome back as Effection's `Result<T>`. Do not declare a local
+    `{ ok: true } | { ok: false }` union — put the success payload under `value`
+    and the failure data on an `Error` — and return a narrowed failure rather
+    than rebuilding it with `Err(result.error)`. Enforced by the
+    `local/prefer-effection-result` Oxlint rule (`scripts/oxlint-rules/`),
+    which autofixes the rebuild with `oxlint --fix`.
 
 ## Writing Guide
 

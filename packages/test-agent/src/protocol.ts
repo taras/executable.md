@@ -5,6 +5,8 @@
  * unknown, and directionally invalid messages are rejected, never cast.
  */
 
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
 import { z } from "zod";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 
@@ -127,32 +129,31 @@ export function encodeMessage(message: WorkerMessage | ControllerMessage): strin
   return JSON.stringify(message) + "\n";
 }
 
-export type ParseResult<T> = { ok: true; message: T } | { ok: false; error: string };
-
-function parseLine<T>(schema: z.ZodType<T>, line: string, direction: string): ParseResult<T> {
+function parseLine<T>(schema: z.ZodType<T>, line: string, direction: string): Result<T> {
   let value: unknown;
   try {
     value = JSON.parse(line);
   } catch (error) {
-    return {
-      ok: false,
-      error: `malformed ${direction} message (invalid JSON): ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    };
+    return Err(
+      new Error(
+        `malformed ${direction} message (invalid JSON): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
   }
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
-    return { ok: false, error: `invalid ${direction} message: ${parsed.error.message}` };
+    return Err(new Error(`invalid ${direction} message: ${parsed.error.message}`));
   }
-  return { ok: true, message: parsed.data };
+  return Ok(parsed.data);
 }
 
-export function parseWorkerMessage(line: string): ParseResult<WorkerMessage> {
+export function parseWorkerMessage(line: string): Result<WorkerMessage> {
   return parseLine(workerMessage, line, "worker");
 }
 
-export function parseControllerMessage(line: string): ParseResult<ControllerMessage> {
+export function parseControllerMessage(line: string): Result<ControllerMessage> {
   return parseLine(controllerMessage, line, "controller");
 }
 
@@ -184,19 +185,16 @@ export function formatRoute(route: ParsedRoute): string {
   return `${route.host}:${route.port}/${route.token}/${route.instance}`;
 }
 
-export function parseRoute(value: string): ParseResult<ParsedRoute> {
+export function parseRoute(value: string): Result<ParsedRoute> {
   const match = /^([^:/]+):(\d+)\/([^/]+)\/(.+)$/.exec(value);
   if (!match) {
-    return { ok: false, error: `malformed controller route: ${value}` };
+    return Err(new Error(`malformed controller route: ${value}`));
   }
   const port = Number.parseInt(match[2]!, 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
-    return { ok: false, error: `malformed controller route port: ${value}` };
+    return Err(new Error(`malformed controller route port: ${value}`));
   }
-  return {
-    ok: true,
-    message: { host: match[1]!, port, token: match[3]!, instance: match[4]! },
-  };
+  return Ok({ host: match[1]!, port, token: match[3]!, instance: match[4]! });
 }
 
 export const PROBE_INSTANCE = "probe";

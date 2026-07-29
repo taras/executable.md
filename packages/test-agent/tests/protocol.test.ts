@@ -19,7 +19,7 @@ describe("Tier TP — controller protocol", () => {
     const result = parseWorkerMessage(line.trimEnd());
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.message).toEqual({ t: "attach", token: "tok", instance: "inst" });
+      expect(result.value).toEqual({ t: "attach", token: "tok", instance: "inst" });
     }
   });
 
@@ -90,7 +90,7 @@ describe("Tier TP — controller protocol", () => {
     const parsed = parseRoute(formatRoute(route));
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
-      expect(parsed.message).toEqual(route);
+      expect(parsed.value).toEqual(route);
     }
     expect(parseRoute("no-route-here").ok).toBe(false);
     expect(parseRoute("127.0.0.1:99999999/t/i").ok).toBe(false);

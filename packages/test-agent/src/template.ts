@@ -1,10 +1,13 @@
 /**
  * WhenPrompt template matching (specs/test-agent-spec.md §WhenPrompt
- * templates). Pure functions — no Effection — so every rule is unit
+ * templates). Pure functions — nothing here suspends — so every rule is unit
  * testable: whole-prompt anchoring, `{?name}` captures, `{binding}`
  * constraints, repeated-capture agreement, and adjacent-capture
  * ambiguity.
  */
+
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
 
 export type TemplateToken =
   | { kind: "literal"; text: string }
@@ -17,15 +20,11 @@ export interface ParsedTemplate {
   captureNames: string[];
 }
 
-export type TemplateParseResult =
-  | { ok: true; template: ParsedTemplate }
-  | { ok: false; error: string };
-
 const CAPTURE_HOLE = /^\{\?([A-Za-z_$][A-Za-z0-9_$]*)\}/;
 const BINDING_HOLE = /^\{([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\}/;
 const MALFORMED_CAPTURE = /^\{\?/;
 
-export function parseTemplate(source: string): TemplateParseResult {
+export function parseTemplate(source: string): Result<ParsedTemplate> {
   const tokens: TemplateToken[] = [];
   const captureNames: string[] = [];
   let literal = "";
@@ -45,12 +44,12 @@ export function parseTemplate(source: string): TemplateParseResult {
       flushLiteral();
       const previous = tokens.at(-1);
       if (previous && previous.kind !== "literal") {
-        return {
-          ok: false,
-          error:
+        return Err(
+          new Error(
             "adjacent capture holes without literal text between them are ambiguous: " +
-            `"${source}"`,
-        };
+              `"${source}"`,
+          ),
+        );
       }
       const name = capture[1]!;
       if (!captureNames.includes(name)) {
@@ -61,7 +60,7 @@ export function parseTemplate(source: string): TemplateParseResult {
       continue;
     }
     if (MALFORMED_CAPTURE.test(rest)) {
-      return { ok: false, error: `malformed capture hole at position ${position}: "${source}"` };
+      return Err(new Error(`malformed capture hole at position ${position}: "${source}"`));
     }
     const binding = BINDING_HOLE.exec(rest);
     if (binding) {
@@ -71,10 +70,11 @@ export function parseTemplate(source: string): TemplateParseResult {
         // A binding resolves to arbitrary text before matching, so a
         // capture directly followed by a binding has no fixed delimiter
         // either — same ambiguity as two adjacent captures.
-        return {
-          ok: false,
-          error: "a capture hole directly followed by another hole is ambiguous: " + `"${source}"`,
-        };
+        return Err(
+          new Error(
+            "a capture hole directly followed by another hole is ambiguous: " + `"${source}"`,
+          ),
+        );
       }
       tokens.push({ kind: "binding", path: binding[1]! });
       position += binding[0].length;
@@ -85,12 +85,34 @@ export function parseTemplate(source: string): TemplateParseResult {
   }
   flushLiteral();
 
-  return { ok: true, template: { source, tokens, captureNames } };
+  return Ok({ source, tokens, captureNames });
 }
 
-export type TemplateMatchResult =
-  | { ok: true; captures: Record<string, string> }
-  | { ok: false; kind: "mismatch" | "config"; expected: string; actual: string; message: string };
+/** The text each `{?name}` hole matched, by name. */
+export type Captures = Record<string, string>;
+
+/**
+ * A prompt that the active stage's template did not accept.
+ *
+ * `kind` separates the two reasons, because they blame different authors: a
+ * `mismatch` is a prompt the template does not describe, while a `config`
+ * failure is a template that cannot match anything — a `{binding}` that
+ * resolves to no bound string. `expected` is the template source and `actual`
+ * the prompt, so a runner can render the comparison without re-deriving it.
+ */
+export class PromptMismatchError extends Error {
+  readonly kind: "mismatch" | "config";
+  readonly expected: string;
+  readonly actual: string;
+
+  constructor(kind: "mismatch" | "config", expected: string, actual: string, message: string) {
+    super(message);
+    this.name = "PromptMismatchError";
+    this.kind = kind;
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -116,7 +138,7 @@ export function matchPrompt(
   template: ParsedTemplate,
   prompt: string,
   env: Record<string, unknown>,
-): TemplateMatchResult {
+): Result<Captures> {
   let pattern = "^";
   const groupIndexByName = new Map<string, number>();
   let groupCount = 0;
@@ -137,16 +159,16 @@ export function matchPrompt(
     } else {
       const resolved = resolveBinding(token.path, env);
       if (resolved === undefined) {
-        return {
-          ok: false,
-          kind: "config",
-          expected: template.source,
-          actual: prompt,
-          message:
+        return Err(
+          new PromptMismatchError(
+            "config",
+            template.source,
+            prompt,
             `template "${template.source}" references "{${token.path}}", ` +
-            "which is not a bound string value — an unresolved binding is a " +
-            "configuration error, never an implicit capture",
-        };
+              "which is not a bound string value — an unresolved binding is a " +
+              "configuration error, never an implicit capture",
+          ),
+        );
       }
       pattern += escapeRegExp(resolved);
     }
@@ -155,18 +177,19 @@ export function matchPrompt(
 
   const match = new RegExp(pattern).exec(prompt);
   if (!match) {
-    return {
-      ok: false,
-      kind: "mismatch",
-      expected: template.source,
-      actual: prompt,
-      message: `prompt did not match the active stage.\nexpected template: ${template.source}\nactual prompt: ${prompt}`,
-    };
+    return Err(
+      new PromptMismatchError(
+        "mismatch",
+        template.source,
+        prompt,
+        `prompt did not match the active stage.\nexpected template: ${template.source}\nactual prompt: ${prompt}`,
+      ),
+    );
   }
 
-  const captures: Record<string, string> = {};
+  const captures: Captures = {};
   for (const [name, index] of groupIndexByName) {
     captures[name] = match[index]!;
   }
-  return { ok: true, captures };
+  return Ok(captures);
 }

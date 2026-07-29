@@ -14,6 +14,7 @@ import type { Json } from "../types.ts";
 import {
   ParseValidationError,
   compileParseSchema,
+  parseIssue,
   parseText,
   validateParsed,
 } from "./parse-schema.ts";
@@ -43,7 +44,7 @@ export default function* (props: Record<string, Json>): Operation<Json> {
 
   const parsed = parseText(text);
   if (!parsed.ok) {
-    throw new ParseValidationError("Parse", [parsed.issue]);
+    throw new ParseValidationError("Parse", [parseIssue(parsed.error)]);
   }
 
   const issues = validateParsed(validate, parsed.value);

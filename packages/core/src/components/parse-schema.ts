@@ -12,6 +12,8 @@
 
 import { Ajv } from "ajv";
 import type { ValidateFunction } from "ajv";
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
 import { SchemaValidationError, normalizeIssues } from "../validate.ts";
 import type { NormalizedIssue } from "../validate.ts";
 import { parseJson, parseJsonObject } from "../json.ts";
@@ -104,8 +106,6 @@ export function validateParsed(validate: ValidateFunction, value: Json): Normali
   return normalizeIssues(validate.errors ?? []);
 }
 
-export type ParsedText = { ok: true; value: Json } | { ok: false; issue: NormalizedIssue };
-
 /**
  * The issues as the JSON a document binds. `NormalizedIssue` is an interface,
  * so it crosses into `Json` by being parsed rather than asserted — the same
@@ -115,28 +115,28 @@ export function issuesAsJson(issues: NormalizedIssue[]): Json {
   return parseJson(issues);
 }
 
+/** Read rendered content as JSON. */
+export function parseText(text: string): Result<Json> {
+  try {
+    return Ok(JSON.parse(text));
+  } catch (error) {
+    return Err(error);
+  }
+}
+
 /**
- * Read rendered content as JSON.
- *
- * A syntax failure becomes one issue in the same normalized shape a schema
+ * A failed `parseText` as one issue in the same normalized shape a schema
  * failure uses, distinguished only by `keyword: "parse"`, so a document reads
  * both kinds of failure the same way.
  */
-export function parseText(text: string): ParsedText {
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch (error) {
-    return {
-      ok: false,
-      issue: {
-        instancePath: "",
-        schemaPath: "",
-        keyword: "parse",
-        params: {},
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
+export function parseIssue(error: Error): NormalizedIssue {
+  return {
+    instancePath: "",
+    schemaPath: "",
+    keyword: "parse",
+    params: {},
+    message: error.message,
+  };
 }
 
 function readSchema(componentName: string, schema: Json): Record<string, Json> {

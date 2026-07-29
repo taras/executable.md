@@ -81,7 +81,7 @@ function* awaitMatch(
     const outcome = matchPrompt(template, offer.text, bindings);
     offer.respond(outcome);
     if (outcome.ok) {
-      return { prompt: offer.text, captures: outcome.captures };
+      return { prompt: offer.text, captures: outcome.value };
     }
   }
 }
@@ -129,10 +129,10 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
 
     const parsed = parseTemplate(source);
     if (!parsed.ok) {
-      return [configError(parsed.error)];
+      return [configError(parsed.error.message)];
     }
     const binding = element.props.as;
-    if (parsed.template.captureNames.length > 0 && typeof binding !== "string") {
+    if (parsed.value.captureNames.length > 0 && typeof binding !== "string") {
       return [configError('captures require an "as" prop.')];
     }
     let bindingName: string | undefined;
@@ -162,7 +162,7 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
     const record = yield* persistStage({ name: `when:${location}#${ordinal}`, input: source }, () =>
       scoped(function* () {
         yield* bridge.events.send({ kind: "suspended", stage: source });
-        return yield* awaitMatch(bridge, parsed.template, currentEnv.values);
+        return yield* awaitMatch(bridge, parsed.value, currentEnv.values);
       }),
     );
 

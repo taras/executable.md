@@ -12,7 +12,13 @@
 import type { Operation } from "effection";
 import { useContent } from "../content-context.ts";
 import type { Json } from "../types.ts";
-import { compileParseSchema, issuesAsJson, parseText, validateParsed } from "./parse-schema.ts";
+import {
+  compileParseSchema,
+  issuesAsJson,
+  parseIssue,
+  parseText,
+  validateParsed,
+} from "./parse-schema.ts";
 
 export const props = {
   type: "object",
@@ -70,7 +76,7 @@ export default function* (props: Record<string, Json>): Operation<Json> {
 
   const parsed = parseText(text);
   if (!parsed.ok) {
-    return { ok: false, input: text, errors: issuesAsJson([parsed.issue]) };
+    return { ok: false, input: text, errors: issuesAsJson([parseIssue(parsed.error)]) };
   }
 
   const issues = validateParsed(validate, parsed.value);

@@ -7,8 +7,8 @@
  */
 
 import { createChannel, withResolvers } from "effection";
-import type { Channel, Operation, Subscription } from "effection";
-import type { TemplateMatchResult } from "../template.ts";
+import type { Channel, Operation, Result, Subscription } from "effection";
+import type { Captures } from "../template.ts";
 
 export type BridgeEvent =
   | { kind: "output"; text: string }
@@ -18,12 +18,12 @@ export type BridgeEvent =
 
 export interface PromptOffer {
   text: string;
-  respond(outcome: TemplateMatchResult): void;
+  respond(outcome: Result<Captures>): void;
 }
 
 export interface TurnBridge {
   events: Channel<BridgeEvent, never>;
-  offer(text: string): Operation<TemplateMatchResult>;
+  offer(text: string): Operation<Result<Captures>>;
   nextOffer(): Operation<PromptOffer>;
 }
 
@@ -42,7 +42,7 @@ export function createTurnBridge(): TurnBridge {
   return {
     events,
     *offer(text) {
-      const outcome = withResolvers<TemplateMatchResult>();
+      const outcome = withResolvers<Result<Captures>>();
       const offer: PromptOffer = { text, respond: outcome.resolve };
       const waiter = waiters.shift();
       if (waiter) {

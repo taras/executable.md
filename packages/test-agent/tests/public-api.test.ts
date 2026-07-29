@@ -21,13 +21,13 @@ const DOCUMENT = { path: "behavior.md", source: '<WhenPrompt template="hi" />' }
 function* reachable(route: string): Operation<boolean> {
   const parsed = parseRoute(route);
   if (!parsed.ok) {
-    throw new Error(parsed.error);
+    throw parsed.error;
   }
   // The socket is closed, and its close observed, before the probe answers,
   // so a later probe never races the previous connection's teardown.
   return yield* scoped(function* () {
     const settled = withResolvers<boolean>();
-    const socket = connect({ host: parsed.message.host, port: parsed.message.port });
+    const socket = connect({ host: parsed.value.host, port: parsed.value.port });
     yield* ensure(function* () {
       socket.destroy();
       yield* once(socket, "close");
