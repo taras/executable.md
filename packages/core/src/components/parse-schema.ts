@@ -12,7 +12,8 @@
 
 import { Ajv } from "ajv";
 import type { ValidateFunction } from "ajv";
-import { NormalizedIssue, SchemaValidationError, normalizeIssues } from "../validate.ts";
+import { SchemaValidationError, normalizeIssues } from "../validate.ts";
+import type { NormalizedIssue } from "../validate.ts";
 import { parseJson, parseJsonObject } from "../json.ts";
 import type { Json } from "../types.ts";
 
