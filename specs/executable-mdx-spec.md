@@ -1984,9 +1984,13 @@ ships in the compiled binary and every published package without a search path
 or a bundling step, and a document invokes it with no `--component-dir`.
 
 Because there is no resolution and no read, a built-in produces **no
-`import_component` journal entry**: nothing about it could be restored
-differently on a replay, and it is an ephemeral definition created fresh on
-every execution.
+`import_component` journal entry**: there is no path to resolve and no file to
+re-read, so a replay has nothing to restore differently.
+
+The definition itself is module-resident and reused — one object, held by the
+registry for the life of the process. That is not what varies between runs.
+What each `<TempDir>` invocation creates fresh is the directory (§6.11); the
+component describing it is the same one every time.
 
 A definition still carries a `path`, which every consumer of the shape expects.
 For a built-in that field is a synthetic identity — `<built-in>/TempDir` — that

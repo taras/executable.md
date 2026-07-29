@@ -87,9 +87,10 @@ function* durableImportComponent(
   rootDocPath: string | undefined,
   searchPaths: string[],
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
-  // A built-in resolves no path and reads no file, so there is nothing to
-  // journal and nothing a replay could restore differently: it is already in
-  // the module graph and is created fresh on every execution.
+  // A built-in is already in the module graph: no path to resolve, no file to
+  // read, and so nothing to journal — a replay has nothing to restore
+  // differently. The definition is module-resident and reused; what varies
+  // between runs is what an invocation of it creates.
   const builtIn = builtInComponent(name);
   if (builtIn) {
     return builtIn;
