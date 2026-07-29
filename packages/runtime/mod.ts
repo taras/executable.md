@@ -7,7 +7,8 @@
  *
  * Six domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
- * - `API.Fs` — filesystem (`readTextFile`, `stat`, `glob`)
+ * - `API.Fs` — filesystem (`readTextFile`, `writeTextFile`, `stat`, `glob`,
+ *   `realpath`, `ensureDir`, `rename`, `remove`)
  * - `API.Fetch` — HTTP requests (`fetch`)
  * - `API.Env` — the host: variables, platform info, the command that invokes
  *   this xmd, and eval-block compilation
@@ -22,8 +23,13 @@ export { API } from "./apis.ts";
 export {
   exec,
   readTextFile,
+  writeTextFile,
   stat,
   glob,
+  realpath,
+  ensureDir,
+  rename,
+  remove,
   fetch,
   cwd,
   env,

@@ -112,10 +112,15 @@ All paths stored in a diagnostic trace are **relative to the workspace root**
 makes traces easier to compare and avoids leaking absolute local paths.
 
 Runtime operations (`readTextFile`, `stat`, `exec`, `glob`) all resolve
-paths relative to cwd. Runtime helpers never see
-absolute paths. Component search directories
-(`["./components", "./"]`) are relative. Resolved paths in the
-journal (`"components/Greeting.md"`) are relative.
+paths relative to cwd, and the engine's own file access is written that way:
+component search directories (`["./components", "./"]`) are relative, and
+resolved paths in the journal (`"components/Greeting.md"`) are relative.
+
+A component that resolves against the **contextual** working directory is the
+exception, because a relative path would resolve against the process's
+directory instead of the one it was given. `<File>` (§6.13) resolves its
+`path` prop against `Env.cwd` itself and hands the Fs Api the absolute result.
+Nothing it resolves reaches a diagnostic or the journal.
 
 #### The contextual working directory
 
@@ -1978,11 +1983,11 @@ deterministic from the content, so it needs no separate journal entry.
 
 #### Built-in components
 
-Some components are core's own: `<TempDir>` (§6.11), `<Parse>`, and
-`<SafeParse>` (§6.12). A built-in resolves no path and reads no file: it is
-already in the module graph, so it ships in the compiled binary and every
-published package without a search path or a bundling step, and a document
-invokes it with no `--component-dir`.
+Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
+`<SafeParse>` (§6.12), and `<File>` (§6.13). A built-in resolves no path and
+reads no file: it is already in the module graph, so it ships in the compiled
+binary and every published package without a search path or a bundling step,
+and a document invokes it with no `--component-dir`.
 
 Because there is no resolution and no read, a built-in produces **no
 `import_component` journal entry**: there is no path to resolve and no file to
@@ -3786,6 +3791,109 @@ failure, render its errors into a corrective prompt, and finish with `<Parse>`
 after a bounded retry. That loop is ordinary Markdown, so it is visible and
 testable like anything else.
 
+### 6.13 Reading and writing text: `<File>`
+
+A document reads a repository file, writes a source file, or lays out a
+fixture without asking an agent to choose a path or run a command. `<File>` is
+core's own component (§5.3) and takes one required prop, `path`, resolved
+relative to the contextual `Env.cwd`:
+
+```md
+<File path="request.md" />
+```
+
+Because the path is contextual, `<File>` composes with `<TempDir>` (§6.11)
+without either component knowing about the other:
+
+```md
+<TempDir>
+<File path="fixtures/request.md">
+Request content
+</File>
+</TempDir>
+```
+
+#### The two forms
+
+Written **self-closing**, `<File>` reads. It renders the file's text, and `as`
+captures that text and renders nothing, exactly as it does for any component
+that returns text.
+
+```md
+<File path="request.md" as="request" />
+```
+
+Written **with content**, `<File>` writes. It expands its children, writes the
+result, and renders nothing at all: no output, no path, no file handle. Where
+the file went is what the document already said, and there is nothing to
+capture.
+
+Missing parent directories are created. An existing target is replaced, so
+writing the same content twice leaves the same file.
+
+#### What gets written
+
+The text written is what the children rendered, minus the line break that
+follows the opening tag and the one that precedes the closing tag. Both are
+inside the element but belong to the markup, so the two ways of writing the
+same file write the same bytes:
+
+```md
+<File path="a.txt">one line</File>
+
+<File path="a.txt">
+one line
+</File>
+```
+
+Nothing else is touched. Whitespace is not normalized, content is not
+reformatted, and no trailing newline is added — a file ends with a newline
+because the author left a blank line before the closing tag.
+
+#### A failed child writes nothing
+
+Children expand completely before anything reaches the filesystem, so an
+existing target survives whatever happens among them.
+
+A code block that fails is ordinarily a diagnostic (§6.9): the content still
+renders, with the diagnostic in place. A component that renders its content
+shows it to the reader. `<File>` renders nothing, so the same diagnostic would
+be written into the file instead. It therefore fails the invocation rather
+than writing, and carries the underlying messages in its own diagnostic —
+which is the only place a reader would otherwise learn what went wrong.
+
+#### Containment
+
+Everything `<File>` touches stays inside `Env.cwd`. An absolute path and a
+path that escapes lexically are refused before any filesystem call, so the
+failure reveals nothing about what the path named.
+
+A lexical check is not enough on its own, because a symlink inside the
+directory can point anywhere. `<File>` resolves the part of the path that
+already exists — the file itself when it is there, the deepest existing
+ancestor when it is not — and re-checks the result. A symlink whose
+destination is still inside the directory is ordinary and is followed to the
+file it names; one that leaves is refused, before the content outside is read
+or changed.
+
+Writes land through a sibling temporary file and a rename. That is what makes
+a failed or cancelled write leave the previous content in place, and it closes
+the one case resolution cannot: a **dangling** symlink has nothing to resolve,
+and `rename` replaces the link rather than following it wherever it points.
+The temporary is removed on every exit, including cancellation.
+
+Reading a path that does not exist, or a directory, fails naming which it was.
+
+#### Scope
+
+The initial component is UTF-8 text only. Binary data, configurable encodings,
+structured file handles, and append, patch, or streaming modes are outside it.
+
+`<File>` performs no durable effect of its own: nothing is journaled, and a
+replay re-reads and re-writes rather than restoring a recorded result. Inside
+a wrapping `<TempDir>` that is the behavior the directory's replay refusal
+depends on (§6.11).
+
 ---
 
 ## 7. Entry point
@@ -4778,6 +4886,28 @@ visible warning blocks, collect into a separate error report).
 | PC13 | External reference | An external `$ref` fails with a diagnostic naming the #192 limit |
 | PC14 | Capture and replay | A replay reproduces the bound value and appends no journal entry |
 | PC15 | Colocated documents | `xmd test packages/core/src/components` runs `Parse.test.md` and `SafeParse.test.md` beside `TempDir.test.md`, with no search path and no JavaScript: both schema forms, every JSON result kind, a local `$ref`, both `<SafeParse>` variants, the preserved input, and the three non-transformation guarantees |
+
+### Tier FL — `<File>`
+
+| # | Test | Verify |
+|---|------|--------|
+| FL1 | Relative round trip | A relative write is readable at the same relative path, against the contextual `Env.cwd` |
+| FL2 | Write renders nothing | The write form contributes no output and no path |
+| FL3 | Parent directories | A write creates the directories its path names |
+| FL4 | Replacement | A second write replaces the content, and rewriting the same content changes nothing |
+| FL5 | Missing file | Reading a missing path is a diagnostic, and the sibling after it still runs |
+| FL6 | Directory target | Reading a directory fails naming what it is |
+| FL7 | Absolute path | Rejected before the filesystem is touched; the target's content never appears |
+| FL8 | Lexical escape | `..` out of the working directory is rejected, and the content it aimed at never appears |
+| FL9 | Internal symlink | Followed for both reads and writes; the write updates the linked file and leaves the link a link |
+| FL10 | Escaping file symlink | Rejected, and the outside content never appears |
+| FL11 | Escaping parent symlink | Rejected for a file that does not exist yet, and nothing is created outside |
+| FL12 | Failing child | The invocation fails instead of writing, carries the block's own failure, and the existing file is unchanged |
+| FL13 | Failed replacement | A directory that refuses new files stops the write with the previous content in place |
+| FL14 | No temporary left behind | A successful write leaves only the target |
+| FL15 | Capture and replay | A replay reproduces the read and appends no journal entry |
+| FL16 | Prop validation | A missing `path` and an undeclared prop are both rejected |
+| FL17 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, the two authoring forms writing the same bytes, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
 

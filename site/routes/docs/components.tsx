@@ -78,6 +78,28 @@ const TEMPDIR_STANDALONE = `<TempDir as="workspace" />
 
 Files written under {workspace} live until the document ends.`;
 
+const FILE_READ = `<File path="request.md" />`;
+
+const FILE_CAPTURE = `<File path="prompts/review.md" as="instructions" />
+
+<Prompt>{instructions}</Prompt>`;
+
+const FILE_WRITE = `<TempDir>
+<File path="fixtures/request.md">
+Request content
+</File>
+
+\`\`\`sh exec
+cat fixtures/request.md
+\`\`\`
+</TempDir>`;
+
+const FILE_FORMS = `<File path="a.txt">one line</File>
+
+<File path="a.txt">
+one line
+</File>`;
+
 const PARSE = `<Capture as="schema" select="code[lang=json]">
 \`\`\`json
 {
@@ -284,6 +306,75 @@ export default define.page(function Components() {
         with the recorded result, and nothing notices that the directory it came
         from is gone. Resuming a document that captures a temporary path is
         unsupported.
+      </p>
+
+      <h2>Reading and writing files</h2>
+      <p>
+        <code>&lt;File&gt;</code> is built into core too. It takes one prop — a
+        {" "}
+        <code>path</code>{" "}
+        relative to the working directory — and does the obvious thing with it.
+        Self-closing, it reads and renders the file's text.
+      </p>
+      <CodeBlock>{FILE_READ}</CodeBlock>
+      <p>
+        <code>as</code>{" "}
+        captures that text and renders nothing, like any other component that
+        returns text — which is how a prompt lives in a file instead of in the
+        document.
+      </p>
+      <CodeBlock>{FILE_CAPTURE}</CodeBlock>
+      <p>
+        Written with content it writes instead, expanding its children first. It
+        renders nothing at all: no output, no path, no file handle. Missing
+        parent directories are created, and an existing file is replaced. Since
+        the path is relative to the <em>contextual</em>{" "}
+        working directory, it composes with <code>&lt;TempDir&gt;</code>{" "}
+        without either component knowing about the other — the shell in the
+        block below finds the file where <code>&lt;File&gt;</code> put it.
+      </p>
+      <CodeBlock>{FILE_WRITE}</CodeBlock>
+
+      <h3>What gets written</h3>
+      <p>
+        Exactly what the children rendered, minus the line break after the
+        opening tag and the one before the closing tag — both are inside the
+        element, but they belong to the markup. So these two write the same
+        bytes.
+      </p>
+      <CodeBlock>{FILE_FORMS}</CodeBlock>
+      <p>
+        Nothing else is touched: whitespace is not normalized, content is not
+        reformatted, and no trailing newline is added. A file ends with a
+        newline because you left a blank line before the closing tag. The
+        initial component is UTF-8 text only — no binary data, no configurable
+        encodings, no append or patch modes.
+      </p>
+
+      <h3>Staying inside the workspace</h3>
+      <p>
+        Everything <code>&lt;File&gt;</code>{" "}
+        touches stays inside the working directory. An absolute path and a path
+        that escapes with <code>..</code>{" "}
+        are refused before any filesystem call, so the failure says nothing
+        about what the path named.
+      </p>
+      <p>
+        A lexical check alone would not be enough, because a symlink inside the
+        directory can point anywhere. <code>&lt;File&gt;</code>{" "}
+        resolves whichever part of the path already exists and checks{" "}
+        <em>that</em>{" "}
+        — so a symlink staying inside is ordinary and gets followed to the file
+        it names, and one that leaves is refused before anything outside is read
+        or changed.
+      </p>
+      <p>
+        A write never half-happens. Children expand completely first, so a
+        failing block leaves the existing file exactly as it was — and because
+        the write has nowhere to render a diagnostic, it fails the invocation
+        rather than writing the diagnostic into your file. The write itself
+        lands through a rename, so a failure partway leaves the previous content
+        in place rather than a truncated file.
       </p>
 
       <h2>Parsing generated JSON</h2>
