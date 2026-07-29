@@ -126,9 +126,13 @@ function staleTerminalRecord(
   stored: unknown,
 ): StaleInputError {
   const held = readLoopRecord(stored);
+  // A malformed entry is described, never quoted. Its content is external
+  // journal data, and a diagnostic that reproduced it would carry whatever it
+  // happened to hold into logs and rendered output. A well-formed one is safe
+  // to name: the outcome is one of three known words and the count is a number.
   const describeHeld =
     held === undefined
-      ? JSON.stringify(stored)
+      ? "an invalid terminal record"
       : `${held.outcome} after ${held.iterations} iterations`;
   return new StaleInputError(
     `The journal records "${description.name}" finishing as ${describeHeld}, but this run ` +

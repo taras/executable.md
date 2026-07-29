@@ -53,6 +53,20 @@ export class DocumentationError extends Error {
 }
 
 /**
+ * A failure that says the journal no longer describes this run: a stale
+ * recorded input (§6.11), or a divergence between what the journal holds and
+ * what the run reached.
+ */
+export type DurabilityFailure =
+  | StaleInputError
+  | DivergenceError
+  | EarlyReturnDivergenceError
+  | ContinuePastCloseDivergenceError;
+
+/** A failure that ends the execution rather than becoming a diagnostic. */
+export type FatalFailure = DocumentationError | DurabilityFailure;
+
+/**
  * The error that ends the execution, if this failure carries one.
  *
  * Expansion turns a failure into a diagnostic the document can render, which
@@ -61,64 +75,37 @@ export class DocumentationError extends Error {
  *
  * - `DocumentationError` — the ambient policy has already decided this
  *   execution fails (§6.9); collecting it would undo that decision.
- * - `StaleInputError` — a journal entry no longer describes the world it was
- *   recorded in (§6.11). The document is not wrong and there is nothing useful
- *   to render: continuing would run later siblings on top of work that never
- *   happened. Rendering it as a comment would let the ambient policy downgrade
- *   a durability failure to a note.
+ * - a `DurabilityFailure` — the journal no longer describes this run (§6.11).
+ *   The document is not wrong and there is nothing useful to render: continuing
+ *   would run later siblings on top of work that never happened, and rendering
+ *   it as a comment would let the ambient policy downgrade a durability failure
+ *   to a note. It would also bury *where* the journal stopped describing the
+ *   run: expansion that carried on would reach another durable operation, whose
+ *   own mismatch is then the one reported.
  *
  * A fatal error stays fatal however it is wrapped, so this looks through the
- * three ways the engine and the platform aggregate failures: an
- * `InvocationTeardownError`'s causes (§4.4), an `AggregateError`'s members,
- * and an ordinary `cause`. It returns the fatal error itself rather than the
- * wrapper, which is the one worth reporting.
- *
- * Cause graphs are arbitrary — nothing stops `error.cause` from pointing back
- * at `error` — so traversal remembers what it has seen. Recursing forever would
- * turn an ordinary diagnostic into a stack overflow, which is exactly the
- * failure this function exists to prevent.
+ * three ways the engine and the platform aggregate failures. It returns the
+ * fatal error itself rather than the wrapper, which is the one worth reporting.
  */
-export function fatalCause(error: unknown): DocumentationError | StaleInputError | undefined {
-  return findFatal(error, new Set());
-}
-
-function findFatal(
-  error: unknown,
-  seen: Set<unknown>,
-): DocumentationError | StaleInputError | undefined {
-  if (error instanceof DocumentationError || error instanceof StaleInputError) {
-    return error;
-  }
-  if (typeof error !== "object" || error === null || seen.has(error)) {
-    return undefined;
-  }
-  seen.add(error);
-  for (const cause of causesOf(error)) {
-    const fatal = findFatal(cause, seen);
-    if (fatal !== undefined) {
-      return fatal;
-    }
-  }
-  return undefined;
+export function fatalCause(error: unknown): FatalFailure | undefined {
+  return firstCause(error, asFatalFailure);
 }
 
 /**
  * The durability failure this one carries, if any.
  *
- * A durability failure says the journal no longer describes this run — a stale
- * recorded input (§6.11), or a divergence between what the journal holds and
- * what the run reached. It is not something the document did, so nothing may
- * record it as an outcome of the document's own work: doing that would append
- * or consume a journal entry on top of a journal already known to be wrong.
- * The original failure is what a caller reports.
- *
- * Looks through the same wrappers as `fatalCause`, for the same reason.
+ * A durability failure is not something the document did, so nothing may record
+ * it as an outcome of the document's own work: doing that would append or
+ * consume a journal entry on top of a journal already known to be wrong.
+ * `DocumentationError` is deliberately not included — an ordinary document
+ * failure *is* an outcome, which is why this is a narrower question than
+ * `fatalCause`.
  */
-export function durabilityFailure(error: unknown): Error | undefined {
-  return findDurability(error, new Set());
+export function durabilityFailure(error: unknown): DurabilityFailure | undefined {
+  return firstCause(error, asDurabilityFailure);
 }
 
-function findDurability(error: unknown, seen: Set<unknown>): Error | undefined {
+function asDurabilityFailure(error: unknown): DurabilityFailure | undefined {
   if (
     error instanceof StaleInputError ||
     error instanceof DivergenceError ||
@@ -127,14 +114,49 @@ function findDurability(error: unknown, seen: Set<unknown>): Error | undefined {
   ) {
     return error;
   }
+  return undefined;
+}
+
+function asFatalFailure(error: unknown): FatalFailure | undefined {
+  if (error instanceof DocumentationError) {
+    return error;
+  }
+  return asDurabilityFailure(error);
+}
+
+/**
+ * The first failure in this one's cause graph that `select` recognises.
+ *
+ * Cause graphs are arbitrary — nothing stops `error.cause` from pointing back
+ * at `error` — so traversal remembers what it has seen. Recursing forever would
+ * turn an ordinary diagnostic into a stack overflow, which is exactly the
+ * failure this traversal exists to prevent. Both questions asked of a failure
+ * share it, so neither can drift from the other's idea of a wrapper.
+ */
+function firstCause<T>(
+  error: unknown,
+  select: (candidate: unknown) => T | undefined,
+): T | undefined {
+  return walkCauses(error, select, new Set());
+}
+
+function walkCauses<T>(
+  error: unknown,
+  select: (candidate: unknown) => T | undefined,
+  seen: Set<unknown>,
+): T | undefined {
+  const selected = select(error);
+  if (selected !== undefined) {
+    return selected;
+  }
   if (typeof error !== "object" || error === null || seen.has(error)) {
     return undefined;
   }
   seen.add(error);
   for (const cause of causesOf(error)) {
-    const durability = findDurability(cause, seen);
-    if (durability !== undefined) {
-      return durability;
+    const found = walkCauses(cause, select, seen);
+    if (found !== undefined) {
+      return found;
     }
   }
   return undefined;

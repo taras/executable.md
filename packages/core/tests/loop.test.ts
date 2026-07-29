@@ -9,7 +9,7 @@ import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { DivergenceError, InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
@@ -1289,6 +1289,131 @@ describe("Tier LOOP — replay validates the terminal record", () => {
     // The loop did not settle this as its own `error` outcome, so the stored
     // terminal record was neither consumed nor joined by a second one.
     expect(outcomeRecords(replayed.events).map((entry) => entry.outcome)).toEqual(["exhausted"]);
+  });
+
+  it("LOOP54: a wrapped durability failure reaches the caller unwrapped", function* () {
+    const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
+
+    const run = yield* scoped(function* () {
+      const stream = new InMemoryStream();
+      yield* useStubFs({ "test.md": "<Loop max={3}>a<Wrapped />b</Loop>" });
+      yield* useEchoExec();
+      // The expansion hook has no generic catch above it, so the wrapper
+      // reaches the loop intact — which is what makes this observable.
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *expand([element], _next) {
+          if (element.name === "Wrapped") {
+            throw new AggregateError([planted], "carried by a wrapper");
+          }
+          return undefined;
+        },
+      });
+      let failure: unknown;
+      try {
+        yield* collect(yield* execute({ path: "test.md", stream }));
+      } catch (error) {
+        failure = error;
+      }
+      return { failure, events: stream.snapshot() };
+    });
+
+    // The exact nested failure, not the AggregateError that carried it.
+    expect(run.failure).toBe(planted);
+    // The loop entered its first iteration and recorded no outcome for a
+    // failure that is not its own.
+    expect(iterationRecords(run.events)).toHaveLength(1);
+    expect(outcomeRecords(run.events)).toHaveLength(0);
+  });
+
+  it("LOOP55: a body divergence is reported where it happened", function* () {
+    const DIVERGING = [
+      "<Loop max={2}>",
+      "",
+      "```js eval",
+      "output('BODY');",
+      "```",
+      "",
+      "</Loop>",
+    ].join("\n");
+
+    const complete = yield* scoped(function* () {
+      const stream = new InMemoryStream();
+      yield* useStubFs({ "test.md": DIVERGING });
+      yield* useEchoExec();
+      yield* collect(yield* execute({ path: "test.md", stream }));
+      return stream.snapshot();
+    });
+
+    // Rename the first iteration's body entry, so replaying the loop reaches a
+    // description the journal does not hold. Everything else is untouched.
+    const bodyEntry = complete.findIndex(isEvalYield);
+    expect(bodyEntry).toBeGreaterThan(0);
+    const bodyName =
+      complete[bodyEntry].type === "yield" ? complete[bodyEntry].description.name : "";
+    const tampered = complete
+      .filter((event) => event.type !== "close")
+      .map((event, index) =>
+        index === bodyEntry && event.type === "yield"
+          ? {
+              ...event,
+              description: { ...event.description, name: `${bodyName}:moved` },
+            }
+          : event,
+      );
+
+    const replayed = yield* resume(DIVERGING, tampered, {});
+
+    // The original mismatch, at the body operation that hit it.
+    expect(replayed.failure).toBeInstanceOf(DivergenceError);
+    const failure = replayed.failure;
+    if (!(failure instanceof DivergenceError)) {
+      throw new Error("expected a DivergenceError");
+    }
+    expect(failure.expected.name).toBe(`${bodyName}:moved`);
+    expect(failure.actual.name).toBe(bodyName);
+    expect(failure.actual.type).toBe("eval");
+    // Not the loop's terminal operation, which is where a divergence that had
+    // been collected as a diagnostic would have surfaced instead.
+    expect(failure.actual.type).not.toBe("loop");
+    expect(failure.expected.type).not.toBe("loop");
+
+    // The loop recorded no outcome of its own: the terminal record the earlier
+    // run wrote is the only one, and it was neither rewritten nor reinterpreted
+    // as an `error`.
+    expect(outcomeRecords(replayed.events)).toEqual([
+      { name: "loop:0", status: "ok", iterations: 2, outcome: "exhausted" },
+    ]);
+    // Nor was it rendered: a collectable diagnostic is exactly what would have
+    // let expansion carry on to a second, misleading mismatch.
+    expect(replayed.output).not.toContain("Divergence");
+    expect(replayed.output).not.toContain("ERROR");
+  });
+
+  it("LOOP56: a malformed terminal record is described, never quoted", function* () {
+    const cut = yield* completeThenCut(SWITCHABLE, { breakNow: false });
+
+    const PLANTED = "ghp_PLANTEDSECRET <script>alert(1)</script>";
+    const tampered = cut.map((event) =>
+      event.type === "yield" && event.description.type === "loop"
+        ? {
+            ...event,
+            result: { status: "ok" as const, value: { note: PLANTED } },
+          }
+        : event,
+    );
+
+    const replayed = yield* resume(SWITCHABLE, tampered, { breakNow: false });
+
+    expect(replayed.failure).toBeInstanceOf(StaleInputError);
+    const message = String(replayed.failure);
+    expect(message).toContain("loop:0");
+    expect(message).toContain("an invalid terminal record");
+    expect(message).toContain("exhausted after 1 iterations");
+    // None of the journal's content is reproduced.
+    expect(message).not.toContain("ghp_PLANTEDSECRET");
+    expect(message).not.toContain("<script>");
+    expect(message).not.toContain("note");
   });
 
   it("LOOP53: a partial journal whose outcome still agrees replays cleanly", function* () {

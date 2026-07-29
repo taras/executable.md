@@ -3140,6 +3140,13 @@ raises a `StaleInputError` (§6.11): a document that resumes from such a journal
 stops rather than continuing under an outcome it did not reach. Live, the value
 compared is the one just written, so the check costs nothing.
 
+A stored value that is not a terminal record at all is **described, not quoted**.
+The diagnostic names the loop and the outcome this run derived; what the entry
+held is reported as "an invalid terminal record". Journal content is external
+data, and a diagnostic that reproduced it would carry whatever it happened to
+hold into logs and rendered output. A well-formed record is safe to name: the
+outcome is one of three known words and the count is a number.
+
 **A durability failure is never a loop outcome.** A stale recorded input or a
 divergence says the journal is already wrong about this run, so the loop records
 nothing for it and the durability failure stays the primary error. Writing an
@@ -3149,6 +3156,12 @@ which a stale journal could hand a loop an outcome it never reached. Only an
 ordinary document failure produces the `error` outcome; where a stale entry is
 what that recording runs into, the `StaleInputError` becomes the primary error
 and carries the document failure as its cause.
+
+**The durability failure itself is what the caller receives**, not the wrapper it
+travelled in. A teardown aggregate or an `AggregateError` says how a failure
+propagated, not what went wrong, and what matters is which journal entry stopped
+describing the run — so the loop rethrows the failure found inside the wrapper,
+on the same terms as §6.9's fatal-cause discovery.
 
 A collecting policy is not a loop failure. The diagnostic is content, the loop
 keeps iterating, and the outcome is `exhausted` or `break` as usual.
@@ -3933,6 +3946,15 @@ siblings run on top of work that never happened, so `StaleInputError` joins
 than convert — including through a teardown aggregate, which must not launder
 it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
 unaffected and remain diagnostics.
+
+**Divergence errors are rethrown on the same terms.** A `DivergenceError`, an
+`EarlyReturnDivergenceError`, and a `ContinuePastCloseDivergenceError` all say
+the journal no longer describes this run, so a generic catch that converted one
+into a diagnostic would let expansion continue to the *next* durable operation —
+whose own mismatch is then the failure reported, at a position that has nothing
+to do with where the journal actually stopped describing the run. Every one of
+these is discovered through the same cycle-safe cause traversal, so what the
+caller receives is the failure itself rather than the wrapper it travelled in.
 
 This is a limitation of the current durable model, not of the component. The
 absence of an `import_component` entry for a built-in (§5.3) says nothing about
@@ -5315,6 +5337,9 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP50 | Stale terminal record — derived `break` | A journal holding `exhausted` for the same iteration count raises `StaleInputError` rather than replaying its outcome onto a run that broke |
 | LOOP51 | Stale terminal record — derived `error` | The same holds for a run that fails, and the document failure is the `StaleInputError`'s cause |
 | LOOP52 | Durability failure is not an outcome | A stale `<TempDir>` replay inside a loop stays a `StaleInputError`; the loop records no `error` outcome and the stored terminal entry is untouched |
+| LOOP54 | Wrapped durability failure | The caller receives the exact nested failure, not the wrapper, and the loop records no outcome for it |
+| LOOP55 | Body divergence | A tampered body entry reports the original `DivergenceError` at the body operation, not a later mismatch at the loop's terminal one; nothing is rendered and no outcome is recorded |
+| LOOP56 | Malformed terminal record | The diagnostic names the loop and the derived outcome and reproduces none of the entry's content |
 | LOOP53 | Agreeing partial replay | A journal whose terminal record matches what the run derives replays cleanly and closes `ok` |
 | LOOP49 | Resumption | An interrupted journal is accepted by a new execution: the recorded iteration entries replay in order, the interrupted iteration's body reruns live because it journaled nothing, the remaining iterations run live, the loop and iteration identities are unchanged, exactly one terminal record is written with `exhausted` and the right count, and the run ends with root `Close(ok)` |
 

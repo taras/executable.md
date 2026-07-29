@@ -259,9 +259,16 @@ export default define.page(function ControlFlow() {
       <p>
         And a durability failure is never recorded as a loop outcome. If the
         journal is already wrong about this run — a resource it recorded is
-        gone, or the replay diverged — the loop writes nothing and that failure
-        is what you see. Only an ordinary document failure produces the{" "}
-        <code>error</code> outcome.
+        gone, or the replay diverged — the loop writes nothing, and the failure
+        you get back is that failure itself, at the operation that hit it,
+        rather than a later mismatch somewhere downstream. Only an ordinary
+        document failure produces the <code>error</code> outcome.
+      </p>
+      <p>
+        A stale-record diagnostic names the loop and the outcome the run
+        derived. It never quotes what the journal held: that is external data,
+        and a diagnostic that reproduced it would carry whatever it contained
+        into your logs and output.
       </p>
 
       <h2>Interrupted runs</h2>

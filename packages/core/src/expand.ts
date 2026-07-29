@@ -1277,8 +1277,13 @@ function* expandLoop(
     // a terminal entry an earlier run wrote — which is how a stale journal
     // would quietly hand this loop a different outcome. The durability failure
     // stays the primary error.
-    if (durabilityFailure(error) !== undefined) {
-      throw error;
+    const durability = durabilityFailure(error);
+    if (durability !== undefined) {
+      // The durability failure itself, not whatever wrapped it. A teardown
+      // aggregate or an AggregateError says how the failure travelled, not what
+      // went wrong, and the caller has to see which journal entry stopped
+      // describing this run.
+      throw durability;
     }
     // An ordinary document failure is the loop's own outcome. Recorded from the
     // catch rather than a destructor: this frame is still live here, so the
