@@ -1281,6 +1281,37 @@ Nested invocations tear down leaf-first: a component inside projected content
 has its own boundary beneath the content scope, so halting that scope dismantles
 the whole subtree first. Sibling invocations share nothing.
 
+#### Retained resources
+
+A component whose result is only useful while something stays alive — a
+directory a later sibling still has to read, a server a later block still has
+to reach — needs the opposite lifetime: the resource has to outlive the
+invocation that produced it. `retain()` gives it one:
+
+```typescript
+const dir = yield* retain(() => useTemporaryDirectory());
+```
+
+The factory runs in the **invocation-site eval scope**: the one that was
+current where the element was written, read before the invocation installs its
+own. The resource therefore belongs to that scope from the beginning — nothing
+is transferred, and nothing outlives the tree it was created in. It is released
+when the site scope succeeds, fails, or is cancelled.
+
+Which scope that is follows from the nesting above. An element written inside
+another component's projected content retains into that component's **content
+scope**, so it is released by stage 1 of the enclosing invocation's teardown —
+ahead of the resources that component acquired for itself. An element at the
+root retains into the **document scope** and lives for the execution.
+
+The site scope is never handed to the component. `retain()` takes a factory and
+returns its value; there is no accessor for the scope, and a component cannot
+inspect or install anything on its caller.
+
+Expansion driven with no ambient eval scope at all has no site to retain into.
+`retain()` reports that rather than falling back to invocation lifetime, which
+would hand the caller a resource that is about to disappear.
+
 #### The persistent-flag pattern
 
 `persist` does not wrap the entire modifier chain in `evalScope.eval()`.
@@ -2135,6 +2166,8 @@ interface, and each operation is also exported directly:
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
+| `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
+| `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: no invocation-site eval scope |
 
 An extension claims component names by wrapping `expand`: it answers
 `{ segments }` for the names it owns and delegates the rest with
@@ -2152,6 +2185,12 @@ offer — no expansion is active and the operation reports that.
 invocation (`yield* env`); a provider is middleware returning the value.
 `useCodeBlock()` and `useContent()` remain as ergonomic aliases backed
 by `codeBlock()` and `content(slot?)`.
+
+`hasContent()` reports the shape of the invocation, not a prediction about what
+it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
+an empty string is still content — and only `<C />` does not. A component whose
+two forms mean different things branches on it without projecting, so asking
+the question never runs the children.
 
 **Providers are scope-local middleware.** Behavior is installed with
 `Component.around(middlewares, { at })` and lasts until the installing
@@ -4418,6 +4457,24 @@ visible warning blocks, collect into a separate error report).
 | O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
 | O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
 | O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
+
+### Tier RT — Retained resources and invocation shape
+
+| # | Test | Verify |
+|---|------|--------|
+| RT1 | Retained value reaches the call site | A component returning what `retain()` produced renders it like any other result |
+| RT2 | Outlives the child invocation | A later sibling invocation starts and stops entirely inside the window where the retained resource is alive |
+| RT3 | Released on site success | `start:retained, stop:retained` when the site scope completes normally |
+| RT4 | Released on site error | The failure propagates and the resource is still released |
+| RT5 | Released on site cancellation | Halting the site scope while the resource is live releases it |
+| RT6 | Nested sites unwind leaf-first | A resource retained inside a component's content stops before that component's own |
+| RT7 | Retention is opt-in | A component that does not call `retain()` keeps invocation lifetime — its resource is gone before the next sibling starts |
+| RT8 | No invocation-site scope | `retain()` reports the missing scope instead of falling back to invocation lifetime |
+| RT9 | Root retention | A resource retained at the root outlives every later sibling in the document |
+| RT10 | Halting mid-expansion | Halting while a later block suspends still releases what an earlier element retained |
+| RT11/RT12 | Paired forms have content | `<C>…</C>` and `<C></C>` both report content |
+| RT13 | Self-closing has none | `<C />` reports none |
+| RT14 | Asking does not project | A component that only calls `hasContent()` never runs the children it reports on |
 
 ### Tier P — Eval binding interpolation
 

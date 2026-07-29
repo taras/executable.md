@@ -46,6 +46,7 @@ import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
+import { unbox } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { parseJson } from "./json.ts";
@@ -79,6 +80,34 @@ function provideEnv(value: EvalEnv): Operation<void> {
 function provideEvalScope(value: EvalScope): Operation<void> {
   return Component.around({ evalScope: () => value }, { at: "min" });
 }
+
+/**
+ * Let the component body create resources in the scope that invoked it
+ * (spec §4.4). `site` is the eval scope ambient at the invocation site, read
+ * before the invocation installs its own; the factory runs there, so what it
+ * acquires belongs to the site scope from the beginning and outlives this
+ * invocation. Nothing about the scope reaches the component: it hands over a
+ * factory and gets back a value.
+ *
+ * An invocation with no ambient eval scope installs nothing, and the default
+ * handler explains that only invocation lifetime is available.
+ */
+function provideRetain(site: EvalScope | undefined): Operation<void> {
+  if (!site) {
+    return noRetain();
+  }
+  return Component.around(
+    {
+      *retain([resource], _next) {
+        return unbox(yield* site.eval(resource));
+      },
+    },
+    { at: "min" },
+  );
+}
+
+// deno-lint-ignore require-yield
+function* noRetain(): Operation<void> {}
 
 /**
  * Offer an element to extensions, with this expansion's recursion — its
@@ -474,6 +503,7 @@ export function* expandSegments(
           segment.props,
           segment.expressions,
           segment.children,
+          segment.selfClosing,
           hideSet,
           counter,
           segment.projectedEnv,
@@ -773,6 +803,7 @@ function* expandComponent(
   props: Record<string, Json>,
   expressions: Record<string, string>,
   children: Segment[],
+  selfClosing: boolean,
   hideSet: Set<string>,
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
@@ -821,6 +852,7 @@ function* expandComponent(
       props,
       expressions,
       children,
+      selfClosing,
       imported,
       hideSet,
       counter,
@@ -937,6 +969,10 @@ function* expandComponent(
   // string; the collector exists only to satisfy the shared handle.
   const bodyContentErrors: Segment[] = [];
 
+  // Read before the invocation exists: the eval scope ambient here is the
+  // caller's, and it is what `retain()` creates resources in.
+  const siteEvalScope = yield* evalScope;
+
   // Both bodies run inside one invocation, so a value component owns its
   // resources exactly like a rendered one.
   let claimProjection: ClaimFn = passthroughClaim;
@@ -964,6 +1000,7 @@ function* expandComponent(
     // halts the content scope, and it is released by the body's own stage.
     yield* provideEnv(componentEnv);
     yield* provideEvalScope(invocation.evalScope);
+    yield* provideRetain(siteEvalScope);
 
     // Render closures (spec §4.8). Non-serializable, so serializeExports
     // omits them from the journal. The optional policy is supplied by a
@@ -1099,6 +1136,7 @@ function* expandFunctionComponent(
   props: Record<string, Json>,
   expressions: Record<string, string>,
   children: Segment[],
+  selfClosing: boolean,
   definition: FunctionComponentDefinition,
   hideSet: Set<string>,
   counter: BlockCounter,
@@ -1169,6 +1207,10 @@ function* expandFunctionComponent(
   // the string so `as` can refuse the capture below.
   const contentErrors: Segment[] = [];
 
+  // Read before the invocation exists: the eval scope ambient here is the
+  // caller's, and it is what `retain()` creates resources in.
+  const siteEvalScope = yield* evalScope;
+
   // Call the function component inside its invocation, with content middleware
   // in scope so it can render children via `yield* useContent()`.
   try {
@@ -1190,10 +1232,17 @@ function* expandFunctionComponent(
       invocation.evalScope.scope.set(ActiveProjection, handle);
 
       yield* provideEvalScope(invocation.evalScope);
+      yield* provideRetain(siteEvalScope);
       yield* Component.around(
         {
           *content([slotName], _next) {
             return yield* handle.projectToString({ kind: "slot", name: slotName });
+          },
+          // The element's shape, not its rendered result: content that renders
+          // an empty string is still content.
+          // deno-lint-ignore require-yield
+          *hasContent(_args, _next) {
+            return !selfClosing;
           },
         },
         { at: "min" },

@@ -84,6 +84,17 @@ export interface ComponentApi {
   persistent: boolean;
   /** Render the invoking component's children (optionally a named slot). */
   content(slot?: string): Operation<string>;
+  /** Whether the invoking element was written with content rather than self-closed. */
+  hasContent(): Operation<boolean>;
+  /**
+   * Create a resource in the scope that invoked this component (spec §4.4).
+   *
+   * The factory runs in the invocation-site eval scope, so what it acquires
+   * belongs to that scope from the beginning: it stays alive after the
+   * component returns, and is released when the site scope succeeds, fails, or
+   * is cancelled. The site scope itself is never handed out.
+   */
+  retain<T>(resource: () => Operation<T>): Operation<T>;
 }
 
 export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
@@ -133,6 +144,20 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
       "Component.content() has no provider: not inside a function component invocation.",
     );
   },
+  // deno-lint-ignore require-yield
+  *hasContent(): Operation<boolean> {
+    throw new Error(
+      "Component.hasContent() has no provider: not inside a function component invocation.",
+    );
+  },
+  // deno-lint-ignore require-yield
+  *retain<T>(_resource: () => Operation<T>): Operation<T> {
+    throw new Error(
+      "Component.retain() has no provider: this invocation has no invocation-site eval " +
+        "scope to own the resource. Expansion driven without one — no document scope and " +
+        "no enclosing invocation — can only create resources with invocation lifetime.",
+    );
+  },
 });
 
 export const importComponent: Operations<ComponentApi>["importComponent"] =
@@ -148,3 +173,5 @@ export const expandSegments: Operations<ComponentApi>["expandSegments"] =
 export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operations.codeBlock;
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
+export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
+export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
