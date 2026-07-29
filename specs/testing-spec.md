@@ -47,6 +47,51 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+## Directory Targets
+
+`xmd test` accepts a directory as well as a document, and defaults to the
+current directory. These are the same command:
+
+```sh
+xmd test
+xmd test .
+```
+
+A directory target discovers the documents beneath it recursively. The default
+pattern is `**/*.test.md`, so ordinary Markdown such as `README.md` or
+`notes.md` does not run. `--pattern` chooses a different glob:
+
+```sh
+xmd test workflows --pattern "**/*.spec.md"
+xmd test workflows --pattern "**/*.spec.md" --pattern "**/*.check.md"
+```
+
+Explicit patterns replace the default rather than adding to it, and repeating
+the option forms an inclusive union. Patterns are relative to the target root.
+A document that several patterns match runs once, and the documents run in the
+code-point order of their normalized relative paths, whatever order the
+patterns were written in. A pattern chosen deliberately to be broad, such as
+`--pattern "**/*.md"`, selects and runs ordinary Markdown.
+
+A directory target searches itself for components, ahead of the configured
+component directories, so a suite resolves the components sitting beside it
+without `--component-dir`. The working directory does not change.
+
+Each document runs in its own execution and scope: bindings, component
+registrations, and testing sessions belong to one document and are torn down
+before the next one starts. A document that declares no tests fails on its own
+rather than inheriting an earlier document's results.
+
+Each document's report is preceded by a heading naming its relative path, and a
+failure is reported against that path. A failing document does not stop the
+run; the remaining documents still execute, and a closing line names how many
+of them failed. The run exits `0` only when every discovered document passes,
+and `1` when any document fails or when no document matches.
+
+`--pattern` applies to a directory, so supplying it with a single document is
+rejected. `--journal` writes one trace for one document, so a directory target
+rejects it before any document runs.
+
 ## Atomic Tests
 
 Atomic tests use `<Test>`:

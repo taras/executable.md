@@ -11,7 +11,18 @@
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
  */
 
-import { exit, spawn, each, createSignal, until, type Operation } from "effection";
+import {
+  Err,
+  Ok,
+  exit,
+  spawn,
+  each,
+  createSignal,
+  scoped,
+  until,
+  type Operation,
+  type Result,
+} from "effection";
 import {
   InMemoryStream,
   type DurableEvent,
@@ -55,6 +66,7 @@ import {
   resolveProps,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
+import { resolveTestTarget } from "./test-target.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
 const runConfig = object({
@@ -108,8 +120,12 @@ const runConfig = object({
 
 const testConfig = object({
   path: {
-    description: "markdown document to test",
-    ...field(z.string(), cli.argument()),
+    description: "markdown document or directory to test (defaults to the current directory)",
+    ...field(z.string().default("."), cli.argument(), field.default(".")),
+  },
+  pattern: {
+    description: "glob for test documents, relative to a directory target (repeatable)",
+    ...field(z.array(z.string()), field.default(["**/*.test.md"]), field.array()),
   },
   componentDir: {
     description: "component search directory",
@@ -291,16 +307,29 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
   yield* installPermissionMode(permissionMode);
 }
 
-function* run(
-  config: {
-    path: string;
-    componentDir: string[];
-    verbose: boolean;
-    journal: string | undefined;
-    raw: boolean;
-  },
-  mode: { testing: boolean; agent?: AgentFlags; props?: Record<string, Json> },
-): Operation<void> {
+interface DocumentConfig {
+  path: string;
+  componentDir: string[];
+  verbose: boolean;
+  journal: string | undefined;
+  raw: boolean;
+}
+
+interface DocumentMode {
+  testing: boolean;
+  agent?: AgentFlags;
+  props?: Record<string, Json>;
+}
+
+/**
+ * Run one document and report how it finished.
+ *
+ * The Result is this operation's only verdict: nothing here prints a final
+ * diagnostic or exits, so a caller running several documents decides once, at
+ * the end, what the process status is. Rendered output, the --verbose journal
+ * echo, and a value root's JSON line are the document's own output and stay.
+ */
+function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
   const { path: rootPath, componentDir, verbose, journal, raw } = config;
 
   // Every CLI invocation starts from an empty stream. --journal writes
@@ -404,22 +433,128 @@ function* run(
   }
 
   // Inspect the completion Result AFTER the report finished streaming:
-  // test failures, assertion aborts, and any document abort exit nonzero.
+  // test failures, assertion aborts, and any document abort fail the run.
   const result = yield* execution;
   if (!result.ok) {
-    if (result.error instanceof TestFailureError) {
-      console.error(`\ntests failed: ${result.error.message}`);
-    } else {
-      console.error(result.error.message);
-    }
-    yield* exit(1);
-    return;
+    return Err(result.error);
   }
 
   // Written straight to stdout, so the result never passes through markdown
   // normalization or terminal formatting.
   if (valueRoot) {
     process.stdout.write(`${JSON.stringify(result.value)}\n`);
+  }
+
+  return Ok(undefined);
+}
+
+/**
+ * Run one document inside its own scope, converting every failure into a
+ * Result.
+ *
+ * The scope tears down after `runDocument` returns, so a teardown failure can
+ * only be caught out here. That is what lets a directory run continue past a
+ * document whose resources failed to release.
+ */
+function* runScopedDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
+  try {
+    return yield* scoped(() => runDocument(config, mode));
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+/** Print a completed document's failure the way `xmd` has always printed it. */
+function reportFailure(error: Error, prefix?: string): void {
+  const label = prefix === undefined ? "" : `${prefix}: `;
+  if (error instanceof TestFailureError) {
+    console.error(`\n${label}tests failed: ${error.message}`);
+    return;
+  }
+  console.error(`${label}${error.message}`);
+}
+
+interface TestConfig extends Omit<DocumentConfig, "path"> {
+  /**
+   * Optional because `field` types a schema by what it accepts, and
+   * `z.string().default(".")` accepts nothing as well as a string. The
+   * schema still produces "." for an omitted argument.
+   */
+  path?: string;
+  pattern: string[];
+}
+
+/**
+ * `xmd test` — one document, or every document a directory holds.
+ *
+ * A directory keeps going after a failure and decides the status once at the
+ * end. A single document behaves exactly as it always has: one diagnostic, no
+ * heading, no summary.
+ */
+function* test(config: TestConfig, args: string[]): Operation<void> {
+  const explicitPatterns = findPatternFlags(args);
+  if (explicitPatterns.some((value) => value.length === 0)) {
+    console.error(`${PATTERN_OPTION} requires a glob — an empty pattern matches nothing`);
+    yield* exit(1);
+    return;
+  }
+
+  const path = config.path ?? ".";
+  const target = yield* resolveTestTarget(path, config.pattern);
+
+  if (target.kind === "file") {
+    if (explicitPatterns.length > 0) {
+      console.error(
+        `unrecognized option for xmd test: ${PATTERN_OPTION} — ${path} is a single document, ` +
+          `so there is nothing to search`,
+      );
+      yield* exit(1);
+      return;
+    }
+    const result = yield* runScopedDocument({ ...config, path }, { testing: true });
+    if (!result.ok) {
+      reportFailure(result.error);
+      yield* exit(1);
+    }
+    return;
+  }
+
+  // Rejected before the first document, so no trace file is created for a run
+  // whose remaining documents would collide with it.
+  if (config.journal !== undefined) {
+    console.error(
+      "--journal is not supported with a directory target — run a single document to write a trace",
+    );
+    yield* exit(1);
+    return;
+  }
+
+  if (target.documents.length === 0) {
+    console.error(`no documents matched ${config.pattern.join(", ")} in ${path}`);
+    yield* exit(1);
+    return;
+  }
+
+  // A suite tests the components beside it: the target root is searched first,
+  // then whatever the caller configured.
+  const componentDir = [target.root, ...config.componentDir];
+  const failures: string[] = [];
+
+  for (const document of target.documents) {
+    process.stdout.write(`\n# ${document.relativePath}\n\n`);
+    const result = yield* runScopedDocument(
+      { ...config, path: document.path, componentDir },
+      { testing: true },
+    );
+    if (!result.ok) {
+      reportFailure(result.error, document.relativePath);
+      failures.push(document.relativePath);
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error(`\n${failures.length} of ${target.documents.length} documents failed`);
+    yield* exit(1);
   }
 }
 
@@ -466,6 +601,31 @@ function takeHelpFlag(args: string[]): HelpRequest {
 
 function findPropsFlag(args: string[]): string | undefined {
   return args.find((arg) => arg === AGGREGATE_OPTION || arg.startsWith("--props"));
+}
+
+const PATTERN_OPTION = "--pattern";
+
+/**
+ * The `--pattern` values the caller wrote, in the order they wrote them.
+ *
+ * The resolved configuration answers neither question this serves. It cannot
+ * say whether the option was given at all — the default is a real value,
+ * indistinguishable from a typed one — and it hides an unusable value: the
+ * parser picks the last *valid* source, so an empty pattern silently falls
+ * back to the default instead of failing.
+ */
+function findPatternFlags(args: string[]): string[] {
+  const values: string[] = [];
+  for (const [index, arg] of args.entries()) {
+    if (arg === PATTERN_OPTION) {
+      values.push(args[index + 1] ?? "");
+      continue;
+    }
+    if (arg.startsWith(`${PATTERN_OPTION}=`)) {
+      values.push(arg.slice(PATTERN_OPTION.length + 1));
+    }
+  }
+  return values;
 }
 
 interface PropsPhase {
@@ -647,7 +807,7 @@ export function* runXmd(args: string[]): Operation<void> {
         yield* exit(1);
         break;
       }
-      yield* run(config, {
+      const result = yield* runScopedDocument(config, {
         testing: false,
         props: props.value,
         agent: {
@@ -659,6 +819,10 @@ export function* runXmd(args: string[]): Operation<void> {
           denyAll: config.denyAll,
         },
       });
+      if (!result.ok) {
+        reportFailure(result.error);
+        yield* exit(1);
+      }
       break;
     }
     case "test": {
@@ -678,7 +842,7 @@ export function* runXmd(args: string[]): Operation<void> {
         yield* exit(1);
         break;
       }
-      yield* run(command.config, { testing: true });
+      yield* test(command.config, args);
       break;
     }
     case "test-agent":

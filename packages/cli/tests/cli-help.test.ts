@@ -29,8 +29,8 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
 
   it("CH3: xmd test --help prints test help", function* () {
     const { stdout } = yield* runCli(["test", "--help"]).expect();
-    expect(stdout).toContain("Usage: xmd test [OPTIONS] <path>");
-    expect(stdout).toContain("markdown document to test");
+    expect(stdout).toContain("Usage: xmd test [OPTIONS] [path]");
+    expect(stdout).toContain("markdown document or directory to test");
   });
 
   it("CH4: --version prints the version", function* () {
