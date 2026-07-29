@@ -120,6 +120,38 @@ above finds only what is left after an exclusion removes a subtree.
 </TempDir>
 </Test>
 
+An exclusion removes exactly the files its own pattern matches. `*` may match
+nothing but never crosses a separator, so `vendor/*` removes the files directly
+inside `vendor` and leaves what is deeper — the exclusion is read as written, not
+widened to the whole subtree.
+
+<Test name="An exclusion that stops at a separator keeps deeper files">
+<TempDir>
+<File path="keep.md">k</File>
+<File path="vendor/skip.md">s</File>
+<File path="vendor/deep/keep.md">d</File>
+<Glob include={["**/*.md"]} exclude={["vendor/*"]} as="kept" />
+<AssertEquals actual={kept} expected={["keep.md", "vendor/deep/keep.md"]} />
+</TempDir>
+</Test>
+
+For the same reason, an exclusion naming only a directory removes nothing:
+directories are never results, so `vendor` has no file to match, and everything
+below it stays.
+
+<Test name="An exclusion naming only a directory removes nothing">
+<TempDir>
+<File path="keep.md">k</File>
+<File path="vendor/skip.md">s</File>
+<File path="vendor/deep/keep.md">d</File>
+<Glob include={["**/*.md"]} exclude={["vendor"]} as="all" />
+<AssertEquals
+  actual={all}
+  expected={["keep.md", "vendor/deep/keep.md", "vendor/skip.md"]}
+/>
+</TempDir>
+</Test>
+
 An exclusion beats a pattern that names a file outright, not just a wildcard
 that happens to reach it.
 

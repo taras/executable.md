@@ -4384,10 +4384,29 @@ A **leading dot is an ordinary character**. `*` matches one like any other, so
 there is no hidden-file prop: `*.md` finds `.hidden.md`, and a pattern finds a
 hidden file exactly when it says so.
 
-**Exclusions win.** A path any `exclude` pattern matches is not a result, whether
-an `include` pattern reached it by wildcard or named it outright. An exclusion
-that covers a directory's contents also prunes it, so `exclude: [".git/**"]`
-means that subtree is not walked rather than walked and discarded.
+**Exclusions win.** A file whose path any `exclude` pattern matches is not a
+result, whether an `include` pattern reached it by wildcard or named it outright.
+
+Exclusion is decided **per file**, against that file's own relative path. A
+pattern that matches a *directory* removes nothing by itself, because directories
+are not results and a directory's path says nothing about the paths beneath it:
+
+- `exclude: ["vendor"]` removes nothing at all — no file is named `vendor`.
+- `exclude: ["vendor/*"]` removes the files directly inside `vendor`, and keeps
+  `vendor/deep/keep.md`, because `*` may match nothing but never crosses a
+  separator.
+- `exclude: ["vendor/**"]` removes the whole subtree, because `**` after a
+  separator matches any number of further segments.
+
+Only the last of those lets the directory be **skipped** instead of walked. A
+subtree is pruned when an exclusion provably covers every path beneath it, which
+is exactly a pattern ending in `/**` whose leading part matches the directory —
+so `.git/**` and `**/node_modules/**` are never walked. Every other exclusion
+walks the subtree and filters its files individually.
+
+Pruning is an optimization and never changes the answer. `**/*` excludes every
+file at any depth and earns no pruning, because it ends at a single `*`; the
+result is the same empty array either way.
 
 #### Only files
 

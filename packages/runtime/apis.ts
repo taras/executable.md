@@ -173,9 +173,47 @@ function toRegExp(pattern: string): RegExp {
   return globToRegExp(pattern, { extended: true, globstar: true });
 }
 
+/**
+ * A matcher for directories whose entire subtree an exclusion covers, when the
+ * pattern is one that can prove it.
+ *
+ * Skipping a subtree is only sound if *every* path beneath it is excluded, and
+ * matching the directory tells us nothing of the sort: `foo` does not match
+ * `foo/deep/keep.md`, and `foo/*` matches `foo/direct.md` but stops at the next
+ * separator. Testing the directory — or the directory with a trailing separator
+ * — as a proxy for "all descendants" prunes more than the pattern selects.
+ *
+ * A trailing `/**` is the form that does prove it. It compiles to
+ * `(?:[^/]*(?:/|$))*`, which matches any sequence of segments, so once the part
+ * before it matches a directory the pattern matches every path under that
+ * directory at any depth. `**` alone covers the whole tree the same way.
+ *
+ * Anything else returns `undefined` and the subtree is walked, with its files
+ * filtered one at a time. That is the conservative direction: descending a
+ * subtree whose files are all excluded costs reads, while skipping one that
+ * holds a match loses the match.
+ */
+const SUBTREE = "/**";
+
+function isRegExp(value: RegExp | undefined): value is RegExp {
+  return value !== undefined;
+}
+
+function pruneMatcher(pattern: string): RegExp | undefined {
+  if (pattern === "**") {
+    return toRegExp("**");
+  }
+  if (!pattern.endsWith(SUBTREE)) {
+    return undefined;
+  }
+  return toRegExp(pattern.slice(0, -SUBTREE.length));
+}
+
 interface Traversal {
   include: RegExp[];
   exclude: RegExp[];
+  /** Directories whose whole subtree an exclusion provably covers. */
+  prune: RegExp[];
   matched: Array<{ path: string; isFile: boolean }>;
 }
 
@@ -190,12 +228,29 @@ interface Traversal {
  * directory read a cancellation point.
  *
  * Paths are assembled from entry names with `/`, so what patterns match is the
- * relative POSIX path on every platform. Exclusions are tested before
- * inclusions and before descending, which is what makes them win.
+ * relative POSIX path on every platform.
+ *
+ * Exclusion is decided per **candidate**: a file or symlink whose own path an
+ * exclude pattern matches is not reported, which is what makes exclusions win.
+ * A directory is not a candidate — it is never reported — so its own path is
+ * not tested against exclusions at all. The only question a directory raises is
+ * whether walking it can still produce something, and that is `pruneMatcher`'s.
  */
 function* descend(directory: string, prefix: string, walk: Traversal): Operation<void> {
   for (const entry of yield* FsApi.operations.readdirDirents(directory)) {
     const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+
+    // Before the exclusion test, because a directory is not a candidate: an
+    // exclusion matching its path says nothing about the files beneath it.
+    // A symlink to a directory takes the branches below instead — `isDirectory`
+    // is false for one — so traversal never follows it.
+    if (entry.isDirectory()) {
+      if (!walk.prune.some((re) => re.test(path))) {
+        yield* descend(join(directory, entry.name), path, walk);
+      }
+      continue;
+    }
+
     if (walk.exclude.some((re) => re.test(path))) {
       continue;
     }
@@ -209,17 +264,6 @@ function* descend(directory: string, prefix: string, walk: Traversal): Operation
       continue;
     }
 
-    if (entry.isDirectory()) {
-      // An exclusion covering a directory's contents — `.git/**` — does not
-      // match the directory itself, but does match it as a prefix. Testing that
-      // form prunes the subtree instead of walking one that can produce nothing.
-      if (walk.exclude.some((re) => re.test(`${path}/`))) {
-        continue;
-      }
-      yield* descend(join(directory, entry.name), path, walk);
-      continue;
-    }
-
     if (entry.isFile() && walk.include.some((re) => re.test(path))) {
       walk.matched.push({ path, isFile: true });
     }
@@ -230,10 +274,16 @@ interface FsHandler {
   readTextFile(path: string): Operation<string>;
   stat(path: string): Operation<StatResult>;
   /**
-   * Entries beneath `root` whose path relative to it matches `patterns` and
-   * matches none of `exclude`. Paths come back relative and POSIX-separated,
-   * which is what both patterns are matched against, so a document's patterns
-   * mean the same thing on every platform.
+   * Files and symbolic links beneath `root` whose path relative to it matches
+   * `patterns` and matches none of `exclude`. Paths come back relative and
+   * POSIX-separated, which is what both pattern lists are matched against, so a
+   * caller's patterns mean the same thing on every platform.
+   *
+   * Exclusion is per candidate: an entry is dropped when its own relative path
+   * matches. Directories are not candidates and are not reported, so an
+   * exclusion matching a directory does not remove what is beneath it — only a
+   * pattern ending in `/**`, which provably covers every descendant, lets the
+   * subtree be skipped rather than walked and filtered.
    *
    * Symbolic links are reported but never followed: a link's own path can
    * match, and a link to a directory is not descended into. Traversal
@@ -366,6 +416,7 @@ export const API: {
       yield* descend(root, "", {
         include: patterns.map(toRegExp),
         exclude: exclude.map(toRegExp),
+        prune: exclude.map(pruneMatcher).filter(isRegExp),
         matched,
       });
       return matched;

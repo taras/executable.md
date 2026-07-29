@@ -535,12 +535,27 @@ export default define.page(function Components() {
       </p>
       <CodeBlock>{GLOB}</CodeBlock>
       <p>
-        <code>exclude</code>{" "}
-        is optional and wins over include. An exclusion that covers a
-        directory's contents prunes it, so the subtree is never walked rather
-        than walked and thrown away.
+        <code>exclude</code> is optional and wins over include.
       </p>
       <CodeBlock>{GLOB_EXCLUDE}</CodeBlock>
+      <p>
+        It is decided per file, against that file's own path — so a pattern
+        matching a <em>directory</em>{" "}
+        removes nothing by itself, because directories are not results.{" "}
+        <code>vendor</code> removes nothing at all; <code>vendor/*</code>{" "}
+        removes what is directly inside and keeps{" "}
+        <code>vendor/deep/keep.md</code>, since <code>*</code>{" "}
+        never crosses a separator; <code>vendor/**</code>{" "}
+        removes the whole subtree.
+      </p>
+      <p>
+        Only that last form lets the directory be <em>skipped</em>{" "}
+        rather than walked, which is why <code>.git/**</code> and{" "}
+        <code>**/node_modules/**</code>{" "}
+        cost nothing on a real repository. Every other exclusion walks the
+        subtree and filters its files one at a time — pruning is an
+        optimization, and it never changes the answer.
+      </p>
       <p>
         Patterns are relative to the same contextual working directory{" "}
         <code>&lt;File&gt;</code>{" "}
