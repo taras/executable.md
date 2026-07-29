@@ -483,3 +483,58 @@ describe("reported offsets locate the credential itself", () => {
     }
   });
 });
+
+/**
+ * Single-quoted values survive serialization.
+ *
+ * JSON escapes `"` but leaves `'` alone, so an apostrophe delimiter looks
+ * identical whether the text came off disk or out of a serialized event —
+ * while the escape *inside* the value doubles. A reader that infers depth
+ * from the delimiter therefore reads `'ab\'cd…'` correctly on disk and
+ * mistakes the escaped apostrophe for the closing quote once serialized,
+ * truncating the value to four characters and waving it through.
+ */
+describe("single-quoted fields after serialization", () => {
+  const TAIL = A.slice(0, 20);
+  const SECRET_SOURCE = `password='ab\\'cd${TAIL}'`;
+  const PLACEHOLDER_SOURCE = `password='your-password-here'`;
+
+  const asImport = (source: string): DurableEvent => ({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { path: "README.md", content: source } },
+  });
+
+  it("detects an escaped apostrophe inside a single-quoted value, directly", function* () {
+    expect((yield* createSecretScanner().scan(SECRET_SOURCE)).length).toBeGreaterThan(0);
+  });
+
+  it("detects the same source inside a serialized root import", function* () {
+    const record = serializeDurableEvent(asImport(SECRET_SOURCE));
+
+    // Serialization doubled the escape but left both delimiters bare, which
+    // is exactly what defeats delimiter-based depth inference.
+    expect(record).toContain("ab\\\\'cd");
+
+    expect((yield* createSecretScanner().scan(record)).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the credential out of the findings in both forms", function* () {
+    const scanner = createSecretScanner();
+
+    for (const content of [SECRET_SOURCE, serializeDurableEvent(asImport(SECRET_SOURCE))]) {
+      const serialized = JSON.stringify(yield* scanner.scan(content));
+      expect(serialized).not.toContain(TAIL);
+      expect(serialized).not.toContain(TAIL.slice(0, 8));
+      expect(serialized).not.toContain(`cd${TAIL.slice(0, 4)}`);
+    }
+  });
+
+  it("leaves a single-quoted placeholder alone, directly and serialized", function* () {
+    const scanner = createSecretScanner();
+
+    expect(yield* scanner.scan(PLACEHOLDER_SOURCE)).toEqual([]);
+    expect(yield* scanner.scan(serializeDurableEvent(asImport(PLACEHOLDER_SOURCE)))).toEqual([]);
+  });
+});

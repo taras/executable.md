@@ -190,35 +190,40 @@ const FIELD_HEAD = new RegExp(`${Q}\\b(?:${FIELD_NAMES})\\b${Q}\\s*[:=]\\s*`, "g
 const BARE_VALUE = /^[^\s,}"'\\]+/;
 
 /**
- * Where a quoted value ends, decided by counting the escapes in front of a
- * candidate quote.
+ * How many backslashes sit in front of a delimiter quote at a given
+ * serialization depth.
  *
- * A closing quote cannot be recognized by what follows it. `\",` and `\" `
- * appear inside perfectly ordinary passwords, so any rule keyed on the next
- * character ends the value early and keeps only the leading fragment — which
- * is then short enough to fall under every threshold and be waved through.
- * What actually distinguishes a delimiter is how many backslashes precede it.
- *
- * Two encodings reach this scanner. In a document read from disk a value is
- * escaped once, so a quote closes the string when an even number of
- * backslashes precede it. In a serialized event the same text is escaped
- * again: the delimiter arrives as `\"` and an inner quote as `\\\"`. Writing
- * the level-1 backslash count as `n`, level 2 shows `2n + 1` — so a delimiter
- * (`n` even) leaves a count of 1 mod 4, and an escaped quote (`n` odd) leaves
- * 3 mod 4.
+ * JSON escapes `"` but leaves `'` alone, so the two marks diverge as soon as
+ * text is serialized: at depth 1 a double-quote delimiter arrives as `\\"`
+ * while an apostrophe delimiter arrives unchanged.
  */
-function readQuotedValue(
+function delimiterEscapes(mark: string, depth: number): number {
+  return mark === '"' ? 2 ** depth - 1 : 0;
+}
+
+/**
+ * Whether a candidate quote closes the value, given the escapes before it.
+ *
+ * A closing quote cannot be recognized by what follows it — `\",` and `\" `
+ * occur inside ordinary passwords — so the decision is made from the run of
+ * backslashes in front of it.
+ *
+ * Each serialization doubles a backslash, so a level-1 escape count `n`
+ * appears as `n * 2 ** depth`, and the delimiter contributes its own escapes
+ * on top. A quote therefore closes when the run is congruent to the
+ * delimiter's own escape count, modulo one full escape step.
+ */
+function closesValue(mark: string, depth: number, backslashes: number): boolean {
+  return backslashes % 2 ** (depth + 1) === delimiterEscapes(mark, depth);
+}
+
+/** Read a quoted value on the assumption that the text is at `depth`. */
+function readAtDepth(
   content: string,
-  openAt: number,
+  bodyStart: number,
+  mark: string,
+  depth: number,
 ): { value: string; at: number } | undefined {
-  const escaped = content[openAt] === "\\";
-  const mark = content[openAt + (escaped ? 1 : 0)];
-  if (mark !== '"' && mark !== "'") {
-    return undefined;
-  }
-
-  const bodyStart = openAt + (escaped ? 2 : 1);
-
   for (let at = bodyStart; at < content.length; at++) {
     if (content[at] !== mark) {
       continue;
@@ -229,11 +234,12 @@ function readQuotedValue(
       backslashes++;
     }
 
-    const closes = escaped ? backslashes % 4 === 1 : backslashes % 2 === 0;
-    if (closes) {
-      // A doubly-escaped delimiter owns the backslash in front of its quote.
-      const valueEnd = escaped ? at - 1 : at;
-      return { value: content.slice(bodyStart, valueEnd), at: bodyStart };
+    if (closesValue(mark, depth, backslashes)) {
+      // The delimiter owns the escapes that represent it.
+      return {
+        value: content.slice(bodyStart, at - delimiterEscapes(mark, depth)),
+        at: bodyStart,
+      };
     }
   }
 
@@ -241,7 +247,49 @@ function readQuotedValue(
 }
 
 /**
- * The complete value of a credential-named field, and where it begins.
+ * Every reading of a quoted value that the text admits.
+ *
+ * A double-quote delimiter announces its own depth: the opening run of
+ * backslashes is `2 ** depth - 1`, so the depth is recoverable. An apostrophe
+ * does not, because JSON never escapes it — `'ab\'cd'` looks identical
+ * whether it came off disk or out of a serialized event, while the escape
+ * inside it doubled. Both readings are returned and the caller judges each,
+ * which is the right bias for a detector: if any reading of the text is a
+ * credential, it must not be persisted.
+ *
+ * The readings coincide whenever the value contains no backslashes, so this
+ * costs nothing on ordinary content.
+ */
+function quotedValues(content: string, at: number): Array<{ value: string; at: number }> {
+  let open = at;
+  while (content[open] === "\\") {
+    open++;
+  }
+
+  const mark = content[open];
+  if (mark !== '"' && mark !== "'") {
+    return [];
+  }
+
+  const escapes = open - at;
+  const depths =
+    mark === '"'
+      ? Number.isInteger(Math.log2(escapes + 1))
+        ? [Math.log2(escapes + 1)]
+        : []
+      : [0, 1];
+
+  const readings = depths
+    .map((depth) => readAtDepth(content, open + 1, mark, depth))
+    .filter((reading) => reading !== undefined);
+
+  return readings.filter(
+    (reading, index) => readings.findIndex((other) => other.value === reading.value) === index,
+  );
+}
+
+/**
+ * Every candidate value for a credential-named field, and where each begins.
  *
  * A quoted value runs to its actual closing quote — spaces, punctuation, and
  * escape sequences included. Only an unquoted value ends at whitespace.
@@ -252,14 +300,14 @@ function readQuotedValue(
  * the quote would hash a different slice and give the same credential two
  * fingerprints depending on whether it happened to be quoted.
  */
-function readFieldValue(content: string, at: number): { value: string; at: number } | undefined {
-  const quoted = readQuotedValue(content, at);
-  if (quoted) {
+function readFieldValues(content: string, at: number): Array<{ value: string; at: number }> {
+  const quoted = quotedValues(content, at);
+  if (quoted.length > 0) {
     return quoted;
   }
 
   const bare = BARE_VALUE.exec(content.slice(at))?.[0];
-  return bare === undefined ? undefined : { value: bare, at };
+  return bare === undefined ? [] : [{ value: bare, at }];
 }
 
 /** An auth scheme in front of the value it carries. */
@@ -315,14 +363,18 @@ export const xmdCredentialRule: SecretLintRuleCreator = {
             if (head.index === undefined) {
               continue;
             }
-            const found = readFieldValue(content, head.index + head[0].length);
-            if (found !== undefined) {
-              report(found.value, found.at, "CREDENTIAL_FIELD");
+            // A field reports at most once: the readings are alternative
+            // interpretations of one value, not separate credentials.
+            for (const found of readFieldValues(content, head.index + head[0].length)) {
+              if (report(found.value, found.at, "CREDENTIAL_FIELD")) {
+                break;
+              }
             }
           }
         }
 
-        function report(value: string, at: number, messageId: keyof typeof messages): void {
+        /** Reports the value when it is credential-like; answers whether it did. */
+        function report(value: string, at: number, messageId: keyof typeof messages): boolean {
           const credential = value.replace(SCHEME, "");
           const start = at + (value.length - credential.length);
 
@@ -331,16 +383,17 @@ export const xmdCredentialRule: SecretLintRuleCreator = {
             // `sk-your-openai-api-key-here` is prose that happens to wear the
             // prefix, and rejecting it would block documentation.
             if (isPlaceholder(credential.replace(/^sk-(?:proj-)?/, ""))) {
-              return;
+              return false;
             }
           } else if (!looksLikeSecret(credential)) {
-            return;
+            return false;
           }
 
           context.report({
             message: t(messageId),
             range: [start, start + credential.length],
           });
+          return true;
         }
       },
     };
