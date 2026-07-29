@@ -24,7 +24,7 @@ import type { ComponentElement, Json, Segment } from "./types.ts";
 /**
  * What to project.
  *
- * `policy` is set only by a persistent evaluation's env facade, which knows the
+ * `policy` is set only by a persistent evaluation's binding snapshot, which knows the
  * policy of the block that started it; every other caller leaves it unset and
  * the projection site's ambient policy applies.
  */

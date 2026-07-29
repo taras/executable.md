@@ -948,7 +948,7 @@ function* expandComponent(
 
     // Render closures (spec §4.8). Non-serializable, so serializeExports
     // omits them from the journal. The optional policy is supplied by a
-    // persistent evaluation's env facade (§4.3), which knows the policy of the
+    // persistent evaluation's binding snapshot (§4.3), which knows the policy of the
     // block that started the projection; an ordinary block leaves it unset and
     // the projection site's policy applies.
     componentEnv.values.renderChildren = (override?: unknown, policy?: ErrorPolicy) =>

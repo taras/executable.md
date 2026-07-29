@@ -51,6 +51,90 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(String(failure)).toContain("Missing");
   });
 
+  // O25: an evaluation sees the bindings that existed when it started, and its
+  // declared exports become shared once it completes.
+  it("O25: exports are committed to the shared bindings for later blocks", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "doc.md": [
+        "```js eval",
+        "const port = 4321;",
+        "const handle = { id: 7 };",
+        "```",
+        "",
+        "```js eval",
+        "output(`port=${port} id=${handle.id}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    // `handle` is a live object the journal cannot carry, so this also proves
+    // the commit publishes values rather than only their serialized subset.
+    expect(output).toContain("port=4321 id=7");
+  });
+
+  // O26: persistent work keeps the values and the policy-bound capabilities it
+  // captured; a later evaluation gets its own snapshot and cannot reach in.
+  it("O26: a later evaluation cannot alter an earlier block's captured bindings", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": [
+        "```js persist eval",
+        "const captured = { seen: null };",
+        "const renderer = renderChildren;",
+        "yield* spawn(function*() {",
+        "  yield* sleep(5);",
+        "  captured.seen = typeof renderer;",
+        "});",
+        "```",
+        "",
+        "```js eval",
+        "const renderer = null;",
+        "```",
+        "",
+        "```js eval",
+        "yield* when(function*() {",
+        '  if (captured.seen === null) throw new Error("not yet");',
+        "});",
+        "output(`seen=${captured.seen}`);",
+        "```",
+      ].join("\n"),
+      "doc.md": "<Wrap>\ncontent\n</Wrap>",
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    // The middle block rebinding `renderer` did not reach the closure the
+    // persistent task captured from its own snapshot.
+    expect(output).toContain("seen=function");
+  });
+
+  // O27: an explicit import shadows the injected binding without the preamble
+  // declaring it twice — the module would not compile otherwise.
+  it("O27: an explicitly imported useContent compiles alongside the injected one", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": [
+        "```ts eval",
+        'import { useContent } from "@executablemd/core";',
+        "const kind = typeof useContent;",
+        "output(`imported=${kind}`);",
+        "```",
+      ].join("\n"),
+      "doc.md": "<Wrap>\ncontent\n</Wrap>",
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    expect(output).toContain("imported=function");
+    expect(output).not.toContain("ERROR");
+  });
+
   // O24: the same block inside an <Output> region collects instead, so the
   // projected error renders as a comment and the region still emits.
   it("O24: a persistent projection inside <Output> settles under the collecting policy", function* () {

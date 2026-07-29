@@ -1,29 +1,24 @@
 /**
  * The binding environment one eval block sees (spec §4.3).
  *
- * Blocks share one bindings record — that is what lets a later block read what
- * an earlier one exported. But `renderChildren`, `render` and `useContent`
- * project content, and a projection settles its errors under the policy of the
- * block that started it, which differs per block. A `persist eval` block runs
- * on the invocation's eval-scope loop task, created long before that policy
- * existed, so the policy cannot come from the surrounding context.
+ * A block runs against a snapshot of the shared bindings taken when it starts,
+ * and its declared exports are committed back when it finishes. It never holds
+ * a live view of later blocks' changes, which is what lets persistent work keep
+ * using the values — and the capabilities — it captured.
  *
- * Each evaluation therefore gets its own facade over the shared record: the
- * three projecting bindings are bound to that evaluation's policy, everything
- * else reads and writes straight through. Nothing is swapped and nothing is
- * restored, so concurrent evaluations cannot race and work that outlives its
- * block keeps calling the closures it was given.
+ * `renderChildren`, `render` and `useContent` project content, and a projection
+ * settles its errors under the policy of the block that started it. A `persist
+ * eval` block runs on the invocation's eval-scope loop task, created long before
+ * that policy existed, so the policy cannot come from the surrounding context.
+ * The snapshot carries ordinary closures bound to it instead.
  */
 
 import type { ErrorPolicy } from "./errors.ts";
 
-/**
- * Bindings the facade re-binds per evaluation. The shared record holds the
- * invocation's own versions, which carry no policy.
- */
+/** Bindings the snapshot rebinds; the shared record holds the unbound originals. */
 const PROJECTING = ["renderChildren", "render", "useContent"];
 
-/** A projection binding as it is injected into the shared record. */
+/** A projection binding as the expansion engine injects it. */
 type Projector = (argument?: unknown, policy?: ErrorPolicy) => unknown;
 
 function isProjector(value: unknown): value is Projector {
@@ -31,48 +26,38 @@ function isProjector(value: unknown): value is Projector {
 }
 
 /**
- * Wrap `values` for one evaluation, binding the projecting operations to
- * `policy`. Reads of anything else, and every write, delete and enumeration,
- * reach the shared record — `serializeExports` and the transform's
- * `Object.keys` see exactly what they saw before.
+ * Snapshot `values` for one evaluation, with the projecting operations bound to
+ * `policy`. The result is a plain object: writes the compiled block makes land
+ * on it, not on the shared record, until `commitExports` publishes them.
  */
 export function evaluationEnv(
   values: Record<string, unknown>,
   policy: ErrorPolicy,
 ): Record<string, unknown> {
-  const bound = new Map<string, unknown>();
+  const snapshot: Record<string, unknown> = { ...values };
+  for (const name of PROJECTING) {
+    const projector = snapshot[name];
+    if (isProjector(projector)) {
+      snapshot[name] = (argument?: unknown) => projector(argument, policy);
+    }
+  }
+  return snapshot;
+}
 
-  return new Proxy(values, {
-    get(target, key) {
-      if (typeof key !== "string" || !PROJECTING.includes(key)) {
-        return Reflect.get(target, key);
-      }
-      const existing = bound.get(key);
-      if (existing) {
-        return existing;
-      }
-      const projector = Reflect.get(target, key);
-      if (!isProjector(projector)) {
-        return projector;
-      }
-      const wrapper = (argument?: unknown) => projector(argument, policy);
-      bound.set(key, wrapper);
-      return wrapper;
-    },
-    set(target, key, value) {
-      return Reflect.set(target, key, value);
-    },
-    deleteProperty(target, key) {
-      return Reflect.deleteProperty(target, key);
-    },
-    has(target, key) {
-      return Reflect.has(target, key);
-    },
-    ownKeys(target) {
-      return Reflect.ownKeys(target);
-    },
-    getOwnPropertyDescriptor(target, key) {
-      return Reflect.getOwnPropertyDescriptor(target, key);
-    },
-  });
+/**
+ * Publish a completed evaluation's declared exports to the shared record.
+ *
+ * The journal carries only the JSON-serializable subset, so this is what keeps
+ * a function or a live object usable by later blocks in the same run.
+ */
+export function commitExports(
+  values: Record<string, unknown>,
+  snapshot: Record<string, unknown>,
+  exports: string[],
+): void {
+  for (const name of exports) {
+    if (name in snapshot) {
+      values[name] = snapshot[name];
+    }
+  }
 }

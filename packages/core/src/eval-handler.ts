@@ -6,7 +6,7 @@ import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { env, evalScope, persistent } from "./component-api.ts";
 import { AmbientErrorPolicy } from "./errors.ts";
-import { evaluationEnv } from "./eval-env.ts";
+import { commitExports, evaluationEnv } from "./eval-env.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
 
@@ -51,9 +51,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         Object.assign(evalEnv.values, bindings);
 
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
-        // One facade per evaluation over the shared bindings: the projecting
-        // operations carry this block's policy, everything else — including
-        // export write-back — reaches the same record.
+        // A snapshot of the bindings as they stand now, with this block's
+        // policy bound into its projection closures. The block writes its
+        // exports here; they are published below once it succeeds.
         const blockEnv = evaluationEnv(evalEnv.values, policy);
 
         if (persist) {
@@ -79,7 +79,11 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
           }
         }
 
-        const exports = serializeExports(evalEnv.values, transformed.exports);
+        // Publish first, so a later block — and any persistent work already
+        // holding a reference — sees live values the journal cannot carry.
+        commitExports(evalEnv.values, blockEnv, transformed.exports);
+
+        const exports = serializeExports(blockEnv, transformed.exports);
 
         if (outputRef.text) {
           (exports as Record<string, unknown>).__output = outputRef.text;

@@ -1198,20 +1198,23 @@ scope-locally around each component body, so eval blocks within a
 component share bindings without leaking into parent or sibling
 components.
 
-**Each evaluation receives its own facade over that record.** `renderChildren`,
-`render` and `useContent` project content, and a projection settles its errors
-under the policy of the block that started it (§6.9) — a `persist eval` block
-runs on the invocation's eval-scope loop task, which was created before that
-policy existed and does not inherit it. The facade binds those three names to
-the policy captured where the block sits; every other read, every write, every
-deletion and every enumeration reaches the one shared record, so exports flow
-between blocks exactly as before.
+**Each evaluation runs against a snapshot, and commits its exports.** A block
+receives a plain object holding the bindings as they stood when it started. Its
+declared exports are published to the shared record once it completes
+successfully — which is what carries a function or a live object to later
+blocks, since the journal keeps only the JSON-serializable subset (§4.5).
 
-Nothing is written to the invocation's contexts and nothing is swapped on the
-shared record, so concurrent evaluations cannot interfere and work that outlives
-its block keeps calling the closures it was given, under its own policy. The
-identity of `env` therefore differs between blocks; the bindings it exposes do
-not.
+A block therefore never observes a later block's changes to the shared record,
+and work that outlives its block keeps the values it captured. Nothing is
+written to the invocation's contexts and nothing is swapped on the shared
+record, so evaluations cannot interfere with one another's bindings.
+
+`renderChildren`, `render` and `useContent` project content, and a projection
+settles its errors under the policy of the block that started it (§6.9) — a
+`persist eval` block runs on the invocation's eval-scope loop task, which was
+created before that policy existed and does not inherit it. The snapshot carries
+those three as ordinary closures bound to the policy where the block sits, so
+persistent work keeps projecting under its own.
 
 ### 4.4 Eval scope and resource lifetime
 
@@ -1326,7 +1329,7 @@ run but are absent from the diagnostic trace.
 | `src/content-context.ts` | `useContent()` — content slot access for function components |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
-| `src/eval-env.ts` | `evaluationEnv()` — the per-evaluation binding facade (§4.3) |
+| `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/errors.ts` | `AmbientErrorPolicy`, `settle()`, `DocumentationError` — error settlement (§6.9) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
@@ -4394,6 +4397,9 @@ visible warning blocks, collect into a separate error report).
 | O11/O12 | Propagated body error | Both component forms stop projected content before releasing their own |
 | O13/O14 | Cancellation | Both forms tear down in the same order when halted mid-projection |
 | O15 | TypeScript nesting | Nested invocations leaf-first; siblings isolated |
+| O25 | Exports commit to shared bindings | A later block reads a declared export, including a live object the journal cannot carry |
+| O26 | Snapshot isolation | A later evaluation rebinding a name does not reach the closure persistent work captured |
+| O27 | Explicit import | An explicitly imported `useContent` compiles without a duplicate injected declaration |
 | O9 | Content teardown failure | Stages 2 and 3 still run, in order, and the failure is reported |
 | O10 | Body teardown failure | Reported after every stage has run |
 | O18 | Nested and sibling invocations | Nested invocations tear down leaf-first; siblings never interleave |
