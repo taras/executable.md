@@ -10,7 +10,7 @@ import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { DivergenceError, InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
-import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import type { DurableEvent, Json, Result } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -1326,6 +1326,57 @@ describe("Tier LOOP — replay validates the terminal record", () => {
     expect(outcomeRecords(run.events)).toHaveLength(0);
   });
 
+  it("LOOP57: a wrapper carrying both failures still yields the durability one", function* () {
+    const planted = new StaleInputError("PLANTED_STALE_ENTRY");
+
+    const run = yield* scoped(function* () {
+      const stream = new InMemoryStream();
+      yield* useStubFs({ "test.md": "<Loop max={3}>a<Mixed />b</Loop>" });
+      yield* useEchoExec();
+      // Thrown from a component, so it travels through the generic catch that
+      // asks `fatalCause` which failure ends the execution. The document's
+      // failure comes first in the wrapper — the order that would otherwise be
+      // reported and let the loop record `error` onto a stale journal.
+      yield* Component.around({
+        *importComponent([name], next) {
+          if (name !== "Mixed") {
+            return yield* next(name);
+          }
+          return {
+            kind: "function",
+            name,
+            path: "Mixed.ts",
+            props: OBJECT_SCHEMA,
+            // deno-lint-ignore require-yield
+            *fn() {
+              throw new AggregateError(
+                [
+                  new DocumentationError({
+                    type: "error",
+                    message: "the document is wrong",
+                  }),
+                  planted,
+                ],
+                "carried together",
+              );
+            },
+          };
+        },
+      });
+      let failure: unknown;
+      try {
+        yield* collect(yield* execute({ path: "test.md", stream }));
+      } catch (error) {
+        failure = error;
+      }
+      return { failure, events: stream.snapshot() };
+    });
+
+    expect(run.failure).toBe(planted);
+    expect(iterationRecords(run.events)).toHaveLength(1);
+    expect(outcomeRecords(run.events)).toHaveLength(0);
+  });
+
   it("LOOP55: a body divergence is reported where it happened", function* () {
     const DIVERGING = [
       "<Loop max={2}>",
@@ -1394,12 +1445,10 @@ describe("Tier LOOP — replay validates the terminal record", () => {
     const cut = yield* completeThenCut(SWITCHABLE, { breakNow: false });
 
     const PLANTED = "ghp_PLANTEDSECRET <script>alert(1)</script>";
+    const malformed: Result = { status: "ok", value: { note: PLANTED } };
     const tampered = cut.map((event) =>
       event.type === "yield" && event.description.type === "loop"
-        ? {
-            ...event,
-            result: { status: "ok" as const, value: { note: PLANTED } },
-          }
+        ? { ...event, result: malformed }
         : event,
     );
 

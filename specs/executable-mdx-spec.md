@@ -3956,6 +3956,17 @@ to do with where the journal actually stopped describing the run. Every one of
 these is discovered through the same cycle-safe cause traversal, so what the
 caller receives is the failure itself rather than the wrapper it travelled in.
 
+**A durability failure takes precedence over a documentation failure, whatever
+the wrapper order.** A wrapper carries whatever failed together, in whatever
+order the platform happened to collect it: an `AggregateError`'s members and an
+`InvocationTeardownError`'s stage failures are both positional. Precedence is
+therefore decided by kind rather than by position — the cause graph is searched
+for a durability failure first, and only a graph without one reports a
+documentation failure. Position-based discovery would let one ordering of the
+same teardown report the document's failure instead, which `<Loop>` would then
+record as an ordinary `error` outcome onto a journal already known not to
+describe the run.
+
 This is a limitation of the current durable model, not of the component. The
 absence of an `import_component` entry for a built-in (§5.3) says nothing about
 it — the risk lies with the effects *inside* the directory, not with resolving
@@ -5070,6 +5081,12 @@ visible warning blocks, collect into a separate error report).
 | FA6 | Both at once | A fatal error is still found when the wrapper holding it is itself cyclic |
 | FA7 | Documentation failures | A `DocumentationError` is discovered the same way |
 | FA8 | Ordinary errors are unaffected | A cyclic ordinary error is collected as a diagnostic and the next block still runs |
+| FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `EarlyReturnDivergenceError`, and `ContinuePastCloseDivergenceError` are each discovered as fatal, bare and wrapped |
+| FA10 | Precedence, either order | Each of the four outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
+| FA11 | Precedence through a teardown | The same holds for an `InvocationTeardownError`'s stage failures |
+| FA12 | Precedence at any depth | Nesting either one deeper than the other does not change the answer |
+| FA13 | No durability failure | A `DocumentationError` is reported when the graph holds none, and `durabilityFailure` finds nothing |
+| FA14 | Precedence with a cycle | A mixed graph that is also cyclic still reports the durability failure |
 
 ### Tier IS — Invocation shape
 
@@ -5340,6 +5357,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP54 | Wrapped durability failure | The caller receives the exact nested failure, not the wrapper, and the loop records no outcome for it |
 | LOOP55 | Body divergence | A tampered body entry reports the original `DivergenceError` at the body operation, not a later mismatch at the loop's terminal one; nothing is rendered and no outcome is recorded |
 | LOOP56 | Malformed terminal record | The diagnostic names the loop and the derived outcome and reproduces none of the entry's content |
+| LOOP57 | Mixed wrapper | A wrapper carrying a documentation failure *and* a durability failure yields the durability one, and the loop records no outcome |
 | LOOP53 | Agreeing partial replay | A journal whose terminal record matches what the run derives replays cleanly and closes `ok` |
 | LOOP49 | Resumption | An interrupted journal is accepted by a new execution: the recorded iteration entries replay in order, the interrupted iteration's body reruns live because it journaled nothing, the remaining iterations run live, the loop and iteration identities are unchanged, exactly one terminal record is written with `exhausted` and the right count, and the run ends with root `Close(ok)` |
 

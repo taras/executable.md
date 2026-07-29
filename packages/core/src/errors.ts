@@ -86,9 +86,17 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  * A fatal error stays fatal however it is wrapped, so this looks through the
  * three ways the engine and the platform aggregate failures. It returns the
  * fatal error itself rather than the wrapper, which is the one worth reporting.
+ *
+ * **A durability failure outranks a documentation failure**, wherever each sits
+ * in the graph. A wrapper carries whatever failed together, in whatever order
+ * the platform happened to collect it, and one of those orders would otherwise
+ * report the document's failure and let the loop record an `error` outcome onto
+ * a journal already known not to describe this run. Precedence is therefore
+ * decided by kind, not by position: the graph is searched for a durability
+ * failure first, and only a graph without one reports a documentation failure.
  */
 export function fatalCause(error: unknown): FatalFailure | undefined {
-  return firstCause(error, asFatalFailure);
+  return durabilityFailure(error) ?? firstCause(error, asDocumentationError);
 }
 
 /**
@@ -117,11 +125,8 @@ function asDurabilityFailure(error: unknown): DurabilityFailure | undefined {
   return undefined;
 }
 
-function asFatalFailure(error: unknown): FatalFailure | undefined {
-  if (error instanceof DocumentationError) {
-    return error;
-  }
-  return asDurabilityFailure(error);
+function asDocumentationError(error: unknown): DocumentationError | undefined {
+  return error instanceof DocumentationError ? error : undefined;
 }
 
 /**
@@ -130,8 +135,8 @@ function asFatalFailure(error: unknown): FatalFailure | undefined {
  * Cause graphs are arbitrary — nothing stops `error.cause` from pointing back
  * at `error` — so traversal remembers what it has seen. Recursing forever would
  * turn an ordinary diagnostic into a stack overflow, which is exactly the
- * failure this traversal exists to prevent. Both questions asked of a failure
- * share it, so neither can drift from the other's idea of a wrapper.
+ * failure this traversal exists to prevent. Every question asked of a failure
+ * shares it, so no two can drift on what counts as a wrapper.
  */
 function firstCause<T>(
   error: unknown,
