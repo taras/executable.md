@@ -8,122 +8,25 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, resource, scoped, sleep, suspend } from "effection";
-import type { Operation } from "effection";
+import { race, scoped, sleep } from "effection";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { useContent } from "../src/content-context.ts";
-import type { ComponentDefinition, FunctionComponentDefinition, Segment } from "../src/types.ts";
-
-type Definition = ComponentDefinition | FunctionComponentDefinition;
-
-const NO_PROPS = {
-  type: "object",
-  properties: {},
-  additionalProperties: false,
-} as const;
-
-/** Records `start:<label>` on acquisition and `stop:<label>` on teardown. */
-function useWatch(timeline: string[], label: string, failOnStop = false): Operation<void> {
-  return resource(function* (provide) {
-    timeline.push(`start:${label}`);
-    yield* ensure(() => {
-      timeline.push(`stop:${label}`);
-      if (failOnStop) {
-        throw new Error(`teardown failed: ${label}`);
-      }
-    });
-    yield* provide();
-  });
-}
-
-function markdown(name: string, body: string): ComponentDefinition {
-  return {
-    kind: "markdown",
-    name,
-    path: `components/${name}.md`,
-    meta: {},
-    props: NO_PROPS,
-    bodySegments: scanSegments(body),
-  };
-}
-
-/**
- * A TypeScript component written the way an author would: ordinary operations,
- * no ephemeral(), no scoped(), no lifetime plumbing.
- */
-function component(name: string, body: () => Operation<string>): FunctionComponentDefinition {
-  return { kind: "function", name, path: `components/${name}.ts`, props: NO_PROPS, fn: body };
-}
-
-/**
- * Install the providers expansion needs, plus a `watch` modifier that retains a
- * probe in whatever eval scope is current — the same anchoring `daemon` uses.
- */
-function useHarness(
-  definitions: Record<string, Definition>,
-  timeline: string[],
-  onBlock?: (snapshot: string[]) => void,
-): Operation<void> {
-  return Component.around(
-    {
-      // deno-lint-ignore require-yield
-      *importComponent([name], _next) {
-        const definition = definitions[name];
-        if (!definition) {
-          throw new Error(`Component not found: ${name}`);
-        }
-        return definition;
-      },
-      *applyModifiers([modifiers, block], _next) {
-        const label = block.content.trim();
-        onBlock?.([...timeline]);
-        const watches = modifiers.some((modifier) => modifier.name === "watch");
-        const failing = modifiers.some((modifier) => modifier.name === "watch-fails");
-        const hangs = modifiers.some((modifier) => modifier.name === "watch-hangs");
-        if (modifiers.some((modifier) => modifier.name === "boom")) {
-          throw new Error("body exploded");
-        }
-        if (watches || failing || hangs) {
-          const scope = yield* Component.operations.evalScope;
-          if (!scope) {
-            throw new Error("watch requires an eval scope");
-          }
-          yield* scope.eval(() => useWatch(timeline, label, failing));
-        }
-        if (hangs) {
-          yield* suspend();
-        }
-        return { output: "", exitCode: 0, stderr: "" };
-      },
-    },
-    { at: "min" },
-  );
-}
-
-function* expandAll(
-  source: string,
-  definitions: Record<string, Definition>,
-  timeline: string[],
-  onBlock?: (snapshot: string[]) => void,
-): Operation<Segment[]> {
-  return yield* scoped(function* () {
-    const root = yield* useEvalScope();
-    yield* useHarness(definitions, timeline, onBlock);
-    yield* Component.around({ evalScope: () => root }, { at: "min" });
-    yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-    return yield* expandSegments(scanSegments(source), {}, {}, new Set());
-  });
-}
-
-const WATCH_BLOCK = "```sh watch exec\nprojected\n```";
-const BOOM_BLOCK = "```sh boom exec\nboom\n```";
-const HANG_BLOCK = "```sh watch-hangs exec\nprojected\n```";
-const WATCH_BLOCK_OWN = "```sh watch exec\nown\n```";
-const FAILING_WATCH_BLOCK = "```sh watch-fails exec\nprojected\n```";
+import {
+  BOOM_BLOCK,
+  component,
+  expandAll,
+  FAILING_WATCH_BLOCK,
+  HANG_BLOCK,
+  markdown,
+  useHarness,
+  useWatch,
+  WATCH_BLOCK,
+  WATCH_BLOCK_OWN,
+} from "./invocation-harness.ts";
 
 describe("Tier O — Eval scope hierarchy", () => {
   // O3: the invocation's eval scope dies with the invocation, not the document.
