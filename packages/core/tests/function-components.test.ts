@@ -4,11 +4,15 @@
  * Tests .ts files as components alongside .md files.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { scoped } from "effection";
+import type { Operation } from "effection";
+import type { Json } from "@executablemd/durable-streams";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -508,6 +512,116 @@ describe("Tier O — Eval scope hierarchy", () => {
       // The ordinary resource is re-established per execution and owned by the
       // invocation, so it is acquired and released once on each run.
       expect(lines("resource")).toEqual(["acquire", "release", "acquire", "release"]);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+describe("Tier RT — Retained resources under durability", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * One bounded execution. A resource retained at the root belongs to the
+   * document eval scope, which `execute()` acquires on its caller's frame —
+   * so the scope has to close before the run's effects can be read.
+   */
+  function runDocument(dir: string, stream: InMemoryStream): Operation<Json> {
+    return scoped(function* () {
+      return yield* collect(
+        yield* execute({
+          path: path.join(dir, "doc.md"),
+          stream,
+          componentDirs: [path.join(dir, "components"), dir],
+        }),
+      );
+    });
+  }
+
+  // RT15: retention is a property of component execution, so it composes with
+  // durability the way an ordinary resource does (O22). The import and the
+  // durable effect replay; the retained resource is re-established on each
+  // execution that actually runs, and released with its site scope each time.
+  it("RT15: a retained resource is re-established on every execution", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Held.ts": [
+          'import { durableCall } from "@executablemd/durable-streams";',
+          'import { retain } from "@executablemd/core";',
+          'import { ensure } from "effection";',
+          'import { appendFileSync, readFileSync } from "node:fs";',
+          "",
+          `const DIR = ${JSON.stringify(tmpDir)};`,
+          "",
+          "function mark(kind, event) {",
+          "  const file = `${DIR}/${kind}.log`;",
+          "  appendFileSync(file, event + '\\n');",
+          "  return readFileSync(file, 'utf8').trim().split('\\n').length;",
+          "}",
+          "",
+          "export default function*() {",
+          "  const token = yield* retain(function*() {",
+          "    mark('retained', 'acquire');",
+          "    yield* ensure(function*() { mark('retained', 'release'); });",
+          "    return 'token';",
+          "  });",
+          "  const stamp = yield* durableCall('held-stamp', () =>",
+          "    Promise.resolve(mark('executor', 'ran')));",
+          "  return `${token}=${stamp}`;",
+          "}",
+        ].join("\n"),
+        "doc.md": "<Held />",
+      });
+
+      const stream = new InMemoryStream();
+      const first = yield* runDocument(tmpDir, stream);
+
+      // Without the root Close the second run replays what is journaled and
+      // then continues live — the same partial-replay shape O22 uses.
+      const events = yield* stream.readAll();
+      const partial = events.filter(
+        (event) => !(event.type === "close" && event.coroutineId === "root"),
+      );
+      const second = yield* runDocument(tmpDir, new InMemoryStream(partial));
+
+      const lines = (kind: string) =>
+        fs
+          .readFileSync(path.join(tmpDir, `${kind}.log`), "utf8")
+          .trim()
+          .split("\n");
+
+      expect(first).toContain("token=1");
+      expect(second).toBe(first);
+      // The durable executor ran once and replayed the second time.
+      expect(lines("executor")).toEqual(["ran"]);
+      // The retained resource did not: it is re-established per execution and
+      // released with that execution's site scope — the document scope here.
+      expect(lines("retained")).toEqual(["acquire", "release", "acquire", "release"]);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // RT16: the same request from an eval block is refused. Eval is durable, so a
+  // replay would restore the block's values without re-establishing anything.
+  it("RT16: an eval block cannot retain at the invocation site", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "doc.md": [
+          "```js eval",
+          'import { retain } from "@executablemd/core";',
+          "const held = yield* retain(function*() { return 'nope'; });",
+          "output(held);",
+          "```",
+        ].join("\n"),
+      });
+
+      const output = yield* runDocument(tmpDir, new InMemoryStream());
+
+      expect(output).toContain("cannot retain a resource at the invocation site");
+      expect(output).not.toContain("nope");
     } finally {
       cleanup(tmpDir);
     }

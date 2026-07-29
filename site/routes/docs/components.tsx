@@ -51,6 +51,23 @@ export default function*(props) {
   return \`## \${props.title}\\n\\n\${body}\`;
 }`;
 
+const RETAIN_COMPONENT =
+  `import { hasContent, retain, useContent } from "@executablemd/core";
+
+export default function*() {
+  if (yield* hasContent()) {
+    // A wrapper: the resource is alive exactly while the content expands.
+    yield* useThing();
+    return yield* useContent();
+  }
+  // Standalone: the caller uses this handle after the invocation is over.
+  return yield* retain(useThing);
+}`;
+
+const RETAIN_USAGE = `<Thing as="handle" />
+
+The resource behind {handle} is still running here.`;
+
 export default define.page(function Components() {
   return (
     <>
@@ -139,6 +156,45 @@ export default define.page(function Components() {
         content — and only <code>&lt;Thing /&gt;</code>{" "}
         does not. Asking never renders the children, so a component whose two
         forms mean different things can branch before projecting anything.
+      </p>
+
+      <h3>Outliving the invocation</h3>
+      <p>
+        Invocation lifetime is right for a wrapper, and wrong for a component
+        that hands something back. A self-closing component returns a value the
+        caller uses <em>after</em>{" "}
+        the invocation is over — releasing the resource behind it at the
+        boundary would return a name for something that no longer exists.
+      </p>
+      <p>
+        <code>retain()</code>{" "}
+        gives that resource invocation-site lifetime instead. Each call opens an
+        isolated child of the invoking scope and runs the factory there, so the
+        resource lives as long as that scope does — for the caller and its later
+        siblings — while everything else the factory touches stays inside the
+        child. Only the value it provides crosses back.
+      </p>
+      <CodeBlock filename="components/Thing.ts">{RETAIN_COMPONENT}</CodeBlock>
+      <CodeBlock>{RETAIN_USAGE}</CodeBlock>
+      <p>
+        Retaining is a lifetime, not authority over the caller. A component
+        cannot reach through <code>retain()</code>{" "}
+        to set a context value or install middleware that its caller's later
+        siblings would observe, and it never receives the invoking scope itself.
+      </p>
+      <p>
+        Retaining also delays release rather than opting out of it. The
+        invocation site is an ordinary scope, so when it finishes, fails, or is
+        cancelled, everything retained into it is torn down, innermost first.
+        Nothing escapes structured concurrency and nothing needs an explicit
+        release.
+      </p>
+      <p>
+        <code>retain()</code> belongs to TypeScript components. An{" "}
+        <code>eval</code>{" "}
+        block is durable — a replay restores its values without running it — so
+        a resource retained from one would have nothing to re-establish it, and
+        the call is refused rather than silently succeeding.
       </p>
 
       <h2>How it renders</h2>

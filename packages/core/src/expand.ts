@@ -46,6 +46,7 @@ import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
+import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { parseJson } from "./json.ts";
@@ -78,6 +79,53 @@ function provideEnv(value: EvalEnv): Operation<void> {
 
 function provideEvalScope(value: EvalScope): Operation<void> {
   return Component.around({ evalScope: () => value }, { at: "min" });
+}
+
+/**
+ * Let the component body create resources that outlive it (spec §4.4).
+ *
+ * `site` is the eval scope ambient at the invocation site, read before the
+ * invocation installs its own. Each `retain()` opens a child scope *of* the
+ * site and runs the factory there, so the resource lives as long as the site
+ * does while everything else the factory touches stays inside the child.
+ *
+ * The isolation is the point, not an accident of nesting. A factory is
+ * arbitrary code: run directly on the site's loop task it could set a context
+ * value or install middleware that every later sibling would then observe —
+ * the same mechanism that lets a `persist` block install a provider for the
+ * rest of its invocation. Retention is a lifetime, not authority over the
+ * caller, so only the provided value crosses back.
+ *
+ * Every invocation installs a provider, including one with no site to retain
+ * into. Leaving that case uninstalled would let whatever `retain` provider
+ * happens to be inherited answer for this invocation, and a resource would be
+ * created in a scope with no relationship to the call site.
+ */
+function provideRetain(site: EvalScope | undefined): Operation<void> {
+  if (!site) {
+    return Component.around({ retain: rejectRetain }, { at: "min" });
+  }
+  return Component.around(
+    {
+      *retain([resource], _next) {
+        // Created *through* the site, so the child's loop task is spawned in
+        // the site's and dies with it — the resource's lifetime — while the
+        // factory runs one level down, where its own scope writes land.
+        const child = unbox(yield* site.eval(useEvalScope));
+        return unbox(yield* child.eval(resource));
+      },
+    },
+    { at: "min" },
+  );
+}
+
+// deno-lint-ignore require-yield
+function* rejectRetain(): Operation<never> {
+  throw new Error(
+    "retain() has no invocation-site eval scope to own the resource. Expansion driven " +
+      "without one — no document scope and no enclosing invocation — can only create " +
+      "resources with invocation lifetime.",
+  );
 }
 
 /**
@@ -940,6 +988,10 @@ function* expandComponent(
   // string; the collector exists only to satisfy the shared handle.
   const bodyContentErrors: Segment[] = [];
 
+  // Read before the invocation exists: the eval scope ambient here is the
+  // caller's, and it is what `retain()` creates resources in.
+  const siteEvalScope = yield* evalScope;
+
   // Both bodies run inside one invocation, so a value component owns its
   // resources exactly like a rendered one.
   let claimProjection: ClaimFn = passthroughClaim;
@@ -967,6 +1019,7 @@ function* expandComponent(
     // halts the content scope, and it is released by the body's own stage.
     yield* provideEnv(componentEnv);
     yield* provideEvalScope(invocation.evalScope);
+    yield* provideRetain(siteEvalScope);
 
     // Render closures (spec §4.8). Non-serializable, so serializeExports
     // omits them from the journal. The optional policy is supplied by a
@@ -1173,6 +1226,10 @@ function* expandFunctionComponent(
   // the string so `as` can refuse the capture below.
   const contentErrors: Segment[] = [];
 
+  // Read before the invocation exists: the eval scope ambient here is the
+  // caller's, and it is what `retain()` creates resources in.
+  const siteEvalScope = yield* evalScope;
+
   // Call the function component inside its invocation, with content middleware
   // in scope so it can render children via `yield* useContent()`.
   try {
@@ -1194,6 +1251,7 @@ function* expandFunctionComponent(
       invocation.evalScope.scope.set(ActiveProjection, handle);
 
       yield* provideEvalScope(invocation.evalScope);
+      yield* provideRetain(siteEvalScope);
       yield* Component.around(
         {
           *content([slotName], _next) {
