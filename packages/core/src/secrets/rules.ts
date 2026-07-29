@@ -43,13 +43,10 @@ const CREDENTIAL_FIELDS = [
 const FIELD_NAMES = CREDENTIAL_FIELDS.map((parts) => parts.join("[-_ ]?")).join("|");
 
 /**
- * A value that names a credential instead of being one.
+ * Words that mark a value as a stand-in rather than a credential.
  *
- * Recognition is restricted to *complete* placeholder values and deliberate
- * placeholder forms. An earlier version matched these words anywhere in the
- * value, which meant a real credential was waved through as soon as it
- * happened to contain `test` — the substring check was a hole, not a
- * convenience.
+ * One of these must appear for a phrase to read as a placeholder — but its
+ * presence is never sufficient on its own. See {@link isPlaceholder}.
  */
 const PLACEHOLDER_WORDS = new Set([
   "example",
@@ -58,18 +55,74 @@ const PLACEHOLDER_WORDS = new Set([
   "dummy",
   "sample",
   "changeme",
-  "change",
   "todo",
   "fixme",
   "test",
   "fake",
   "your",
   "my",
-  "the",
   "here",
-  "value",
   "goes",
+  "insert",
+  "replace",
+  "some",
   "xxx",
+]);
+
+/**
+ * The rest of the vocabulary documented placeholders are written from.
+ *
+ * Every segment of a phrase must come from this vocabulary or from
+ * {@link PLACEHOLDER_WORDS}. Anything outside it — an ordinary noun, an
+ * adjective, a made-up word — means the value is not documentation.
+ */
+const FILLER_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "of",
+  "for",
+  "in",
+  "to",
+  "and",
+  "or",
+  "api",
+  "key",
+  "keys",
+  "token",
+  "tokens",
+  "secret",
+  "password",
+  "passwd",
+  "pwd",
+  "pass",
+  "auth",
+  "authorization",
+  "bearer",
+  "client",
+  "access",
+  "refresh",
+  "session",
+  "id",
+  "name",
+  "user",
+  "username",
+  "account",
+  "value",
+  "string",
+  "text",
+  "code",
+  "docs",
+  "documentation",
+  "credential",
+  "credentials",
+  "openai",
+  "anthropic",
+  "github",
+  "gitlab",
+  "aws",
+  "gcp",
+  "azure",
 ]);
 
 /** Deliberate placeholder syntax. The whole value, never a fragment of one. */
@@ -80,9 +133,9 @@ const EXPLICIT_FORMS = [
   /^\{\{[^}]*\}\}$/, // {{ api_key }}
   /^x+$/i,
   /^\*+$/,
-  /^\.+$/,
   /^-+$/,
-  /^(none|null|undefined|empty|unset|omitted|redacted)$/i,
+  /^\.+$/,
+  /^(none|null|undefined|empty|unset|omitted|redacted|changeme)$/i,
 ];
 
 /**
@@ -99,11 +152,16 @@ const WORDS = /^[a-z]{1,15}(?:[-_ .][a-z]{1,15})*$/;
 /**
  * Whether a value names a credential instead of being one.
  *
- * A value qualifies only as a *complete* placeholder: deliberate syntax, or
- * prose in which every segment is a word and at least one is a placeholder
- * word. Containing a placeholder word is never enough on its own — treating
- * it as enough is a hole a real credential walks through as soon as it
- * happens to include `test`.
+ * A value is exempt only when the *complete* value is a placeholder:
+ * deliberate syntax, or a phrase whose every segment comes from the
+ * documented vocabulary with at least one placeholder word among them.
+ *
+ * Requiring every segment is the point. Exempting a phrase because one
+ * segment happened to be a placeholder word let ordinary diceware
+ * passphrases through — `the-correct-horse-battery-staple` and
+ * `example-purple-elephant-dances-nightly` are plausible real passwords, and
+ * a rule that reads them as documentation misses them entirely. Common words
+ * like `the`, `test`, or `your` cannot excuse the words around them.
  */
 export function isPlaceholder(value: string): boolean {
   if (EXPLICIT_FORMS.some((form) => form.test(value))) {
@@ -112,7 +170,13 @@ export function isPlaceholder(value: string): boolean {
   if (!WORDS.test(value)) {
     return false;
   }
-  return value.split(/[-_ .]/).some((segment) => PLACEHOLDER_WORDS.has(segment));
+
+  const segments = value.split(/[-_ .]/);
+  const documented = segments.every(
+    (segment) => PLACEHOLDER_WORDS.has(segment) || FILLER_WORDS.has(segment),
+  );
+
+  return documented && segments.some((segment) => PLACEHOLDER_WORDS.has(segment));
 }
 
 /** The minimum length a value must reach before it can be a credential. */

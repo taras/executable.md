@@ -538,3 +538,74 @@ describe("single-quoted fields after serialization", () => {
     expect(yield* scanner.scan(serializeDurableEvent(asImport(PLACEHOLDER_SOURCE)))).toEqual([]);
   });
 });
+
+/**
+ * Lowercase passphrases are not documentation.
+ *
+ * Exempting a phrase because *one* segment was a placeholder word let
+ * ordinary diceware passwords through: `the-correct-horse-battery-staple` is
+ * a plausible real credential, and a rule that reads it as documentation
+ * misses it entirely.
+ *
+ * The earlier "one segment does not excuse the value" fixtures did not catch
+ * this. They all carried mixed case or digits, so the word pattern rejected
+ * them before the placeholder-word check ever ran — they passed for a reason
+ * unrelated to what they claimed to test. These are all lowercase, so the
+ * placeholder logic is the only thing standing between them and a finding.
+ */
+describe("lowercase passphrases containing placeholder words", () => {
+  const PASSPHRASES = [
+    "the-correct-horse-battery-staple",
+    "correct-horse-test-battery-staple",
+    "example-purple-elephant-dances-nightly",
+  ];
+
+  const asImport = (source: string): DurableEvent => ({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { path: "README.md", content: source } },
+  });
+
+  for (const phrase of PASSPHRASES) {
+    // deno-lint-ignore require-yield
+    it(`does not treat ${phrase} as a placeholder`, function* () {
+      expect(isPlaceholder(phrase)).toBe(false);
+      expect(looksLikeSecret(phrase)).toBe(true);
+    });
+
+    it(`detects ${phrase} in a credential field`, function* () {
+      expect(
+        (yield* createSecretScanner().scan(`{"password":"${phrase}"}`)).length,
+      ).toBeGreaterThan(0);
+    });
+
+    it(`detects ${phrase} in a Bearer header`, function* () {
+      expect(
+        (yield* createSecretScanner().scan(`Authorization: Bearer ${phrase}`)).length,
+      ).toBeGreaterThan(0);
+    });
+
+    it(`detects ${phrase} inside a serialized root import`, function* () {
+      const record = serializeDurableEvent(asImport(`{"password": "${phrase}"}`));
+
+      expect((yield* createSecretScanner().scan(record)).length).toBeGreaterThan(0);
+    });
+
+    it(`keeps ${phrase} out of the findings`, function* () {
+      const scanner = createSecretScanner();
+
+      for (const content of [
+        `{"password":"${phrase}"}`,
+        `Authorization: Bearer ${phrase}`,
+        serializeDurableEvent(asImport(`{"password": "${phrase}"}`)),
+      ]) {
+        const serialized = JSON.stringify(yield* scanner.scan(content));
+        expect(serialized).not.toContain(phrase);
+        for (const word of phrase.split("-")) {
+          expect(serialized).not.toContain(word);
+        }
+      }
+    });
+  }
+});
