@@ -40,14 +40,14 @@ export default define.page(function ExecEval() {
         <li>
           <code>persist</code>{" "}
           — keep resources created by an eval block alive for the component
-          lifetime.
+          invocation.
         </li>
         <li>
           <code>timeout=30s</code> — cancel a long-running block.
         </li>
         <li>
           <code>daemon</code>{" "}
-          — start a long-running subprocess tied to the component scope.
+          — start a long-running subprocess tied to the component invocation.
         </li>
       </ul>
       <p class="muted">
@@ -84,8 +84,8 @@ export default define.page(function ExecEval() {
       <p>
         <code>daemon exec</code>{" "}
         starts a long-lived process, returns control immediately, and is torn
-        down by structured concurrency when the component scope closes — no
-        manual cleanup. Combined with readiness polling, this is how provider
+        down by structured concurrency when the component invocation completes —
+        no manual cleanup. Combined with readiness polling, this is how provider
         components run local model servers.
       </p>
 

@@ -6,13 +6,18 @@
  * handlers with 20_000; tests construct them directly with a small timeout.
  */
 
-import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
-import type { Operation, Task } from "effection";
+import { scoped } from "effection";
+import type { Operation } from "effection";
 import { timebox } from "@effectionx/timebox";
-import { unbox, useEvalScope } from "@effectionx/scope-eval";
-import type { EvalScope } from "@effectionx/scope-eval";
 import { AssertionError, assertionError } from "./assert.ts";
-import { Component, env, evalScope, expandSegments, validateBindingName } from "@executablemd/core";
+import {
+  Component,
+  env,
+  evalScope,
+  expandSegments,
+  validateBindingName,
+  withInvocation,
+} from "@executablemd/core";
 import type { ComponentElement, ErrorSegment, EvalEnv, Segment } from "@executablemd/core";
 import { Test, boundary, inTest, record, testing, verbose } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
@@ -56,29 +61,6 @@ class TeardownError extends Error {
     super(cause instanceof Error ? cause.message : String(cause));
     this.cause = cause;
   }
-}
-
-interface EvalScopeLease {
-  scope: EvalScope;
-  task: Task<void>;
-}
-
-/**
- * Host a child EvalScope in a dedicated task inside the parent EvalScope.
- * The child inherits the parent's middleware, but its lifetime belongs to
- * the TEST: `parentScope.eval(() => useEvalScope())` alone would tie the
- * worker to the parent scope, leaking test-installed middleware into later
- * tests. The suspended task keeps the child alive until the lease is halted.
- */
-function* leaseChildEvalScope(parentScope: EvalScope): Operation<EvalScopeLease> {
-  const published = withResolvers<EvalScope>();
-  const boxed = yield* parentScope.eval(function* () {
-    return yield* spawn(function* () {
-      published.resolve(yield* useEvalScope());
-      yield* suspend();
-    });
-  });
-  return { scope: yield* published.operation, task: unbox(boxed) };
 }
 
 export interface TestHandlers {
@@ -173,16 +155,14 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     let established = false;
 
     try {
-      yield* scoped(function* () {
-        const lease = yield* leaseChildEvalScope(parentScope);
-        // Halt the lease during this scope's teardown, before the next test
-        // can start. A throwing halt propagates as a teardown failure.
-        yield* ensure(() => lease.task.halt());
-
+      // A test is a component invocation: its resources, its middleware and
+      // anything its body projects are dismantled in that order before the
+      // next test starts (core §4.4).
+      yield* withInvocation(function* (invocation) {
         yield* Component.around(
           {
             env: () => testEnv,
-            evalScope: () => lease.scope,
+            evalScope: () => invocation.evalScope,
           },
           { at: "min" },
         );
@@ -215,9 +195,9 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
       });
     } catch (outer) {
       if (bodyError === undefined && !timedOut) {
-        // Setup failures (lease creation, middleware install) are unexpected
-        // errors; only failures dismantling an ESTABLISHED scope/lease are
-        // teardown failures.
+        // Setup failures (invocation startup, middleware install) are
+        // unexpected errors; only failures dismantling an ESTABLISHED
+        // invocation — an InvocationTeardownError — are teardown failures.
         bodyError = established ? new TeardownError(outer) : outer;
       }
     }

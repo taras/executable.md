@@ -8,7 +8,6 @@ import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
-import { ephemeral } from "@executablemd/durable-streams";
 import { useContent } from "../src/content-context.ts";
 import type {
   Segment,
@@ -822,8 +821,8 @@ describe("function component content", () => {
       path: "components/Card.ts",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn(_props) {
-        const header = yield* ephemeral(useContent("header"));
-        const body = yield* ephemeral(useContent());
+        const header = yield* useContent("header");
+        const body = yield* useContent();
         return `[${header.trim()}|${body.trim()}]`;
       },
     };

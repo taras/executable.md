@@ -74,6 +74,50 @@ describe("Tier Q — Daemon integration", () => {
     }
   });
 
+  // Q5: the daemon dies with the component invocation, not with the document.
+  // A probe placed after the component — still inside the same run — is the
+  // only way to tell those two apart.
+  it("Q5: a daemon in a component is gone once the invocation completes", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const pidFile = path.join(tmpDir, "daemon.pid");
+      writeFiles(tmpDir, {
+        "components/Holder.md": [
+          "```bash daemon exec",
+          `sh -c 'echo $$ > ${pidFile}; while true; do sleep 1; done'`,
+          "```",
+          "",
+          "```bash exec",
+          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; echo ready`,
+          "```",
+        ].join("\n"),
+        "doc.md": [
+          "<Holder />",
+          "",
+          "```bash exec",
+          `if kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED; else echo STOPPED; fi`,
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+
+      expect(output).toContain("ready");
+      expect(output).toContain("STOPPED");
+      expect(output).not.toContain("LEAKED");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
   // Q3: daemon returns empty output — no rendered output in document
   it("Q3: daemon produces no rendered output", function* () {
     const tmpDir = makeTempDir();

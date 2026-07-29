@@ -13,7 +13,7 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { scoped, useScope } from "effection";
+import { ensure, scoped, useScope } from "effection";
 import type { Operation } from "effection";
 import { parse } from "acorn";
 import type {
@@ -40,8 +40,12 @@ import {
   importComponent,
   raise,
 } from "./component-api.ts";
-import { DocumentationError } from "./errors.ts";
-import { useEvalScope, unbox } from "@effectionx/scope-eval";
+import { AmbientErrorPolicy, DocumentationError } from "./errors.ts";
+import type { ErrorPolicy } from "./errors.ts";
+import { withInvocation } from "./invocation.ts";
+import type { Invocation } from "./invocation.ts";
+import { ActiveProjection } from "./projection.ts";
+import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { parseJson } from "./json.ts";
@@ -128,6 +132,118 @@ function expandChildrenScoped(
     }
     return yield* expandSegments(segments, meta, props, hideSet, counter);
   });
+}
+
+interface ProjectionState {
+  invocation: Invocation;
+  enclosing: ProjectionHandle | undefined;
+  children: Segment[];
+  /**
+   * The environment projected content expands in. Undefined leaves the ambient
+   * one in place, which is how a function component publishes bindings to its
+   * own content: it installs an env and `useContent()` inherits it.
+   */
+  callerEnv: EvalEnv | undefined;
+  meta: Record<string, unknown>;
+  props: Record<string, Json>;
+  hideSet: Set<string>;
+  counter: BlockCounter;
+  /** Where a string projection records the errors it renders away. */
+  collect: Segment[];
+}
+
+/**
+ * Build the handle one invocation publishes (spec §6.3).
+ *
+ * Every projection expands in a task the invocation's content scope owns, so
+ * nested invocations and persistent work created by projected content descend
+ * from it and stop with the invocation. The environment is the caller's, the
+ * resource scope is the callee's.
+ */
+function createProjectionHandle(state: ProjectionState): ProjectionHandle {
+  const slots = partitionBySlot(state.children);
+  const project = makeProjectFn(state.callerEnv);
+  let slotErrorsEmitted = false;
+
+  function select(request: ProjectionRequest): Segment[] {
+    if (request.kind === "markdown") {
+      return request.segments;
+    }
+    if (request.kind === "children") {
+      return state.children;
+    }
+    if (request.name !== undefined) {
+      return (slots.named.get(request.name) ?? []).map(stripSlotProp);
+    }
+    return slots.default;
+  }
+
+  function environmentFor(request: ProjectionRequest): EvalEnv | undefined {
+    if (request.kind === "children" && request.override) {
+      return { values: { ...(state.callerEnv?.values ?? {}), ...request.override } };
+    }
+    return state.callerEnv;
+  }
+
+  function* runProjection(request: ProjectionRequest): Operation<Segment[]> {
+    const segments = select(request);
+    const policy = request.policy ?? (yield* AmbientErrorPolicy.get()) ?? "collect";
+    const contentScope = yield* state.invocation.useContentScope();
+    // The enclosing handle answers <Content /> written inside projected
+    // content: it belongs to the caller's invocation, not to this one.
+    // Dynamic markdown is the component's own, so it keeps this handle.
+    const inner = request.kind === "markdown" ? handle : state.enclosing;
+
+    return yield* scoped(function* () {
+      const task = contentScope.scope.run(function* () {
+        yield* AmbientErrorPolicy.set(policy);
+        // Slot errors are reported inside the policy-bound task, so an empty
+        // selection cannot settle them under the invocation's baseline.
+        const errors: Segment[] = [];
+        if (!slotErrorsEmitted && slots.errors.length > 0) {
+          slotErrorsEmitted = true;
+          for (const slotError of slots.errors) {
+            errors.push(yield* raise(slotError));
+          }
+        }
+        if (segments.length === 0) {
+          return errors;
+        }
+        yield* provideEvalScope(contentScope);
+        const projectionEnv = environmentFor(request);
+        if (projectionEnv) {
+          yield* provideEnv(projectionEnv);
+        }
+        yield* ActiveProjection.set(inner);
+        const rendered = yield* expandSegments(
+          project(segments),
+          state.meta,
+          state.props,
+          state.hideSet,
+          state.counter,
+        );
+        return [...errors, ...rendered];
+      });
+      yield* ensure(() => task.halt());
+      return yield* task;
+    });
+  }
+
+  const handle: ProjectionHandle = {
+    project: runProjection,
+    *projectToString(request: ProjectionRequest): Operation<string> {
+      const segments = yield* runProjection(request);
+      // A string result must not hide a failure: record the structured errors
+      // where the invocation can refuse an `as=` capture.
+      for (const segment of segments) {
+        if (segment.type === "error") {
+          state.collect.push(segment);
+        }
+      }
+      return renderSegments(segments);
+    },
+  };
+  return handle;
 }
 
 function validateRenderOverride(override: unknown): Record<string, unknown> | undefined {
@@ -707,86 +823,75 @@ function* expandComponent(
   const newHideSet = new Set([...hideSet, name]);
   const componentEnv: EvalEnv = { values: { ...validatedProps } };
 
-  // Create per-component eval scope as a child of the parent eval scope.
-  // By creating it via parentEvalScope.eval(), the child's spawned task
-  // lives inside the parent's scope — Effection's scope prototype chain
-  // ensures scope.reduce() walks child → parent when resolving middleware.
-  const parentEvalScope = yield* evalScope;
-  let childEvalScope: EvalScope | undefined = undefined;
-  if (parentEvalScope) {
-    const result = yield* parentEvalScope.eval(() => useEvalScope());
-    childEvalScope = unbox(result) as EvalScope;
-  }
-
-  // Inject render closures into the component's binding environment.
-  // These are generator functions that eval blocks can yield* to render
-  // content within the current expansion context.
-  //
-  // renderChildren() — expands and renders this component's children.
-  // render(markdown) — scans, expands, and renders arbitrary markdown.
-  //
-  // Both use parentEvalScope, not childEvalScope. Children are
-  // caller-provided content — they expand in the caller's scope
-  // context. The component's childEvalScope and its sequential
-  // channel are for the component's own persist eval blocks
-  // (middleware installation, etc.), not for expanding caller content.
-  //
-  // Children may contain operations that create resources (nested
-  // components, persist eval blocks, daemons), but those resources
-  // are scoped to the expansion — their lifecycle is bound by their
-  // place in the structured concurrency tree. Inner components create
-  // their own child scopes off parentEvalScope, and ancestor
-  // middleware is visible through Effection's scope prototype chain.
-  //
-  // Both install env/evalScope middleware inside a fresh scope so the full
-  // expansion context is available regardless of which task the closure
-  // runs in (e.g., inside evalScope.eval()).
-  //
-  // These are non-serializable (functions) so serializeExports silently
-  // omits them from the journal.
-  const capturedMeta = definition.meta;
-  const capturedProps = validatedProps;
   // Children are caller-provided content, not the component's own body.
   // Use the parent's hide set (without the current component name) so
   // that caller-provided children can reference the same component name
   // without triggering false cycle detection. True cycles in a component's
   // body are still caught because body expansion uses newHideSet.
-  const capturedChildrenHideSet = hideSet;
-  const capturedParentEvalScope = parentEvalScope;
-  // Children are caller-provided content. Use the caller's eval env so
-  // expression props (e.g., {pr}) resolve against the scope where the
-  // JSX was written, not the wrapping component's env. Falls back to
+  //
+  // Use the caller's eval env for the same reason: expression props (e.g.
+  // {pr}) resolve against the scope where the JSX was written.
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
+  // Markdown projections render into segments, so nothing is hidden by a
+  // string; the collector exists only to satisfy the shared handle.
+  const bodyContentErrors: Segment[] = [];
 
-  const renderInCallerScope = (segments: Segment[], override?: Record<string, unknown>) =>
-    (function* () {
-      const expanded = yield* expandChildrenScoped(
-        segments,
-        capturedCallerEnv,
-        override,
-        capturedParentEvalScope,
-        capturedMeta,
-        capturedProps,
-        capturedChildrenHideSet,
-        counter,
-      );
-      return renderSegments(expanded);
-    })();
+  // Both bodies run inside one invocation, so a value component owns its
+  // resources exactly like a rendered one.
+  function* installInvocation(invocation: Invocation): Operation<void> {
+    const enclosing = yield* ActiveProjection.get();
+    const handle = createProjectionHandle({
+      invocation,
+      enclosing,
+      children,
+      callerEnv: capturedCallerEnv,
+      meta: definition.meta,
+      props: validatedProps,
+      hideSet,
+      counter,
+      collect: bodyContentErrors,
+    });
+    // Published on the eval scope, which every task the invocation owns
+    // descends from — including its persist-eval blocks and its content.
+    invocation.evalScope.scope.set(ActiveProjection, handle);
 
-  componentEnv.values.renderChildren = (override?: unknown) =>
-    renderInCallerScope(children, validateRenderOverride(override));
+    // Installed on the invocation's own body task rather than a nested
+    // scoped(): anything the body acquires must still be alive when teardown
+    // halts the content scope, and it is released by the body's own stage.
+    yield* provideEnv(componentEnv);
+    yield* provideEvalScope(invocation.evalScope);
 
-  componentEnv.values.render = (markdown: string) => renderInCallerScope(scanSegments(markdown));
+    // Render closures (spec §4.8). Non-serializable, so serializeExports
+    // omits them from the journal. The optional policy is supplied by a
+    // persistent evaluation's env facade (§4.3), which knows the policy of the
+    // block that started the projection; an ordinary block leaves it unset and
+    // the projection site's policy applies.
+    componentEnv.values.renderChildren = (override?: unknown, policy?: ErrorPolicy) =>
+      handle.projectToString({
+        kind: "children",
+        override: validateRenderOverride(override),
+        policy,
+      });
+    componentEnv.values.render = (markdown: unknown, policy?: ErrorPolicy) =>
+      handle.projectToString({
+        kind: "markdown",
+        segments: scanSegments(String(markdown)),
+        policy,
+      });
+    componentEnv.values.useContent = (slot?: unknown, policy?: ErrorPolicy) =>
+      handle.projectToString({
+        kind: "slot",
+        name: slot === undefined ? undefined : String(slot),
+        policy,
+      });
+  }
 
   const returns = definition.returns;
   if (returns !== undefined) {
     let value: Json;
     try {
-      value = yield* scoped(function* () {
-        yield* provideEnv(componentEnv);
-        if (childEvalScope) {
-          yield* provideEvalScope(childEvalScope);
-        }
+      value = yield* withInvocation(function* (invocation) {
+        yield* installInvocation(invocation);
         return yield* expandValueBody(
           name,
           returns,
@@ -808,8 +913,8 @@ function* expandComponent(
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
 
-    // Bind only after the component's scoped environment unwinds, so the
-    // value reaches the caller's environment and never the component's own.
+    // Bind only after the invocation has torn down, so the value reaches the
+    // caller's environment and never the component's own.
     const parentEnv = yield* env;
     if (!parentEnv || asBinding === undefined) {
       return [
@@ -824,11 +929,8 @@ function* expandComponent(
     return [];
   }
 
-  const expanded = yield* scoped(function* () {
-    yield* provideEnv(componentEnv);
-    if (childEvalScope) {
-      yield* provideEvalScope(childEvalScope);
-    }
+  const expanded = yield* withInvocation(function* (invocation) {
+    yield* installInvocation(invocation);
     return yield* expandBody(
       definition.bodySegments,
       children,
@@ -955,33 +1057,37 @@ function* expandFunctionComponent(
     ];
   }
 
-  const slots = partitionBySlot(children);
-
   // useContent() must hand the component a string, so a collecting policy would
   // otherwise let a rendered error comment become the captured value and drop
   // the ErrorSegment from the document. Keep the structured errors alongside
   // the string so `as` can refuse the capture below.
   const contentErrors: Segment[] = [];
 
-  // Call the function component with content middleware in scope so it can
-  // render children via `yield* useContent()` / `useContent("slot")`.
+  // Call the function component inside its invocation, with content middleware
+  // in scope so it can render children via `yield* useContent()`.
   try {
-    const output = yield* scoped(function* () {
+    const output = yield* withInvocation(function* (invocation) {
+      const enclosing = yield* ActiveProjection.get();
+      const handle = createProjectionHandle({
+        invocation,
+        enclosing,
+        children,
+        // A function component's content inherits whatever environment the
+        // component installed for it — see ProjectionState.callerEnv.
+        callerEnv: undefined,
+        meta: {},
+        props: {},
+        hideSet,
+        counter,
+        collect: contentErrors,
+      });
+      invocation.evalScope.scope.set(ActiveProjection, handle);
+
+      yield* provideEvalScope(invocation.evalScope);
       yield* Component.around(
         {
           *content([slotName], _next) {
-            if (slotName !== undefined) {
-              const slotChildren = (slots.named.get(slotName) ?? []).map(stripSlotProp);
-              if (slotChildren.length === 0) {
-                return "";
-              }
-              const expanded = yield* expandSegments(slotChildren, {}, {}, hideSet, counter);
-              contentErrors.push(...expanded.filter((segment) => segment.type === "error"));
-              return renderSegments(expanded);
-            }
-            const expanded = yield* expandSegments(slots.default, {}, {}, hideSet, counter);
-            contentErrors.push(...expanded.filter((segment) => segment.type === "error"));
-            return renderSegments(expanded);
+            return yield* handle.projectToString({ kind: "slot", name: slotName });
           },
         },
         { at: "min" },
@@ -1708,30 +1814,14 @@ export function* expandBody(
   for (const chunk of chunks) {
     if (chunk.output) {
       const expanded = yield* scoped(function* () {
-        yield* Component.around(
-          {
-            // deno-lint-ignore require-yield
-            *raise([error], _next) {
-              return error;
-            },
-          },
-          { at: "min" },
-        );
+        yield* AmbientErrorPolicy.set("collect");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
       output.push(...expanded);
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
-        yield* Component.around(
-          {
-            // deno-lint-ignore require-yield
-            *raise([error], _next) {
-              throw new DocumentationError(error);
-            },
-          },
-          { at: "min" },
-        );
+        yield* AmbientErrorPolicy.set("throw");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
     }

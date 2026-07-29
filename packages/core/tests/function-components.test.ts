@@ -436,3 +436,80 @@ describe("Tier FC — Function components", () => {
     }
   });
 });
+
+describe("Tier O — Eval scope hierarchy", () => {
+  // O22: the widened component contract keeps durability compositional — a
+  // component can journal a durable effect and hold an ordinary resource in the
+  // same body, and each keeps its own semantics across a partial replay.
+  it("O22: a component combines a durable effect with a directly acquired resource", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Mixed.ts": [
+          'import { durableCall } from "@executablemd/durable-streams";',
+          'import { ensure, resource } from "effection";',
+          'import { appendFileSync, readFileSync } from "node:fs";',
+          "",
+          `const DIR = ${JSON.stringify(tmpDir)};`,
+          "",
+          "function mark(kind, event) {",
+          "  const file = `${DIR}/${kind}.log`;",
+          "  appendFileSync(file, event + '\\n');",
+          "  return readFileSync(file, 'utf8').trim().split('\\n').length;",
+          "}",
+          "",
+          "export default function*() {",
+          "  yield* resource(function*(provide) {",
+          "    mark('resource', 'acquire');",
+          "    yield* ensure(function*() { mark('resource', 'release'); });",
+          "    yield* provide();",
+          "  });",
+          "  const stamp = yield* durableCall('component-stamp', () =>",
+          "    Promise.resolve(mark('executor', 'ran')));",
+          "  return `stamp=${stamp}`;",
+          "}",
+        ].join("\n"),
+        "doc.md": "<Mixed />",
+      });
+
+      const stream = new InMemoryStream();
+      const first = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+
+      // durableRun short-circuits on the root Close, so a stream without it is
+      // what forces a replay that then continues live.
+      const events = yield* stream.readAll();
+      const partial = events.filter(
+        (event) => !(event.type === "close" && event.coroutineId === "root"),
+      );
+      const second = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(partial),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+
+      const lines = (kind: string) =>
+        fs
+          .readFileSync(path.join(tmpDir, `${kind}.log`), "utf8")
+          .trim()
+          .split("\n");
+
+      // The durable executor ran once and was replayed the second time.
+      expect(lines("executor")).toEqual(["ran"]);
+      expect(second).toBe(first);
+      expect(first).toContain("stamp=1");
+      // The ordinary resource is re-established per execution and owned by the
+      // invocation, so it is acquired and released once on each run.
+      expect(lines("resource")).toEqual(["acquire", "release", "acquire", "release"]);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});

@@ -6,7 +6,7 @@
  */
 
 import type { Operation } from "effection";
-import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
+import type { Json as DurableJson } from "@executablemd/durable-streams";
 
 export type Json = DurableJson;
 
@@ -157,6 +157,18 @@ export interface ImportResult extends Record<string, Json> {
 }
 
 /**
+ * One run of a component: durable-capable, and free to acquire runtime
+ * resources that belong to the component invocation.
+ *
+ * Durable effects a component yields are journaled and replayed as usual,
+ * because the engine runs it inside the document's durable routine. Ordinary
+ * resources it acquires are released when the invocation ends — after the
+ * content it projected has stopped (§4.4) — so a component that holds
+ * something for its children needs no lifetime plumbing of its own.
+ */
+export type ComponentExecution<T> = Operation<T>;
+
+/**
  * A TypeScript function component — a generator function that receives
  * validated props directly. A text component returns its rendered output as a
  * string; a component declaring `export const returns` returns the JSON value
@@ -165,15 +177,14 @@ export interface ImportResult extends Record<string, Json> {
  * Children are available via `useContent()` on the Effection scope:
  * ```ts
  * import { useContent } from "@executablemd/core";
- * import { ephemeral } from "@executablemd/core";
  * export default function*(props) {
- *   const content = yield* ephemeral(useContent());
+ *   const content = yield* useContent();
  *   return `<div>${content}</div>`;
  * }
  * ```
  */
 export interface FunctionComponent {
-  (props: Record<string, Json>): Workflow<Json>;
+  (props: Record<string, Json>): ComponentExecution<Json>;
 }
 
 /**

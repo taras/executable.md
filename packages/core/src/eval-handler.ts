@@ -5,6 +5,8 @@ import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { env, evalScope, persistent } from "./component-api.ts";
+import { AmbientErrorPolicy } from "./errors.ts";
+import { evaluationEnv } from "./eval-env.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
 
@@ -18,6 +20,10 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
       );
     }
     const persist = yield* ephemeral(persistent);
+    // Captured here, on the expansion frame, where the block's documentation or
+    // <Output> policy is ambient. A persist block runs on the invocation's
+    // eval-scope loop task, which predates that policy and cannot inherit it.
+    const policy = (yield* ephemeral(AmbientErrorPolicy.get())) ?? "collect";
 
     // Inject output() function into env so eval blocks can produce
     // rendered output. The function is a plain synchronous call:
@@ -45,6 +51,10 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         Object.assign(evalEnv.values, bindings);
 
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
+        // One facade per evaluation over the shared bindings: the projecting
+        // operations carry this block's policy, everything else — including
+        // export write-back — reaches the same record.
+        const blockEnv = evaluationEnv(evalEnv.values, policy);
 
         if (persist) {
           // Persist mode: run the compiled block inside the eval scope
@@ -55,7 +65,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
               `persist eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,
             );
           }
-          const blockResult = yield* scope.eval(() => fn(evalEnv.values));
+          const blockResult = yield* scope.eval(() => fn(blockEnv));
           const returnValue = unbox(blockResult);
           if (!outputRef.text && returnValue != null) {
             outputRef.text = String(returnValue);
@@ -63,7 +73,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         } else {
           // Normal mode: run the compiled block in the current scope.
           // Resources are torn down when this operation completes.
-          const returnValue = yield* fn(evalEnv.values);
+          const returnValue = yield* fn(blockEnv);
           if (!outputRef.text && returnValue != null) {
             outputRef.text = String(returnValue);
           }
