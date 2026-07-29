@@ -3043,6 +3043,207 @@ Diagnostics from `<If>` and `<Else>` carry the source location of the element
 that caused them, as `path:line:column` when the element came from a file and
 `line:column` for text scanned without an origin.
 
+#### `<Loop>` bounded repetition directive
+
+`<Loop>` expands a region of a document more than once, under a bound the
+document states. Like `<Capture>`, `<Each>` and `<If>` it is a native directive
+handled by the expansion engine, never resolved from the filesystem.
+
+```markdown
+<Loop name="planning" max={5}>
+<Plan />
+<Review as="verdict" />
+<If condition={verdict.passed}>
+<Break />
+</If>
+</Loop>
+```
+
+Props (only these two are accepted; any other prop is an error):
+
+- `max` — required. The bound on how many times the body expands. An eval
+  expression (`max={policy.attempts}`) resolves against the caller/projected
+  env at expansion time, a JSON literal (`max={5}`) at scan time, and the
+  result must be a **positive integer**. Zero, a negative number, a fraction, a
+  non-finite number, and any non-number are errors rather than a bound to round
+  or coerce. There is no unbounded form of the directive.
+- `name` — optional. A **string-literal**, non-empty label. It is diagnostic
+  metadata: the loop's own errors name it, and nothing else observes it. It is
+  not passed to descendants, and it creates no binding.
+
+The body expands in document order, at most `max` times. **Reaching `max`
+completes the loop normally** — exhaustion is not a failure and produces no
+diagnostic. Whether an exhausted bound means the work succeeded is the
+surrounding document's policy to state, written as an ordinary `<If>` on
+whatever the body bound. Retry-limit failure is therefore something a document
+declares, not something `<Loop>` does.
+
+**`<Loop>` opens no binding scope.** Every iteration expands in the enclosing
+environment, so an iteration reads what earlier ones bound, and the final
+values stay readable after `</Loop>` — that is how a document acts on what the
+repetition produced. This is the opposite of `<Each>`, whose per-item binding
+exists only for the iteration that renders it.
+
+Like `<Each>` and `<If>`, `<Loop>` is **structural**: each iteration expands to
+segments appended to the loop's output, so `ErrorSegment` and `execOutput`
+segments survive and the ambient raise policy applies to them exactly as
+elsewhere. It is **not an observation boundary** either — it reports the errors
+it creates itself (an invalid bound, an invalid name, an unknown prop) and
+hands the body's segments back untouched.
+
+`<Loop>` adds no error policy of its own. Under a throwing policy the first
+failure ends the loop by propagating out of it; under a collecting one the
+diagnostic renders and the next iteration runs. Cancellation stops the loop
+where it stands. Resources an iteration acquires are released at their own
+invocation boundary (§4.4), so an iteration's resources are gone before the
+next one begins and none of them outlive the loop.
+
+**Execution records.** A loop writes its own journal entries rather than
+leaving its behavior to be inferred from whatever the body happened to record.
+Two kinds, both ordinary durable entries on the document's coroutine:
+
+| Entry | Description | Value |
+| --- | --- | --- |
+| Iteration entry | `{ type: "loop_iteration", name: "loop:<id>:iteration:<n>", loop? }` | `{ iteration: <n> }` |
+| Terminal | `{ type: "loop", name: "loop:<id>", loop? }` | `{ iterations, outcome }` |
+
+`<id>` comes from the block ID counter (§6.1), so every `<Loop>` an execution
+enters has a distinct identity — including each entry into a loop nested in
+another one — and lands on the same identity when the document replays. The
+optional `loop` field carries the author's `name`; like every field beyond
+`type` and `name` it is stored for readers and never compared during divergence
+detection.
+
+**An iteration entry records that an iteration was entered.** It does not mean
+the body completed: the entry is written *before* the body runs, so the record
+never depends on what the body contains. An iteration whose body is empty has
+one, and so does the iteration an interrupted document stopped inside.
+`iteration` is the iteration's **deterministic, zero-based identity**, and it is
+internal — not a binding, not a prop, not a value the body can read.
+
+**The `loop` entry is terminal.** It is written when the loop finishes, it
+exists only for the three ways a loop reaches an end, and `outcome` says which:
+
+| `outcome` | Means |
+| --- | --- |
+| `exhausted` | The loop reached `max`. |
+| `break` | A `<Break>` ended it. |
+| `error` | A failure left the loop, under a throwing policy. |
+
+`iterations` counts the iterations that were **entered**, so a loop that breaks
+on its final iteration and one that exhausts the same bound have identical
+iteration entries and differ only in `outcome`.
+
+**A replayed terminal entry is validated.** An iteration entry names its own
+number, so replay's identity match already checks it. A terminal entry names
+only the loop, so replay would match it whatever this run derived, and the
+protocol's default is that the journal is authoritative — the stored value would
+be handed back and the derived one discarded. Recording a terminal entry
+therefore compares the two. A stored `outcome` or `iterations` that disagrees
+with what this run reached means the journal no longer describes this run, and
+raises a `StaleInputError` (§6.11): a document that resumes from such a journal
+stops rather than continuing under an outcome it did not reach. Live, the value
+compared is the one just written, so the check costs nothing.
+
+A stored value that is not a terminal record at all is **described, not quoted**.
+The diagnostic names the loop and the outcome this run derived; what the entry
+held is reported as "an invalid terminal record". Journal content is external
+data, and a diagnostic that reproduced it would carry whatever it happened to
+hold into logs and rendered output. A well-formed record is safe to name: the
+outcome is one of three known words and the count is a number.
+
+**A durability failure is never a loop outcome.** A stale recorded input or a
+divergence says the journal is already wrong about this run, so the loop records
+nothing for it and the durability failure stays the primary error. Writing an
+`error` outcome there would append to a journal known to be wrong and, on a
+resumed run, consume a terminal entry an earlier run wrote — the exact path by
+which a stale journal could hand a loop an outcome it never reached. Only an
+ordinary document failure produces the `error` outcome; where a stale entry is
+what that recording runs into, the `StaleInputError` becomes the primary error
+and carries the document failure as its cause.
+
+**The durability failure itself is what the caller receives**, not the wrapper it
+travelled in. A teardown aggregate or an `AggregateError` says how a failure
+propagated, not what went wrong, and what matters is which journal entry stopped
+describing the run — so the loop rethrows the failure found inside the wrapper,
+on the same terms as §6.9's fatal-cause discovery.
+
+A collecting policy is not a loop failure. The diagnostic is content, the loop
+keeps iterating, and the outcome is `exhausted` or `break` as usual.
+
+**An interrupted loop has iteration entries and no terminal entry.** This is
+deliberate rather than a gap: an entry appended while the loop is being torn
+down would sit after the iteration entries a resumed run still has to replay,
+and would make that run diverge — so nothing is written, and the journal stays
+resumable.
+
+At execution level the same shape holds. A run that finishes ends with a root
+`Close`: `ok` on success, `err` for a document failure, which a loop's `error`
+outcome precedes. **An interrupted execution has no root `Close` at all.**
+
+| Durable state | Loop entries | Root `Close` |
+| --- | --- | --- |
+| Completed | terminal entry, `exhausted` or `break` | `ok` |
+| Failed | terminal entry, `error` | `err` |
+| Interrupted | iteration entries only | absent |
+
+The journal therefore says whether an execution finished, and does **not** say
+why an unfinished one stopped. Cancellation and a process crash leave the same
+durable state, because they mean the same thing to a reader — the execution did
+not finish — and take the same recovery path: resume from the journal, which
+replays what completed and runs the rest live. Which of the two happened is
+runtime knowledge held by whoever cancelled or observed the process, not
+journal state.
+
+#### `<Break>` loop exit
+
+`<Break>` ends the loop it is written in. It is self-closing, accepts no props
+and no content, and is reserved: the name never resolves a component.
+
+```markdown
+<Loop max={5}>
+<Attempt as="result" />
+<If condition={result.ok}>
+<Break />
+</If>
+</Loop>
+```
+
+It stops the remainder of the current iteration and exits the nearest enclosing
+`<Loop>`. Content after it does not expand, so it imports no component, runs no
+eval or exec block, reaches no provider, creates no binding, and writes no
+journal entry — placing a deliberately failing assertion after a `<Break>` is
+the direct way to test that. Everything the iteration produced before the
+`<Break>` stands, bindings included.
+
+A nested `<Loop>` handles its own `<Break>`: the inner loop exits and the outer
+one keeps running. There is no way to break a named outer loop.
+
+**Which loop a `<Break>` means is decided by where the author wrote it.** A
+component's own body is isolated from the loop that invoked it: a `<Break>`
+written there belongs to a `<Loop>` in that body, and is a diagnostic when the
+body has none. Content the caller projects **through** a component is the
+caller's text, written where the caller can see the loop, so a `<Break>` in it
+ends the caller's loop — whether the component renders it through `<Content />`,
+`useContent()`, or `renderChildren()`. Markdown the component itself produces
+with `render()` is the component's own text and follows the body's rule.
+
+A projected `<Break>` stops the projected content and marks the caller's loop.
+The component's own body still finishes: the loop has no authority over how a
+component renders. The break takes effect where it was written — at the
+invocation site, once the invocation returns — so the rest of that iteration and
+the iterations that were left do not expand.
+
+A `<Break>` outside any `<Loop>` is a diagnostic rather than a component
+invocation. **A malformed `<Break>` performs no control action**: props or
+content on the element mean it does not carry the author's instruction, so the
+diagnostic settles under the ambient policy — aborting under a throwing one,
+rendering under a collecting one while the loop runs to its bound — rather than
+a rejected element also ending the loop.
+
+Diagnostics from `<Loop>` and `<Break>` carry source locations on the same
+terms as `<If>`.
+
 ### 6.6 Eval binding interpolation
 
 Bare `{name}` references (no namespace prefix) resolve against
@@ -3750,6 +3951,26 @@ siblings run on top of work that never happened, so `StaleInputError` joins
 than convert — including through a teardown aggregate, which must not launder
 it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
 unaffected and remain diagnostics.
+
+**Divergence errors are rethrown on the same terms.** A `DivergenceError`, an
+`EarlyReturnDivergenceError`, and a `ContinuePastCloseDivergenceError` all say
+the journal no longer describes this run, so a generic catch that converted one
+into a diagnostic would let expansion continue to the *next* durable operation —
+whose own mismatch is then the failure reported, at a position that has nothing
+to do with where the journal actually stopped describing the run. Every one of
+these is discovered through the same cycle-safe cause traversal, so what the
+caller receives is the failure itself rather than the wrapper it travelled in.
+
+**A durability failure takes precedence over a documentation failure, whatever
+the wrapper order.** A wrapper carries whatever failed together, in whatever
+order the platform happened to collect it: an `AggregateError`'s members and an
+`InvocationTeardownError`'s stage failures are both positional. Precedence is
+therefore decided by kind rather than by position — the cause graph is searched
+for a durability failure first, and only a graph without one reports a
+documentation failure. Position-based discovery would let one ordering of the
+same teardown report the document's failure instead, which `<Loop>` would then
+record as an ordinary `error` outcome onto a journal already known not to
+describe the run.
 
 This is a limitation of the current durable model, not of the component. The
 absence of an `import_component` entry for a built-in (§5.3) says nothing about
@@ -5148,6 +5369,12 @@ visible warning blocks, collect into a separate error report).
 | FA6 | Both at once | A fatal error is still found when the wrapper holding it is itself cyclic |
 | FA7 | Documentation failures | A `DocumentationError` is discovered the same way |
 | FA8 | Ordinary errors are unaffected | A cyclic ordinary error is collected as a diagnostic and the next block still runs |
+| FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `EarlyReturnDivergenceError`, and `ContinuePastCloseDivergenceError` are each discovered as fatal, bare and wrapped |
+| FA10 | Precedence, either order | Each of the four outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
+| FA11 | Precedence through a teardown | The same holds for an `InvocationTeardownError`'s stage failures |
+| FA12 | Precedence at any depth | Nesting either one deeper than the other does not change the answer |
+| FA13 | No durability failure | A `DocumentationError` is reported when the graph holds none, and `durabilityFailure` finds nothing |
+| FA14 | Precedence with a cycle | A mixed graph that is also cyclic still reports the durability failure |
 
 ### Tier IS — Invocation shape
 
@@ -5334,6 +5561,93 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
 | IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
+
+### Tier LOOP / BREAK — bounded repetition directive
+
+Identifiers match `packages/core/tests/loop.test.ts` one to one.
+
+| # | Test | Verify |
+|---|------|--------|
+| LOOP1 | Exact repetition | `max={3}` expands the body three times, in order |
+| LOOP2 | Bound of one | `max={1}` expands the body once |
+| LOOP3 | Exhaustion | Reaching `max` completes normally; surrounding content keeps its position |
+| LOOP4 | Empty body | A loop with no children renders nothing |
+| LOOP5 | Self-closing `<Loop>` | Renders nothing, with no error |
+| LOOP6 | Bound from a binding | `max={attempts}` resolves from the evaluation environment |
+| LOOP7 | Repeated blocks | The body's code block runs once per iteration |
+| LOOP8 | Repeated invocations | The body's component is imported once per iteration |
+| LOOP9 | Nesting | An inner loop reruns in full for every outer iteration |
+| LOOP10 | Bindings carry forward | An iteration reads what an earlier one bound |
+| LOOP11 | Bindings survive the loop | The final value is readable after `</Loop>` |
+| LOOP12 | Last-iteration binding | A binding made in the final iteration survives |
+| LOOP13 | Body reads the shared env | An `<If>` in the body sees a binding an earlier iteration changed |
+| LOOP14 | Missing `max` | Rejected; the body does not render |
+| LOOP15 | Non-positive and fractional bounds | `0`, `-1`, and `1.5` are rejected |
+| LOOP16 | No coercion | String, boolean, `null`, array, and object bounds are rejected with their kind named |
+| LOOP17 | Non-finite bounds | `Infinity` and `NaN` are rejected |
+| LOOP18 | Unresolvable expression | The failing expression is quoted in the diagnostic |
+| LOOP19 | Invalid bound runs nothing | No component in the body is imported |
+| LOOP20 | Unknown props | Literal and expression props other than `max`/`name` are rejected |
+| LOOP21 | `name` is inert | A named loop renders exactly what an unnamed one does |
+| LOOP22 | `name` binds nothing | Neither `{name}` nor the label resolves in the body |
+| LOOP23 | `name` in diagnostics | The loop's own errors name it |
+| LOOP24 | `name={expr}` | Rejected — `name` is a string literal |
+| LOOP25 | Empty or non-string `name` | Rejected |
+| BREAK1 | Immediate break | `max={5}` with a `<Break>` in the body runs one iteration |
+| BREAK2 | Break before output | A leading `<Break>` produces nothing |
+| BREAK3 | Break inside `<If>` | A selected `<Break>` exits the loop |
+| BREAK4 | Unselected break | An unselected `<Break>` leaves the loop running |
+| BREAK5 | Bindings before the break | They remain available after the loop |
+| BREAK6 | Nearest loop only | An inner `<Break>` leaves the outer loop running |
+| BREAK7 | Outer break after an inner loop | The outer loop exits |
+| BREAK8 | Break inside `<Each>` | The enclosing loop exits and the remaining items are skipped |
+| BREAK9 | Text after the break | Does not render |
+| BREAK10 | Component after the break | Never imported |
+| BREAK11 | Code block after the break | Never runs |
+| BREAK12 | `<Capture>` after the break | Creates no binding |
+| BREAK13 | After the loop | Content following `</Loop>` still runs |
+| BREAK14 | Break outside a loop | Diagnosed |
+| BREAK15 | Stray break resolves nothing | No component named `Break` is imported |
+| BREAK16 | Props on `<Break>` | Literal and expression props are both rejected |
+| BREAK17 | Content on `<Break>` | Rejected |
+| BREAK18 | Malformed break performs no control action | Under a collecting policy the diagnostic renders and the loop still runs to its bound, with each iteration intact |
+| BREAK18b | Malformed break under a throwing policy | The diagnostic aborts through the ambient policy |
+| BREAK19 | Component body boundary | A `<Break>` a component writes is diagnosed and the caller's loop keeps running |
+| BREAK20 | Projection through `<Content />` | A `<Break>` the caller projects exits the caller's loop; the component still finishes rendering |
+| BREAK21 | Component-written break end to end | Diagnosed, and every iteration keeps its trailing content |
+| BREAK22 | Projection through `useContent()` | The same holds for a component that renders content from a code block |
+| LOOP26 | Throwing policy | The first failing iteration aborts the loop |
+| LOOP27 | Collecting policy | The diagnostic renders and the next iteration runs |
+| LOOP28 | Cancellation | Halting mid-loop stops it where it stands |
+| LOOP29 | Teardown per iteration | An iteration's resources are released before the next begins |
+| LOOP30 | Teardown on break | The breaking iteration's resources are released before the loop exits |
+| LOOP31 | Local position | A diagnostic carries `line:column` |
+| LOOP32 | Origin position | A scanned origin adds `path:` to the diagnostic |
+| LOOP33 | `<Break>` position | A stray `<Break>` reports its own location |
+| LOOP34 | No position | An element built without scanning diagnoses without a location |
+| LOOP35 | Body entries per iteration | Each iteration journals a distinct, deterministic eval entry |
+| LOOP36 | Journal after a break | Skipped content writes no eval entry |
+| LOOP37 | Accumulation | A binding grows across iterations end to end |
+| LOOP38 | Repeated import (execution) | The body's component runs once per iteration end to end |
+| LOOP39 | Partial replay | Truncated at the loop's second iteration entry, the journal replays exactly one iteration, runs the remaining two live onto the same identities, reproduces the output, and records `exhausted` |
+| LOOP40 | Break from a binding | A condition computed in the body ends the document's loop |
+| LOOP41 | Empty-body records | Three iteration entries and an `exhausted` terminal record, with no body to journal |
+| LOOP42 | Immediate break records | One iteration entry and a `break` terminal record — distinct from empty exhaustion |
+| LOOP43 | Final-iteration break | Identical iteration entries to an exhausted loop; only `outcome` differs |
+| LOOP44 | Failure records | A throwing policy records an `error` terminal record with the iterations entered, and the execution ends with root `Close(err)` |
+| LOOP45 | Collecting policy is not failure | The diagnostic renders and the terminal outcome is `exhausted` |
+| LOOP46 | Interrupted state | Iteration entries for the iterations entered, no terminal loop record, and no root `Close` — observably different from a completed run (`ok`) and a failed one (`err`), without saying why it stopped |
+| LOOP47 | Nested identities | Each entry into a nested loop records its own distinct identity |
+| LOOP48 | Identity is internal | `{iteration}` resolves to nothing in the body |
+| LOOP50 | Stale terminal record — derived `break` | A journal holding `exhausted` for the same iteration count raises `StaleInputError` rather than replaying its outcome onto a run that broke |
+| LOOP51 | Stale terminal record — derived `error` | The same holds for a run that fails, and the document failure is the `StaleInputError`'s cause |
+| LOOP52 | Durability failure is not an outcome | A stale `<TempDir>` replay inside a loop stays a `StaleInputError`; the loop records no `error` outcome and the stored terminal entry is untouched |
+| LOOP54 | Wrapped durability failure | The caller receives the exact nested failure, not the wrapper, and the loop records no outcome for it |
+| LOOP55 | Body divergence | A tampered body entry reports the original `DivergenceError` at the body operation, not a later mismatch at the loop's terminal one; nothing is rendered and no outcome is recorded |
+| LOOP56 | Malformed terminal record | The diagnostic names the loop and the derived outcome and reproduces none of the entry's content |
+| LOOP57 | Mixed wrapper | A wrapper carrying a documentation failure *and* a durability failure yields the durability one, and the loop records no outcome |
+| LOOP53 | Agreeing partial replay | A journal whose terminal record matches what the run derives replays cleanly and closes `ok` |
+| LOOP49 | Resumption | An interrupted journal is accepted by a new execution: the recorded iteration entries replay in order, the interrupted iteration's body reruns live because it journaled nothing, the remaining iterations run live, the loop and iteration identities are unchanged, exactly one terminal record is written with `exhausted` and the right count, and the run ends with root `Close(ok)` |
 
 ### Tier SC — Sample component (integration)
 

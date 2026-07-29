@@ -113,17 +113,19 @@ function render(
 
 describe("Component.expandSegments", () => {
   it("inherits the hide set, so a self-reference is a cycle and not runaway depth", function* () {
-    const output = yield* render("<Loop />", {
-      Loop: makeComponent("Loop", "<Passthrough><Loop /></Passthrough>"),
+    const output = yield* render("<Recurse />", {
+      Recurse: makeComponent("Recurse", "<Passthrough><Recurse /></Passthrough>"),
     });
-    expect(output).toContain("Cycle detected: Loop");
+    expect(output).toContain("Cycle detected: Recurse");
     expect(output).not.toContain("Maximum expansion depth");
   });
 
   it("does not leak one element's recursion state into its siblings", function* () {
-    const components = { Loop: makeComponent("Loop", "<Passthrough><Loop /></Passthrough>") };
-    const both = yield* render("<Loop /><Loop />", components);
-    const single = yield* render("<Loop />", components);
+    const components = {
+      Recurse: makeComponent("Recurse", "<Passthrough><Recurse /></Passthrough>"),
+    };
+    const both = yield* render("<Recurse /><Recurse />", components);
+    const single = yield* render("<Recurse />", components);
     expect(both).toBe(single + single);
   });
 

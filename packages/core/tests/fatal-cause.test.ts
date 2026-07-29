@@ -10,9 +10,14 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
-import { StaleInputError } from "@executablemd/durable-streams";
+import {
+  ContinuePastCloseDivergenceError,
+  DivergenceError,
+  EarlyReturnDivergenceError,
+  StaleInputError,
+} from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "../src/invocation.ts";
-import { DocumentationError, fatalCause } from "../src/errors.ts";
+import { DocumentationError, durabilityFailure, fatalCause } from "../src/errors.ts";
 import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -21,6 +26,30 @@ import { scanSegments } from "../src/scanner.ts";
 function stale(): StaleInputError {
   return new StaleInputError("journal entry no longer describes this run");
 }
+
+function documentation(): DocumentationError {
+  return new DocumentationError({
+    type: "error",
+    message: "the document is wrong",
+  });
+}
+
+/**
+ * One of each durability failure, so every kind is asked the same questions. A
+ * failing assertion names the class through the received value.
+ */
+const DURABILITY_FAILURES: Array<() => Error> = [
+  stale,
+  () =>
+    new DivergenceError(
+      "root",
+      3,
+      { type: "eval", name: "eval:recorded" },
+      { type: "eval", name: "eval:reached" },
+    ),
+  () => new EarlyReturnDivergenceError("root", 2, 5),
+  () => new ContinuePastCloseDivergenceError("root", 5),
+];
 
 describe("Tier FA — Fatal error discovery", () => {
   it("FA1: an error that is its own cause terminates the search", function* () {
@@ -75,7 +104,11 @@ describe("Tier FA — Fatal error discovery", () => {
   });
 
   it("FA7: a documentation failure is found the same way", function* () {
-    const fatal = new DocumentationError({ type: "error", message: "boom", source: "x" });
+    const fatal = new DocumentationError({
+      type: "error",
+      message: "boom",
+      source: "x",
+    });
 
     expect(fatalCause(new InvocationTeardownError([fatal]))).toBe(fatal);
   });
@@ -111,5 +144,64 @@ describe("Tier FA — Fatal error discovery", () => {
     const output = renderSegments(expanded);
     expect(output).toContain("ordinary cyclic failure");
     expect(output).toContain("second block ran");
+  });
+
+  it("FA9: every durability failure is discovered as fatal", function* () {
+    for (const make of DURABILITY_FAILURES) {
+      const planted = make();
+      expect(fatalCause(planted)).toBe(planted);
+      expect(durabilityFailure(planted)).toBe(planted);
+      // And through a wrapper, which is how each of them actually arrives.
+      const wrapped = new AggregateError([planted], "wrapped");
+      expect(fatalCause(wrapped)).toBe(planted);
+      expect(durabilityFailure(wrapped)).toBe(planted);
+    }
+  });
+
+  it("FA10: a durability failure outranks a documentation failure in either order", function* () {
+    for (const make of DURABILITY_FAILURES) {
+      const planted = make();
+      const doc = documentation();
+
+      expect(fatalCause(new AggregateError([doc, planted], "mixed"))).toBe(planted);
+      expect(fatalCause(new AggregateError([planted, doc], "mixed"))).toBe(planted);
+    }
+  });
+
+  it("FA11: the same holds through a teardown aggregate", function* () {
+    const planted = stale();
+    const doc = documentation();
+
+    expect(fatalCause(new InvocationTeardownError([doc, planted]))).toBe(planted);
+    expect(fatalCause(new InvocationTeardownError([planted, doc]))).toBe(planted);
+  });
+
+  it("FA12: precedence holds however deeply either one is nested", function* () {
+    const planted = stale();
+    const doc = documentation();
+    const shallowDoc = new AggregateError(
+      [doc, new AggregateError([new AggregateError([planted], "inner")], "middle")],
+      "outer",
+    );
+    const shallowStale = new AggregateError([planted, new AggregateError([doc], "inner")], "outer");
+
+    expect(fatalCause(shallowDoc)).toBe(planted);
+    expect(fatalCause(shallowStale)).toBe(planted);
+  });
+
+  it("FA13: a documentation failure is reported when no durability failure exists", function* () {
+    const doc = documentation();
+
+    expect(fatalCause(new AggregateError([new Error("ordinary"), doc], "mixed"))).toBe(doc);
+    expect(durabilityFailure(new AggregateError([doc], "wrapped"))).toBeUndefined();
+  });
+
+  it("FA14: precedence survives a cyclic mixed graph", function* () {
+    const planted = stale();
+    const doc = documentation();
+    const wrapper = new AggregateError([doc, planted], "mixed");
+    doc.cause = wrapper;
+
+    expect(fatalCause(wrapper)).toBe(planted);
   });
 });
