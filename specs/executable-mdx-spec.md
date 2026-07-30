@@ -1307,6 +1307,14 @@ Success, error and cancellation all leave through that destructor. A body that
 throws has its throw caught at its task boundary, so its resources are still
 alive when the first stage runs.
 
+Body execution and teardown are different failure domains, and cleanup failure
+never erases the failure that caused the unwind. A body failure with clean
+teardown is rethrown unchanged; a teardown failure alone is the single teardown
+error; when both fail, the caller receives one aggregate whose ordered members
+are the body failure and that teardown error. Every original failure stays
+reachable by object identity, so fatal discovery (§6.11) traverses the combined
+graph with its usual precedence.
+
 Nested invocations tear down leaf-first: a component inside projected content
 has its own boundary beneath the content scope, so halting that scope dismantles
 the whole subtree first. Sibling invocations share nothing.
@@ -5476,6 +5484,13 @@ visible warning blocks, collect into a separate error report).
 | O31 | Captured markdown projection | The same block under `as=` refuses the binding: the interpolation stays literal and the recorded error returns to the caller once |
 | O32 | Caught projection error | A caught `DocumentationError` is explicit recovery: nothing is recorded, the component completes, and the capture succeeds |
 | O33 | Recovery leaks nothing | Work the projected content started is torn down with its scope; catching the error lets none of it escape the invocation |
+| O34 | Body failure, clean teardown | The body's failure is rethrown by identity and every stage still runs |
+| O35 | Lone teardown failure | Each stage alone — content, body and eval — yields the single teardown error carrying the planted failure by identity, and every stage still runs |
+| O36 | Both domains fail | One aggregate: the body failure first, then one teardown error with every stage failure in stage order, all by identity |
+| O37 | Documentation failure survives teardown | A `DocumentationError` body failure stays discoverable through the aggregate |
+| O38 | Durability failure survives teardown | A durability body failure plus a teardown failure is still fatal |
+| O39 | Durability outranks documentation across domains | A durability teardown failure wins over a documentation body failure |
+| O40 | Stages always run | Every teardown stage runs after a body failure, even when stages themselves fail |
 | O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
 
 ### Tier CW — Contextual working directory
