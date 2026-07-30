@@ -20,6 +20,7 @@ import {
   type DurableStream,
 } from "@executablemd/durable-streams";
 import { exec, readTextFile, cwd } from "@executablemd/runtime";
+import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import type {
@@ -158,8 +159,11 @@ function* durableImportComponent(
 
   // Function component: .ts file — import() the module
   if (isFunctionComponentPath(path)) {
-    // Resolve to absolute path for dynamic import
-    const currentDir = yield* ephemeral(cwd());
+    // Against the process's directory, not the contextual `Env.cwd`: the search
+    // that chose this path stats there too, so a component that rebinds `cwd`
+    // for its content — `<TempDir>` — does not change which components that
+    // content can resolve, or leave a selected path unloadable.
+    const currentDir = yield* ephemeral(processCwd());
     const absolutePath = path.startsWith("/") ? path : `${currentDir}/${path}`;
     const mod = yield* ephemeral(until(import(`file://${absolutePath}`)));
     if (typeof mod !== "object" || mod === null) {

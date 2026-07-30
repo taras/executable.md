@@ -17,7 +17,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import process from "node:process";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
@@ -36,6 +37,19 @@ function useFixture(): Operation<string> {
     const dir = yield* until(mkdtemp(join(tmpdir(), "cr-test-")));
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     yield* provide(yield* until(realpath(dir)));
+  });
+}
+
+/**
+ * A fixture directory *relative to the process's own*, so a search path can be
+ * relative. An absolute path is used verbatim, which hides any disagreement
+ * about which directory a relative one is resolved against.
+ */
+function useLocalFixture(): Operation<string> {
+  return resource(function* (provide) {
+    const dir = yield* until(mkdtemp(join(process.cwd(), "cr-local-")));
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    yield* provide(basename(dir));
   });
 }
 
@@ -279,7 +293,8 @@ describe("Tier CR — registration is scope-local", () => {
       yield* right;
     });
 
-    expect(seen.toSorted()).toEqual(["left", "right"]);
+    // Sorted because the two tasks finish in whichever order they are scheduled.
+    expect([...seen].sort()).toEqual(["left", "right"]);
   });
 });
 
@@ -455,6 +470,27 @@ describe("Tier CR — what a document gets", () => {
     const output = String(yield* run(dir));
     expect(output).not.toContain("SHOULD NOT RENDER");
     expect(output).toContain("reserved");
+  });
+
+  // Selection stats against the process's directory, so loading has to as well.
+  // `<TempDir>` rebinds the contextual `Env.cwd` for its content, and a
+  // repository component written inside it must still resolve and load.
+  //
+  // The search path has to be *relative* for this to bite: an absolute one is
+  // used verbatim and never consults a working directory at all, which is why
+  // the fixture lives under the process's own directory.
+  it("CR24b: a relative repository component loads inside a rebound cwd", function* () {
+    const dir = yield* useLocalFixture();
+    yield* writeTextFile(join(dir, "doc.md"), "<TempDir>\n<Widget />\n</TempDir>\n");
+    yield* writeTextFile(
+      join(dir, "Widget.ts"),
+      [
+        "export const props = { type: 'object', properties: {}, additionalProperties: false };",
+        "export default function*() { return 'LOADED'; }",
+      ].join("\n"),
+    );
+
+    expect(String(yield* run(dir))).toContain("LOADED");
   });
 });
 
