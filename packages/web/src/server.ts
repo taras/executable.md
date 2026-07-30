@@ -233,8 +233,9 @@ export function useFormServer(
           throw refused;
         }
         if (refused.status === 413) {
-          // Refused mid-flight: say so, make sure it was said, and drop the
-          // connection this arrived on without disturbing the listener.
+          // Destroying the socket does not disturb the listener, and there is no
+          // gentler option: an HTTP/1.1 connection whose request body was
+          // abandoned mid-stream cannot be resynchronized.
           yield* respond(channel, 413, undefined, undefined, { Connection: "close" });
           req.socket.destroy();
           return;
@@ -317,10 +318,9 @@ function* respond(
   if (contentType !== undefined) {
     headers["Content-Type"] = contentType;
   }
-  // Declared rather than chunked. A response whose length is stated is one a
-  // client can read to completion without interpreting transfer framing, which
-  // is what lets the tests assert on the exact bytes this server wrote. 204 is
-  // the exception: it carries no body, so a length would be meaningless.
+  // Without this the runtime chunks the response, and a chunked body cannot be
+  // read to completion without interpreting transfer framing. 204 is excluded
+  // because it carries no body.
   if (status !== 204) {
     headers["Content-Length"] = String(new TextEncoder().encode(body ?? "").byteLength);
   }
@@ -356,8 +356,8 @@ function bodyFor(route: StaticRoute, input: FormServerInput): string {
     case "validator":
       return input.compiled.validatorScript;
     case "config":
-      // The body and nothing else. Schema and UI schema reach the page through
-      // the validator script, which already carries them.
+      // Schema and UI schema are deliberately absent: they reach the page
+      // through the validator script, which already carries them.
       return JSON.stringify({ bodyHtml: input.bodyHtml });
   }
 }
