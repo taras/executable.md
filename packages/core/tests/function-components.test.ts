@@ -573,6 +573,47 @@ describe("Tier FC — Function components", () => {
       cleanup(tmpDir);
     }
   });
+
+  // FC12: recovery is written the way an author writes it — a real .ts file
+  // compiled by the engine, importing `ContentError` from the package. The
+  // `instanceof` check is the assertion: it only matches if the class the
+  // component imported is the class the engine threw.
+  it("FC12: a compiled component catches ContentError and returns its own fallback", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Preview.ts": [
+          'import { content, ContentError } from "@executablemd/core";',
+          "",
+          "export default function* Preview() {",
+          "  try {",
+          "    return yield* content();",
+          "  } catch (error) {",
+          "    if (error instanceof ContentError) {",
+          '      return `recovered:${error.errors[0]?.message ?? "?"}`;',
+          "    }",
+          "    throw error;",
+          "  }",
+          "}",
+        ].join("\n"),
+        "doc.md": ["<Preview>", "<Missing />", "</Preview>"].join("\n"),
+      });
+
+      const run = yield* runObserved(tmpDir);
+
+      // The child error was reported exactly once, where it was created;
+      // recovery neither suppressed that observation nor added another.
+      expect(run.observed).toHaveLength(1);
+      expect(run.observed[0]).toContain("Cannot resolve component: Missing");
+      // The fallback quotes the message of that same segment, so the component
+      // inspected the original error rather than a rendered summary of it — and
+      // the document shows the recovery instead of a diagnostic.
+      expect(run.output).toContain(`recovered:${run.observed[0]}`);
+      expect(run.output).not.toContain("ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
 });
 
 /**

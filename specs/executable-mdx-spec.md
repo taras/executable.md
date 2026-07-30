@@ -1989,6 +1989,12 @@ is ordinary recovery:
   invocation lifetime stay owned by the invocation until it exits (§4.4).
 - a caught failure is finished with. The engine does not reassert it, and it
   never reaches the component's consumer boundary.
+- a component that recovers and then fails on its own terms reports *its*
+  failure, and the failure it reports keeps the content failure in its cause
+  chain, so the original error segments stay reachable from the outside. Fatal
+  discovery stops at a content failure it reaches there rather than continuing
+  into the decision the component replaced: what the document reports is the
+  component's own diagnostic, not the child's.
 - the engine never uses `halt()` or cancellation to make a documentation failure
   uncatchable. Cancellation remains a lifecycle mechanism, not a way to deliver
   a domain error.
@@ -4356,6 +4362,13 @@ shows it to the reader. `<File>` renders nothing, so the same diagnostic would
 be written into the file instead. It therefore fails the invocation rather
 than writing, and carries the underlying messages in its own diagnostic —
 which is the only place a reader would otherwise learn what went wrong.
+
+Under fail-fast the reported failure is `<File>`'s as well: the write is what the
+document asked for, and that it did not happen is the fact a reader needs. The
+content failure it was translated from stays reachable through that error's cause
+chain, carrying the same error segments the document reported (§5.1.2), so
+reporting the component's account costs nothing that a host inspecting the
+failure needs.
 
 #### Containment
 

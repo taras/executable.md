@@ -88,8 +88,8 @@ export const props = {
 
 /** A path that leaves the working directory, or a target that cannot be text. */
 export class FileAccessError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "FileAccessError";
   }
 }
@@ -150,6 +150,12 @@ export default function* (props: Record<string, Json>): Operation<string> {
  * The original messages come along, because `<File>` renders nothing: this
  * diagnostic is the only place the reader would learn what actually went wrong.
  * Anything else thrown is not a content failure and passes through untouched.
+ *
+ * The content failure itself stays in this failure's cause chain. What is
+ * reported is this component's own diagnostic — the write is what the document
+ * asked for, and that it did not happen is the fact a reader needs — while the
+ * failure it was translated from, and the error segments it carries, remain
+ * reachable underneath for a host inspecting what ended the execution.
  */
 function* rendered(requested: string): Operation<string> {
   try {
@@ -161,6 +167,7 @@ function* rendered(requested: string): Operation<string> {
     const failures = error.errors.map((segment) => segment.message);
     throw new FileAccessError(
       `did not write "${requested}": its content failed to expand. ${failures.join(" ")}`,
+      { cause: error },
     );
   }
 }

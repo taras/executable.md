@@ -1778,6 +1778,34 @@ function errorSegments(segments: Segment[]): ErrorSegment[] {
 }
 
 /**
+ * Report a diagnostic built from a failure, keeping that failure reachable
+ * underneath whatever settlement produces.
+ *
+ * The diagnostic is what the document says, and under a throwing policy the
+ * `DocumentationError` carrying it is what the execution fails with. The failure
+ * it was built from is the structural account of how the component got there —
+ * a component that recovered from failed content and then reported a failure of
+ * its own is the only place the original content failure survives. The link is
+ * made inside the observation chain's throw, so no observer downstream of
+ * settlement ever sees the failure without it, and only for the segment this
+ * call raised.
+ */
+function* raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
+  try {
+    return yield* raise(segment);
+  } catch (failure) {
+    if (
+      failure instanceof DocumentationError &&
+      failure.segment === segment &&
+      failure.cause === undefined
+    ) {
+      failure.cause = from;
+    }
+    throw failure;
+  }
+}
+
+/**
  * Expand a function component (.ts file).
  *
  * Function components are generator functions that return a rendered
@@ -1936,11 +1964,18 @@ function* expandFunctionComponent(
     if (fatal !== undefined) {
       throw fatal;
     }
-    // The content the component asked for failed and it did not recover: the
-    // invocation is replaced by the errors the projection already reported
-    // (§6.9), which the consumer boundary then settles under the caller's
-    // policy. Reporting them again here would double-observe them.
+    // The content the component asked for failed and it did not recover, so the
+    // invocation is replaced by what the projection already reported (§6.9) and
+    // reporting it again here would double-observe it. Under a throwing policy
+    // that is the original `DocumentationError`, by identity; under a collecting
+    // one it is the segments, which the consumer boundary then settles under the
+    // caller's policy. Restored here rather than by `fatalCause`, which stops at
+    // a content failure so that a component reporting a failure of its own keeps
+    // it (see `causesOf`).
     if (error instanceof ContentExpansionFailure) {
+      if (error.cause instanceof DocumentationError) {
+        throw error.cause;
+      }
       return [...error.errors];
     }
     // A return that failed its schema already names the component and carries
@@ -1949,14 +1984,17 @@ function* expandFunctionComponent(
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
     return [
-      yield* raise({
-        type: "error",
-        message:
-          error instanceof Error
-            ? `Function component ${name} error: ${error.message}`
-            : `Function component ${name} error: ${String(error)}`,
-        source: name,
-      }),
+      yield* raiseFrom(
+        {
+          type: "error",
+          message:
+            error instanceof Error
+              ? `Function component ${name} error: ${error.message}`
+              : `Function component ${name} error: ${String(error)}`,
+          source: name,
+        },
+        error,
+      ),
     ];
   }
 }

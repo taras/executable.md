@@ -2,6 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { StaleInputError } from "@executablemd/durable-streams";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content, raise } from "../src/component-api.ts";
 import { useContent } from "../src/content-context.ts";
@@ -151,6 +152,26 @@ function recovering(
 }
 
 /**
+ * An author who constructs and throws the public `ContentError` themselves.
+ *
+ * The segment it carries was never reported, so it is not transport: the effect
+ * recorded before the throw is what shows the function body ran and fabricated
+ * it rather than receiving it from a content failure.
+ */
+function forging(name: string, log: Trace, fabricated: ErrorSegment): FunctionComponentDefinition {
+  return {
+    kind: "function",
+    name,
+    path: `${name}.ts`,
+    props: OPEN_SCHEMA,
+    *fn(_props) {
+      yield* recordEntry(log.effects, name);
+      throw new ContentError([fabricated]);
+    },
+  };
+}
+
+/**
  * An unresolvable component is the cheapest way to plant an ErrorSegment
  * inside a captured subtree: the import failure is reported by the body's own
  * consumer boundary, so it reaches the capture as a segment.
@@ -170,6 +191,23 @@ function useBroken(): Operation<void> {
         return {
           segments: [yield* raise({ type: "error", message: `broken ${seq}`, source: "Broken" })],
         };
+      }
+      return yield* next(element);
+    },
+  });
+}
+
+/**
+ * Claims `<Stale />` and fails its expansion with the planted durability
+ * failure. The journal no longer describes this run, so nothing between the
+ * projection and the document may translate it into a diagnostic or present it
+ * as a content failure.
+ */
+function useStale(planted: StaleInputError): Operation<void> {
+  return Component.around({
+    *expand([element], next) {
+      if (element.name === "Stale") {
+        throw planted;
       }
       return yield* next(element);
     },
@@ -209,6 +247,8 @@ interface RunOptions {
   functions?: Record<string, FunctionComponentDefinition>;
   values?: Record<string, unknown>;
   trace?: Trace;
+  /** Fail `<Stale />` expansion with this durability failure. */
+  stale?: StaleInputError;
 }
 
 function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
@@ -234,6 +274,10 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
     });
     yield* useBroken();
     yield* useSpawner(log);
+    const planted = opts.stale;
+    if (planted) {
+      yield* useStale(planted);
+    }
     yield* Component.around(
       {
         // deno-lint-ignore require-yield
@@ -628,5 +672,91 @@ describe("capture error propagation", () => {
     expect(result.output).toContain("AFTER");
     expect(log.effects).toEqual([]);
     expect("cap" in values).toBe(false);
+  });
+
+  it("CE24: an author-thrown ContentError is an ordinary function-component error", function* () {
+    const log = trace();
+    const fabricated: ErrorSegment = {
+      type: "error",
+      message: "author fabricated",
+      source: "Forge",
+    };
+    const result = yield* run("<Forge>body</Forge>TAIL", {
+      functions: { Forge: forging("Forge", log, fabricated) },
+      trace: log,
+    });
+
+    // The body ran and threw its own ContentError, so the transport path was
+    // never entered — the engine reports the component's failure instead.
+    expect(log.effects).toEqual(["Forge"]);
+    const reported = errors(result.segments);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).not.toBe(fabricated);
+    expect(reported[0].source).toBe("Forge");
+    expect(reported[0].message).toBe("Function component Forge error: author fabricated");
+    // The fabricated segment is reported by nothing and reaches nothing: the one
+    // observation is the engine's own diagnostic, and the document renders only
+    // that, with the author's message quoted inside it.
+    expect(log.raised).toHaveLength(1);
+    expect(log.raised[0]).toBe(reported[0]);
+    expect(log.raised.includes(fabricated)).toBe(false);
+    expect(result.segments.includes(fabricated)).toBe(false);
+    expect(result.output).toBe(
+      "<!-- ERROR: Function component Forge error: author fabricated -->TAIL",
+    );
+  });
+
+  it("CE25: a durability failure crossing content() is neither a ContentError nor a diagnostic", function* () {
+    const log = trace();
+    const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
+    let thrown: unknown;
+    try {
+      yield* run("<Recover><Stale /></Recover>TAIL", {
+        functions: { Recover: recovering("Recover", log) },
+        stale: planted,
+        trace: log,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // The catch at `yield* content()` saw the durability failure itself, so the
+    // `instanceof ContentError` branch could not match and rethrew it.
+    expect(log.caught).toHaveLength(1);
+    expect(log.caught[0]).toBe(planted);
+    expect(log.caught[0]).not.toBeInstanceOf(ContentError);
+    expect(log.recoveries).toEqual([]);
+    // It left expansion by identity rather than becoming an ErrorSegment: a
+    // collecting policy renders whatever was reported, and nothing was.
+    expect(thrown).toBe(planted);
+    expect(log.raised).toEqual([]);
+    expect(log.failures).toEqual([]);
+  });
+
+  it("CE26: a durability failure at the content boundary outranks the throwing policy", function* () {
+    const log = trace();
+    const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
+    let thrown: unknown;
+    try {
+      yield* run("<Recover><Stale /></Recover>TAIL", {
+        functions: { Recover: recovering("Recover", log) },
+        stale: planted,
+        throwing: true,
+        trace: log,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Same source, opposite policy: the object that escapes is still the planted
+    // failure, and no DocumentationError was constructed for it to outrank.
+    expect(thrown).toBe(planted);
+    expect(thrown).not.toBeInstanceOf(DocumentationError);
+    expect(thrown).not.toBeInstanceOf(ContentError);
+    expect(log.caught).toHaveLength(1);
+    expect(log.caught[0]).toBe(planted);
+    expect(log.recoveries).toEqual([]);
+    expect(log.raised).toEqual([]);
+    expect(log.failures).toEqual([]);
   });
 });

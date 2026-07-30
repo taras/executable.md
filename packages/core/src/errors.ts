@@ -65,6 +65,12 @@ export class DocumentationError extends Error {
  * code does not branch on the ambient policy. Left uncaught, normal
  * continuation stops and the invocation boundary reports the original errors
  * under the consumer's policy.
+ *
+ * A component that recovers and then fails on its own terms keeps this error in
+ * the cause chain of the failure it reports, so the content failure it recovered
+ * from — and the segments it carries — stay reachable from the outside. What is
+ * *reported* is still the component's own failure: fatal discovery stops here
+ * rather than continuing into the decision the component replaced (`causesOf`).
  */
 export class ContentError extends Error {
   readonly errors: readonly ErrorSegment[];
@@ -198,6 +204,17 @@ function causesOf(error: object): unknown[] {
   }
   if (error instanceof AggregateError) {
     return error.errors;
+  }
+  // A `ContentError` reached in a cause graph is recovered context rather than a
+  // failure still looking for a policy: it was delivered to a component that
+  // caught it and chose a failure of its own, and that choice is what the
+  // document has to report. Walking through it would resurrect the decision the
+  // component replaced — the component's contextual diagnostic would be built
+  // and then discarded in favour of the child's. Nothing fatal hides behind it:
+  // failed content carries a documentation failure and nothing else, and a
+  // durability failure crosses `content()` unwrapped.
+  if (error instanceof ContentError) {
+    return [];
   }
   if (error instanceof Error && error.cause !== undefined) {
     return [error.cause];
