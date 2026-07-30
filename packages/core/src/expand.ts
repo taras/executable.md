@@ -511,33 +511,23 @@ export function* expandSegments(
         }
 
         if (segment.name === "Capture") {
-          const captureResult = yield* expandCapture(
-            segment,
-            parentMeta,
-            parentProps,
-            hideSet,
-            counter,
+          // No raise() here: expandCapture reports the errors it creates, and
+          // its body settled its own (§6.9).
+          result.push(
+            ...(yield* expandCapture(segment, parentMeta, parentProps, hideSet, counter)),
           );
-          for (const captureSegment of captureResult) {
-            result.push(yield* raise(captureSegment));
-          }
           break;
         }
 
         if (segment.name === "Each") {
-          const eachResult = yield* expandEach(segment, parentMeta, parentProps, hideSet, counter);
-          for (const eachSegment of eachResult) {
-            if (eachSegment.type === "error") {
-              result.push(yield* raise(eachSegment));
-            } else {
-              result.push(eachSegment);
-            }
-          }
+          // Same as <Capture>: expandEach reports its own errors and hands the
+          // body's back untouched (§6.9).
+          result.push(...(yield* expandEach(segment, parentMeta, parentProps, hideSet, counter)));
           break;
         }
 
         if (segment.name === "If") {
-          // No raise() here, unlike the branches above: expandIf reports the
+          // No raise() here, like the branches above: expandIf reports the
           // errors it creates, and the selected branch settled its own (§6.9).
           result.push(...(yield* expandIf(segment, parentMeta, parentProps, hideSet, counter)));
           break;
@@ -574,11 +564,13 @@ export function* expandSegments(
           counter,
           segment.projectedEnv,
         );
-        // Consumer boundary: re-raise transported error segments under the
-        // ambient policy before appending them (spec §6.9).
+        // Consumer boundary: the callee reported these where they were created,
+        // under whatever policy its body ran — an `<Output>` region collects,
+        // documentation throws. Settling them here applies this caller's policy
+        // without reporting them a second time (spec §6.9).
         for (const expandedSegment of expanded) {
           if (expandedSegment.type === "error") {
-            result.push(yield* raise(expandedSegment));
+            result.push(yield* settle(expandedSegment));
           } else {
             result.push(expandedSegment);
           }
@@ -676,6 +668,19 @@ function captureError(message: string): ErrorSegment {
   return { type: "error", message, source: "Capture" };
 }
 
+/**
+ * Capture the rendered body into an `as` binding (spec §6.5 `<Capture>`).
+ *
+ * Like `<If>`, it is not an observation boundary. Errors it creates itself — a
+ * missing or invalid `as`, an unknown prop, an empty body — are reported here,
+ * exactly once. Body segments come back from `expandSegments` already reported
+ * where they were produced, and are handed on untouched: a failing element
+ * inside a capture settles once, exactly as it would inline.
+ *
+ * A capture never swallows an error. When the body produced one, `as` creates no
+ * binding and the error segments stand in place of the capture, so the reader
+ * sees the failure instead of a binding holding a diagnostic as its text.
+ */
 function* expandCapture(
   segment: Extract<Segment, { type: "component" }>,
   parentMeta: Record<string, unknown>,
@@ -684,35 +689,39 @@ function* expandCapture(
   counter: BlockCounter,
 ): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
-    return [captureError('<Capture> must have content. Use <Capture as="x">...</Capture>.')];
+    return [
+      yield* raise(captureError('<Capture> must have content. Use <Capture as="x">...</Capture>.')),
+    ];
   }
 
   const propNames = Object.keys(segment.props);
   if (propNames.some((name) => name !== "as" && name !== "select")) {
-    return [captureError('<Capture> only accepts "as" and "select" props.')];
+    return [yield* raise(captureError('<Capture> only accepts "as" and "select" props.'))];
   }
 
   const expressionNames = Object.keys(segment.expressions);
   if (expressionNames.length > 0) {
     if (expressionNames.includes("as")) {
-      return [captureError('<Capture as={...}> is invalid: "as" must be a string literal.')];
+      return [
+        yield* raise(captureError('<Capture as={...}> is invalid: "as" must be a string literal.')),
+      ];
     }
     if (!expressionNames.every((n) => n === "select")) {
-      return [captureError('<Capture> only accepts "as" and "select" props.')];
+      return [yield* raise(captureError('<Capture> only accepts "as" and "select" props.'))];
     }
   }
 
   if (segment.props.as === undefined) {
-    return [captureError('<Capture> requires an "as" prop (non-empty string).')];
+    return [yield* raise(captureError('<Capture> requires an "as" prop (non-empty string).'))];
   }
 
   const asBinding = validateBindingName(segment.props.as);
   if (!asBinding.ok) {
-    return [captureError(asBinding.error.message)];
+    return [yield* raise(captureError(asBinding.error.message))];
   }
   const bindingName = asBinding.value;
   if (bindingName === undefined) {
-    return [captureError('<Capture> requires an "as" prop (non-empty string).')];
+    return [yield* raise(captureError('<Capture> requires an "as" prop (non-empty string).'))];
   }
 
   const expandedChildren = yield* expandSegments(
@@ -723,9 +732,9 @@ function* expandCapture(
     counter,
   );
 
-  // Consumer boundary (spec §6.9): a capture never swallows an error. Hand the
-  // error segments back before rendering or `select` folds them into text, so
-  // expandSegments applies the ambient policy and the binding stays unset.
+  // The body reported these where they were created (§6.9). They are returned
+  // before rendering or `select` folds them into text, so the binding stays
+  // unset and the diagnostics reach the document unchanged.
   const errors: ErrorSegment[] = [];
   for (const child of expandedChildren) {
     if (child.type === "error") {
@@ -752,7 +761,7 @@ function* expandCapture(
 
   const bindingEnv = yield* env;
   if (!bindingEnv) {
-    return [captureError("<Capture> requires an evaluation environment.")];
+    return [yield* raise(captureError("<Capture> requires an evaluation environment."))];
   }
   bindingEnv.values[bindingName] = captured;
   return [];
@@ -764,6 +773,17 @@ function eachError(message: string): ErrorSegment {
 
 const EACH_PROPS = new Set(["in", "let", "as"]);
 
+/**
+ * Expand the body once per item, binding `let` to the item (spec §6.5 `<Each>`).
+ *
+ * Like `<If>` and `<Loop>`, it is not an observation boundary: errors it creates
+ * itself — an unknown prop, a `let`/`as`/`in` that does not hold up — are
+ * reported here, exactly once, and every iteration's segments come back already
+ * reported and are handed on untouched.
+ *
+ * With `as`, a capture never swallows an error: when any iteration produced one,
+ * no binding is created and the error segments stand in place of the capture.
+ */
 function* expandEach(
   segment: Extract<Segment, { type: "component" }>,
   parentMeta: Record<string, unknown>,
@@ -775,30 +795,34 @@ function* expandEach(
     (n) => !EACH_PROPS.has(n),
   );
   if (unknownProp !== undefined) {
-    return [eachError(`<Each> only accepts "in", "let", and "as" props. Got: "${unknownProp}".`)];
+    return [
+      yield* raise(
+        eachError(`<Each> only accepts "in", "let", and "as" props. Got: "${unknownProp}".`),
+      ),
+    ];
   }
 
   if ("let" in segment.expressions) {
-    return [eachError('Prop "let" on <Each /> must be a string literal.')];
+    return [yield* raise(eachError('Prop "let" on <Each /> must be a string literal.'))];
   }
   if (segment.props.let === undefined) {
-    return [eachError('<Each> requires a "let" prop (the item binding name).')];
+    return [yield* raise(eachError('<Each> requires a "let" prop (the item binding name).'))];
   }
   const letBinding = validateBindingName(segment.props.let);
   if (!letBinding.ok) {
-    return [eachError(`Prop "let" on <Each /> ${letBinding.error.message}`)];
+    return [yield* raise(eachError(`Prop "let" on <Each /> ${letBinding.error.message}`))];
   }
   const name = letBinding.value;
   if (name === undefined) {
-    return [eachError('<Each> requires a "let" prop (the item binding name).')];
+    return [yield* raise(eachError('<Each> requires a "let" prop (the item binding name).'))];
   }
 
   if ("as" in segment.expressions) {
-    return [eachError('Prop "as" on <Each /> must be a string literal.')];
+    return [yield* raise(eachError('Prop "as" on <Each /> must be a string literal.'))];
   }
   const asResult = validateBindingName(segment.props.as);
   if (!asResult.ok) {
-    return [eachError(`Prop "as" on <Each /> ${asResult.error.message}`)];
+    return [yield* raise(eachError(`Prop "as" on <Each /> ${asResult.error.message}`))];
   }
   const asBinding = asResult.value;
 
@@ -815,13 +839,13 @@ function* expandEach(
       );
       items = resolved.in;
     } catch (error) {
-      return [eachError(error instanceof Error ? error.message : String(error))];
+      return [yield* raise(eachError(error instanceof Error ? error.message : String(error)))];
     }
   } else {
-    return [eachError('<Each> requires an "in" prop (the array to iterate).')];
+    return [yield* raise(eachError('<Each> requires an "in" prop (the array to iterate).'))];
   }
   if (!Array.isArray(items)) {
-    return [eachError('Prop "in" on <Each /> must resolve to an array.')];
+    return [yield* raise(eachError('Prop "in" on <Each /> must resolve to an array.'))];
   }
 
   // Effective caller env honors projection through <Content />, mirroring
@@ -858,10 +882,9 @@ function* expandEach(
     return out;
   }
 
-  // Consumer boundary (spec §6.9): a capture never swallows an error. Hand the
-  // error segments back so expandSegments applies the ambient policy exactly
-  // once — a collecting policy keeps them in the document, a throwing policy
-  // aborts — and leave the binding unset either way.
+  // A capture never swallows an error. The body reported these where they were
+  // created (§6.9), so they are returned as they are: the diagnostics reach the
+  // document unchanged and the binding stays unset.
   const errors = out.filter((outSegment) => outSegment.type === "error");
   if (errors.length > 0) {
     return errors;
@@ -869,7 +892,9 @@ function* expandEach(
 
   const captureEnv = yield* env;
   if (!captureEnv) {
-    return [eachError('Prop "as" on <Each /> requires a parent evaluation environment.')];
+    return [
+      yield* raise(eachError('Prop "as" on <Each /> requires a parent evaluation environment.')),
+    ];
   }
   captureEnv.values[asBinding] = renderSegments(out);
   return [];
@@ -1658,10 +1683,9 @@ function* expandComponent(
   });
 
   if (asBinding) {
-    // Consumer boundary (spec §6.9): a capture never swallows an error. Hand
-    // the error segments back so expandSegments applies the ambient policy
-    // exactly once — a collecting policy keeps them in the document, a
-    // throwing policy aborts — and leave the binding unset either way.
+    // A capture never swallows an error. The body reported these where they
+    // were created (§6.9), so they are handed back as they are and the binding
+    // stays unset.
     const errors = expanded.filter((capturedSegment) => capturedSegment.type === "error");
     if (errors.length > 0) {
       return errors;
@@ -1826,9 +1850,9 @@ function* expandFunctionComponent(
       return yield* definition.fn(validatedProps);
     });
     if (asBinding) {
-      // Consumer boundary (spec §6.9): a capture never swallows an error. Hand
-      // the content errors back so expandSegments applies the ambient policy
-      // and leave the binding unset.
+      // A capture never swallows an error. The projection reported these where
+      // they were created (§6.9), so they are handed back as they are and the
+      // binding stays unset.
       if (contentErrors.length > 0) {
         return contentErrors;
       }
@@ -2529,8 +2553,8 @@ function buildBody(
  * whole body renders (backward compatible). With `<Output>`, only the declared
  * regions render; documentation executes for its side effects under a throwing
  * raise policy (fail-fast) and its rendered result is discarded; output
- * regions install a collecting raise that shadows any inherited throwing
- * middleware (innermost min runs first), so their errors render as comments.
+ * regions set a collecting policy of their own, so their errors render as
+ * comments; the caller settles them again on the way out.
  * Regions and documentation run in document order, so output can depend on
  * bindings computed by preceding documentation.
  */

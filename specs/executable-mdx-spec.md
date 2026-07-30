@@ -2758,14 +2758,19 @@ Rules:
   No other props are allowed.
 - `as={expr}` is invalid (must be string literal).
 
+`<Capture>` is **not an observation boundary**. Under the one-observation rule
+(§6.9) it reports only the errors it creates itself — a missing or invalid `as`,
+an unknown prop, an empty body — and hands the body's segments back untouched,
+because they were already reported where they were produced.
+
 Behavior:
 
 1. Expand children in the **current env/scope** (no new `EvalEnv`, no
    new `EvalScope`).
 2. If the expanded children contain any `ErrorSegment`, store no binding and
-   return those error segments so the enclosing consumer boundary applies the
-   ambient raise policy (§6.9). Steps 3–7 do not run, so rendering and
-   `select` never fold an error comment into the captured value.
+   return those error segments as they are — already reported (§6.9). Steps 3–7
+   do not run, so rendering and `select` never fold an error comment into the
+   captured value.
 3. Render children to string.
 4. Trim trailing whitespace (`/\s+$/`).
 5. If `select` prop is present, apply CSS selector extraction (see below).
@@ -2928,11 +2933,17 @@ are appended to the loop output, so `ErrorSegment` and `execOutput` segments
 survive and the ambient raise policy applies to them exactly as elsewhere. The
 loop is rendered to a string only when `as` captures it.
 
+Like `<If>` and `<Loop>`, `<Each>` is **not an observation boundary**. Under the
+one-observation rule (§6.9) it reports only the errors it creates itself — an
+unknown prop, a `let`, `as`, or `in` that does not hold up — and hands every
+iteration's segments back untouched, because they were already reported where
+they were produced. A failing element inside the body therefore settles exactly
+once, as it would inline.
+
 A capture never swallows an error. When the expanded body contains any
-`ErrorSegment`, `as` creates no binding: the error segments are returned in
-place of the capture, so the enclosing consumer boundary applies the ambient
-raise policy to them exactly once — a collecting policy keeps them in the
-document, a throwing policy aborts.
+`ErrorSegment`, `as` creates no binding: the error segments stand in place of
+the capture, already reported, so a collecting policy keeps them in the document
+and a throwing policy aborts.
 
 This holds for all four capture paths:
 
@@ -3772,6 +3783,16 @@ policy: a collecting caller keeps the error in the document, a throwing caller
 aborts. Settling is not reporting, so a handler that ran its children under its
 own policy — collecting them the way an `<Output>` region does — still fails a
 throwing caller, and still without a second observation.
+
+**Every path reports once.** The rule is the same wherever segments cross a
+construct: `<If>`, `<Else>`, `<Each>`, `<Capture>`, `<Loop>` and `<Break>` report
+the errors they create and hand a body's segments back untouched, because those
+ran under the same policy. A component invocation is the one boundary that
+settles rather than appends — its body may have run under a policy of its own —
+and settling applies the caller's policy without a second observation. So a
+failing element reports exactly once wherever it is written: inline, in a
+selected branch, in an iteration, inside a capture, in a component body, or
+projected into a `<Content />`.
 
 #### Root and component consistency
 
@@ -5740,6 +5761,8 @@ The one-observation contract of §6.9, measured with counting `Component.raise`
 middleware. Identifiers match `packages/core/tests/error-observation.test.ts` one
 to one.
 
+Across the extension boundary:
+
 | # | Test | Verify |
 |---|------|--------|
 | OBS1 | Extension-created error | An error a `Component.expand` handler creates and reports is observed once |
@@ -5748,6 +5771,22 @@ to one.
 | OBS4 | Collecting policy | Both kinds render exactly one error comment, in place |
 | OBS5 | Throwing policy | Both kinds abort at the first error, having reported it once |
 | OBS6 | Policy change across recursion | An error collected under a handler's own policy is settled again at the boundary and throws for a throwing caller, without a second observation |
+
+Across the engine's own constructs:
+
+| # | Test | Verify |
+|---|------|--------|
+| OBS7 | Inline baseline | An `ErrorSegment` outside any construct is observed once |
+| OBS8 | Selected `<If>` branch | Observed once |
+| OBS9 | `<Each>` body | Observed once per iteration that produced one, and no more |
+| OBS10 | `<Capture>` body | Observed once |
+| OBS11 | Component body | Observed once |
+| OBS12 | Projected `<Content />` | Observed once, through both the segment and the string-projection path |
+| OBS13 | `<Loop>` body | Observed once |
+| OBS14 | Construct-owned diagnostics | `<Each>` and `<Capture>` prop and structure errors each report once |
+| OBS15 | Refused captures | `<Capture as>`, `<Each as>` and a component `as` each report the body error once and set no binding |
+| OBS16 | Throwing policy | An ambient `throw` policy aborts at the first error on every path above |
+| OBS17 | Collecting policy | A collected error renders exactly one comment on every path above |
 
 Provider families carry the same contract in their own tiers: `AC20`
 (`<Prompt>` prop validation), the assertion validation row in
