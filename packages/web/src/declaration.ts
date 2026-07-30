@@ -19,9 +19,11 @@
  * and carried through untouched, never compiled.
  */
 
-import type { Json, JsonObject } from "./json.ts";
-import { isJsonObject, JsonParseError, parseJsonObject } from "./json.ts";
+import type { JsonObject } from "./json.ts";
+import { JsonParseError, parseJsonObject } from "./json.ts";
 import { createServerAjv } from "./ajv-options.ts";
+import { walkSchema } from "./schema-walk.ts";
+import type { NameKind } from "./schema-walk.ts";
 
 /** A declaration that cannot be used. Raised before any live effect. */
 export class DeclarationError extends Error {
@@ -44,6 +46,7 @@ export function parseDeclaration(schema: unknown, uiSchema?: unknown): Declarati
   const normalizedSchema = readObject("schema", schema);
 
   rejectAsyncSchema(normalizedSchema);
+  rejectUnsupportedNames(normalizedSchema);
   rejectExternalReferences(normalizedSchema);
   rejectInvalidDraft07(normalizedSchema);
 
@@ -104,6 +107,38 @@ function rejectAsyncSchema(schema: JsonObject): void {
 }
 
 /**
+ * Refuse `__proto__` where a schema declares it as a name.
+ *
+ * Ajv builds its internal tables from schema keys by assignment, so this one name
+ * does not survive: `properties: { "__proto__": … }` compiles, and then a
+ * submission carrying that key is judged as though the property had never been
+ * declared — with `additionalProperties: false` it is rejected outright.
+ * `dependencies: { "__proto__": [...] }` compiles and never applies. `required`
+ * is refused by strict mode as an undefined property. None of those is a failure
+ * a document could see or work around.
+ *
+ * Supporting the name would mean reimplementing what Ajv does with schema keys,
+ * so this slice refuses it and says so, rather than claiming a support it does
+ * not have. The same string as *data* — a `const`, an `enum` member, a title, a
+ * default — is untouched, because nothing reads it as a key.
+ */
+function rejectUnsupportedNames(schema: JsonObject): void {
+  walkSchema(schema, {
+    subschema() {},
+    declaredName(name: string, kind: NameKind, path: string) {
+      if (name !== "__proto__") {
+        return;
+      }
+      throw new DeclarationError(
+        `<WebForm> schema declares "__proto__" as a ${kind} at ${path}, which is not ` +
+          "supported: the underlying validator loses that name, so the rule would " +
+          "silently not apply. Rename it, or carry the value under a different key.",
+      );
+    },
+  });
+}
+
+/**
  * Refuse a reference that leaves the document.
  *
  * Ajv reports an unreachable external reference and a mistyped local pointer
@@ -112,49 +147,25 @@ function rejectAsyncSchema(schema: JsonObject): void {
  * string. Only a same-document pointer can resolve today; file and HTTP(S)
  * references are #192.
  *
- * The scan reads every `$ref` string anywhere in the schema, without tracking
- * whether that position is a schema or data. So a `$ref` appearing inside a
- * `const` or an `enum` member — where it is a literal value that Ajv never
- * resolves — is refused as though it were a reference. That is a deliberate
- * false positive: refusing a schema that would have worked is recoverable by
- * rewriting it, while admitting a reference this package cannot resolve is not,
- * and distinguishing the two needs a full schema-position walker.
+ * `$ref` is read only at real schema positions. An object carrying `$ref` inside
+ * a `const` or an `enum` member is a JSON value the author wants matched, not a
+ * reference, and Ajv never resolves it — so neither does this.
  */
 function rejectExternalReferences(schema: JsonObject): void {
-  for (const reference of collectReferences(schema)) {
-    if (!reference.startsWith("#")) {
-      throw new DeclarationError(
-        `<WebForm> schema references "${reference}", which is outside the supplied schema. ` +
-          "Only references contained within it resolve; external file and HTTP(S) " +
-          "references are deferred to #192.",
-      );
-    }
-  }
-}
-
-function collectReferences(value: Json): string[] {
-  const references: string[] = [];
-  visit(value);
-  return references;
-
-  function visit(node: Json): void {
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        visit(item);
+  walkSchema(schema, {
+    subschema(subschema: JsonObject, path: string) {
+      const reference = subschema["$ref"];
+      if (typeof reference !== "string" || reference.startsWith("#")) {
+        return;
       }
-      return;
-    }
-    if (!isJsonObject(node)) {
-      return;
-    }
-    const reference = node["$ref"];
-    if (typeof reference === "string") {
-      references.push(reference);
-    }
-    for (const item of Object.values(node)) {
-      visit(item);
-    }
-  }
+      throw new DeclarationError(
+        `<WebForm> schema references "${reference}" at ${path}, which is outside the ` +
+          "supplied schema. Only references contained within it resolve; external file " +
+          "and HTTP(S) references are deferred to #192.",
+      );
+    },
+    declaredName() {},
+  });
 }
 
 /**

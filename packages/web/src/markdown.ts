@@ -19,11 +19,18 @@
  * ## Threat model
  *
  * This boundary protects the form page from untrusted or generated body content
- * and from unrelated local web origins. Such content cannot execute code, read
- * local files, issue external requests, navigate the form away, or reach any
- * route but the authorized submission. It is **not** a sandbox against the
- * document's author or the host process: both already hold execution authority
- * over the machine, and nothing here reduces that.
+ * and from unrelated local web origins. Such content cannot execute code,
+ * automatically navigate, or automatically issue external requests, and it cannot
+ * reach any route but the authorized submission.
+ *
+ * It does not make the body inert. A safe `http`, `https`, or `mailto` link is
+ * preserved on purpose, so a person who activates one does navigate or does reach
+ * another origin — by their own action, from a destination they can see. What the
+ * policy denies is anything the page would do on its own.
+ *
+ * It is **not** a sandbox against the document's author or the host process:
+ * both already hold execution authority over the machine, and nothing here
+ * reduces that.
  *
  * ## Images
  *

@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 
 import { DeclarationError, parseDeclaration } from "../src/declaration.ts";
-import { SchemaCompileError } from "../src/compile.ts";
+import { compileForm, SchemaCompileError } from "../src/compile.ts";
 import type { Json, JsonObject } from "../src/json.ts";
 
 const REVIEW_SCHEMA = {
@@ -21,7 +21,7 @@ const REVIEW_UI_SCHEMA = {
   notes: { "ui:widget": "textarea" },
 };
 
-function asObject(value: Json | undefined): JsonObject {
+function asObject(value: Json | JsonObject | undefined): JsonObject {
   if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected a JSON object");
   }
@@ -131,35 +131,60 @@ describe("declaration: refusals", () => {
     }
   });
 
-  it("refuses an external reference and names #192", function* () {
-    const external = [
-      { type: "object", properties: { a: { $ref: "https://example.test/s.json" } } },
-      { type: "object", properties: { a: { $ref: "./sibling.json" } } },
-      { type: "object", properties: { a: { $ref: "other.json#/definitions/x" } } },
-      { definitions: { deep: { items: [{ $ref: "file:///abs.json" }] } } },
+  it("refuses an external reference at every schema position", function* () {
+    const external: Array<[string, unknown]> = [
+      [
+        "properties",
+        { type: "object", properties: { a: { $ref: "https://example.test/s.json" } } },
+      ],
+      ["items", { type: "array", items: { $ref: "./sibling.json" } }],
+      ["tuple items", { type: "array", items: [{ $ref: "other.json#/definitions/x" }] }],
+      ["allOf", { allOf: [{ $ref: "file:///abs.json" }] }],
+      ["definitions", { definitions: { d: { $ref: "https://example.test/d.json" } } }],
+      ["additionalProperties", { type: "object", additionalProperties: { $ref: "./a.json" } }],
+      ["if", { if: { $ref: "./i.json" } }],
+      ["contains", { type: "array", contains: { $ref: "./c.json" } }],
+      ["dependencies schema", { type: "object", dependencies: { a: { $ref: "./d.json" } } }],
     ];
 
-    for (const schema of external) {
+    for (const [position, schema] of external) {
       const error = failure(() => parseDeclaration(schema));
 
-      expect(error).toBeInstanceOf(DeclarationError);
+      expect({ position, kind: error.name }).toEqual({ position, kind: "DeclarationError" });
       expect(error.message).toContain("outside the supplied schema");
       expect(error.message).toContain("#192");
     }
   });
 
   /**
-   * The scan does not track schema position, so a `$ref` used as a literal value
-   * is refused too. Recorded rather than hidden: a schema that would have worked
-   * is turned away, which is the safe direction and the reason the trade-off is
-   * stated in `declaration.ts`.
+   * `const`, `enum`, `default`, and `examples` hold arbitrary JSON. An object in
+   * one of them is a value to match, not a subschema, and Ajv never resolves a
+   * `$ref` there — so neither does the preflight. Compiling each one is what
+   * shows the acceptance is real rather than a deferred failure.
    */
-  it("refuses a $ref used as data, not as a reference", function* () {
-    for (const schema of [
-      { type: "object", properties: { a: { const: { $ref: "https://example.test/x" } } } },
-      { type: "object", properties: { a: { enum: [{ $ref: "https://example.test/x" }] } } },
-    ]) {
-      expect(failure(() => parseDeclaration(schema))).toBeInstanceOf(DeclarationError);
+  it("accepts a $ref that is data rather than a reference", function* () {
+    const data: Array<[string, unknown]> = [
+      [
+        "const",
+        { type: "object", properties: { a: { const: { $ref: "https://example.test/v" } } } },
+      ],
+      [
+        "enum",
+        { type: "object", properties: { a: { enum: [{ $ref: "https://example.test/v" }] } } },
+      ],
+      [
+        "default",
+        { type: "object", properties: { a: { default: { $ref: "http://example.test/v" } } } },
+      ],
+    ];
+
+    for (const [position, schema] of data) {
+      const compiled = compileForm(parseDeclaration(schema));
+
+      expect({ position, compiled: typeof compiled.validate }).toEqual({
+        position,
+        compiled: "function",
+      });
     }
   });
 
@@ -220,46 +245,124 @@ describe("declaration: what refusal precedes", () => {
   });
 });
 
-describe("declaration: normalization is the same everywhere", () => {
+describe("declaration: __proto__ in a schema position", () => {
   /**
-   * `__proto__` is an ordinary JSON key and a legal schema property name, but
-   * `object[key] = value` reaches `Object.prototype`'s inherited setter for it.
-   * What that does differs by engine — V8 replaces the prototype and drops the
-   * key, JavaScriptCore likewise, Deno keeps it — so a declaration carrying one
-   * would normalize differently per runtime, and the object PR 5 fingerprints for
-   * the journal would differ with it.
+   * Ajv builds its internal tables from schema keys by assignment, so this one
+   * name does not survive. `properties: { "__proto__": … }` compiles and then a
+   * submission carrying that key is judged as though the property were never
+   * declared; `dependencies` compiles and never applies; `required` is refused by
+   * strict mode. Rather than claim a support that is not there, the declaration is
+   * refused before anything compiles.
    */
-  it("keeps a __proto__ key as an ordinary property", function* () {
-    const declaration = parseDeclaration(
-      '{"type":"object","properties":{"__proto__":{"type":"string"}}}',
-    );
-    const properties = declaration.schema.properties;
+  it("refuses __proto__ wherever a schema declares it as a name", function* () {
+    const unsupported: Array<{ kind: string; path: string; text: string }> = [
+      {
+        kind: "property",
+        path: "#/properties",
+        text: '{"type":"object","properties":{"__proto__":{"type":"string"}}}',
+      },
+      {
+        kind: "property",
+        path: "#/properties/o/properties",
+        text: '{"type":"object","properties":{"o":{"type":"object","properties":{"__proto__":{"type":"string"}}}}}',
+      },
+      {
+        kind: "required property",
+        path: "#/required",
+        text: '{"type":"object","properties":{"a":{"type":"string"}},"required":["__proto__"]}',
+      },
+      {
+        kind: "dependency",
+        path: "#/dependencies",
+        text: '{"type":"object","dependencies":{"__proto__":["a"]}}',
+      },
+      {
+        kind: "property dependency",
+        path: "#/dependencies/a",
+        text: '{"type":"object","dependencies":{"a":["__proto__"]}}',
+      },
+      {
+        kind: "definition",
+        path: "#/definitions",
+        text: '{"definitions":{"__proto__":{"type":"string"}}}',
+      },
+      {
+        kind: "pattern property",
+        path: "#/patternProperties",
+        text: '{"type":"object","patternProperties":{"__proto__":{"type":"string"}}}',
+      },
+    ];
 
-    expect(Object.keys(declaration.schema)).toEqual(["type", "properties"]);
-    expect(Object.keys(asObject(properties))).toEqual(["__proto__"]);
-    expect(asObject(properties)["__proto__"]).toEqual({ type: "string" });
+    for (const { kind, path, text } of unsupported) {
+      const error = failure(() => parseDeclaration(text));
+
+      expect({ path, name: error.name }).toEqual({ path, name: "DeclarationError" });
+      expect(error.message).toContain(`"__proto__" as a ${kind} at ${path}`);
+    }
+  });
+
+  it("refuses before anything compiles", function* () {
+    const error = failure(() =>
+      parseDeclaration('{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
+    );
+
+    expect(error).toBeInstanceOf(DeclarationError);
+    expect(error).not.toBeInstanceOf(SchemaCompileError);
+  });
+
+  /** The same string as data is read by nothing, so it is left alone. */
+  it("accepts __proto__ as data or descriptive text", function* () {
+    const accepted: unknown[] = [
+      JSON.parse('{"type":"object","properties":{"a":{"const":{"__proto__":1}}}}'),
+      JSON.parse('{"type":"object","properties":{"a":{"enum":[{"__proto__":1}]}}}'),
+      { type: "object", title: "how __proto__ behaves", description: "mentions __proto__" },
+    ];
+
+    for (const schema of accepted) {
+      expect(typeof compileForm(parseDeclaration(schema)).validate).toBe("function");
+    }
+  });
+});
+
+describe("declaration: the JSON parser keeps every key", () => {
+  /**
+   * `uiSchema` is data all the way through — never compiled, never read as a
+   * schema — so `__proto__` is legal there and must survive. It is also what
+   * proves the parser normalizes with `defineProperty`: plain assignment reaches
+   * `Object.prototype`'s inherited setter for that key, which on Node and Bun
+   * replaces the prototype and drops the key while Deno keeps it, so the same
+   * declaration would normalize differently per runtime.
+   */
+  it("keeps an own __proto__ key in a uiSchema", function* () {
+    const declaration = parseDeclaration(
+      { type: "object" },
+      '{"__proto__":{"ui:widget":"hidden"},"ui:order":["a"]}',
+    );
+    const uiSchema = asObject(declaration.uiSchema);
+
+    expect(Object.keys(uiSchema)).toEqual(["__proto__", "ui:order"]);
+    expect(Object.prototype.hasOwnProperty.call(uiSchema, "__proto__")).toBe(true);
+    expect(uiSchema["__proto__"]).toEqual({ "ui:widget": "hidden" });
   });
 
   it("leaves the normalized object an ordinary object", function* () {
-    const declaration = parseDeclaration('{"__proto__":{"reached":true},"type":"object"}');
+    const declaration = parseDeclaration({ type: "object" }, '{"__proto__":{"reached":true}}');
 
-    expect(Object.getPrototypeOf(declaration.schema)).toBe(Object.prototype);
-    expect(Object.keys(declaration.schema)).toEqual(["__proto__", "type"]);
+    expect(Object.getPrototypeOf(asObject(declaration.uiSchema))).toBe(Object.prototype);
     expect("reached" in {}).toBe(false);
   });
 
-  it("normalizes a __proto__ key identically from text and structure", function* () {
-    const structured = parseDeclaration({
-      type: "object",
-      properties: JSON.parse('{"__proto__":{"type":"string"}}'),
-    });
-    const captured = parseDeclaration(
-      '{"type":"object","properties":{"__proto__":{"type":"string"}}}',
+  it("normalizes an own __proto__ key identically from text and structure", function* () {
+    const structured = parseDeclaration(
+      { type: "object" },
+      JSON.parse('{"__proto__":{"ui:widget":"hidden"}}'),
     );
+    const captured = parseDeclaration({ type: "object" }, '{"__proto__":{"ui:widget":"hidden"}}');
 
-    expect(Object.keys(asObject(captured.schema.properties))).toEqual(
-      Object.keys(asObject(structured.schema.properties)),
+    expect(Object.keys(asObject(captured.uiSchema))).toEqual(
+      Object.keys(asObject(structured.uiSchema)),
     );
+    expect(captured.uiSchema).toEqual(structured.uiSchema);
   });
 });
 

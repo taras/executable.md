@@ -11,7 +11,8 @@ import { rootValidator, runValidatorScript } from "./validator-script.ts";
  * One schema reaching every axis the two validators could disagree on: a format
  * that must not be asserted, a length bound that reaches `ucs2length`, an object
  * enum that reaches `equal`, an integer that must not be coerced, a property with
- * a default that must not be inserted, a closed object, and a local reference.
+ * a default that must not be inserted, a closed object, a local reference, and a
+ * decimal `multipleOf`.
  */
 const AXES_SCHEMA = {
   type: "object",
@@ -23,6 +24,10 @@ const AXES_SCHEMA = {
     shape: { enum: [{ kind: "a" }, { kind: "b" }] },
     tone: { type: "string", default: "neutral" },
     author: { $ref: "#/definitions/person" },
+    // A decimal multipleOf is where the two Ajv instances diverged: binary
+    // floating point leaves 4.22 / 0.01 a hair off an integer, and only
+    // RJSF's multipleOfPrecision forgives it.
+    amount: { type: "number", multipleOf: 0.01 },
   },
   definitions: {
     person: {
@@ -68,6 +73,12 @@ const CASES: Array<{ name: string; data: JsonObject; valid: boolean }> = [
     valid: true,
   },
   { name: "a local reference violated", data: { decision: "approve", author: {} }, valid: false },
+  { name: "a decimal multiple, 4.22", data: { decision: "approve", amount: 4.22 }, valid: true },
+  { name: "a decimal multiple, 4.23", data: { decision: "approve", amount: 4.23 }, valid: true },
+  { name: "a decimal multiple, 0.07", data: { decision: "approve", amount: 0.07 }, valid: true },
+  { name: "a decimal multiple, 0.14", data: { decision: "approve", amount: 0.14 }, valid: true },
+  { name: "a decimal multiple, 1.5", data: { decision: "approve", amount: 1.5 }, valid: true },
+  { name: "not a multiple of 0.01", data: { decision: "approve", amount: 4.225 }, valid: false },
 ];
 
 function clone(value: JsonObject): JsonObject {
@@ -187,6 +198,71 @@ describe("compile: the browser validator, executed", () => {
     const registration = yield* runValidatorScript(compileAxes().validatorScript);
 
     expect(registration.uiSchema).toBe(undefined);
+  });
+});
+
+describe("compile: the server is built the way the browser is", () => {
+  /**
+   * `compileSchemaValidatorsCode` builds its Ajv through RJSF's
+   * `createAjvInstance`, so the server must too. A bare `new Ajv({ ...AJV_OPTIONS })`
+   * differs by everything in RJSF's own config these options do not mention, and
+   * `multipleOfPrecision: 8` is one of them: without it the server rejected 4.22
+   * against `multipleOf: 0.01` while the executed browser validator accepted it.
+   *
+   * This asserts the observable consequence rather than the option, so restating a
+   * single default instead of sharing the construction path would still fail it.
+   */
+  it("agrees on decimal multipleOf values, executed on both sides", function* () {
+    const compiled = compileForm(parseDeclaration({ type: "number", multipleOf: 0.01 }));
+    const registration = yield* runValidatorScript(compiled.validatorScript);
+    const browser = rootValidator(registration);
+
+    for (const value of [4.22, 4.23, 0.07, 0.14, 1.5, 2, 0.01]) {
+      expect({ value, server: compiled.validate(value), browser: browser(value) }).toEqual({
+        value,
+        server: true,
+        browser: true,
+      });
+    }
+    for (const value of [4.225, 0.005]) {
+      expect({ value, server: compiled.validate(value), browser: browser(value) }).toEqual({
+        value,
+        server: false,
+        browser: false,
+      });
+    }
+  });
+});
+
+describe("compile: what the browser receives is JSON, not source", () => {
+  /**
+   * JSON and JavaScript object initializers disagree about `__proto__`: as JSON it
+   * is an ordinary member, as source it sets the prototype and leaves no own
+   * property. The script therefore carries JSON text and calls `JSON.parse`, and
+   * this executes the script to prove the key survives that trip.
+   *
+   * `uiSchema` is the subject because it is data all the way through — a schema
+   * declaring `__proto__` as a name is refused at preflight instead.
+   */
+  it("delivers an own __proto__ key in a uiSchema byte-for-byte", function* () {
+    const uiSchemaText = '{"__proto__":{"ui:widget":"hidden"},"ui:order":["decision"]}';
+    const compiled = compileForm(parseDeclaration(AXES_SCHEMA, uiSchemaText));
+    const registration = yield* runValidatorScript(compiled.validatorScript);
+    const delivered = registration.uiSchema;
+
+    if (delivered === undefined) {
+      throw new Error("the script registered no uiSchema");
+    }
+    expect(Object.prototype.hasOwnProperty.call(delivered, "__proto__")).toBe(true);
+    expect(Object.keys(delivered)).toEqual(["__proto__", "ui:order"]);
+    expect(delivered["__proto__"]).toEqual({ "ui:widget": "hidden" });
+    expect(JSON.stringify(delivered)).toBe(uiSchemaText);
+  });
+
+  it("reconstructs the schema through JSON.parse rather than as source", function* () {
+    const { validatorScript } = compileForm(parseDeclaration(AXES_SCHEMA));
+
+    expect(validatorScript).toContain("bridge.register(exports, JSON.parse(");
   });
 });
 

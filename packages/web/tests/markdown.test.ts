@@ -217,15 +217,29 @@ describe("markdown: sanitization is last", () => {
     expect(renderBody(body)).toBe(renderBody(body));
   });
 
-  it("leaves nothing that could execute or fetch", function* () {
+  it("leaves nothing that acts on its own", function* () {
     const html = renderBody(
       "# Review\n\n<script>1</script>\n\n<img src=x onerror=1>\n\n" +
-        "[l](javascript:x)\n\n![i](https://elsewhere.test/p.gif)\n",
+        "[l](javascript:x)\n\n![i](https://elsewhere.test/p.gif)\n\n" +
+        '<meta http-equiv="refresh" content="0;url=https://elsewhere.test">\n',
     );
 
     expect(/on[a-z]+=/.test(html)).toBe(false);
     expect(html.includes("<script")).toBe(false);
     expect(html.includes("javascript:")).toBe(false);
+    expect(html.includes("http-equiv")).toBe(false);
+    // Nothing the page would load or navigate to by itself.
     expect(html.includes("https://")).toBe(false);
+  });
+
+  /**
+   * The policy denies what the page would do on its own, not what a person
+   * chooses to do. A safe link keeps its destination, so the threat model claims
+   * no more than "cannot *automatically* navigate or issue external requests".
+   */
+  it("still preserves a link a person can choose to follow", function* () {
+    const html = renderBody("[docs](https://example.test/guide)\n");
+
+    expect(html).toContain('href="https://example.test/guide"');
   });
 });

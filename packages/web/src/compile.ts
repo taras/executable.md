@@ -164,27 +164,44 @@ function assertExportsValidators(generated: string): void {
 }
 
 /**
- * A JSON value as a JavaScript literal for the generated script.
+ * A JSON value as an expression the generated script evaluates back to it.
  *
- * The value is re-parsed from its own serialization, so what the script carries
- * is provably nothing but JSON. `<` and the two Unicode line separators are then
- * escaped, which keeps the literal inert wherever it lands and independent of how
- * the bytes are delivered.
+ * The result is `JSON.parse("…")` — a string literal the script parses
+ * — rather than the serialization pasted in as a JavaScript object literal. The
+ * two are not interchangeable, because JSON and JavaScript object initializers
+ * disagree about exactly one key: in JSON `{"__proto__": {}}` is an ordinary
+ * member, while as JavaScript source it sets the object's prototype and leaves no
+ * own property. Pasting the text as source therefore dropped that key on its way
+ * to the browser, so the page would build its form from a schema the server never
+ * compiled. Handing the script JSON text and letting `JSON.parse` rebuild it keeps
+ * JSON semantics all the way to the DOM.
  *
- * That is a property of this literal, not of the whole script. Ajv's generated
- * code embeds the schema again, in its own `JSON.stringify` output, which escapes
- * neither — so a schema whose text contains `</script>` puts that sequence in the
- * script. It is delivered as a same-origin external script under
+ * This is still data, not code. `JSON.parse` cannot execute anything, and there is
+ * no `eval`, no `new Function`, and nothing author-controlled outside the string
+ * literal.
+ *
+ * The value is re-parsed from its own serialization first, so what the script
+ * carries is provably nothing but JSON. `<` and the two Unicode line separators
+ * are then escaped, which keeps the literal inert wherever it lands and
+ * independent of how the bytes are delivered.
+ *
+ * That last point is a property of this literal, not of the whole script. Ajv's
+ * generated code embeds the schema again, in its own `JSON.stringify` output,
+ * which escapes neither — so a schema whose text contains `</script>` puts that
+ * sequence in the script. It is delivered as a same-origin external script under
  * `script-src 'self'` and is never inlined into markup, which is what makes that
  * harmless; inlining it is not a supported delivery and the route table does not
  * offer one.
  */
 function jsonLiteral(value: JsonObject): string {
   const roundTripped: Json = parseJsonObject(JSON.parse(JSON.stringify(value)));
-  return JSON.stringify(roundTripped)
+  // Stringified twice on purpose: once to JSON text, and once to a JavaScript
+  // string literal holding that text.
+  const literal = JSON.stringify(JSON.stringify(roundTripped))
     .replaceAll("<", "\\u003c")
     .replaceAll("\u2028", "\\u2028")
     .replaceAll("\u2029", "\\u2029");
+  return `JSON.parse(${literal})`;
 }
 
 function messageOf(error: unknown): string {
