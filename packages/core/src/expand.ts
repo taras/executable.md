@@ -311,40 +311,54 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     const inner = request.kind === "markdown" ? handle : state.enclosing;
 
     return yield* scoped(function* () {
+      // The projection's failure travels back to the caller rather than into
+      // the content scope (see runInContentScope): a throw-bound failure the
+      // caller catches is explicit recovery, and the invocation must not
+      // re-report it as a teardown error.
+      const outcome = withResolvers<{ segments: Segment[] } | { failure: unknown }>();
       const task = contentScope.scope.run(function* () {
-        yield* AmbientErrorPolicy.set(policy);
-        // Slot errors are reported inside the policy-bound task, so an empty
-        // selection cannot settle them under the invocation's baseline.
-        const errors: Segment[] = [];
-        if (!slotErrorsEmitted && slots.errors.length > 0) {
-          slotErrorsEmitted = true;
-          for (const slotError of slots.errors) {
-            errors.push(yield* raise(slotError));
+        try {
+          yield* AmbientErrorPolicy.set(policy);
+          // Slot errors are reported inside the policy-bound task, so an empty
+          // selection cannot settle them under the invocation's baseline.
+          const errors: Segment[] = [];
+          if (!slotErrorsEmitted && slots.errors.length > 0) {
+            slotErrorsEmitted = true;
+            for (const slotError of slots.errors) {
+              errors.push(yield* raise(slotError));
+            }
           }
+          if (segments.length === 0) {
+            outcome.resolve({ segments: errors });
+            return;
+          }
+          yield* provideEvalScope(contentScope);
+          const projectionEnv = environmentFor(request);
+          if (projectionEnv) {
+            yield* provideEnv(projectionEnv);
+          }
+          yield* ActiveProjection.set(inner);
+          // Dynamic markdown is the component's own text, so it is not written
+          // where the caller's loop is and cannot break it.
+          yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
+          const rendered = yield* expandSegments(
+            project(segments),
+            state.meta,
+            state.props,
+            state.hideSet,
+            state.counter,
+          );
+          outcome.resolve({ segments: [...errors, ...rendered] });
+        } catch (error) {
+          outcome.resolve({ failure: error });
         }
-        if (segments.length === 0) {
-          return errors;
-        }
-        yield* provideEvalScope(contentScope);
-        const projectionEnv = environmentFor(request);
-        if (projectionEnv) {
-          yield* provideEnv(projectionEnv);
-        }
-        yield* ActiveProjection.set(inner);
-        // Dynamic markdown is the component's own text, so it is not written
-        // where the caller's loop is and cannot break it.
-        yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
-        const rendered = yield* expandSegments(
-          project(segments),
-          state.meta,
-          state.props,
-          state.hideSet,
-          state.counter,
-        );
-        return [...errors, ...rendered];
       });
       yield* ensure(() => task.halt());
-      return yield* task;
+      const result = yield* outcome.operation;
+      if ("failure" in result) {
+        throw result.failure;
+      }
+      return result.segments;
     });
   }
 
@@ -1550,8 +1564,9 @@ function* expandComponent(
   // Use the caller's eval env for the same reason: expression props (e.g.
   // {pr}) resolve against the scope where the JSX was written.
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
-  // Markdown projections render into segments, so nothing is hidden by a
-  // string; the collector exists only to satisfy the shared handle.
+  // A body eval block can render errors away through a string projection
+  // (renderChildren, render, useContent); the collector records them so an
+  // `as=` capture can be refused (§6.5).
   const bodyContentErrors: Segment[] = [];
 
   // Read before the invocation exists: the eval scope ambient here is the
@@ -1684,9 +1699,14 @@ function* expandComponent(
 
   if (asBinding) {
     // A capture never swallows an error. The body reported these where they
-    // were created (§6.9), so they are handed back as they are and the binding
-    // stays unset.
-    const errors = expanded.filter((capturedSegment) => capturedSegment.type === "error");
+    // were created (§6.9) — including the ones a string projection rendered
+    // away — so they are handed back as they are and the binding stays unset.
+    // Recorded errors precede expanded ones regardless of source position;
+    // the order across the two lists is deliberately unspecified.
+    const errors = [
+      ...bodyContentErrors,
+      ...expanded.filter((capturedSegment) => capturedSegment.type === "error"),
+    ];
     if (errors.length > 0) {
       return errors;
     }
