@@ -17,7 +17,14 @@ import {
   StaleInputError,
 } from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "../src/invocation.ts";
-import { ContentError, DocumentationError, durabilityFailure, fatalCause } from "../src/errors.ts";
+import {
+  componentAbort,
+  ContentError,
+  DocumentationError,
+  durabilityFailure,
+  fatalCause,
+  hasOrdinaryFailure,
+} from "../src/errors.ts";
 import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -305,5 +312,138 @@ describe("Tier FA — Fatal error discovery", () => {
 
     expect(durabilityFailure(cyclic)).toBe(planted);
     expect(fatalCause(wrapper)).toBe(planted);
+  });
+});
+
+describe("Tier FA — a component that ends the execution", () => {
+  it("FA20: a marked failure is returned by identity, and stays marked", function* () {
+    const failure = new Error("no such agent");
+    const marked = componentAbort(failure);
+
+    // Marking does not wrap: the same object comes back.
+    expect(marked).toBe(failure);
+    expect(fatalCause(marked)).toBe(failure);
+    // The property a wrapper could not have: still fatal at the next boundary,
+    // which is handed whatever the previous one rethrew.
+    expect(fatalCause(fatalCause(failure))).toBe(failure);
+  });
+
+  it("FA21: a marked failure is found through every wrapper contract", function* () {
+    const first = componentAbort(new Error("setup"));
+    expect(fatalCause(new Error("wrapper", { cause: first }))).toBe(first);
+
+    const second = componentAbort(new Error("setup"));
+    expect(fatalCause(new AggregateError([new Error("other"), second], "mixed"))).toBe(second);
+
+    const third = componentAbort(new Error("setup"));
+    expect(fatalCause(new InvocationTeardownError([third]))).toBe(third);
+
+    const nested = componentAbort(new Error("setup"));
+    const deep = new AggregateError(
+      [new Error("body"), new InvocationTeardownError([new Error("first"), nested])],
+      "both failed",
+    );
+    expect(fatalCause(deep)).toBe(nested);
+    // Repeating the question on what was returned answers the same.
+    expect(fatalCause(fatalCause(deep))).toBe(nested);
+  });
+
+  it("FA22: durability outranks a marked failure, either way round", function* () {
+    const planted = stale();
+    const marked = componentAbort(new Error("setup"));
+
+    expect(fatalCause(new AggregateError([marked, planted], "mixed"))).toBe(planted);
+    expect(fatalCause(new AggregateError([planted, marked], "mixed"))).toBe(planted);
+  });
+
+  it("FA23: a recovered content failure hides a marked failure beneath it", function* () {
+    const marked = componentAbort(new Error("setup"));
+    const contextual = recovered();
+    contextual.cause = marked;
+
+    expect(fatalCause(contextual)).toBeUndefined();
+
+    // Durability still looks straight through, as it always has.
+    const planted = stale();
+    const withDurability = recovered();
+    withDurability.cause = planted;
+    expect(fatalCause(withDurability)).toBe(planted);
+  });
+
+  it("FA24: a thrown non-Error becomes a marked Error carrying the original", function* () {
+    const marked = componentAbort("just a string");
+
+    expect(marked).toBeInstanceOf(Error);
+    expect(marked.cause).toBe("just a string");
+    expect(fatalCause(marked)).toBe(marked);
+  });
+
+  it("FA25: a frozen Error can be marked, and is not mutated", function* () {
+    const frozen = Object.freeze(new Error("frozen setup"));
+    const marked = componentAbort(frozen);
+
+    expect(marked).toBe(frozen);
+    expect(Object.isFrozen(marked)).toBe(true);
+    expect(fatalCause(frozen)).toBe(frozen);
+  });
+
+  it("FA26: a cyclic graph holding a marked failure terminates", function* () {
+    const marked = componentAbort(new Error("setup"));
+    const wrapper = new AggregateError([marked], "mixed");
+    marked.cause = wrapper;
+
+    expect(fatalCause(wrapper)).toBe(marked);
+  });
+});
+
+describe("Tier FA — ordinary failure classification", () => {
+  it("FA27: content, documentation, durability and marked failures are not ordinary", function* () {
+    expect(hasOrdinaryFailure(new ContentError([]))).toBe(false);
+    expect(hasOrdinaryFailure(documentation())).toBe(false);
+    expect(hasOrdinaryFailure(stale())).toBe(false);
+    expect(hasOrdinaryFailure(componentAbort(new Error("already")))).toBe(false);
+  });
+
+  it("FA28: an ordinary Error is ordinary, wherever it sits", function* () {
+    const ordinary = new Error("cleanup failed");
+
+    expect(hasOrdinaryFailure(ordinary)).toBe(true);
+    expect(hasOrdinaryFailure(new InvocationTeardownError([ordinary]))).toBe(true);
+    expect(
+      hasOrdinaryFailure(
+        new AggregateError([new ContentError([]), new InvocationTeardownError([ordinary])], "both"),
+      ),
+    ).toBe(true);
+    expect(hasOrdinaryFailure(new AggregateError([documentation(), ordinary], "mixed"))).toBe(true);
+    expect(
+      hasOrdinaryFailure(new AggregateError([componentAbort(new Error("a")), ordinary], "mixed")),
+    ).toBe(true);
+  });
+
+  it("FA29: what a failure that answers for itself carries is out of scope", function* () {
+    // A documentation failure brings along whatever it was translated from, and
+    // a marked one its own cause; neither makes the wrapper ordinary.
+    const doc = documentation();
+    doc.cause = new Error("the value it came from");
+    expect(hasOrdinaryFailure(doc)).toBe(false);
+
+    const marked = componentAbort(new Error("setup", { cause: new Error("underneath") }));
+    expect(hasOrdinaryFailure(marked)).toBe(false);
+
+    const contextual = recovered();
+    contextual.cause = new Error("beneath the content failure");
+    expect(hasOrdinaryFailure(contextual)).toBe(false);
+  });
+
+  it("FA30: the aggregating wrappers are never ordinary themselves", function* () {
+    expect(hasOrdinaryFailure(new AggregateError([], "empty"))).toBe(false);
+    expect(hasOrdinaryFailure(new InvocationTeardownError([]))).toBe(false);
+  });
+
+  it("FA31: a cyclic graph terminates", function* () {
+    const cyclic = new AggregateError([new ContentError([])], "mixed");
+    cyclic.cause = cyclic;
+
+    expect(hasOrdinaryFailure(cyclic)).toBe(false);
   });
 });

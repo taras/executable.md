@@ -1,10 +1,15 @@
 /**
  * Agent component registration (specs/acp-client-spec.md).
  *
- * Teaches the expansion loop the agent words via the core
- * `Component.expand` hook and decorates the Execution Api so prompt
- * failures — and, when a root provider is configured, provider teardown
- * failures — participate in the DocumentExecution completion.
+ * Registers the agent words as ordinary function components for this scope,
+ * and decorates the Execution Api so prompt failures — and, when a root
+ * provider is configured, provider teardown failures — participate in the
+ * DocumentExecution completion.
+ *
+ * Registration and execution decoration are separate concerns: the components
+ * are defaults a document can replace by writing its own file with one of these
+ * names, while the completion decoration belongs to the execution regardless of
+ * which implementation answered.
  *
  * The root provider's lifetime is part of the execution: the middleware
  * returns a bridged DocumentExecution whose owning spawned operation
@@ -17,16 +22,29 @@
 
 import { Err, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { Component } from "../component-api.ts";
 import { Execution } from "../execute.ts";
 import type { DocumentExecution, ExecuteOptions } from "../execute.ts";
+import { registerComponents } from "../components/registration.ts";
+import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
 import type { Json } from "../types.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
 import { AgentInternal } from "./internal.ts";
 import { AgentPromptError } from "./errors.ts";
-import { createAgentHandlers } from "./handlers.ts";
+import {
+  AGENT_PROPS,
+  AGENT_PROVIDER_PROPS,
+  AgentComponent,
+  AgentProvider,
+  ApproveAll,
+  AskPermission,
+  NO_PROPS_SCHEMA,
+  Prompt,
+  PROMPT_PROPS,
+  SESSION_PROPS,
+  SessionComponent,
+} from "./function-components.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
 
 export interface AgentComponentsOptions {
@@ -49,8 +67,6 @@ interface SequencedFailure {
 }
 
 export function* installAgentComponents(options?: AgentComponentsOptions): Operation<void> {
-  const handlers = createAgentHandlers();
-
   if (options?.defaultAgent !== undefined) {
     const defaultAgent = options.defaultAgent;
     yield* AgentInternal.around({ defaultAgentName: () => defaultAgent }, { at: "min" });
@@ -60,26 +76,16 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     yield* AgentInternal.around({ permissionMode: () => permissionMode }, { at: "min" });
   }
 
-  yield* Component.around({
-    *expand([element], next) {
-      switch (element.name) {
-        case "AgentProvider":
-          return { segments: yield* handlers.expandAgentProvider(element) };
-        case "Agent":
-          return { segments: yield* handlers.expandAgent(element) };
-        case "Session":
-          return { segments: yield* handlers.expandSession(element) };
-        case "Prompt":
-          return { segments: yield* handlers.expandPrompt(element) };
-        case "ApproveAll":
-          return { segments: yield* handlers.expandApproveAll(element) };
-        case "AskPermission":
-          return { segments: yield* handlers.expandAskPermission(element) };
-        default:
-          return yield* next(element);
-      }
-    },
-  });
+  // Non-reserved: a repository component with one of these names is chosen
+  // ahead of them, as it would be ahead of any other package's default.
+  yield* registerComponents([
+    { name: "AgentProvider", origin: CORE_ORIGIN, fn: AgentProvider, props: AGENT_PROVIDER_PROPS },
+    { name: "Agent", origin: CORE_ORIGIN, fn: AgentComponent, props: AGENT_PROPS },
+    { name: "Session", origin: CORE_ORIGIN, fn: SessionComponent, props: SESSION_PROPS },
+    { name: "Prompt", origin: CORE_ORIGIN, fn: Prompt, props: PROMPT_PROPS },
+    { name: "ApproveAll", origin: CORE_ORIGIN, fn: ApproveAll, props: NO_PROPS_SCHEMA },
+    { name: "AskPermission", origin: CORE_ORIGIN, fn: AskPermission, props: NO_PROPS_SCHEMA },
+  ]);
 
   const rootProvider = options?.rootProvider;
 

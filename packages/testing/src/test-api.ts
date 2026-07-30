@@ -14,6 +14,7 @@
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import type { Operation } from "effection";
+import type { EvalScope } from "@effectionx/scope-eval";
 
 /** A completed test, in discovery order. Never holds rendered markdown. */
 export interface TestResult {
@@ -40,6 +41,16 @@ export interface TestApi {
   testing: boolean;
   /** Whether expansion is currently inside a `<Test>` body. */
   inTest: boolean;
+  /**
+   * The eval scope of the `<Test>` being expanded, or undefined outside one.
+   *
+   * `evalScope` answers with the *nearest* one, and a component invocation
+   * installs its own — so something running inside a component in a test reads
+   * the invocation's, not the test's. This answers the same from anywhere in
+   * the test however deeply nested, which is what lets per-test state be found
+   * rather than re-created, and gives that state the test's lifetime.
+   */
+  testScope: EvalScope | undefined;
   /** Whether assertion diagnostics render during regular execution. */
   verbose: boolean;
   /** Whether a useTesting() session is already active in this scope. */
@@ -55,6 +66,7 @@ export interface TestApi {
 export const Test: Api<TestApi> = createApi<TestApi>("Test", {
   testing: false,
   inTest: false,
+  testScope: undefined,
   verbose: false,
   sessionActive: false,
   // deno-lint-ignore require-yield
@@ -69,6 +81,7 @@ export const Test: Api<TestApi> = createApi<TestApi>("Test", {
 
 export const testing: Operations<TestApi>["testing"] = Test.operations.testing;
 export const inTest: Operations<TestApi>["inTest"] = Test.operations.inTest;
+export const testScope: Operations<TestApi>["testScope"] = Test.operations.testScope;
 export const verbose: Operations<TestApi>["verbose"] = Test.operations.verbose;
 export const sessionActive: Operations<TestApi>["sessionActive"] = Test.operations.sessionActive;
 export const record: Operations<TestApi>["record"] = Test.operations.record;

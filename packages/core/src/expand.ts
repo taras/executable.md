@@ -23,11 +23,13 @@ import type {
   ComponentElement,
   ComponentHandling,
   ComponentDefinition,
+  ComponentInvocationMetadata,
   EvalEnv,
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
   ReturnsSchema,
+  SourcePosition,
 } from "./types.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
@@ -41,12 +43,15 @@ import {
   raise,
 } from "./component-api.ts";
 import {
+  abortsOrdinaryComponentFailures,
   AmbientErrorPolicy,
   attributeCause,
+  componentAbort,
   ContentError,
   DocumentationError,
   durabilityFailure,
   fatalCause,
+  hasOrdinaryFailure,
   settle,
 } from "./errors.ts";
 import type { ErrorPolicy } from "./errors.ts";
@@ -604,6 +609,7 @@ export function* expandSegments(
           hideSet,
           counter,
           segment.projectedEnv,
+          segment.position,
         );
         // Consumer boundary: the callee reported these where they were created,
         // under whatever policy its body ran — an `<Output>` region collects,
@@ -1452,6 +1458,7 @@ function* expandComponent(
   hideSet: Set<string>,
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
+  position?: SourcePosition,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -1508,6 +1515,7 @@ function* expandComponent(
       hideSet,
       counter,
       projectedEnv,
+      position,
     );
   }
 
@@ -1864,6 +1872,7 @@ function* expandFunctionComponent(
   hideSet: Set<string>,
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
+  position?: SourcePosition,
 ): Operation<Segment[]> {
   if ("as" in expressions) {
     return [
@@ -1930,6 +1939,22 @@ function* expandFunctionComponent(
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
 
+  // Detached and frozen: what a component reads about its call site is a copy,
+  // so nothing it does can reach the element the parser built.
+  const metadata: ComponentInvocationMetadata = Object.freeze(
+    position === undefined
+      ? { name }
+      : {
+          name,
+          position: Object.freeze({
+            ...(position.path === undefined ? {} : { path: position.path }),
+            offset: position.offset,
+            line: position.line,
+            column: position.column,
+          }),
+        },
+  );
+
   // Call the function component inside its invocation, with content middleware
   // in scope so it can render its invocation content through `yield* content()`.
   try {
@@ -1980,6 +2005,10 @@ function* expandFunctionComponent(
           *hasContent(_args, _next) {
             return !selfClosing;
           },
+          // deno-lint-ignore require-yield
+          *invocation(_args, _next) {
+            return metadata;
+          },
         },
         { at: "min" },
       );
@@ -2009,7 +2038,15 @@ function* expandFunctionComponent(
     }
     return [{ type: "text", content: asText(output) }];
   } catch (error) {
-    const fatal = fatalCause(error);
+    // After the invocation, never before it: only here does the complete
+    // body-and-teardown failure exist. A component that ends the execution on
+    // ordinary failures marks the structure it was handed rather than a member,
+    // so an aggregate keeps every failure it accounts for.
+    const failure =
+      abortsOrdinaryComponentFailures(definition.fn) && hasOrdinaryFailure(error)
+        ? componentAbort(error)
+        : error;
+    const fatal = fatalCause(failure);
     if (fatal !== undefined) {
       throw fatal;
     }
@@ -2021,18 +2058,18 @@ function* expandFunctionComponent(
     // caller's policy. Restored here by identity rather than by `fatalCause`,
     // whose documentation search stops at a content failure so that a component
     // reporting a failure of its own keeps it (see `isRecoveredContent`).
-    if (error instanceof ContentExpansionFailure) {
-      if (error.cause instanceof DocumentationError) {
-        throw error.cause;
+    if (failure instanceof ContentExpansionFailure) {
+      if (failure.cause instanceof DocumentationError) {
+        throw failure.cause;
       }
-      return [...error.errors];
+      return [...failure.errors];
     }
     // A return that failed its schema already names the component and carries
     // its issues; wrapping it would bury both.
-    if (error instanceof SchemaValidationError) {
-      return [yield* raise(schemaValidationErrorSegment(error, name))];
+    if (failure instanceof SchemaValidationError) {
+      return [yield* raise(schemaValidationErrorSegment(failure, name))];
     }
-    const from = error instanceof ThrownValue ? error.value : error;
+    const from = failure instanceof ThrownValue ? failure.value : failure;
     return [
       yield* raiseFrom(
         {

@@ -73,9 +73,21 @@ components.
 
 ## Components
 
-`installAgentComponents()` teaches the expansion loop six words through the core
-`Component.expand` hook. Each supports the engine-wide `as` capture and takes
-string/boolean **literals** only (expression props are rejected).
+`installAgentComponents()` registers six components for the installing scope
+(§5.3). They are ordinary function components and non-reserved **defaults**: a
+repository component with one of these names is chosen ahead of them, and the
+engine owns their expression props, schema validation, `as` capture, content
+projection and invocation lifetime exactly as it does for any other `.ts`
+component. Props take string and boolean values, from a literal or from an
+expression that resolves to one.
+
+What is not ordinary is which of their failures end the document. An unknown
+provider, a missing default agent, an unusable duration, an unavailable agent, a
+session that cannot be established, and a `<Prompt>` replaying a recorded
+`raised` marker all stop the execution rather than rendering a diagnostic and
+letting later siblings run as though the agent had answered. `<AgentProvider>`
+extends that to the resources its factory installs, whose cleanup the invocation
+boundary runs after the component has returned.
 
 - **`<AgentProvider>`** resolves a registered provider by its `name` prop and
   installs it for its body. The optional `defaultAgent` prop overrides the

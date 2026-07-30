@@ -2486,6 +2486,15 @@ interface, and each operation is also exported directly:
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
+| `invocation()` | Where this function component was invoked — its name, and the call site's position when the source has one | throws a missing-provider error |
+
+`invocation()` answers with a detached, frozen snapshot: the component's name,
+and a `position` carrying `path`, `offset`, `line` and `column`. `path` is absent
+for markdown scanned at runtime, which belongs to no file, and `position` itself
+is absent for an element that carries none. It is available only while the
+component runs; a nested invocation shadows it and the enclosing one is restored.
+Nothing else about the invocation is reachable through it — not the element, its
+props, its expressions, its `as`, or its content.
 
 An extension claims component names by wrapping `expand`: it answers
 `{ segments }` for the names it owns and delegates the rest with
@@ -5873,6 +5882,31 @@ visible warning blocks, collect into a separate error report).
 | FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
 | FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |
 | FA19 | Cycles through a content failure | A self-caused content failure and one whose cause points back at the wrapper holding it both terminate, and the durability failure is still found |
+
+### Tier IM — Invocation metadata
+
+| # | Test | Verify |
+|---|------|--------|
+| IM1 | Call site | The name, and the path, offset, line and column it was written at |
+| IM2 | Runtime-scanned markdown | A position with no path, so a location is still `line:column` |
+| IM2b | No position at all | An element carrying none reports none |
+| IM3 | Nesting | A nested invocation shadows, and the enclosing value is restored |
+| IM4 | Two invocations | Each reports its own site |
+| IM5/IM6 | Outside an invocation | Asking before or after one is a misuse error |
+| IM7 | Detached | The snapshot and its position are frozen, and reading one changes nothing |
+| IM8 | Shape | Exactly `name` and `position`; the position exactly `path`, `offset`, `line`, `column` |
+
+### Tier AF — Agent components as function components
+
+| # | Test | Verify |
+|---|------|--------|
+| AF1-AF2 | Expression props | A string and a boolean expression prop resolve, which the claimed handler rejected |
+| AF3-AF4 | Validation first | A wrong type or an unknown prop is the engine's diagnostic, and the component performs nothing |
+| AF5-AF6 | Core-owned `as` | The returned string is captured once and not also emitted; an invalid `as` prevents every effect |
+| AF7-AF8 | Content before effects | A failing wrapper performs no lookup, prompt or journal work; an empty wrapper still beats `text` |
+| AF9-AF12 | Fatality survives nesting | A `throwOnError` prompt ends the document inside `<Agent>`, inside `<Agent><Session>`, and inside a repository component projecting it as content; the error stays the original `AgentPromptError` |
+| AF13-AF15 | Registered defaults | Each name resolves to core's registration, a repository component overrides it, and a repository `Prompt` contacts no provider |
+| AF16-AF20 | Prompt-failure policy | Absent by default; forces `throwOnError` when it says yes; an explicit `throwOnError` wins without consulting it; a repository `Prompt` never consults it |
 
 ### Tier CR — Component registration and resolution
 

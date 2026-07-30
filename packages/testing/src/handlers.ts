@@ -167,7 +167,13 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
           },
           { at: "min" },
         );
-        yield* Test.around({ inTest: () => true }, { at: "min" });
+        // Published separately from `evalScope`, which a nested component
+        // invocation shadows with its own: this stays the test's for anything
+        // running inside it, however deeply nested.
+        yield* Test.around(
+          { inTest: () => true, testScope: () => invocation.evalScope },
+          { at: "min" },
+        );
         // ErrorSegments fail the test. Outer instrumentation (default "max")
         // so nested { at: "min" } policies cannot shadow it: every raise in
         // the body — components, <Output> regions, code blocks, imports,
