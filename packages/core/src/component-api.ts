@@ -56,6 +56,10 @@ export interface ComponentApi {
    * once, where it is created. The default implementation settles it under
    * `AmbientErrorPolicy`: collected for rendering, or thrown inside
    * suppressed documentation.
+   *
+   * Whoever creates an ErrorSegment calls this, including an `expand` handler.
+   * A segment that reaches the document without it never passes the chain, so
+   * middleware that counts, logs, or forwards failures never sees it.
    */
   raise(error: ErrorSegment): Operation<ErrorSegment>;
   env: EvalEnv | undefined;
@@ -65,6 +69,15 @@ export interface ComponentApi {
    * Extensions install middleware that returns `{ segments }` for the names
    * they claim and delegates to `next` for everything else. The default
    * answers `undefined` — unhandled — so expansion proceeds normally.
+   *
+   * A handler owns the observation of every ErrorSegment it creates: it calls
+   * `raise` for its own diagnostics — an invalid prop, a structural violation —
+   * and returns errors that came back from `expandSegments` untouched, because
+   * those were already reported where they were produced. The engine settles
+   * whatever is returned under the caller's ambient policy, so a collecting
+   * caller keeps the error and a throwing one aborts, either way without a
+   * second observation. Returning a diagnostic the handler created but never
+   * raised bypasses the observation chain and breaks this contract.
    */
   expand(element: ComponentElement): Operation<ComponentHandling | undefined>;
   /**
@@ -77,6 +90,11 @@ export interface ComponentApi {
    * that received the element. Ordinary expansion work — a code block, a
    * modifier chain, a task that outlives the offer — finds no active expansion
    * and gets an error.
+   *
+   * Every ErrorSegment among the returned segments has already been reported
+   * through `raise`, at the point inside the expansion that produced it. A
+   * handler passes them on as they are; raising one again would report the same
+   * failure twice.
    */
   expandSegments(segments: Segment[]): Operation<Segment[]>;
   codeBlock(): Operation<CodeBlockContext>;

@@ -23,6 +23,7 @@ import { AgentPromptError } from "../src/agent/errors.ts";
 import { readCompletedPrompts } from "../src/agent/journal.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
+import { Component } from "../src/component-api.ts";
 import type { Json } from "@executablemd/core";
 
 interface StubResponse {
@@ -201,6 +202,22 @@ describe("Tier AC — agent components", () => {
     expect(stub.promptCalls.length).toBe(0);
     expect(output).toContain("<Prompt>");
     expect(output).toContain("prompt");
+  });
+
+  it("AC20: a component's own validation diagnostic is observed once", function* () {
+    const observed: string[] = [];
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    yield* Component.around({
+      *raise([error], next) {
+        observed.push(error.message);
+        return yield* next(error);
+      },
+    });
+    const { output } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toContain("<Prompt>");
+    expect(output.match(/<Prompt>/g)).toHaveLength(1);
   });
 
   it("AC4: as binding captures the response instead of emitting it", function* () {

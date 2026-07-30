@@ -26,8 +26,8 @@ import { createContext, scoped, spawn, suspend, useScope, withResolvers } from "
 import type { Operation, Scope } from "effection";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { Agent, Component, evalScope, expandSegments } from "@executablemd/core";
-import type { ComponentElement, Segment, Session } from "@executablemd/core";
+import { Agent, Component, evalScope, expandSegments, raise } from "@executablemd/core";
+import type { ComponentElement, ErrorSegment, Segment, Session } from "@executablemd/core";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { command, cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
@@ -68,7 +68,7 @@ interface TestAgentSession {
 
 const TestAgentCtx = createContext<TestAgentSession | undefined>("testAgent.session", undefined);
 
-function configError(source: string, message: string): Segment {
+function configError(source: string, message: string): ErrorSegment {
   return { type: "error", message: `<${source}> ${message}`, source };
 }
 
@@ -113,15 +113,17 @@ export function* installTestAgentComponents(): Operation<void> {
   function* expandTestAgent(element: ComponentElement): Operation<Segment[]> {
     if (!(yield* Test.operations.sessionActive)) {
       return [
-        configError(
-          "TestAgent",
-          "is valid only in an active testing session created by xmd test or useTesting().",
+        yield* raise(
+          configError(
+            "TestAgent",
+            "is valid only in an active testing session created by xmd test or useTesting().",
+          ),
         ),
       ];
     }
     const agentProp = element.props.agent;
     if (agentProp !== undefined && typeof agentProp !== "string") {
-      return [configError("TestAgent", 'the "agent" prop must be a string literal.')];
+      return [yield* raise(configError("TestAgent", 'the "agent" prop must be a string literal.'))];
     }
     const defaultAgent = typeof agentProp === "string" ? agentProp : "test";
 
@@ -311,17 +313,25 @@ export function* installTestAgentComponents(): Operation<void> {
   function* expandScenario(element: ComponentElement): Operation<Segment[]> {
     const session = yield* TestAgentCtx.expect();
     if (session === undefined) {
-      return [configError("TestAgent.Scenario", "is valid only inside <TestAgent>.")];
+      return [yield* raise(configError("TestAgent.Scenario", "is valid only inside <TestAgent>."))];
     }
     const { agent, session: sessionProp, src } = element.props;
     if (typeof src !== "string" || src.length === 0) {
-      return [configError("TestAgent.Scenario", 'requires a "src" prop.')];
+      return [yield* raise(configError("TestAgent.Scenario", 'requires a "src" prop.'))];
     }
     if (agent !== undefined && typeof agent !== "string") {
-      return [configError("TestAgent.Scenario", 'the "agent" prop must be a string literal.')];
+      return [
+        yield* raise(
+          configError("TestAgent.Scenario", 'the "agent" prop must be a string literal.'),
+        ),
+      ];
     }
     if (sessionProp !== undefined && typeof sessionProp !== "string") {
-      return [configError("TestAgent.Scenario", 'the "session" prop must be a string literal.')];
+      return [
+        yield* raise(
+          configError("TestAgent.Scenario", 'the "session" prop must be a string literal.'),
+        ),
+      ];
     }
 
     const declaredIn = element.position?.path;

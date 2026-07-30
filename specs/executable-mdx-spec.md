@@ -2254,11 +2254,11 @@ interface, and each operation is also exported directly:
 |---|---|---|
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
-| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9) | settles it: collected, or thrown inside documentation |
+| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9); whoever creates one calls this, including an `expand` handler | settles it: collected, or thrown inside documentation |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
-| `expand(element)` | Offer a component element to extensions before built-in expansion (§6.1) | returns `undefined` — unclaimed |
-| `expandSegments(segments)` | Expand segments within the expansion that offered the current element | throws: no expansion is active |
+| `expand(element)` | Offer a component element to extensions before built-in expansion (§6.1); a handler reports the errors it creates and the engine settles what it returns (§6.9) | returns `undefined` — unclaimed |
+| `expandSegments(segments)` | Expand segments within the expansion that offered the current element; any `ErrorSegment` it returns was already reported (§6.9) | throws: no expansion is active |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
@@ -3755,6 +3755,23 @@ ambient policy — collected for rendering, or thrown as a documentation failure
 A documentation chunk and an `<Output>` region select the policy by value rather
 than by installing reporting middleware, so an error crossing from a component's
 own policy into its caller's is settled again without being reported twice.
+
+**An extension owns the observation of the errors it creates.** A
+`Component.expand` handler returns two kinds of `ErrorSegment`, and nothing in
+the segment distinguishes them:
+
+- one the handler created — an invalid prop, a structural violation. The handler
+  calls `Component.raise` for it, at the point it decided the element was wrong.
+  A diagnostic returned without that call never passes the observation chain, so
+  middleware that counts, logs, or forwards failures never sees it.
+- one that came back from `Component.expandSegments`. It was already reported
+  inside that expansion, where it was produced, and is returned untouched.
+
+The engine settles whatever the handler returns under the caller's ambient
+policy: a collecting caller keeps the error in the document, a throwing caller
+aborts. Settling is not reporting, so a handler that ran its children under its
+own policy — collecting them the way an `<Output>` region does — still fails a
+throwing caller, and still without a second observation.
 
 #### Root and component consistency
 
@@ -5716,6 +5733,26 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
 | IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
+
+### Tier OBS — error observation
+
+The one-observation contract of §6.9, measured with counting `Component.raise`
+middleware. Identifiers match `packages/core/tests/error-observation.test.ts` one
+to one.
+
+| # | Test | Verify |
+|---|------|--------|
+| OBS1 | Extension-created error | An error a `Component.expand` handler creates and reports is observed once |
+| OBS2 | Transported error | An error returned from `Component.expandSegments` is not observed again at the extension boundary |
+| OBS3 | Layered passthrough | Two nested claiming handlers still yield one observation |
+| OBS4 | Collecting policy | Both kinds render exactly one error comment, in place |
+| OBS5 | Throwing policy | Both kinds abort at the first error, having reported it once |
+| OBS6 | Policy change across recursion | An error collected under a handler's own policy is settled again at the boundary and throws for a throwing caller, without a second observation |
+
+Provider families carry the same contract in their own tiers: `AC20`
+(`<Prompt>` prop validation), the assertion validation row in
+`packages/testing/tests/assertions.test.ts`, and `TV12` (`<TestAgent>`
+configuration).
 
 ### Tier LOOP / BREAK — bounded repetition directive
 

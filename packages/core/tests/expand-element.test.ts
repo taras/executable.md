@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component } from "../src/component-api.ts";
+import { Component, raise } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import type { ComponentDefinition, ComponentElement, EvalEnv, Segment } from "../src/types.ts";
@@ -124,7 +124,7 @@ describe("the expand hook", () => {
     expect(seen).toEqual(["Silent", "Greeting"]);
   });
 
-  it("extension error segments follow the ambient raise policy", function* () {
+  it("a handler reports the error it creates, and the engine settles it", function* () {
     const raised: string[] = [];
     const output = yield* scoped(function* () {
       yield* useTestComponents({});
@@ -136,11 +136,13 @@ describe("the expand hook", () => {
         },
       });
       yield* Component.around({
-        // deno-lint-ignore require-yield
         *expand([element], next) {
           if (element.name === "Broken") {
-            const error: Segment = { type: "error", message: "broken thing", source: "Broken" };
-            return { segments: [error] };
+            return {
+              segments: [
+                yield* raise({ type: "error", message: "broken thing", source: "Broken" }),
+              ],
+            };
           }
           return yield* next(element);
         },

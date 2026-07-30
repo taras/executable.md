@@ -14,7 +14,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute, installAgentComponents } from "@executablemd/core";
+import { Component, execute, installAgentComponents } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { installTestingComponents, useTesting } from "@executablemd/testing";
@@ -108,6 +108,23 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
       { session: false },
     );
     expect(run.output).toContain("valid only in an active testing session");
+  });
+
+  it("TV12: a configuration diagnostic is observed once and rendered once", function* () {
+    const observed: string[] = [];
+    yield* Component.around({
+      *raise([error], next) {
+        observed.push(error.message);
+        return yield* next(error);
+      },
+    });
+    const run = yield* runDoc(
+      { "doc.md": "<TestAgent>\nbody\n</TestAgent>\n" },
+      { session: false },
+    );
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toContain("valid only in an active testing session");
+    expect(run.output.match(/valid only in an active testing session/g)).toHaveLength(1);
   });
 
   it("TV2: missing and duplicate mappings fail the owning test before the turn", function* () {

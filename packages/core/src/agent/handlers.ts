@@ -11,12 +11,12 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { Config } from "@executablemd/runtime";
-import { env, expandSegments } from "../component-api.ts";
+import { env, expandSegments, raise } from "../component-api.ts";
 import { validateBindingName } from "../expand.ts";
 import { renderSegments } from "../render.ts";
 import { parseDuration } from "../modifiers/timeout.ts";
 import { validateProps, PropValidationError } from "../validate.ts";
-import type { ComponentElement, PropsSchema, Segment } from "../types.ts";
+import type { ComponentElement, ErrorSegment, PropsSchema, Segment } from "../types.ts";
 import { Agent } from "./agent-api.ts";
 import type { PromptOptions, Session } from "./agent-api.ts";
 import { AgentProviders } from "./provider-api.ts";
@@ -68,7 +68,12 @@ const PROMPT_PROPS: PropsSchema = {
   additionalProperties: false,
 };
 
-function errorSegment(source: string, message: string): Segment {
+/**
+ * Build a diagnostic. Constructing one is separate from reporting it, because
+ * prop parsing runs synchronously: the handler that owns the failure raises it
+ * (core §6.9) before returning it.
+ */
+function errorSegment(source: string, message: string): ErrorSegment {
   return { type: "error", message: `<${source}> ${message}`, source };
 }
 
@@ -81,7 +86,7 @@ function parseLiteralProps(
   source: string,
   element: ComponentElement,
   schema: PropsSchema,
-): { props: Record<string, unknown> } | { error: Segment } {
+): { props: Record<string, unknown> } | { error: ErrorSegment } {
   for (const name of Object.keys(element.expressions)) {
     if (name !== "as" && name !== "slot") {
       return {
@@ -116,18 +121,24 @@ function* captureAs(
     return segments;
   }
   if ("as" in element.expressions) {
-    return [errorSegment(source, 'the "as" prop must be a string literal, not an expression.')];
+    return [
+      yield* raise(
+        errorSegment(source, 'the "as" prop must be a string literal, not an expression.'),
+      ),
+    ];
   }
   const currentEnv = yield* env;
   if (!currentEnv) {
-    return [errorSegment(source, 'binding with "as" requires an eval scope in context.')];
+    return [
+      yield* raise(errorSegment(source, 'binding with "as" requires an eval scope in context.')),
+    ];
   }
   const parsed = validateBindingName(element.props.as);
   if (!parsed.ok) {
-    return [errorSegment(source, `the "as" prop ${parsed.error.message}`)];
+    return [yield* raise(errorSegment(source, `the "as" prop ${parsed.error.message}`))];
   }
   if (parsed.value === undefined) {
-    return [errorSegment(source, 'the "as" prop must be a non-empty string.')];
+    return [yield* raise(errorSegment(source, 'the "as" prop must be a non-empty string.'))];
   }
   currentEnv.values[parsed.value] = rendered ?? renderSegments(segments);
   return [];
@@ -159,7 +170,7 @@ export function createAgentHandlers(): AgentHandlers {
   function* expandAgentProvider(element: ComponentElement): Operation<Segment[]> {
     const parsed = parseLiteralProps("AgentProvider", element, AGENT_PROVIDER_PROPS);
     if ("error" in parsed) {
-      return [parsed.error];
+      return [yield* raise(parsed.error)];
     }
     const { props } = parsed;
     const name = String(props.name);
@@ -195,7 +206,7 @@ export function createAgentHandlers(): AgentHandlers {
   function* expandApproveAll(element: ComponentElement): Operation<Segment[]> {
     const parsed = parseLiteralProps("ApproveAll", element, NO_PROPS_SCHEMA);
     if ("error" in parsed) {
-      return [parsed.error];
+      return [yield* raise(parsed.error)];
     }
     return yield* scoped(function* () {
       yield* installApproveAll();
@@ -207,7 +218,7 @@ export function createAgentHandlers(): AgentHandlers {
   function* expandAskPermission(element: ComponentElement): Operation<Segment[]> {
     const parsed = parseLiteralProps("AskPermission", element, NO_PROPS_SCHEMA);
     if ("error" in parsed) {
-      return [parsed.error];
+      return [yield* raise(parsed.error)];
     }
     return yield* scoped(function* () {
       yield* installAskPermission();
@@ -219,7 +230,7 @@ export function createAgentHandlers(): AgentHandlers {
   function* expandAgent(element: ComponentElement): Operation<Segment[]> {
     const parsed = parseLiteralProps("Agent", element, AGENT_PROPS);
     if ("error" in parsed) {
-      return [parsed.error];
+      return [yield* raise(parsed.error)];
     }
     const resolved = yield* Agent.operations.agent(asString(parsed.props.name));
     if (element.selfClosing) {
@@ -245,7 +256,7 @@ export function createAgentHandlers(): AgentHandlers {
   function* expandSession(element: ComponentElement): Operation<Segment[]> {
     const parsed = parseLiteralProps("Session", element, SESSION_PROPS);
     if ("error" in parsed) {
-      return [parsed.error];
+      return [yield* raise(parsed.error)];
     }
     const session: Session = yield* Agent.operations.session(asString(parsed.props.name));
     if (element.selfClosing) {
@@ -274,7 +285,7 @@ export function createAgentHandlers(): AgentHandlers {
   function* expandPrompt(element: ComponentElement): Operation<Segment[]> {
     const parsed = parseLiteralProps("Prompt", element, PROMPT_PROPS);
     if ("error" in parsed) {
-      return [parsed.error];
+      return [yield* raise(parsed.error)];
     }
     const { props } = parsed;
 
@@ -302,10 +313,10 @@ export function createAgentHandlers(): AgentHandlers {
     const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
     const sequence = yield* AgentInternal.operations.nextPromptSequence();
 
-    const raise = props.throwOnError === true;
+    const throwOnError = props.throwOnError === true;
     const record = yield* persistPrompt(
       { name: `prompt:${location}#${ordinal}`, input: content },
-      () => runPrompt(content, options, sequence, raise),
+      () => runPrompt(content, options, sequence, throwOnError),
     );
 
     const failure = promptFailureFromRecord(record);
@@ -353,7 +364,7 @@ function* runPrompt(
   content: string,
   options: PromptOptions,
   sequence: number,
-  raise: boolean,
+  throwOnError: boolean,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
 
@@ -425,7 +436,7 @@ function* runPrompt(
   if (failure !== undefined) {
     record.error = failure;
   }
-  if (raise && status !== "completed") {
+  if (throwOnError && status !== "completed") {
     record.raised = true;
   }
   return record;

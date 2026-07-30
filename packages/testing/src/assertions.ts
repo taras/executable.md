@@ -31,7 +31,7 @@ import {
   fail,
 } from "./assert.ts";
 import type { Operation } from "effection";
-import { DocumentOutput, env, expandSegments, renderSegments } from "@executablemd/core";
+import { DocumentOutput, env, expandSegments, raise, renderSegments } from "@executablemd/core";
 import type { ComponentElement, ErrorSegment, Segment } from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
@@ -166,6 +166,11 @@ const KIND_PROPS: Record<AssertionKind, { allowed: string[]; required: string[] 
   numeric: { allowed: ["actual", "expected", "msg"], required: ["actual", "expected"] },
 };
 
+/**
+ * Build a validation diagnostic. Constructing one is separate from reporting
+ * it: the handler that owns the failure raises it (core §6.9) before returning
+ * it, so this stays usable from synchronous prop checks.
+ */
 export function validationError(name: string, message: string): ErrorSegment {
   return { type: "error", message: `<${name}> ${message}`, source: name };
 }
@@ -202,9 +207,11 @@ export function* expandAssertion(
   for (const name of supplied) {
     if (!rules.allowed.includes(name)) {
       return [
-        validationError(
-          assertion.name,
-          `does not accept a "${name}" prop (allowed: ${rules.allowed.join(", ")}).`,
+        yield* raise(
+          validationError(
+            assertion.name,
+            `does not accept a "${name}" prop (allowed: ${rules.allowed.join(", ")}).`,
+          ),
         ),
       ];
     }
@@ -212,13 +219,15 @@ export function* expandAssertion(
 
   const hasChildren = !element.selfClosing && element.children.length > 0;
   if (hasChildren && !assertion.allowsExpectedChildren) {
-    return [validationError(assertion.name, "does not accept expected children.")];
+    return [yield* raise(validationError(assertion.name, "does not accept expected children."))];
   }
   if (hasChildren && supplied.includes("expected")) {
     return [
-      validationError(
-        assertion.name,
-        'accepts either an "expected" prop or expected children, not both.',
+      yield* raise(
+        validationError(
+          assertion.name,
+          'accepts either an "expected" prop or expected children, not both.',
+        ),
       ),
     ];
   }
@@ -226,12 +235,16 @@ export function* expandAssertion(
   for (const name of rules.required) {
     const suppliedByChildren = name === "expected" && hasChildren;
     if (!supplied.includes(name) && !suppliedByChildren) {
-      return [validationError(assertion.name, `requires the "${name}" prop.`)];
+      return [yield* raise(validationError(assertion.name, `requires the "${name}" prop.`))];
     }
   }
   if (assertion.kind === "binary-eq" || assertion.kind === "string-includes") {
     if (!supplied.includes("expected") && !hasChildren) {
-      return [validationError(assertion.name, 'requires an "expected" prop or expected children.')];
+      return [
+        yield* raise(
+          validationError(assertion.name, 'requires an "expected" prop or expected children.'),
+        ),
+      ];
     }
   }
 
@@ -257,11 +270,13 @@ export function* expandAssertion(
         resolved[name] = evaluateExpression(element.expressions[name]!, merged);
       } catch (error) {
         return [
-          validationError(
-            assertion.name,
-            `failed to evaluate the "${name}" expression: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+          yield* raise(
+            validationError(
+              assertion.name,
+              `failed to evaluate the "${name}" expression: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
           ),
         ];
       }
@@ -274,7 +289,9 @@ export function* expandAssertion(
   // CHECK alone — formatting it here would run hostile toJSON/toString
   // side effects before the assertion outcome is established.
   if ("msg" in resolved && typeof resolved.msg !== "string") {
-    return [validationError(assertion.name, 'requires "msg" to be a string when supplied.')];
+    return [
+      yield* raise(validationError(assertion.name, 'requires "msg" to be a string when supplied.')),
+    ];
   }
 
   const values: ResolvedValues = {
