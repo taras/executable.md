@@ -13,3 +13,7 @@ dist/
 npm/
 **/npm/
 .dnt-importmap.*.json
+
+# deno task build:web output — built into the package at release time,
+# never a repository source file (specs/release-process-spec.md)
+packages/web/generated/

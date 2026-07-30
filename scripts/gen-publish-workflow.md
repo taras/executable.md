@@ -9,6 +9,12 @@ publishable packages and their `needs:` order from the workspace manifests and
 writes `.github/workflows/publish-packages.yml`. CI regenerates the file and
 fails when the committed copy is stale. See specs/release-process-spec.md §3.
 
+A workspace member whose `package.json` declares `"private": true` is not
+published: the generator skips it, so it appears in no job. This is how an
+in-progress package lands its foundation on `main` without a tag publishing it
+before it is ready. Clearing the flag in a later PR adds the package back on the
+next regeneration.
+
 ## Workflow header
 
 The static top of the workflow, through the `version` job's tag resolution:
@@ -183,6 +189,10 @@ for (const dir of dirs) {
     continue;
   }
   if (typeof denoJson.name !== "string" || !denoJson.name.startsWith(SCOPE)) {
+    continue;
+  }
+  // A private member is not published — it appears in no job.
+  if (pkgJson.private === true) {
     continue;
   }
   const deps = Object.keys(pkgJson.dependencies ?? {});

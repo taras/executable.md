@@ -90,7 +90,18 @@ release never depends on a binary that release has not published yet.
   expands the root `workspace` entries (including one-level globs such as
   `packages/*`) and derives the jobs from the member manifests it finds, a
   member without a `deno.json` naming an `@executablemd` package being skipped
-  — never edited by hand. Run
+  — never edited by hand. A member whose `package.json` declares
+  `"private": true` is also skipped and appears in no npm job, so a package can
+  land its foundation on `main` before it is ready to publish; clearing the flag
+  adds it back on the next regeneration. Such a member also declares no
+  `deno.json` `name` and no `exports`, so `deno install` warns about neither an
+  unpublishable name nor a missing `exports`, and `deno publish` finds no JSR
+  entry to publish either; both fields land in the same PR that clears the
+  private flag. The two conditions are independent rules, and no repository
+  member reaches the second one on its own, so
+  `scripts/tests/publish-workflow-generator.test.ts` runs the generator over a
+  fixture member that holds a full JSR identity and declares `"private": true`.
+  Run
   `deno task gen:publish-workflow` after adding/removing a
   workspace package or changing its `@executablemd` dependencies; CI fails if
   the committed file is stale. Its `version` job validates the tag against
@@ -221,7 +232,41 @@ per `publish-one.yml` call, and `deno publish` filters already-published
 workspace members individually — so a rerun after a partial publish picks up
 only what is missing. No dispatch path publishes outside a tag.
 
-## 8. Consumer note
+## 8. Browser assets (`@executablemd/web`)
+
+`packages/web`'s browser client (`packages/web/client/**`) bundles through
+`scripts/build-web-client.ts` (`deno task build:web`) into
+`packages/web/generated/client-bundle.ts` — gitignored, never committed. The
+Deno test suite (`scripts/tests/build-web-client.test.ts`) bundles and
+inspects the real output, asserting determinism, absence of eval and
+external-asset paths under the fixed CSP policy, restoration of the patched
+dependency manifest on every exit path, and that `deno task build:web` writes
+the generated module to that path and nowhere in the index.
+
+Restoring that manifest is not something `ensure()` delivers on its own.
+`@effectionx/fs` writes through a promise adapted with `until()`, and halting
+stops observing that promise rather than the write behind it, so a restore can
+be overtaken by the patch it undoes. `scripts/lib/manifest-patch.ts` holds the
+in-flight write and waits for it before restoring; it is the one place the build
+calls `node:fs/promises` directly, because no `@effectionx/fs` operation hands
+its promise back.
+
+Bundling is Deno-only; the shape of the generated module is not. Its serializer
+(`scripts/lib/web-client-module.ts`) touches no host, so
+`scripts/tests/web-client-module.test.ts` loads generated modules and checks
+their round-trip and byte-length contract under Deno, Node, and Bun.
+
+A publishable `@executablemd/web` is an atomic configuration state: public
+`deno.json` identity and `exports`, `private` cleared from `package.json`,
+`build:web` run immediately before both JSR and npm packaging, and explicit
+inclusion of `generated/client-bundle.ts` in both published artifacts. The
+configuration elements change atomically; the package is never published
+without its browser asset and never published while private.
+
+`packages/web` is currently private. It carries no release hook, no `deno.json`
+`name` or `exports`, and no npm or JSR publish job (§3).
+
+## 9. Consumer note
 
 `@executablemd/core`, `@executablemd/runtime`, `@executablemd/testing`,
 `@executablemd/cli`, and `@executablemd/test-agent` depend on effection's 4.x

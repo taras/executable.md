@@ -39,6 +39,7 @@
   "tasks": {
     "xmd": "deno run --allow-all packages/cli/src/deno.ts",
     "build": "deno compile --node-modules-dir=none --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd packages/cli/src/compiled.ts",
+    "build:web": "deno run --allow-all scripts/build-web-client.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
     "test": "deno test --allow-all",

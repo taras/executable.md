@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext"]
+  },
+  "imports": {
+    "react": "npm:react@19.2.0",
+    "react/": "npm:/react@19.2.0/",
+    "react-dom": "npm:react-dom@19.2.0",
+    "react-dom/": "npm:/react-dom@19.2.0/",
+    "@rjsf/core/": "npm:/@rjsf/core@6.7.1/",
+    "@rjsf/shadcn/": "npm:/@rjsf/shadcn@6.7.1/",
+    "@rjsf/utils": "npm:@rjsf/utils@6.7.1",
+    "@rjsf/validator-ajv8/": "npm:/@rjsf/validator-ajv8@6.7.1/",
+    "ajv/": "npm:/ajv@8.20.0/"
+  }
+}
