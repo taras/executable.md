@@ -11,6 +11,11 @@
     "@rjsf/shadcn/": "npm:/@rjsf/shadcn@6.7.1/",
     "@rjsf/utils": "npm:@rjsf/utils@6.7.1",
     "@rjsf/validator-ajv8/": "npm:/@rjsf/validator-ajv8@6.7.1/",
-    "ajv/": "npm:/ajv@8.20.0/"
+    "ajv": "npm:ajv@8.20.0",
+    "ajv/": "npm:/ajv@8.20.0/",
+    "remark": "npm:remark@15.0.1",
+    "remark-rehype": "npm:remark-rehype@11.1.2",
+    "rehype-sanitize": "npm:rehype-sanitize@6.0.0",
+    "rehype-stringify": "npm:rehype-stringify@10.0.1"
   }
 }
