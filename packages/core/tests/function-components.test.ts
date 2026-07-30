@@ -8,6 +8,7 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { Component } from "../src/component-api.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -48,6 +49,40 @@ function writeFiles(dir: string, files: Record<string, string>): void {
 
 function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+interface ObservedRun {
+  output: string;
+  observed: string[];
+}
+
+/**
+ * One execution with counting `raise` middleware in scope.
+ *
+ * Content a function component never asks for is never expanded, so nothing in
+ * it is ever reported. Output alone cannot show that: a collecting policy
+ * renders a diagnostic it observed, but so does an expansion that discarded
+ * one. The observation count is what distinguishes "not expanded" from
+ * "expanded and swallowed".
+ */
+function runObserved(dir: string): Operation<ObservedRun> {
+  return scoped(function* () {
+    const observed: string[] = [];
+    yield* Component.around({
+      *raise([error], next) {
+        observed.push(error.message);
+        return yield* next(error);
+      },
+    });
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(dir, "doc.md"),
+        stream: new InMemoryStream(),
+        componentDirs: [path.join(dir, "components"), dir],
+      }),
+    );
+    return { output: String(output), observed };
+  });
 }
 
 describe("Tier FC — Function components", () => {
@@ -220,16 +255,16 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  it("FC3: function component with useContent", function* () {
+  it("FC3: function component renders its content with content()", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
         "components/Wrapper.ts": [
-          'import { useContent } from "@executablemd/core";',
+          'import { content } from "@executablemd/core";',
           "",
           "export default function*() {",
-          "  const childContent = yield* useContent();",
-          "  return `BEFORE\\n${childContent}\\nAFTER`;",
+          "  const rendered = yield* content();",
+          "  return `BEFORE\\n${rendered}\\nAFTER`;",
           "}",
         ].join("\n"),
         "doc.md": ["<Wrapper>", "child content here", "</Wrapper>"].join("\n"),
@@ -245,6 +280,54 @@ describe("Tier FC — Function components", () => {
       expect(output).toContain("BEFORE");
       expect(output).toContain("child content here");
       expect(output).toContain("AFTER");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // `content()` is the canonical operation; a component written against the
+  // `useContent()` alias keeps working, including for a named slot.
+  it("FC3-compat: a component written with useContent() still renders its content", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Legacy.ts": [
+          'import { useContent } from "@executablemd/core";',
+          "",
+          "export default function*() {",
+          "  const childContent = yield* useContent();",
+          '  const heading = yield* useContent("header");',
+          "  return `HEAD[${heading.trim()}]\\n${childContent}`;",
+          "}",
+        ].join("\n"),
+        "doc.md": [
+          "<Legacy>",
+          '<Note slot="header" />',
+          "",
+          "child content here",
+          "</Legacy>",
+        ].join("\n"),
+        "components/Note.md": [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties: {}",
+          "  additionalProperties: false",
+          "---",
+          "HEADING",
+        ].join("\n"),
+      });
+      const stream = new InMemoryStream();
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("HEAD[HEADING]");
+      expect(output).toContain("child content here");
+      expect(output).not.toContain("ERROR");
     } finally {
       cleanup(tmpDir);
     }
@@ -435,6 +518,207 @@ describe("Tier FC — Function components", () => {
       );
       expect(output1).toContain("STATIC-OUTPUT");
       expect(output2).toBe(output1);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // FC10: only the requested slot is expanded, so a slot the component never
+  // asks for cannot fail the invocation — nothing in it runs.
+  it("FC10: an error in an unrequested slot is never expanded or observed", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Body.ts": [
+          'import { content } from "@executablemd/core";',
+          "",
+          "export default function*() {",
+          "  const rendered = yield* content();",
+          "  return `BODY[${rendered.trim()}]`;",
+          "}",
+        ].join("\n"),
+        "doc.md": ["<Body>", '<Missing slot="header" />', "", "body text", "</Body>"].join("\n"),
+      });
+
+      const run = yield* runObserved(tmpDir);
+
+      expect(run.output).toContain("BODY[body text]");
+      expect(run.output).not.toContain("ERROR");
+      expect(run.observed).toEqual([]);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // FC11: content is expanded because the component asks for it. One that never
+  // calls content() leaves it unexpanded, however broken it is.
+  it("FC11: a component that never calls content() does not expand it", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Ignores.ts": [
+          "export default function*() {",
+          '  return "IGNORED-CONTENT";',
+          "}",
+        ].join("\n"),
+        "doc.md": ["<Ignores>", "<Missing />", "</Ignores>"].join("\n"),
+      });
+
+      const run = yield* runObserved(tmpDir);
+
+      expect(run.output).toContain("IGNORED-CONTENT");
+      expect(run.output).not.toContain("ERROR");
+      expect(run.observed).toEqual([]);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+/**
+ * Tier FC-WF — the invocation shape a component like `<WebForm>` needs.
+ *
+ * An object-valued schema resolved from the document reaches the function
+ * through validated props; the content it renders is validated before the
+ * effects that follow it; and its declared return only becomes an `as` binding
+ * when that content succeeded. The engine owns every one of those steps, so the
+ * component needs neither the raw element nor an expression resolver.
+ */
+describe("Tier FC-WF — props, returns, and as around content()", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * `record` is an operation the component genuinely yields to, and the log
+   * file is the only witness that it ran. Reading non-execution out of the
+   * rendered output would prove nothing: a failed invocation renders no output
+   * either way.
+   */
+  function analyze(dir: string): string {
+    return [
+      'import { content } from "@executablemd/core";',
+      'import { appendFileSync } from "node:fs";',
+      "",
+      `const LOG = ${JSON.stringify(path.join(dir, "effects.log"))};`,
+      "",
+      "function* record(event) {",
+      "  appendFileSync(LOG, event + '\\n');",
+      "}",
+      "",
+      "export const props = {",
+      '  type: "object",',
+      '  properties: { schema: { type: "object" } },',
+      '  required: ["schema"],',
+      "  additionalProperties: false,",
+      "};",
+      "",
+      "export const returns = {",
+      '  type: "object",',
+      "  properties: {",
+      '    body: { type: "string" },',
+      '    schemaType: { type: "string" },',
+      '    fields: { type: "array", items: { type: "string" } },',
+      "  },",
+      '  required: ["body", "schemaType", "fields"],',
+      "  additionalProperties: false,",
+      "};",
+      "",
+      "export default function*(props) {",
+      "  yield* record(`props:${props.schema.type}:${Object.keys(props.schema.properties)}`);",
+      "  const rendered = yield* content();",
+      "  yield* record('post-content');",
+      "  return {",
+      "    body: rendered.trim(),",
+      "    schemaType: props.schema.type,",
+      "    fields: Object.keys(props.schema.properties),",
+      "  };",
+      "}",
+    ].join("\n");
+  }
+
+  function invocation(...children: string[]): string {
+    return [
+      "```js eval",
+      "const responseSchema = {",
+      '  type: "object",',
+      '  properties: { question: { type: "string" }, answer: { type: "string" } },',
+      "};",
+      "```",
+      "",
+      '<Analyze schema={responseSchema} as="result">',
+      ...children,
+      "</Analyze>",
+      "",
+      "```js eval",
+      // `typeof` on a name the invocation never bound is safe; reading it
+      // directly would be a ReferenceError and hide what is being asserted.
+      "const shown = typeof result === 'undefined' ? 'unbound' : JSON.stringify(result);",
+      "```",
+      "",
+      "captured: {shown}",
+      "",
+    ].join("\n");
+  }
+
+  /** Every event the component's `record` operation appended, in order. */
+  function events(dir: string): string[] {
+    const log = path.join(dir, "effects.log");
+    if (!fs.existsSync(log)) {
+      return [];
+    }
+    return fs.readFileSync(log, "utf8").trim().split("\n");
+  }
+
+  it("FC-WF1: an object-valued schema prop reaches the function and its return binds", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Analyze.ts": analyze(tmpDir),
+        "doc.md": invocation("analysis body"),
+      });
+
+      const run = yield* runObserved(tmpDir);
+
+      expect(run.observed).toEqual([]);
+      expect(run.output).not.toContain("ERROR");
+      // The declared return validated and reached the invocation site.
+      expect(run.output).toContain(
+        `captured: ${JSON.stringify({
+          body: "analysis body",
+          schemaType: "object",
+          fields: ["question", "answer"],
+        })}`,
+      );
+      // The function saw the resolved, validated schema object, not an
+      // expression or a string, and resumed past its content.
+      expect(events(tmpDir)).toEqual(["props:object:question,answer", "post-content"]);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  it("FC-WF2: failed content skips the return, the binding, and post-content work", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Analyze.ts": analyze(tmpDir),
+        "doc.md": invocation("PARTIAL-BEFORE", "<Missing />", "PARTIAL-AFTER"),
+      });
+
+      const run = yield* runObserved(tmpDir);
+
+      // The original diagnostic replaces the whole invocation, once.
+      expect(run.observed).toHaveLength(1);
+      expect(run.observed[0]).toContain("Cannot resolve component: Missing");
+      expect(run.output.match(/Cannot resolve component: Missing/g)).toHaveLength(1);
+      // No wrapper, and no partial content from around the failure.
+      expect(run.output).not.toContain("PARTIAL-BEFORE");
+      expect(run.output).not.toContain("PARTIAL-AFTER");
+      // Nothing validated the return, so `as` left the binding unmade — and the
+      // sibling that reads it still runs under the collecting policy.
+      expect(run.output).toContain("captured: unbound");
+      // The function ran and received its validated props; it stopped at
+      // content() and never reached the effect after it.
+      expect(events(tmpDir)).toEqual(["props:object:question,answer"]);
     } finally {
       cleanup(tmpDir);
     }

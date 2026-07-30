@@ -1424,11 +1424,11 @@ run but are absent from the diagnostic trace.
 | `src/eval-context.ts` | `compileBlock()` — delegates to `API.Env.compile` |
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
-| `src/content-context.ts` | `useContent()` — content slot access for function components |
+| `src/content-context.ts` | `useContent()`, `hasContent()` — compatibility aliases for the canonical `content(slot?)` (§5.5) |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
-| `src/errors.ts` | `AmbientErrorPolicy`, `settle()`, `DocumentationError` — error settlement (§6.9) |
+| `src/errors.ts` | `AmbientErrorPolicy`, `settle()`, `DocumentationError`, `ContentError` — error settlement (§6.9) and the function-content failure boundary (§5.1.2) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
@@ -1842,7 +1842,7 @@ has stopped (§4.4), so a component can hold something open for its children:
 ```typescript
 export default function*() {
   const directory = yield* useTempDir();
-  return yield* useContent();
+  return yield* content();
 }
 ```
 
@@ -1860,6 +1860,13 @@ in markdown component frontmatter; the prop-name map is a frontmatter
 spelling and does not apply to a TypeScript export. If no `props`
 export exists, the component accepts no props.
 
+The exported schema is the runtime contract. The engine resolves expression
+props, validates them against it, strips the reserved names, and passes only
+validated `Record<string, Json>` props to the generator (§6.5) — a component
+never sees the raw element or an unvalidated value. A JSON Schema a document
+hands over as a prop value, `schema={responseSchema}`, is ordinary JSON data on
+those props and is validated as such.
+
 **Return declaration.** A named `export const returns = { ... }` declares a
 return value under the same contract as the `returns:` frontmatter key,
 including the object-return shorthand (§6.10). The generator of a value
@@ -1867,34 +1874,134 @@ function component returns that JSON value rather than a string; without the
 export, its returned string is its rendering, and returning anything else is
 an error.
 
-**Children via `useContent()`.** Function components access children
-contextually, not from props. The expansion engine installs a
-scope-local content provider (§5.5) around each function component
-invocation. Components that need rendered children call
-`yield* useContent()`:
+**Content via `content()`.** Function components reach their invocation
+content contextually, not from props: there is no React-style `children` prop.
+The expansion engine installs a scope-local content provider (§5.5) around each
+function component invocation, and `content()` is the canonical operation a
+component calls for it:
 
 ```typescript
 // components/Card.ts
-import { useContent } from "@executablemd/core";
+import { content, type Json } from "@executablemd/core";
 
 export default function*(props: Record<string, Json>) {
-  const content = yield* useContent();
-  return `<div class="card">\n${content}\n</div>`;
+  const rendered = yield* content();
+  return `<div class="card">\n${rendered}\n</div>`;
 }
 ```
 
-Named slots are supported — `useContent("header")` returns the
-content for a specific slot, matching `<Content slot="header" />`
-in markdown components:
+Named slots are supported — `content("header")` returns the content assigned to
+that slot, matching `<Content slot="header" />` in markdown components:
 
 ```typescript
-const header = yield* useContent("header");
-const body = yield* useContent();  // default slot
+const header = yield* content("header");
+const body = yield* content();  // default slot
 ```
 
-Calling `useContent()` outside a function component invocation reports
-a clear missing-provider error. The provider is removed when the
+`useContent(slot?)` is a supported compatibility alias for the same operation
+(§5.5); components written against it keep working unchanged.
+
+Only the requested slot is expanded. Content nobody asks for is never expanded,
+and a component that never calls `content()` does not expand its invocation
+content at all — `hasContent()` answers the shape of the invocation without
+projecting (§5.5). Calling `content()` outside a function component invocation
+reports a clear missing-provider error. The provider is removed when the
 invocation completes, so content never leaks into sibling expansions.
+
+**`content()` is the failure boundary.** Each call is where invocation content
+either becomes a string or fails. When the requested content carries no
+`ErrorSegment`, the call returns the rendered string and the generator resumes
+normally: text returns, declared returns, expression props and `as` behave as
+they do everywhere else.
+
+When expanding the requested content produces one or more `ErrorSegment`s, the
+call does not return and normal continuation stops at the `yield* content()`
+expression:
+
+- code after the call does not run through normal continuation;
+- the function's return value is not processed and a declared return is not
+  validated;
+- no `as` binding is created;
+- left uncaught, the whole invocation is replaced by the original error
+  segments — the same objects, with their metadata and source order intact —
+  and partial content plus any wrapper the function would have produced are
+  discarded;
+- later document siblings continue under a collecting policy and abort under a
+  throwing one, as they do for any other first error.
+
+One rule covers captured and uncaptured invocations, default content and named
+slots, and both text and declared-return components. For
+
+```markdown
+<Probe>before<Broken />after</Probe>TAIL
+```
+
+the result is the original error from `<Broken />` followed by `TAIL` — not
+`before`, `after`, or a wrapper `Probe` returns. Collection inside the projected
+content is unchanged: a collecting projection still discovers every error it can
+before returning, and the short circuit happens where control would otherwise
+resume the function.
+
+Code before the call has already run and cannot be undone. A component that
+validates its content before opening a port, starting a server, or acquiring
+anything comparable places `content()` ahead of those effects.
+
+**Recovery: `ContentError`.** The failure arrives at the `yield* content()`
+expression as `ContentError`, exported from `@executablemd/core`:
+
+```typescript
+export class ContentError extends Error {
+  readonly errors: readonly ErrorSegment[];
+}
+```
+
+`errors` holds the original `ErrorSegment` objects in source order — not copies,
+and not a rendered string. A component recognizes intended content recovery with
+`error instanceof ContentError`; it does not branch on the ambient policy,
+because the same public error is presented under `collect` and under `throw`, so
+one piece of recovery code covers both:
+
+```typescript
+import { content, ContentError } from "@executablemd/core";
+
+export default function* Preview() {
+  try {
+    return yield* content();
+  } catch (error) {
+    if (error instanceof ContentError) {
+      return "Content is unavailable";
+    }
+    throw error;
+  }
+}
+```
+
+`content()` fails as an ordinary Effection operation, so a `try/catch` around it
+is ordinary recovery:
+
+- a catch directly around the call is explicit recovery. The component may
+  inspect `error.errors`, return fallback content, or deliberately do different
+  work — effects included. "Post-content code does not execute" means it does
+  not execute through *normal continuation*; structured concurrency guarantees
+  ownership and teardown, it does not forbid error recovery.
+- recovery keeps the enclosing invocation alive. Work owned by the failed
+  projection unwinds with its scope, while resources deliberately retained to
+  invocation lifetime stay owned by the invocation until it exits (§4.4).
+- a caught failure is finished with. The engine does not reassert it, and it
+  never reaches the component's consumer boundary.
+- the engine never uses `halt()` or cancellation to make a documentation failure
+  uncatchable. Cancellation remains a lifecycle mechanism, not a way to deliver
+  a domain error.
+- durability failures (§6.11) and unrelated engine failures are never presented
+  as `ContentError`; they keep their own identity and precedence.
+
+Left uncaught, the boundary hands the failure to the invocation's consumer: under
+`collect` it transports the original error segments and settles them under the
+consumer's policy, and under `throw` it restores and rethrows the original
+`DocumentationError`, so external fail-fast is unchanged (§6.9). The recovery
+type and the propagated type are deliberately two views of one boundary — a
+component catches `ContentError` at `content()`, and a caller the component did
+not recover for still observes `DocumentationError`.
 
 **Resolution priority.** When both `Name.md` and `Name.ts` exist,
 the `.md` file wins. This ensures backward compatibility — existing
@@ -2261,7 +2368,7 @@ interface, and each operation is also exported directly:
 | `expandSegments(segments)` | Expand segments within the expansion that offered the current element; any `ErrorSegment` it returns was already reported (§6.9) | throws: no expansion is active |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
-| `content(slot?)` | Render the invoking component's children (§5.1, §6.3) | throws a missing-provider error |
+| `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -2279,8 +2386,11 @@ offer — no expansion is active and the operation reports that.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.
-`useCodeBlock()` and `useContent()` remain as ergonomic aliases backed
-by `codeBlock()` and `content(slot?)`.
+`content(slot?)` is the canonical content operation for function components
+(§5.1.2); `useCodeBlock()` and `useContent(slot?)` remain as ergonomic
+compatibility aliases backed by `codeBlock()` and `content(slot?)`. The
+`useContent` binding injected into eval blocks (§4.3) is a separate,
+policy-carrying closure rather than this alias.
 
 `hasContent()` reports the shape of the invocation, not a prediction about what
 it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
@@ -2508,6 +2618,11 @@ eval block that catches the `DocumentationError` has recovered it explicitly:
 nothing was recorded for a capture refusal, the invocation completes without
 re-reporting the caught failure, and the work the projected content started is
 torn down with its scope rather than escaping past the invocation.
+
+A function component's `content()` is the same boundary in its own vocabulary: it
+presents the failure as `ContentError` under either policy (§5.1.2), a catch
+there is the same explicit recovery, and the projected work still unwinds with
+the content scope.
 
 `substituteContent` resolves the slots:
 
@@ -2958,22 +3073,28 @@ This holds for all four capture paths:
 | Native `<Capture as>` | its expanded children carry an `ErrorSegment` — checked before rendering and before `select` is applied |
 | `<Each as>` | the expanded loop output carries an `ErrorSegment` |
 | Markdown component `as=` | its expanded body carries an `ErrorSegment`, or a string projection in its body (`renderChildren()`, `render()`, `useContent()`) rendered one away |
-| Function component `as=` | rendering its content produced an `ErrorSegment` |
+| Function component `as=` | the content it requested carried an `ErrorSegment`, so `content()` never returned (§5.1.2) |
 
-A function component cannot inspect segments after the fact, because
-`useContent()` must return a string. The engine therefore tracks the
-`ErrorSegment`s produced while rendering the default and named slots and
-returns them instead of binding the rendered text. A markdown component's body
-hides errors the same way when an eval block string-projects its content, so
-the invocation tracks those too and refuses the capture with the recorded
+A function component's `as` needs no separate refusal rule, because
+`content()` is itself the boundary (§5.1.2): a requested-content error stops
+normal continuation at the `yield* content()` call, the invocation is replaced by
+the original error segments, and there is no return value to validate and no
+rendered text to bind. This is the same rule captured and uncaptured — an
+uncaptured invocation drops its partial content and wrapper for the original
+errors rather than rendering them inline — and it holds for the default content,
+for a named slot, and for both text and declared-return components. A component
+that catches `ContentError` around the call has recovered explicitly: it renders
+what it chose to render, and its `as` binds that.
+
+A markdown component's body hides errors when an eval block string-projects its
+content, so the invocation tracks those and refuses the capture with the recorded
 segments. A value component cannot reach a recorded projection error: `<Output>`
 and `returns` are exclusive, its eval-block projections are bound to the block's
 snapshot policy — `throw` in value-body documentation — and that failure
 propagates as the body's fail-fast abort.
 
-Uncaptured forms are unaffected: without `as`, a function component's content
-errors render inline as before, and `<Each>` keeps emitting its body segments
-structurally.
+Uncaptured `<Each>` is unaffected: without `as` it keeps emitting its body
+segments structurally.
 
 **Block scoping.** Each iteration expands its body in a fresh env object —
 `{ values: { ...caller.values, [let]: item } }` — created inside a scope that
@@ -3806,6 +3927,29 @@ failing element reports exactly once wherever it is written: inline, in a
 selected branch, in an iteration, inside a capture, in a component body, or
 projected into a `<Content />`.
 
+**Appending and settling stay distinct.** The difference is not cosmetic.
+`<Each>` and `<Capture>` expand inside the caller's own policy frame, so their
+transported errors have already settled there and are appended as they are. A
+component invocation settles instead, because its body may have run inside an
+inner `<Output>` collection frame or a documentation throw frame; appending at
+the caller would let a collected inner error slip past the caller's fail-fast
+policy. `content()` adds an *inner* boundary to a function component's own
+control flow and does not replace that consumer boundary: the content provider
+projects structured segments, presents `ContentError` at the `content()` call,
+and — if the component does not recover — hands the original segments back as the
+invocation's result under `collect` or restores the original `DocumentationError`
+under `throw`. The invocation's consumer then settles under its own ambient
+policy, without reporting anything a second time.
+
+Observation counts cannot catch a regression here, because appending and
+settling can both observe exactly once. The guards are the consumer-boundary
+tests in `packages/core/tests/expand.test.ts`: a child's `<Output>` error
+consumed from parent documentation throws, the same error consumed inside a
+parent `<Output>` renders as one collected comment, and a captured child
+`<Output>` error throws before the `as` binding is stored. A function component
+whose content collects an error in one policy frame and is consumed by a
+throwing parent frame belongs to that same set, and throws rather than appending.
+
 #### Root and component consistency
 
 A root document obeys exactly the same rules as an imported component (§5.4).
@@ -3929,6 +4073,9 @@ Markdown and TypeScript components share one contract. A function component
 declares `export const returns` (§5.1.2), and its generator returns the JSON
 value validated against that schema. It renders nothing and must be captured
 with `as`. Without the declaration it returns its rendered string, as before.
+Validation and capture happen only after the generator completes normally, so an
+unrecovered content failure reaches neither: nothing is validated and nothing is
+bound (§5.1.2).
 
 #### Roots
 
@@ -6094,7 +6241,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
 | 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<Result<string>>` (`yield*` for the completion Result) and has `.output` stream for chunks; once a handle exists every failure resolves `Err(error)` — completion never throws, so policy middleware (e.g. testing) can map outcomes without exception control flow |
 | 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
-| 75 | `useContent()` is contextual, not a function argument | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same contextual pattern as `env`/`evalScope`; supports named slots via `useContent("header")` |
+| 75 | Function-component content is contextual, not a function argument | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same contextual pattern as `env`/`evalScope`; supports named slots via `content("header")`, with `useContent()` kept as a compatibility alias |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |
 | 77 | Function component imported on every run | The current module must execute because functions are not serialized into a trace |
 | 78 | Internal durable-streams package | Provides journaling for the core runtime |

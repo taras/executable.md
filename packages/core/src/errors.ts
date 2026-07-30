@@ -53,6 +53,30 @@ export class DocumentationError extends Error {
 }
 
 /**
+ * What `content()` throws when the requested content fails to expand.
+ *
+ * `errors` holds the original `ErrorSegment` references in source order — not
+ * copies, and not a rendered string — so a component that recovers can inspect
+ * the same objects the document reports.
+ *
+ * Catching this at `yield* content()` is explicit recovery: the component
+ * decides what to render instead, and the failure never reaches its consumer.
+ * The same shape is presented under both `collect` and `throw`, so recovery
+ * code does not branch on the ambient policy. Left uncaught, normal
+ * continuation stops and the invocation boundary reports the original errors
+ * under the consumer's policy.
+ */
+export class ContentError extends Error {
+  readonly errors: readonly ErrorSegment[];
+
+  constructor(errors: readonly ErrorSegment[]) {
+    super(errors[0]?.message ?? "content failed to expand");
+    this.name = "ContentError";
+    this.errors = errors;
+  }
+}
+
+/**
  * A failure that says the journal no longer describes this run: a stale
  * recorded input (§6.11), or a divergence between what the journal holds and
  * what the run reached.

@@ -174,14 +174,23 @@ export type ComponentExecution<T> = Operation<T>;
  * string; a component declaring `export const returns` returns the JSON value
  * validated against that schema.
  *
- * Children are available via `useContent()` on the Effection scope:
+ * Invocation content is available contextually through `content()` — there is
+ * no `children` prop:
  * ```ts
- * import { useContent } from "@executablemd/core";
+ * import { content } from "@executablemd/core";
  * export default function*(props) {
- *   const content = yield* useContent();
- *   return `<div>${content}</div>`;
+ *   const rendered = yield* content();
+ *   return `<div>${rendered}</div>`;
  * }
  * ```
+ *
+ * That call is the component's failure boundary (spec §5.1.2): content that
+ * fails to expand throws `ContentError` there instead of returning, so a
+ * component validates its content before it acquires anything by calling
+ * `content()` first. Catching `ContentError` around the call is explicit
+ * recovery; uncaught, the invocation yields the original errors and the
+ * generator's return value is never used. `useContent(slot?)` is a
+ * compatibility alias with the same behavior.
  */
 export interface FunctionComponent {
   (props: Record<string, Json>): ComponentExecution<Json>;

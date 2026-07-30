@@ -2,14 +2,21 @@
  * Content projection (spec §6.3).
  *
  * A component invocation publishes a handle describing what it can project and
- * where. Every projection — Markdown `<Content />`, `useContent()`,
- * `renderChildren()` and `render()` — expands inside the invocation's content
- * scope, so its live effects belong to the invocation rather than to the caller
- * that wrote the content, and stop before the invocation cleans up its own.
+ * where. Every projection — Markdown `<Content />`, a function component's
+ * `content()`, and an eval block's `renderChildren()`, `render()` and
+ * `useContent()` bindings — expands inside the invocation's content scope, so
+ * its live effects belong to the invocation rather than to the caller that wrote
+ * the content, and stop before the invocation cleans up its own.
  *
  * `<Content />` differs only in how its segments are chosen: slots are resolved
  * during body substitution, and the resolved segments ride on the element the
- * handle claims. The other three ask the handle to select their segments.
+ * handle claims. The others ask the handle to select their segments.
+ *
+ * The two selecting methods differ in what a failure looks like. `project()`
+ * hands ErrorSegments back structurally, which is how a function component's
+ * `content()` recognizes a failed projection and raises `ContentError` at the
+ * author's call. `projectToString()` renders, so it needs somewhere to record
+ * errors a string would hide.
  *
  * The handle is deliberately not part of the public API: it carries the
  * invocation's slot map, its content scope and its enclosing handle, none of
@@ -54,6 +61,11 @@ export interface ProjectionHandle {
   /**
    * `project`, recording any ErrorSegments where the invocation collects them
    * before rendering, so a string result never hides a failure from `as=`.
+   *
+   * Requires that collector, which only an invocation that string-projects
+   * installs — a Markdown body's `renderChildren()`, `render()` and `useContent()`
+   * bindings. A handle without one fails the call rather than rendering errors
+   * away silently; function components project structurally and install none.
    */
   projectToString(request: ProjectionRequest): Operation<string>;
 }

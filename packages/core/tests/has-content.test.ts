@@ -8,8 +8,10 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
 import type { Operation } from "effection";
 import { renderSegments } from "../src/render.ts";
+import { Component } from "../src/component-api.ts";
 import { hasContent } from "../src/content-context.ts";
 import { component, expandAll, WATCH_BLOCK_OWN } from "./invocation-harness.ts";
 
@@ -54,5 +56,27 @@ describe("Tier IS — Invocation shape", () => {
 
     expect(renderSegments(expanded)).toContain("paired");
     expect(timeline).toEqual([]);
+  });
+
+  // IS5: the failing form of IS4. `content()` is the failure boundary, so
+  // content the component never asks for cannot fail it — a broken element in
+  // there is neither expanded nor reported. Counting `raise` is what shows it:
+  // a collecting policy renders a reported diagnostic and one that was never
+  // produced indistinguishably.
+  it("IS5: hasContent() does not expand or observe an error in the content", function* () {
+    const observed: string[] = [];
+    const expanded = yield* scoped(function* () {
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error.message);
+          return yield* next(error);
+        },
+      });
+      return yield* expandAll(`<Shape>\n<Missing />\n</Shape>`, { Shape: reporter("Shape") }, []);
+    });
+
+    expect(renderSegments(expanded)).toContain("paired");
+    expect(renderSegments(expanded)).not.toContain("ERROR");
+    expect(observed).toEqual([]);
   });
 });
