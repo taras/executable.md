@@ -57,7 +57,7 @@ export function component(
   name: string,
   body: () => Operation<string>,
 ): FunctionComponentDefinition {
-  return { kind: "function", name, path: `components/${name}.ts`, props: NO_PROPS, fn: body };
+  return { kind: "function", name, props: NO_PROPS, fn: body };
 }
 
 /**

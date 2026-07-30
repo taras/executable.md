@@ -91,7 +91,6 @@ function useBrokenExtension(): Operation<void> {
 const echoComponent: FunctionComponentDefinition = {
   kind: "function",
   name: "Echo",
-  path: "components/Echo.ts",
   props: { type: "object", properties: {}, additionalProperties: false },
   fn: () => content(),
 };
@@ -854,7 +853,6 @@ describe("function component content", () => {
     const card: FunctionComponentDefinition = {
       kind: "function",
       name: "Card",
-      path: "components/Card.ts",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn(_props) {
         const header = yield* content("header");

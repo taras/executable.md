@@ -94,7 +94,6 @@ function probe(name: string, log: Trace, options: ProbeOptions = {}): FunctionCo
   return {
     kind: "function",
     name,
-    path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
       const rendered = options.alias
@@ -125,7 +124,6 @@ function recovering(
   return {
     kind: "function",
     name,
-    path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
       try {
@@ -162,7 +160,6 @@ function forging(name: string, log: Trace, fabricated: ErrorSegment): FunctionCo
   return {
     kind: "function",
     name,
-    path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
       yield* recordEntry(log.effects, name);

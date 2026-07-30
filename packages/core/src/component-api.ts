@@ -24,6 +24,7 @@ import type {
   ComponentDefinition,
   ComponentElement,
   ComponentHandling,
+  ComponentRegistry,
   ErrorSegment,
   EvalEnv,
   FunctionComponentDefinition,
@@ -139,6 +140,18 @@ export interface ComponentApi {
    * provider that rejects the call rather than letting it succeed.
    */
   retain<T>(resource: () => Operation<T>): Operation<T>;
+  /**
+   * Components made resolvable by name for this scope (spec §5.3).
+   *
+   * Install with `registerComponents()` rather than by hand: each accepted
+   * batch adds one immutable layer that merges over what it inherited, so a
+   * nested registration shadows an outer one without changing it.
+   *
+   * Core's own components are not here. They are the terminal of
+   * `selectComponent()`, which both execution and inspection resolve through,
+   * so what this holds is only what a host or package added.
+   */
+  registry: ComponentRegistry;
 }
 
 export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
@@ -203,6 +216,7 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
   *retain<T>(_resource: () => Operation<T>): Operation<T> {
     throw new Error("Component.retain() has no provider: not inside a component invocation.");
   },
+  registry: new Map(),
 });
 
 export const importComponent: Operations<ComponentApi>["importComponent"] =
@@ -220,3 +234,4 @@ export const persistent: Operations<ComponentApi>["persistent"] = Component.oper
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
+export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;

@@ -24,8 +24,11 @@ export type {
   PropsSchema,
   ReturnsSchema,
   ComponentDefinition,
-  ImportResult,
-  ResolveResult,
+  ComponentOrigin,
+  ComponentRegistry,
+  ComponentSelection,
+  Registered,
+  RegistryEntry,
   SampleContext,
   Json,
   JsonObject,
@@ -94,8 +97,20 @@ export { useTerminalOutput } from "./src/output/terminal.ts";
 
 export { execute, Execution } from "./src/execute.ts";
 export type { ExecuteOptions, ExecutionApi, DocumentExecution } from "./src/execute.ts";
-export { inspectDocument } from "./src/inspect.ts";
-export type { DocumentInfo, InspectOptions } from "./src/inspect.ts";
+export { inspectComponent, inspectDocument } from "./src/inspect.ts";
+export type {
+  ComponentInfo,
+  DocumentInfo,
+  InspectComponentOptions,
+  InspectOptions,
+} from "./src/inspect.ts";
+
+// Component registration — scope-local names resolved ahead of package defaults.
+export { ComponentRegistrationError, registerComponents } from "./src/components/registration.ts";
+export type { ComponentRegistration } from "./src/components/registration.ts";
+export { DEFAULT_COMPONENT_DIRS, selectComponent } from "./src/components/select.ts";
+export type { SelectOptions } from "./src/components/select.ts";
+export { RESERVED_STRUCTURAL } from "./src/structural.ts";
 export { parseMarkdownDefinition } from "./src/definition.ts";
 export { compileDataUri, useDataUriCompiler } from "./src/data-uri-compiler.ts";
 export { compileTempFile, useTempFileCompiler } from "./src/temp-file-compiler.ts";
