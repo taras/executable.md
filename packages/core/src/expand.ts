@@ -199,7 +199,7 @@ interface ProjectionState {
   /**
    * The environment projected content expands in. Undefined leaves the ambient
    * one in place, which is how a function component publishes bindings to its
-   * own content: it installs an env and `useContent()` inherits it.
+   * own content: it installs an env and `content()` inherits it.
    */
   callerEnv: EvalEnv | undefined;
   meta: Record<string, unknown>;
@@ -1896,7 +1896,7 @@ function* expandFunctionComponent(
   const siteLoop = yield* ActiveLoop.get();
 
   // Call the function component inside its invocation, with content middleware
-  // in scope so it can render children via `yield* useContent()`.
+  // in scope so it can render its invocation content through `yield* content()`.
   try {
     const output = yield* withInvocation(function* (invocation) {
       const enclosing = yield* ActiveProjection.get();

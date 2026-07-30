@@ -243,7 +243,7 @@ export default define.page(function Components() {
         file whose default export is a generator function is a component too. It
         receives validated props, declares them with a named <code>props</code>
         {" "}
-        export, and reads its children with <code>content()</code>.
+        export, and reads its content with <code>content()</code>.
       </p>
       <CodeBlock filename="components/Section.ts">{TS_COMPONENT}</CodeBlock>
       <p>

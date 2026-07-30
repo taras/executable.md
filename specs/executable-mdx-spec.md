@@ -135,7 +135,7 @@ its own invocation:
 
 ```typescript
 yield* API.Env.around({ *cwd() { return directory; } }, { at: "min" });
-return yield* useContent();
+return yield* content();
 ```
 
 Everything expanded inside then observes that directory, including nested
@@ -1261,8 +1261,9 @@ three, nested:
   and daemons in a component's body anchor here.
 - a **content** scope, created at an invocation's first projection and shared by
   the rest of them (§6.3). Everything projected content creates anchors here —
-  Markdown `<Content />`, `useContent()`, `renderChildren()` and `render()`
-  alike.
+  Markdown `<Content />`, a function component's `content()`, and the
+  `renderChildren()`, `render()` and `useContent()` bindings injected into eval
+  blocks (§4.3) alike.
 
 #### The invocation boundary
 
@@ -2427,7 +2428,7 @@ policy-carrying closure rather than this alias.
 it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
 an empty string is still content — and only `<C />` does not. A component whose
 two forms mean different things branches on it without projecting, so asking
-the question never runs the children.
+the question never expands the invocation content.
 
 **Providers are scope-local middleware.** Behavior is installed with
 `Component.around(middlewares, { at })` and lasts until the installing
@@ -3401,7 +3402,7 @@ written there belongs to a `<Loop>` in that body, and is a diagnostic when the
 body has none. Content the caller projects **through** a component is the
 caller's text, written where the caller can see the loop, so a `<Break>` in it
 ends the caller's loop — whether the component renders it through `<Content />`,
-`useContent()`, or `renderChildren()`. Markdown the component itself produces
+`content()`, or `renderChildren()`. Markdown the component itself produces
 with `render()` is the component's own text and follows the body's rule.
 
 A projected `<Break>` stops the projected content and marks the caller's loop.
@@ -5796,7 +5797,7 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | IS1/IS2 | Paired forms have content | `<C>…</C>` and `<C></C>` both report content |
 | IS3 | Self-closing has none | `<C />` reports none |
-| IS4 | Asking does not project | A component that only calls `hasContent()` never runs the children it reports on |
+| IS4 | Asking does not project | A component that only calls `hasContent()` never expands the invocation content it reports on |
 | IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
 
 ### Tier RT — Retained resources

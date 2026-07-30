@@ -50,7 +50,7 @@ export function useContent(slotName?: string): Operation<string> {
  * @example
  * ```ts
  * if (yield* hasContent()) {
- *   return yield* useContent();
+ *   return yield* content();
  * }
  * ```
  */
