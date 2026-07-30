@@ -180,6 +180,10 @@ function assertExportsValidators(generated: string): void {
  * no `eval`, no `new Function`, and nothing author-controlled outside the string
  * literal.
  *
+ * Serializing twice follows from that: the inner call produces the JSON text, and
+ * the outer one turns that text into the JavaScript string literal the script
+ * parses.
+ *
  * The value is re-parsed from its own serialization first, so what the script
  * carries is provably nothing but JSON. `<` and the two Unicode line separators
  * are then escaped, which keeps the literal inert wherever it lands and
@@ -195,8 +199,6 @@ function assertExportsValidators(generated: string): void {
  */
 function jsonLiteral(value: JsonObject): string {
   const roundTripped: Json = parseJsonObject(JSON.parse(JSON.stringify(value)));
-  // Stringified twice on purpose: once to JSON text, and once to a JavaScript
-  // string literal holding that text.
   const literal = JSON.stringify(JSON.stringify(roundTripped))
     .replaceAll("<", "\\u003c")
     .replaceAll("\u2028", "\\u2028")
