@@ -282,7 +282,10 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // the content scope. Raising it there would poison the scope, and the
       // invocation's teardown would then re-report it as a teardown error,
       // replacing the documentation failure the caller is meant to see.
-      const outcome = withResolvers<{ segments: Segment[] } | { failure: unknown }>();
+      const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
+      // Shared with the expansion below, so a failure still leaves behind what it
+      // rendered before stopping.
+      const rendered: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
           yield* AmbientErrorPolicy.set(options.policy);
@@ -296,22 +299,22 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           }
           yield* ActiveProjection.set(options.inner);
           yield* ActiveLoop.set(options.loop);
-          outcome.resolve({
-            segments: yield* expandSegments(
-              options.segments,
-              options.meta,
-              options.props,
-              options.hideSet,
-              state.counter,
-            ),
-          });
+          yield* expandSegments(
+            options.segments,
+            options.meta,
+            options.props,
+            options.hideSet,
+            state.counter,
+            rendered,
+          );
+          outcome.resolve({ segments: rendered });
         } catch (error) {
-          outcome.resolve({ failure: error });
+          outcome.resolve({ segments: rendered, failure: error });
         }
       });
       yield* ensure(() => task.halt());
       const result = yield* outcome.operation;
-      if ("failure" in result) {
+      if (result.failure !== undefined) {
         throw result.failure;
       }
       return [...options.errors, ...result.segments];
@@ -319,6 +322,23 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   }
 
   function* runProjection(request: ProjectionRequest): Operation<Segment[]> {
+    const outcome = yield* runProjectionOutcome(request);
+    if (outcome.failure !== undefined) {
+      throw outcome.failure;
+    }
+    return outcome.segments;
+  }
+
+  /**
+   * Project, and report what happened rather than deciding it.
+   *
+   * `segments` holds everything rendered, which for a failure is everything
+   * rendered *before* it — expansion accumulates into the array as it goes, so
+   * a body that stops partway still surrenders what it produced.
+   */
+  function* runProjectionOutcome(
+    request: ProjectionRequest,
+  ): Operation<{ segments: Segment[]; failure?: unknown }> {
     const segments = select(request);
     const policy = request.policy ?? (yield* AmbientErrorPolicy.get()) ?? "collect";
     const contentScope = yield* state.invocation.useContentScope();
@@ -332,13 +352,17 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // the content scope (see runInContentScope): a throw-bound failure the
       // caller catches is explicit recovery, and the invocation must not
       // re-report it as a teardown error.
-      const outcome = withResolvers<{ segments: Segment[] } | { failure: unknown }>();
+      const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
+      // Shared with the expansion below, so a failure still leaves behind what it
+      // rendered before stopping.
+      const rendered: Segment[] = [];
+      // Slot errors are reported inside the policy-bound task, so an empty
+      // selection cannot settle them under the invocation's baseline. Held out
+      // here so a failure still reports them alongside what rendered.
+      const errors: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
           yield* AmbientErrorPolicy.set(policy);
-          // Slot errors are reported inside the policy-bound task, so an empty
-          // selection cannot settle them under the invocation's baseline.
-          const errors: Segment[] = [];
           if (!slotErrorsEmitted && slots.errors.length > 0) {
             slotErrorsEmitted = true;
             for (const slotError of slots.errors) {
@@ -358,24 +382,21 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           // Dynamic markdown is the component's own text, so it is not written
           // where the caller's loop is and cannot break it.
           yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
-          const rendered = yield* expandSegments(
+          yield* expandSegments(
             project(segments),
             state.meta,
             state.props,
             state.hideSet,
             state.counter,
+            rendered,
           );
           outcome.resolve({ segments: [...errors, ...rendered] });
         } catch (error) {
-          outcome.resolve({ failure: error });
+          outcome.resolve({ segments: [...errors, ...rendered], failure: error });
         }
       });
       yield* ensure(() => task.halt());
-      const result = yield* outcome.operation;
-      if ("failure" in result) {
-        throw result.failure;
-      }
-      return result.segments;
+      return yield* outcome.operation;
     });
   }
 
@@ -411,6 +432,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       });
     },
     project: runProjection,
+    tryProject: runProjectionOutcome,
     *projectToString(request: ProjectionRequest): Operation<string> {
       const collect = state.collect;
       if (collect === undefined) {
@@ -472,8 +494,15 @@ export function* expandSegments(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter = createBlockCounter(),
+  /**
+   * Where to accumulate, when the caller wants what was rendered even if this
+   * does not finish. Expansion appends as it goes, so a caller holding the same
+   * array still has everything produced before a failure — which is how a
+   * `<Test>` keeps its output when its body stops partway.
+   */
+  collect?: Segment[],
 ): Operation<Segment[]> {
-  const result: Segment[] = [];
+  const result: Segment[] = collect ?? [];
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
   const loop = yield* ActiveLoop.get();
@@ -2008,6 +2037,19 @@ function* expandFunctionComponent(
           // deno-lint-ignore require-yield
           *invocation(_args, _next) {
             return metadata;
+          },
+          *tryContent([slotName], _next) {
+            const outcome = yield* handle.tryProject({ kind: "slot", name: slotName });
+            // A documentation failure is presented in the public shape, as
+            // `content()` does, so a component recovering from one sees the
+            // same thing either way.
+            const failure =
+              outcome.failure instanceof DocumentationError
+                ? new ContentExpansionFailure([outcome.failure.segment], outcome.failure)
+                : outcome.failure;
+            return failure === undefined
+              ? { text: renderSegments(outcome.segments) }
+              : { text: renderSegments(outcome.segments), failure };
           },
         },
         { at: "min" },
