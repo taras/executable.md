@@ -24,7 +24,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
-import { builtInComponent } from "../src/components/registry.ts";
+import { CORE_REGISTRY } from "../src/components/registry.ts";
 import { Component, raise } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
@@ -147,9 +147,9 @@ interface Observation {
  */
 function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operation<Observation> {
   return scoped(function* () {
-    const definition = builtInComponent("File");
+    const definition = CORE_REGISTRY.get("File")?.default?.definition;
     if (!definition) {
-      throw new Error("the File built-in is missing");
+      throw new Error("the File component core supplies is missing");
     }
     const raised: ErrorSegment[] = [];
     const failures: DocumentationError[] = [];

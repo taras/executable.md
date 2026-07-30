@@ -19,17 +19,18 @@ import {
   ephemeral,
   type DurableStream,
 } from "@executablemd/durable-streams";
-import { exec, readTextFile, stat, cwd } from "@executablemd/runtime";
+import { exec, readTextFile, cwd } from "@executablemd/runtime";
+import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import type {
   ComponentDefinition,
+  ComponentRegistry,
   FunctionComponent,
   FunctionComponentDefinition,
   JsonObject,
   PropsSchema,
   ReturnsSchema,
-  ImportResult,
 } from "./types.ts";
 import { parseJsonObject } from "./json.ts";
 import { compilePropsSchema, compileReturnsSchema, validateProps } from "./validate.ts";
@@ -60,7 +61,12 @@ import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
-import { builtInComponent } from "./components/registry.ts";
+import {
+  DEFAULT_COMPONENT_DIRS,
+  effectiveRegistry,
+  selectComponent,
+  unresolvedMessage,
+} from "./components/select.ts";
 import type { EvalEnv } from "./types.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
@@ -82,52 +88,92 @@ export interface ExecuteOptions {
   modifiers?: Record<string, ModifierFactory>;
 }
 
+/**
+ * What resolving a name decided, in a form the journal can hold.
+ *
+ * Selection is an observation of the environment — which files exist, what is
+ * registered — so it belongs inside the durable operation with the read it
+ * leads to. A registration is recorded by origin rather than by value: a
+ * function cannot be serialized, so replay restores the origin and looks the
+ * implementation up again in the scope that is running now.
+ */
+type DurableSelection =
+  | { kind: "repository"; path: string; content: string }
+  | { kind: "registered"; origin: string; reserved: boolean };
+
 function* durableImportComponent(
   name: string,
   rootDocPath: string | undefined,
   searchPaths: string[],
+  registry: ComponentRegistry,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
-  // A built-in is already in the module graph: no path to resolve, no file to
-  // read, and so nothing to journal — a replay has nothing to restore
-  // differently. The definition is module-resident and reused; what varies
-  // between runs is what an invocation of it creates.
-  const builtIn = builtInComponent(name);
-  if (builtIn) {
-    return builtIn;
-  }
-
-  const result = (yield createDurableOperation<ImportResult>(
+  const selection = (yield createDurableOperation<DurableSelection>(
     { type: "import_component", name },
-    function* (): Operation<ImportResult> {
-      // Resolve the path — runs inside Operation context
-      let path: string;
-
+    function* (): Operation<DurableSelection> {
       if (name === "__root__" && rootDocPath) {
-        path = rootDocPath;
-      } else {
-        path = yield* resolveComponentPath(name, searchPaths);
+        return { kind: "repository", path: rootDocPath, content: yield* readTextFile(rootDocPath) };
       }
 
-      const content = yield* readTextFile(path);
+      const selected = yield* selectComponent(name, { componentDirs: searchPaths, registry });
 
-      return { path, content };
+      switch (selected.kind) {
+        case "repository":
+          return {
+            kind: "repository",
+            path: selected.path,
+            content: yield* readTextFile(selected.path),
+          };
+        case "registered":
+          return {
+            kind: "registered",
+            origin: selected.origin.kind === "registered" ? selected.origin.origin : "",
+            reserved: selected.origin.kind === "registered" && selected.origin.reserved,
+          };
+        case "structural":
+          throw new Error(
+            `${name} is structural syntax the engine owns, so it never resolves a component`,
+          );
+        case "unresolved":
+          throw new Error(unresolvedMessage(name, selected.searched));
+      }
     },
-  )) as ImportResult;
+  )) as DurableSelection;
+
+  if (selection.kind === "registered") {
+    // The function was never journaled. Find the implementation the recorded
+    // origin names in the registry this run has; refusing when it is gone is
+    // what keeps a replay from quietly invoking somebody else's component.
+    const entry = effectiveRegistry(registry).get(name);
+    const found = selection.reserved ? entry?.reserved : entry?.default;
+    if (!found || found.origin !== selection.origin) {
+      const kind = selection.reserved ? "reserved registration" : "registration";
+      throw new Error(
+        `Component ${name} was recorded as the ${kind} "${selection.origin}", which is not ` +
+          `registered in this run${found ? ` — "${found.origin}" is registered instead` : ""}.`,
+      );
+    }
+    return found.definition;
+  }
+
+  const { path, content } = selection;
 
   // Function component: .ts file — import() the module
-  if (isFunctionComponentPath(result.path)) {
-    // Resolve to absolute path for dynamic import
-    const currentDir = yield* ephemeral(cwd());
-    const absolutePath = result.path.startsWith("/") ? result.path : `${currentDir}/${result.path}`;
+  if (isFunctionComponentPath(path)) {
+    // Against the process's directory, not the contextual `Env.cwd`: the search
+    // that chose this path stats there too, so a component that rebinds `cwd`
+    // for its content — `<TempDir>` — does not change which components that
+    // content can resolve, or leave a selected path unloadable.
+    const currentDir = yield* ephemeral(processCwd());
+    const absolutePath = path.startsWith("/") ? path : `${currentDir}/${path}`;
     const mod = yield* ephemeral(until(import(`file://${absolutePath}`)));
     if (typeof mod !== "object" || mod === null) {
-      throw new Error(`Function component "${name}" at ${result.path} did not load a module`);
+      throw new Error(`Function component "${name}" at ${path} did not load a module`);
     }
 
     const defaultExport = "default" in mod ? mod.default : undefined;
     if (!isFunctionComponent(defaultExport)) {
       throw new Error(
-        `Function component "${name}" at ${result.path} must have a default export that is a generator function`,
+        `Function component "${name}" at ${path} must have a default export that is a generator function`,
       );
     }
 
@@ -141,7 +187,6 @@ function* durableImportComponent(
     const definition: FunctionComponentDefinition = {
       kind: "function",
       name,
-      path: result.path,
       props,
       fn: defaultExport,
     };
@@ -156,56 +201,11 @@ function* durableImportComponent(
   }
 
   // Markdown component: parse at runtime — deterministic from content
-  return parseMarkdownDefinition(name, result.path, result.content);
+  return parseMarkdownDefinition(name, path, content);
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
   return typeof value === "function";
-}
-
-function* resolveComponentPath(name: string, searchPaths: string[]): Operation<string> {
-  const baseName = name.replace(/\./g, "/");
-
-  for (const dir of searchPaths) {
-    // Try {dir}/{Name}.md (backward compat — .md wins over .ts)
-    const mdCandidate = normalizePath(dir === "." ? `${baseName}.md` : `${dir}/${baseName}.md`);
-    const mdStat = yield* stat(mdCandidate);
-    if (mdStat.exists && mdStat.isFile) {
-      return mdCandidate;
-    }
-
-    // Try {dir}/{Name}.ts (function component)
-    const tsCandidate = normalizePath(dir === "." ? `${baseName}.ts` : `${dir}/${baseName}.ts`);
-    const tsStat = yield* stat(tsCandidate);
-    if (tsStat.exists && tsStat.isFile) {
-      return tsCandidate;
-    }
-
-    // Try {dir}/{Name}/index.md
-    const indexMdCandidate = normalizePath(
-      dir === "." ? `${baseName}/index.md` : `${dir}/${baseName}/index.md`,
-    );
-    const indexMdStat = yield* stat(indexMdCandidate);
-    if (indexMdStat.exists && indexMdStat.isFile) {
-      return indexMdCandidate;
-    }
-
-    // Try {dir}/{Name}/index.ts
-    const indexTsCandidate = normalizePath(
-      dir === "." ? `${baseName}/index.ts` : `${dir}/${baseName}/index.ts`,
-    );
-    const indexTsStat = yield* stat(indexTsCandidate);
-    if (indexTsStat.exists && indexTsStat.isFile) {
-      return indexTsCandidate;
-    }
-  }
-
-  throw new Error(`Cannot resolve component: ${name} (searched: ${searchPaths.join(", ")})`);
-}
-
-/** Strip leading ./ from paths for workspace-relative normalization. */
-function normalizePath(path: string): string {
-  return path.replace(/^\.\//, "");
 }
 
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>
@@ -457,7 +457,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
     path: rootPath,
     stream,
     props = {},
-    componentDirs = ["components", "."],
+    componentDirs = [...DEFAULT_COMPONENT_DIRS],
     modifiers: customModifiers = {},
   } = options;
 
@@ -519,10 +519,14 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       yield* Component.around(
         {
           *importComponent([name], _next) {
+            // Read per import, in the invoking scope, so a component registered
+            // by a nested scope is visible to what that scope expands.
+            const registered = yield* Component.operations.registry;
             return yield* durableImportComponent(
               name,
               name === "__root__" ? rootPath : undefined,
               componentDirs,
+              registered,
             );
           },
           *applyModifiers([modifiers, context], _next) {

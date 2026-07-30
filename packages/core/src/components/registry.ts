@@ -1,88 +1,59 @@
 /**
- * Components core owns (specs/executable-mdx-spec.md §5.3).
+ * The components core supplies (spec §5.3).
  *
- * A built-in resolves no source file: it is already in the module graph, so it
- * ships in the compiled binary and every published package without a search
- * path or a bundling step. Import consults this map and returns the definition
- * directly.
+ * They resolve no source file: each is already in the module graph, so it ships
+ * in the compiled binary and every published package without a search path or a
+ * bundling step.
  *
- * Deliberately module-private — not exported from `mod.ts`. What is contracted
- * is only that a built-in resolves with no path and no search directory; where
- * this lookup sits relative to filesystem resolution is incidental and may
- * change. What a host may add, what happens when a repository file shares one
- * of these names, and how inspection reports the choice are #202's to settle.
+ * They are ordinary **defaults**, not reserved names. A repository component
+ * with one of these names is chosen ahead of the default, exactly as it would
+ * be ahead of any other package's registration. Nothing here claims a name a
+ * document cannot take back.
+ *
+ * This is the terminal of `selectComponent()` rather than an installation, so
+ * execution and inspection resolve against the same defaults without either one
+ * having to install them.
  */
 
-import type { FunctionComponentDefinition } from "../types.ts";
+import type { ComponentRegistry, RegistryEntry } from "../types.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import File, { props as fileProps } from "./File.ts";
 import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
 import { parseJsonObject } from "../json.ts";
+import type { FunctionComponent, PropsSchema, ReturnsSchema } from "../types.ts";
 
-const BUILT_IN: ReadonlyMap<string, FunctionComponentDefinition> = new Map<
-  string,
-  FunctionComponentDefinition
->([
-  [
-    "TempDir",
-    {
-      kind: "function",
-      name: "TempDir",
-      // Synthetic: the definition shape carries a path, but a built-in has
-      // no file to name. Nothing resolves against it and nothing reads it
-      // back — it exists so diagnostics can say where the component came from.
-      path: "<built-in>/TempDir",
-      props: parseJsonObject(tempDirProps),
-      fn: TempDir,
-    },
-  ],
-  [
-    "File",
-    {
-      kind: "function",
-      name: "File",
-      path: "<built-in>/File",
-      props: parseJsonObject(fileProps),
-      fn: File,
-    },
-  ],
-  [
-    "Glob",
-    {
-      kind: "function",
-      name: "Glob",
-      path: "<built-in>/Glob",
-      props: parseJsonObject(globProps),
-      returns: parseJsonObject(globReturns),
-      fn: Glob,
-    },
-  ],
-  [
-    "Parse",
-    {
-      kind: "function",
-      name: "Parse",
-      path: "<built-in>/Parse",
-      props: parseJsonObject(parseProps),
-      returns: parseJsonObject(parseReturns),
-      fn: Parse,
-    },
-  ],
-  [
-    "SafeParse",
-    {
-      kind: "function",
-      name: "SafeParse",
-      path: "<built-in>/SafeParse",
-      props: parseJsonObject(safeParseProps),
-      returns: parseJsonObject(safeParseReturns),
-      fn: SafeParse,
-    },
-  ],
-]);
+/** The origin every core component reports to inspection. */
+export const CORE_ORIGIN = "@executablemd/core";
 
-export function builtInComponent(name: string): FunctionComponentDefinition | undefined {
-  return BUILT_IN.get(name);
+function core(
+  name: string,
+  fn: FunctionComponent,
+  props: PropsSchema,
+  returns?: ReturnsSchema,
+): [string, RegistryEntry] {
+  return [
+    name,
+    {
+      default: {
+        definition: {
+          kind: "function",
+          name,
+          props,
+          ...(returns === undefined ? {} : { returns }),
+          fn,
+        },
+        origin: CORE_ORIGIN,
+      },
+    },
+  ];
 }
+
+export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
+  core("TempDir", TempDir, parseJsonObject(tempDirProps)),
+  core("File", File, parseJsonObject(fileProps)),
+  core("Glob", Glob, parseJsonObject(globProps), parseJsonObject(globReturns)),
+  core("Parse", Parse, parseJsonObject(parseProps), parseJsonObject(parseReturns)),
+  core("SafeParse", SafeParse, parseJsonObject(safeParseProps), parseJsonObject(safeParseReturns)),
+]);

@@ -34,8 +34,13 @@ export const props = {
  * Any JSON value, because content may legitimately be an object, an array, a
  * scalar, or `null`. The caller's `schema` prop is the real contract, checked
  * inside this component by an Ajv that cannot transform what it validates.
+ *
+ * The `$schema` marker is what says "a schema, taken as written". A `returns`
+ * object carrying neither `type` nor `$schema` is the concise shorthand for an
+ * object's properties (§5.1.1), so a bare `{}` would declare an object with no
+ * properties — the opposite of any value.
  */
-export const returns = {};
+export const returns = { $schema: "http://json-schema.org/draft-07/schema#" };
 
 export default function* (props: Record<string, Json>): Operation<Json> {
   const validate = compileParseSchema("Parse", props.schema);

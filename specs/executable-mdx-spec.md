@@ -1434,6 +1434,11 @@ run but are absent from the diagnostic trace.
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
 | `src/content-context.ts` | `useContent()`, `hasContent()` — compatibility aliases for the canonical `content(slot?)` (§5.5) |
+| `src/structural.ts` | `RESERVED_STRUCTURAL` — the structural constructs, reserved against registration and repository files (§5.3) |
+| `src/scope-local.ts` | `updateOwn()`, `readOwn()` — own-scope context updates, the one use of `Scope.hasOwn` (§5.3) |
+| `src/components/registration.ts` | `registerComponents()`, `ComponentRegistration`, `ComponentRegistrationError`, `mergeRegistry()` — scope-local registration (§5.3) |
+| `src/components/select.ts` | `selectComponent()`, `DEFAULT_COMPONENT_DIRS` — the resolver execution and inspection share (§5.3) |
+| `src/components/registry.ts` | `CORE_REGISTRY` — the components core supplies, as non-reserved defaults (§5.3) |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
@@ -2121,67 +2126,136 @@ Parsing the current content into frontmatter and segments is a **runtime
 operation** that runs after the journaled operation returns. It is
 deterministic from the content, so it needs no separate journal entry.
 
-#### Built-in components
+#### Registration and resolution order
+
+A component name is resolved in tiers, and the first tier that answers wins:
+
+1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
+   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`. These are the language's own
+   constructs. They are reserved: a registration cannot claim one, and a
+   repository file named after one never stands in for it. A structural name
+   written where its construct gives it no meaning is a diagnostic, not a
+   missing component.
+2. **a reserved registration** — a host protecting a language or security
+   invariant.
+3. **a repository-local file**, by the candidate order below.
+4. **a registered default**, including the components core supplies.
+5. **nothing**, which is the unresolved diagnostic.
+
+So a repository component overrides any ordinary package default, core's
+included, and a reserved registration overrides the repository. Only genuine
+absence falls through to a default: a candidate that exists but cannot be read,
+imported, parsed, or compiled fails where it is loaded, so a broken local
+component is never quietly replaced.
+
+Two registrations for one name and kind at the same scope are a configuration
+error naming both origins. Installation order is not a resolution mechanism —
+reserved and default registrations are held apart, so which one wins is decided
+by the tiers above however they were installed.
+
+**Registration is scope-local.** `registerComponents()` makes names resolvable
+for the installing scope and its descendants. A child scope may register a name
+its parent already registered — that shadows, and the parent is unchanged.
+Siblings and concurrent executions never see one another's registrations, and
+leaving the installing scope removes them. Registering describes a component; it
+runs nothing and acquires nothing. Names and schemas are validated where they
+are installed, so a malformed registration is an error in the host rather than a
+diagnostic that appears the first time a document writes the name.
+
+#### The components core supplies
 
 Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
-`<SafeParse>` (§6.12), `<File>` (§6.13), and `<Glob>` (§6.14). A built-in resolves no path and
-reads no file: it is already in the module graph, so it ships in the compiled
-binary and every published package without a search path or a bundling step,
-and a document invokes it with no `--component-dir`.
+`<SafeParse>` (§6.12), `<File>` (§6.13), and `<Glob>` (§6.14). Each is already
+in the module graph, so it ships in the compiled binary and every published
+package without a search path or a bundling step, and a document invokes it with
+no `--component-dir`.
 
-Because there is no resolution and no read, a built-in produces **no
-`import_component` journal entry**: there is no path to resolve and no file to
-re-read, so a replay has nothing to restore differently.
+They are ordinary **defaults**, not reserved names: a repository component
+called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
+ahead of any other package's registration. Nothing core supplies claims a name a
+document cannot take back.
 
-The definition itself is module-resident and reused — one object, held by the
-registry for the life of the process. That is not what varies between runs.
-What each `<TempDir>` invocation creates fresh is the directory (§6.11); the
-component describing it is the same one every time.
+The definitions are module-resident and reused — one object per component for
+the life of the process. That is not what varies between runs. What each
+`<TempDir>` invocation creates fresh is the directory (§6.11); the component
+describing it is the same one every time.
 
-A definition still carries a `path`, which every consumer of the shape expects.
-For a built-in that field is a synthetic identity — `<built-in>/TempDir` — that
-names no file and resolves against no directory. It appears in diagnostics, not
-in the journal, and nothing reads it back.
+A definition carries no path. A registration names no file, and a repository
+definition's source is already described by the selection that chose it, so
+source identity lives on the selection rather than being copied onto every
+definition.
 
-What is specified is that core can resolve a built-in with no filesystem path
-and no search directory. What happens when a repository-local component shares
-a built-in name is **unspecified** — a document must not rely on either
-resolving. That question, along with what a host may add and how inspection
-reports the choice, is owned by issue #202.
+#### Origin
 
+Every selected implementation has a structured origin, and one resolver answers
+for both execution and inspection so they cannot disagree about which tier won:
 
 ```typescript
-interface ImportResult {
-  path: string;           // Workspace-relative, from Resolve Api
-  content: string;        // Raw file content
-}
+type ComponentOrigin =
+  | { kind: "structural"; construct: string }
+  | { kind: "repository"; path: string }
+  | { kind: "registered"; origin: string; reserved: boolean };
+```
+
+`inspectComponent(name)` reports the selected kind and origin without running
+anything. A registration and a Markdown file describe themselves fully — both
+are already parsed or already in the module graph. A repository `.ts` component
+reports only where it is: its schemas live on the module's exports, and loading
+the module would run its top-level code. Collision and unresolved diagnostics
+name the origins and the searched locations they considered.
+
+
+Which implementation a name resolves to is an observation of the environment —
+which files exist, and what is registered — so it is made **inside** the durable
+operation, with the read it leads to. What the journal holds is serializable: a
+repository selection records the chosen path and its content, and a registration
+records its origin, never its function.
+
+```typescript
+type DurableSelection =
+  | { kind: "repository"; path: string; content: string }
+  | { kind: "registered"; origin: string; reserved: boolean };
 
 function* durableImportComponent(
   name: string,
-): Workflow<ComponentDefinition> {
-  // Single durable effect: resolve + read
-  const result = (yield createDurableOperation<ImportResult>(
+): Workflow<ComponentDefinition | FunctionComponentDefinition> {
+  // Single durable effect: select + read
+  const selection = (yield createDurableOperation<DurableSelection>(
     { type: "import_component", name },
     function* () {
-      // Resolve via Api — middleware runs here during live execution
-      const { path } = yield* Resolve.operations.resolve(name);
+      const selected = yield* selectComponent(name, { componentDirs, registry });
 
-      // Read file via runtime
-      const readTextFile = API.Fs.operations.readTextFile;
-      const content = yield* readTextFile(path);
-
-      return { path, content } as ImportResult;
+      if (selected.kind === "repository") {
+        const readTextFile = API.Fs.operations.readTextFile;
+        return { kind: "repository", path: selected.path,
+                 content: yield* readTextFile(selected.path) };
+      }
+      if (selected.kind === "registered") {
+        return { kind: "registered", origin: selected.origin.origin,
+                 reserved: selected.origin.reserved };
+      }
+      throw new Error(`Cannot resolve component: ${name} (searched: …)`);
     },
-  )) as ImportResult;
+  )) as DurableSelection;
+
+  // A registration is restored by origin: the implementation comes from the
+  // registry this run has, and a recorded origin that is no longer registered
+  // fails rather than quietly invoking a different component.
+  if (selection.kind === "registered") {
+    const found = lookUp(name, selection);
+    if (!found) {
+      throw new Error(`Component ${name} was recorded as "${selection.origin}", …`);
+    }
+    return found.definition;
+  }
 
   // Function component: .ts file — import() the module
-  if (result.path.endsWith(".ts")) {
-    const absolutePath = `${process.cwd()}/${result.path}`;
+  if (selection.path.endsWith(".ts")) {
+    const absolutePath = `${process.cwd()}/${selection.path}`;
     const mod = yield* call(() => import(`file://${absolutePath}`));
     return {
       kind: "function" as const,
       name,
-      path: result.path,
       props: mod.props === undefined
         ? { type: "object", properties: {}, additionalProperties: false }
         : parseJsonObject(mod.props),
@@ -2190,13 +2264,13 @@ function* durableImportComponent(
   }
 
   // Markdown component: parse at runtime — deterministic from content
-  const { data: frontmatter, content: body } = grayMatter(result.content);
+  const { data: frontmatter, content: body } = grayMatter(selection.content);
   const { meta, props } = parseFrontmatter(frontmatter);
   const bodySegments = scanSegments(body);
 
   return {
     name,
-    path: result.path,
+    path: selection.path,
     meta,
     props,
     bodySegments,
@@ -2209,12 +2283,21 @@ function* durableImportComponent(
 ```json
 { "type": "import_component", "name": "Greeting" }
 { "status": "ok", "value": {
+    "kind": "repository",
     "path": "components/Greeting.md",
     "content": "---\nemoji: 👋\n..." } }
+
+{ "type": "import_component", "name": "TempDir" }
+{ "status": "ok", "value": {
+    "kind": "registered",
+    "origin": "@executablemd/core",
+    "reserved": false } }
 ```
 
-One journal entry per component. The entry captures both *which file was found*
-(path) and *what was in it* (content) for current-run diagnostics.
+One journal entry per component, whatever it resolved to. A repository entry
+captures both *which file was found* (path) and *what was in it* (content); a
+registration entry captures the origin that named it, because a function cannot
+be serialized and the implementation is looked up again on replay.
 
 ```typescript
 // A component's declared props interface is a canonical draft-07 JSON
@@ -4211,9 +4294,9 @@ record as an ordinary `error` outcome onto a journal already known not to
 describe the run.
 
 This is a limitation of the current durable model, not of the component. The
-absence of an `import_component` entry for a built-in (§5.3) says nothing about
-it — the risk lies with the effects *inside* the directory, not with resolving
-the component. Re-executing recorded effects inside a freshly established
+`import_component` entry recording that `<TempDir>` resolved to core's
+registration (§5.3) says nothing about it — the risk lies with the effects
+*inside* the directory, not with resolving the component. Re-executing recorded effects inside a freshly established
 environment is issue #218.
 
 The standalone form is outside this gate, and cannot be brought inside it. A
@@ -5693,7 +5776,7 @@ visible warning blocks, collect into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| TD1 | Built-in resolution | The name resolves with no component directory and no file on disk, and the journal records no `import_component` entry for it |
+| TD1 | Core-default resolution | The name resolves with no component directory and no file on disk, and the journal records the registered selection |
 | TD2 | Contextual working directory | An `exec` block inside reports the temporary directory, canonical on both sides |
 | TD3 | Restoration | A block after the element reports the previous working directory |
 | TD4 | Isolation | Nested and sibling instances are distinct, and the inner one restores the outer's |
@@ -5790,6 +5873,44 @@ visible warning blocks, collect into a separate error report).
 | FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
 | FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |
 | FA19 | Cycles through a content failure | A self-caused content failure and one whose cause points back at the wrapper holding it both terminate, and the durability failure is still found |
+
+### Tier CR — Component registration and resolution
+
+| # | Test | Verify |
+|---|------|--------|
+| CR1 | Structural names are not registrable | Registering `Loop` fails at installation |
+| CR2 | Name validation | A name a document could not write is rejected; a dotted name is accepted |
+| CR3/CR4 | Schema validation | An unusable props or returns schema fails at installation, not at invocation |
+| CR5 | Registration is inert | Registering runs no component and acquires no resource |
+| CR6 | Rollback | A rejected batch installs nothing and leaves the collision index unchanged |
+| CR7 | Same-scope duplicates | Two registrations for one name and kind at one scope fail, naming both origins |
+| CR8 | Kinds coexist | A reserved and a default registration for one name may both exist; reserved resolves |
+| CR9–CR13 | Scope locality | A child shadows its parent and restores it on exit; siblings and concurrent scopes are isolated |
+| CR14 | Structural wins | A structural name resolves to the construct, never to a component |
+| CR15 | Reserved over repository | A reserved registration outranks a file on disk |
+| CR16 | Repository over default | A repository file outranks a registered default, including each of core's |
+| CR17 | Defaults resolve | Core's components resolve with nothing on disk |
+| CR18 | Unresolved | The diagnostic names the searched directories and the registered origins considered |
+| CR19/CR20 | Candidate order | Markdown before TypeScript, earlier directories first, dots addressing subdirectories |
+| CR21 | Order independence | Reserved beats default however the two were installed, across scopes and within one |
+| CR22 | End to end | A repository component replaces one of core's in a running document |
+| CR23 | Broken local component | A file that exists but cannot be used fails; it does not fall back to the default |
+| CR24 | Structural is not shadowed | A file named after a construct never supplies it |
+| CR25–CR29 | Inspection | Inspection agrees with execution, describes structural and unresolved names, and never imports a repository `.ts` |
+| CR30 | Defaults are journaled | A core default records an `import_component` entry and replays without re-running |
+| CR31 | Repository replay | The entry holds path and content, and a replay never probes the filesystem |
+| CR32 | Registration replay | A reserved registration records its origin and replays |
+| CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
+
+### Tier SL — Own-scope context updates
+
+| # | Test | Verify |
+|---|------|--------|
+| SL1/SL2 | Writing | The first write starts from empty; repeated writes at one scope accumulate |
+| SL3 | Rollback | An update that throws leaves the scope unchanged and still usable |
+| SL4/SL5 | Inheritance | A child starts empty, never mutates what it inherited, and leaves the parent's value intact |
+| SL6/SL7 | Isolation | Sibling and concurrent scopes cannot see one another |
+| SL8 | Lifetime | What a scope wrote is gone once it exits |
 
 ### Tier IS — Invocation shape
 

@@ -192,7 +192,6 @@ function echoComponent(name: string): FunctionComponentDefinition {
   return {
     kind: "function",
     name,
-    path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
       return yield* content();
@@ -205,7 +204,6 @@ function throwingComponent(name: string, failure: unknown): FunctionComponentDef
   return {
     kind: "function",
     name,
-    path: `${name}.ts`,
     props: OPEN_SCHEMA,
     // deno-lint-ignore require-yield
     *fn(_props) {
@@ -224,7 +222,6 @@ function recoveringComponent(name: string, caught: ContentError[]): FunctionComp
   return {
     kind: "function",
     name,
-    path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
       try {

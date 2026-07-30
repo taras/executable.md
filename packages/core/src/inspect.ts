@@ -1,8 +1,10 @@
 import type { Operation } from "effection";
 import { readTextFile } from "@executablemd/runtime";
 
-import type { PropsSchema, ReturnsSchema } from "./types.ts";
+import type { ComponentOrigin, PropsSchema, ReturnsSchema } from "./types.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
+import { Component } from "./component-api.ts";
+import { selectComponent } from "./components/select.ts";
 
 const TEXT_RETURN_SCHEMA: ReturnsSchema = { type: "string" };
 
@@ -60,4 +62,80 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
     returns: definition.returns ?? TEXT_RETURN_SCHEMA,
     returnMode: definition.returns === undefined ? "text" : "value",
   };
+}
+
+export interface InspectComponentOptions {
+  /** The name a document would write. */
+  name: string;
+  /** Where to look, matching the search path execution uses. */
+  componentDirs?: string[];
+}
+
+/**
+ * What a name resolves to, and how much of it can be described without running
+ * anything.
+ *
+ * A registration and a Markdown file describe themselves fully — both are
+ * already parsed or already in the module graph. A repository `.ts` component
+ * reports only where it is: its schemas live on the module's exports, and
+ * loading the module would run its top-level code.
+ */
+export type ComponentInfo =
+  | { kind: "structural"; construct: string; origin: ComponentOrigin }
+  | {
+      kind: "registered";
+      origin: ComponentOrigin;
+      props: PropsSchema;
+      returns?: ReturnsSchema;
+    }
+  | { kind: "markdown"; origin: ComponentOrigin; props: PropsSchema; returns?: ReturnsSchema }
+  | { kind: "function"; origin: ComponentOrigin }
+  | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
+
+/**
+ * Describe what a component name resolves to, without running it.
+ *
+ * Inspection and execution share `selectComponent`, so they cannot disagree
+ * about which tier wins. Describing a name imports no TypeScript module,
+ * expands nothing, parses no candidate that was not selected, and creates no
+ * journal.
+ */
+export function* inspectComponent(options: InspectComponentOptions): Operation<ComponentInfo> {
+  const { name, componentDirs } = options;
+  const registry = yield* Component.operations.registry;
+  const selected = yield* selectComponent(name, { componentDirs, registry });
+
+  switch (selected.kind) {
+    case "structural":
+      return {
+        kind: "structural",
+        construct: selected.construct,
+        origin: { kind: "structural", construct: selected.construct },
+      };
+    case "registered":
+      return {
+        kind: "registered",
+        origin: selected.origin,
+        props: selected.definition.props,
+        ...(selected.definition.returns === undefined
+          ? {}
+          : { returns: selected.definition.returns }),
+      };
+    case "unresolved":
+      return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
+    case "repository": {
+      const origin: ComponentOrigin = { kind: "repository", path: selected.path };
+      if (isFunctionComponentPath(selected.path)) {
+        return { kind: "function", origin };
+      }
+      const source = yield* readTextFile(selected.path);
+      const definition = parseMarkdownDefinition(name, selected.path, source);
+      return {
+        kind: "markdown",
+        origin,
+        props: definition.props,
+        ...(definition.returns === undefined ? {} : { returns: definition.returns }),
+      };
+    }
+  }
 }

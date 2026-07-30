@@ -151,11 +151,6 @@ export interface ComponentDefinition {
   bodySegments: Segment[];
 }
 
-export interface ImportResult extends Record<string, Json> {
-  path: string;
-  content: string;
-}
-
 /**
  * One run of a component: durable-capable, and free to acquire runtime
  * resources that belong to the component invocation.
@@ -197,21 +192,63 @@ export interface FunctionComponent {
 }
 
 /**
- * Definition for a function component (.ts file).
- * Distinguished from ComponentDefinition by the `kind` field.
+ * Definition for a function component — a repository `.ts` file or a
+ * registration. Distinguished from ComponentDefinition by the `kind` field.
+ *
+ * It carries no path. A registration is module-resident and names no file, and
+ * a repository definition's source is already described by the
+ * `ComponentSelection` that chose it, so source identity lives there rather
+ * than being copied onto every definition (spec §5.3).
  */
 export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
-  path: string;
   props: PropsSchema;
   returns?: ReturnsSchema;
   fn: FunctionComponent;
 }
 
-export interface ResolveResult {
-  path: string;
+/**
+ * Where a selected implementation came from (spec §5.3).
+ *
+ * A registration names itself with a stable human-readable `origin` rather than
+ * a filesystem path, because it has no file to name.
+ */
+export type ComponentOrigin =
+  | { kind: "structural"; construct: string }
+  | { kind: "repository"; path: string }
+  | { kind: "registered"; origin: string; reserved: boolean };
+
+/**
+ * What resolving a name decided, before anything is loaded.
+ *
+ * Structural syntax selects no definition — it is engine-owned and never
+ * reaches component import. A repository selection carries only the chosen
+ * path: reading and parsing happen afterwards, inside the journal.
+ */
+export type ComponentSelection =
+  | { kind: "structural"; construct: string }
+  | { kind: "registered"; definition: FunctionComponentDefinition; origin: ComponentOrigin }
+  | { kind: "repository"; path: string }
+  | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
+
+/** A registered implementation and the origin that named it. */
+export interface Registered {
+  definition: FunctionComponentDefinition;
+  origin: string;
 }
+
+/**
+ * Reserved and default registrations for one name are held apart so that
+ * precedence comes from the resolver's tiers rather than from the order
+ * registrations were installed in.
+ */
+export interface RegistryEntry {
+  reserved?: Registered;
+  default?: Registered;
+}
+
+export type ComponentRegistry = ReadonlyMap<string, RegistryEntry>;
 
 export interface SampleContext {
   /** The content to send to the LLM (rendered children or prompt text). */

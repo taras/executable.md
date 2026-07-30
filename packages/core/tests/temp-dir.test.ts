@@ -103,10 +103,11 @@ const PWD = "```sh exec\npwd\n```";
 describe("Tier TD — TempDir", () => {
   beforeAll(() => useTempFileCompiler());
 
-  // TD1: the component is core's, not the document's — no search path, no file,
-  // and nothing to journal. The root document is still imported, so the
-  // assertion is about which names appear, not that the entry type is absent.
-  it("TD1: resolves with no component directory and journals no import", function* () {
+  // TD1: the component is core's, not the document's — the fixture directory
+  // holds no TempDir file, and it still resolves. Selection is an observation of
+  // the environment, so it is journaled like any other import; what the entry
+  // records is the registration's origin, never the function.
+  it("TD1: resolves with no component file, and journals the selection", function* () {
     const dir = yield* useFixture();
     yield* writeDocument(dir, "<TempDir>inside</TempDir>");
 
@@ -118,7 +119,7 @@ describe("Tier TD — TempDir", () => {
     });
 
     expect(String(output)).toContain("inside");
-    expect(yield* imported(stream)).toEqual(["__root__"]);
+    expect(yield* imported(stream)).toEqual(["__root__", "TempDir"]);
   });
 
   // TD2: the whole process contract, asserted from inside the subprocess.

@@ -62,6 +62,7 @@ import { SchemaValidationError, validateProps, validateReturnValue } from "./val
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
+import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
@@ -585,6 +586,15 @@ export function* expandSegments(
           break;
         }
 
+        if (RESERVED_STRUCTURAL.has(segment.name)) {
+          // Every other structural name is consumed above; reaching here means
+          // one was written where the construct that gives it meaning is not.
+          // It is reserved, so resolution stops rather than looking for a file
+          // that could stand in for the syntax.
+          result.push(yield* raise(strayStructuralError(segment)));
+          break;
+        }
+
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -951,6 +961,31 @@ function ifError(segment: ComponentElement, message: string): ErrorSegment {
 
 function elseError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "Else" };
+}
+
+/**
+ * A structural name written where its construct gives it no meaning.
+ *
+ * `<Content />` is the one that reaches here in practice: outside an invocation
+ * there is nothing to project. Naming it reserved is the point — a repository
+ * file called `Content.md` does not stand in for the syntax.
+ */
+function strayStructuralError(segment: ComponentElement): ErrorSegment {
+  const name = segment.name;
+  const detail =
+    name === "Content"
+      ? `<${name} /> renders the content its invocation was given, so it means something ` +
+        "only inside a component's body."
+      : `<${name} /> is part of a construct that is not open here.`;
+  return {
+    type: "error",
+    message: positioned(
+      `${detail} <${name}> is reserved: it never resolves a component, so a repository ` +
+        `file named ${name} cannot supply it.`,
+      segment,
+    ),
+    source: name,
+  };
 }
 
 function strayElseError(segment: ComponentElement): ErrorSegment {
