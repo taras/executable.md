@@ -1550,8 +1550,9 @@ function* expandComponent(
   // Use the caller's eval env for the same reason: expression props (e.g.
   // {pr}) resolve against the scope where the JSX was written.
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
-  // Markdown projections render into segments, so nothing is hidden by a
-  // string; the collector exists only to satisfy the shared handle.
+  // A body eval block can render errors away through a string projection
+  // (renderChildren, render, useContent); the collector records them so an
+  // `as=` capture can be refused (§6.5).
   const bodyContentErrors: Segment[] = [];
 
   // Read before the invocation exists: the eval scope ambient here is the
@@ -1684,9 +1685,12 @@ function* expandComponent(
 
   if (asBinding) {
     // A capture never swallows an error. The body reported these where they
-    // were created (§6.9), so they are handed back as they are and the binding
-    // stays unset.
-    const errors = expanded.filter((capturedSegment) => capturedSegment.type === "error");
+    // were created (§6.9) — including the ones a string projection rendered
+    // away — so they are handed back as they are and the binding stays unset.
+    const errors = [
+      ...bodyContentErrors,
+      ...expanded.filter((capturedSegment) => capturedSegment.type === "error"),
+    ];
     if (errors.length > 0) {
       return errors;
     }

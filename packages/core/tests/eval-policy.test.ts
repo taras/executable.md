@@ -221,4 +221,25 @@ describe("Tier O — Eval scope hierarchy", () => {
 
     expect(output).toContain("ERROR");
   });
+
+  // O31: the same collecting projection, captured — the string rendered the
+  // error away, so the capture is refused (§6.5) and the recorded segment
+  // returns to the caller instead of hiding inside the bound string.
+  it("O31: a captured markdown projection refuses the binding on a projected error", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": ["<Output>", ...PROJECTING_BLOCK, "</Output>"].join("\n"),
+      "doc.md": '<Wrap as="cap">\n<Missing />\n</Wrap>\n\nvalue:{cap}:end',
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    expect(output).toContain("ERROR");
+    // The binding stays unset, so the interpolation stays literal and the
+    // sibling text still renders under the collecting policy.
+    expect(output).toContain("value:{cap}:end");
+    // Reported once on the way out, not again when it crosses back.
+    expect(String(output).split("Cannot resolve component: Missing").length - 1).toBe(1);
+  });
 });

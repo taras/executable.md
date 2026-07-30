@@ -2951,13 +2951,19 @@ This holds for all four capture paths:
 | --- | --- |
 | Native `<Capture as>` | its expanded children carry an `ErrorSegment` — checked before rendering and before `select` is applied |
 | `<Each as>` | the expanded loop output carries an `ErrorSegment` |
-| Markdown component `as=` | its expanded body carries an `ErrorSegment` |
+| Markdown component `as=` | its expanded body carries an `ErrorSegment`, or a string projection in its body (`renderChildren()`, `render()`, `useContent()`) rendered one away |
 | Function component `as=` | rendering its content produced an `ErrorSegment` |
 
 A function component cannot inspect segments after the fact, because
 `useContent()` must return a string. The engine therefore tracks the
 `ErrorSegment`s produced while rendering the default and named slots and
-returns them instead of binding the rendered text.
+returns them instead of binding the rendered text. A markdown component's body
+hides errors the same way when an eval block string-projects its content, so
+the invocation tracks those too and refuses the capture with the recorded
+segments. A value component cannot reach a recorded projection error: `<Output>`
+and `returns` are exclusive, its eval-block projections are bound to the block's
+snapshot policy — `throw` in value-body documentation — and that failure
+propagates as the body's fail-fast abort.
 
 Uncaptured forms are unaffected: without `as`, a function component's content
 errors render inline as before, and `<Each>` keeps emitting its body segments
@@ -5461,6 +5467,7 @@ visible warning blocks, collect into a separate error report).
 | O21 | Boundary owns its scope | Invocation resources are gone the moment expansion returns, inside a longer-lived parent scope |
 | O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
 | O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
+| O31 | Captured markdown projection | The same block under `as=` refuses the binding: the interpolation stays literal and the recorded error returns to the caller once |
 | O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
 
 ### Tier CW — Contextual working directory
