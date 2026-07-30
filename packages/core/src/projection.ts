@@ -68,6 +68,14 @@ export interface ProjectionHandle {
    * away silently; function components project structurally and install none.
    */
   projectToString(request: ProjectionRequest): Operation<string>;
+  /**
+   * `project`, reporting a failure instead of throwing it.
+   *
+   * `segments` holds what was rendered — for a failure, everything produced
+   * before it stopped. A component that means to render something in place of
+   * the failure needs both halves; `project` is for one that does not.
+   */
+  tryProject(request: ProjectionRequest): Operation<{ segments: Segment[]; failure?: unknown }>;
 }
 
 /**

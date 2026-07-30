@@ -26,6 +26,7 @@ export type {
   ComponentDefinition,
   ComponentInvocationMetadata,
   ComponentOrigin,
+  PartialContent,
   ComponentRegistry,
   ComponentSelection,
   Registered,
@@ -63,6 +64,7 @@ export {
   content,
   retain,
   invocation,
+  tryContent,
 } from "./src/component-api.ts";
 
 export { renderSegments } from "./src/render.ts";

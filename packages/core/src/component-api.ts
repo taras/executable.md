@@ -26,6 +26,7 @@ import type {
   ComponentHandling,
   ComponentInvocationMetadata,
   ComponentRegistry,
+  PartialContent,
   ErrorSegment,
   EvalEnv,
   FunctionComponentDefinition,
@@ -150,6 +151,17 @@ export interface ComponentApi {
    */
   invocation(): Operation<ComponentInvocationMetadata>;
   /**
+   * Render the invoking component's content, reporting a failure instead of
+   * replacing the invocation with it.
+   *
+   * `content()` is the failure boundary and stays the ordinary way to ask. This
+   * is for a component that renders something *in place of* the failure — a
+   * test report — and so needs both what rendered before the stop and why it
+   * stopped. It hands back text and a reason, never segments: there is no
+   * recursion here and no reaching into the caller.
+   */
+  tryContent(slot?: string): Operation<PartialContent>;
+  /**
    * Components made resolvable by name for this scope (spec §5.3).
    *
    * Install with `registerComponents()` rather than by hand: each accepted
@@ -231,6 +243,12 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
       "Component.invocation() has no provider: not inside a function component invocation.",
     );
   },
+  // deno-lint-ignore require-yield
+  *tryContent(_slot?: string): Operation<PartialContent> {
+    throw new Error(
+      "Component.tryContent() has no provider: not inside a function component invocation.",
+    );
+  },
   registry: new Map(),
 });
 
@@ -251,3 +269,4 @@ export const hasContent: Operations<ComponentApi>["hasContent"] = Component.oper
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
 export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
 export const invocation: Operations<ComponentApi>["invocation"] = Component.operations.invocation;
+export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;

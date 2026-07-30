@@ -209,6 +209,19 @@ export interface FunctionComponentDefinition {
 }
 
 /**
+ * What a component's content rendered, and why it stopped if it did.
+ *
+ * `text` is everything produced before the stop, so a component reporting a
+ * failure can show the work that led to it. `failure` is what the content threw
+ * — absent when it finished. Error segments the content *collected* are part of
+ * `text`, not a failure: they settled under the ambient policy already.
+ */
+export interface PartialContent {
+  readonly text: string;
+  readonly failure?: unknown;
+}
+
+/**
  * Where a function component was invoked (spec §5.5).
  *
  * A detached snapshot, not the element the parser built: a component learns
