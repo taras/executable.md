@@ -588,4 +588,95 @@ describe("Tier OBS — construct error observation", () => {
     expect(observed).toHaveLength(1);
     expect(observed[0]).toBe(failure.segment);
   });
+
+  // OBS23: `throw undefined` is still a thrown value. The failure's own `cause`
+  // property records it — membership in the attribution, not comparison with
+  // undefined, is what distinguishes "translated from undefined" from "no
+  // attribution at all".
+  it("OBS23: a contextual failure records a thrown undefined as its cause", function* () {
+    const observed: ErrorSegment[] = [];
+    const caught: Array<{ failure: DocumentationError; hasCause: boolean; cause: unknown }> = [];
+    let thrown: unknown;
+
+    yield* scoped(function* () {
+      yield* AmbientErrorPolicy.set("throw");
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error);
+          try {
+            return yield* next(error);
+          } catch (failure) {
+            if (failure instanceof DocumentationError) {
+              caught.push({
+                failure,
+                hasCause: Object.hasOwn(failure, "cause"),
+                cause: failure.cause,
+              });
+            }
+            throw failure;
+          }
+        },
+      });
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Boom") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return throwingComponent("Boom", undefined);
+          },
+        },
+        { at: "min" },
+      );
+      try {
+        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set());
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(caught).toHaveLength(1);
+    const [{ failure, hasCause, cause }] = caught;
+    // Present and exactly undefined, already inside the middleware's catch.
+    expect(hasCause).toBe(true);
+    expect(cause).toBe(undefined);
+    expect(thrown).toBe(failure);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toBe(failure.segment);
+  });
+
+  it("OBS24: a collected thrown undefined renders a diagnostic and produces no Error", function* () {
+    const observed: ErrorSegment[] = [];
+    const probe = yield* scoped(function* () {
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error);
+          return yield* next(error);
+        },
+      });
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Boom") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return throwingComponent("Boom", undefined);
+          },
+        },
+        { at: "min" },
+      );
+      const segments = yield* expandSegments(scanSegments("<Boom />TAIL"), {}, {}, new Set());
+      return { segments, output: renderSegments(segments) };
+    });
+
+    // Collecting settles a segment; no DocumentationError is ever constructed,
+    // so there is no JavaScript Error to carry a cause.
+    expect(observed).toHaveLength(1);
+    expect(probe.output).toContain("Function component Boom error");
+    expect(probe.output).toContain("TAIL");
+  });
 });

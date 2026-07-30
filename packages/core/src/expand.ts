@@ -1779,6 +1779,19 @@ function errorSegments(segments: Segment[]): ErrorSegment[] {
 }
 
 /**
+ * Carries a non-Error value a function component threw. The invocation
+ * boundary transports failures as Errors — `withInvocation` wraps anything
+ * else with `asError`, which keeps the string but loses the value — so the
+ * value rides across in this carrier and the diagnostic is translated from
+ * the exact value the component threw, `undefined` included.
+ */
+class ThrownValue extends Error {
+  constructor(readonly value: unknown) {
+    super(String(value));
+  }
+}
+
+/**
  * Report a diagnostic built from a failure, keeping that failure reachable
  * underneath whatever settlement produces.
  *
@@ -1935,7 +1948,14 @@ function* expandFunctionComponent(
         },
         { at: "min" },
       );
-      return yield* definition.fn(validatedProps);
+      try {
+        return yield* definition.fn(validatedProps);
+      } catch (error) {
+        if (error instanceof Error) {
+          throw error;
+        }
+        throw new ThrownValue(error);
+      }
     });
     if (asBinding) {
       const parentEnv = yield* env;
@@ -1977,17 +1997,18 @@ function* expandFunctionComponent(
     if (error instanceof SchemaValidationError) {
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
+    const from = error instanceof ThrownValue ? error.value : error;
     return [
       yield* raiseFrom(
         {
           type: "error",
           message:
-            error instanceof Error
-              ? `Function component ${name} error: ${error.message}`
-              : `Function component ${name} error: ${String(error)}`,
+            from instanceof Error
+              ? `Function component ${name} error: ${from.message}`
+              : `Function component ${name} error: ${String(from)}`,
           source: name,
         },
-        error,
+        from,
       ),
     ];
   }

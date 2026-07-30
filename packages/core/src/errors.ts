@@ -76,9 +76,11 @@ export class DocumentationError extends Error {
     super(segment.message);
     this.name = "DocumentationError";
     this.segment = segment;
-    const from = segmentCauses.get(segment);
-    if (from !== undefined) {
-      this.cause = from;
+    // Membership, not value: a component can throw `undefined`, and that is
+    // still the exact value this failure was translated from — the own `cause`
+    // property records it. Only a segment with no attribution has none.
+    if (segmentCauses.has(segment)) {
+      this.cause = segmentCauses.get(segment);
     }
   }
 }
@@ -145,9 +147,15 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  *   run: expansion that carried on would reach another durable operation, whose
  *   own mismatch is then the one reported.
  *
- * A fatal error stays fatal however it is wrapped, so this looks through the
- * three ways the engine and the platform aggregate failures. It returns the
- * fatal error itself rather than the wrapper, which is the one worth reporting.
+ * This looks through the three ways the engine and the platform aggregate
+ * failures and returns the fatal error itself rather than the wrapper, which is
+ * the one worth reporting. The two kinds travel differently: a durability
+ * failure stays fatal through the complete cause graph, while a
+ * `DocumentationError` remains fatal unless it crossed an explicit
+ * `ContentError` recovery boundary — a component that recovered decided what
+ * the document reports. An uncaught private content transport restores its
+ * original `DocumentationError` explicitly at the function-component boundary,
+ * not through this traversal.
  *
  * **A durability failure outranks a documentation failure**, wherever each sits
  * in the graph. A wrapper carries whatever failed together, in whatever order
