@@ -70,9 +70,41 @@ function asError(cause: unknown): Error {
  * Every stage is attempted even when an earlier one throws. Success, error and
  * cancellation all leave through it: the body's throw is caught at its task
  * boundary so its resources are still alive when stage 1 runs.
+ *
+ * Body execution and teardown are different failure domains, and a cleanup
+ * failure must not erase the failure that caused the unwind. When both fail,
+ * the caller receives one `AggregateError` whose ordered members are the body
+ * failure and a single `InvocationTeardownError` — each original error stays
+ * reachable by identity, which is what `fatalCause()` traverses.
  */
 export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T>): Operation<T> {
   return yield* scoped(function* () {
+    let bodyFailure: Error | undefined;
+    const teardownFailures: unknown[] = [];
+
+    // The frame's final failure is decided here, not by the stage runner
+    // below. Spawning registers an auto-halt destructor for `evalHost` on this
+    // frame, and a halted task rethrows its teardown failure every time
+    // `halt()` is awaited — so that re-halt runs between the stage runner and
+    // this destructor, and would otherwise replace the selected outcome.
+    // Destructors run last-registered-first and a later failure wins, which is
+    // why this one is registered before the spawn: it runs last, and what it
+    // throws — or declines to throw, letting the body failure through — is
+    // what the caller receives.
+    yield* ensure(function* () {
+      if (teardownFailures.length === 0) {
+        return;
+      }
+      const teardown = new InvocationTeardownError(teardownFailures);
+      if (bodyFailure === undefined) {
+        throw teardown;
+      }
+      throw new AggregateError(
+        [bodyFailure, teardown],
+        "component invocation body and teardown both failed",
+      );
+    });
+
     const evalPublished = withResolvers<EvalScope>();
     const evalHost = yield* spawn(function* () {
       try {
@@ -134,8 +166,11 @@ export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T
       },
     };
 
+    // Registered after the spawns so it runs first: the stages execute in the
+    // boundary's order and every one is attempted. Failures are only recorded
+    // here — throwing would hand the frame an outcome a later destructor's
+    // re-halt could still replace.
     yield* ensure(function* () {
-      const failures: unknown[] = [];
       const stages: Array<() => Operation<void>> = [
         () => (content ? content.task.halt() : noop()),
         () => bodyHost.halt(),
@@ -145,16 +180,21 @@ export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T
         try {
           yield* stage();
         } catch (error) {
-          failures.push(error);
+          teardownFailures.push(error);
         }
-      }
-      if (failures.length > 0) {
-        throw new InvocationTeardownError(failures);
       }
     });
 
     start.resolve(invocation);
-    return yield* resultPublished.operation;
+    try {
+      return yield* resultPublished.operation;
+    } catch (error) {
+      // Recorded so the outcome destructor can keep it when a teardown stage
+      // also fails; a destructor throw would otherwise replace it as the
+      // scope's failure.
+      bodyFailure = asError(error);
+      throw error;
+    }
   });
 }
 
