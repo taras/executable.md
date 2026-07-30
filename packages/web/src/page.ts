@@ -3,8 +3,14 @@
  *
  * The shell is fully static. It carries no author content and no interpolated
  * values: it references the client script and stylesheet by same-origin
- * relative paths and leaves an empty `#root` for the client to render into —
- * so the page needs no inline script and admits none.
+ * relative paths and leaves three empty elements for the client to fill — so the
+ * page needs no inline script and admits none.
+ *
+ * `#content` receives the document's rendered body, already sanitized on the
+ * server. `#root` receives the form. `#status` is a live region, so a screen
+ * reader announces the result of a submission instead of leaving it to be
+ * noticed: `role="status"` with `aria-live="polite"` waits for a pause rather
+ * than interrupting, which is right for a confirmation.
  *
  * The headers are fixed and restrictive, and no author setting relaxes them.
  * `default-src 'none'` denies every resource class that is not named, so fonts,
@@ -51,7 +57,9 @@ export const PAGE_SHELL = `<!DOCTYPE html>
     <link rel="stylesheet" href="theme.css">
   </head>
   <body>
+    <div id="content"></div>
     <div id="root"></div>
+    <div id="status" role="status" aria-live="polite"></div>
     <script src="client.js"></script>
   </body>
 </html>

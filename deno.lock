@@ -4155,6 +4155,7 @@
         "packageJson": {
           "dependencies": [
             "npm:@effectionx/fs@0.3.0",
+            "npm:@effectionx/node@0.2.4",
             "npm:@rjsf/core@6.7.1",
             "npm:@rjsf/shadcn@6.7.1",
             "npm:@rjsf/utils@6.7.1",
