@@ -200,6 +200,20 @@ function echoComponent(name: string): FunctionComponentDefinition {
   };
 }
 
+/** Fails on its own terms, without asking for content. */
+function throwingComponent(name: string, failure: unknown): FunctionComponentDefinition {
+  return {
+    kind: "function",
+    name,
+    path: `${name}.ts`,
+    props: OPEN_SCHEMA,
+    // deno-lint-ignore require-yield
+    *fn(_props) {
+      throw failure;
+    },
+  };
+}
+
 /**
  * Recovers from a failed projection and hands the caught `ContentError` to the
  * test scope, which is the only way to read the errors it carries: recovery
@@ -509,5 +523,69 @@ describe("Tier OBS — construct error observation", () => {
     // Recovery keeps the failure from the consumer, so nothing settles.
     expect(errorSegments(probe.segments)).toHaveLength(0);
     expect(probe.output).toBe("recovered");
+  });
+
+  // OBS22: where the cause is attached, measured from inside the observation
+  // chain. Raise middleware that catches what `next` throws is the earliest any
+  // observer can see the DocumentationError — settlement constructs it at the end
+  // of the chain — so a failure that is complete there is complete everywhere.
+  it("OBS22: a contextual failure carries its cause where the chain throws it", function* () {
+    const exploded = new Error("component exploded");
+    const observed: ErrorSegment[] = [];
+    // The cause is read where the middleware catches, not afterwards: a link
+    // attached once the chain has unwound would be invisible to a test that
+    // inspected the same object at the end of the run.
+    const caught: Array<{ failure: DocumentationError; cause: unknown }> = [];
+    let thrown: unknown;
+
+    yield* scoped(function* () {
+      yield* AmbientErrorPolicy.set("throw");
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error);
+          try {
+            return yield* next(error);
+          } catch (failure) {
+            if (failure instanceof DocumentationError) {
+              caught.push({ failure, cause: failure.cause });
+            }
+            throw failure;
+          }
+        },
+      });
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Boom") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return throwingComponent("Boom", exploded);
+          },
+        },
+        { at: "min" },
+      );
+      try {
+        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set());
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(caught).toHaveLength(1);
+    const [{ failure, cause }] = caught;
+    expect(cause).toBe(exploded);
+    expect(failure.message).toContain("Function component Boom error: component exploded");
+
+    // The same object leaves the expansion, with the same cause.
+    expect(thrown).toBe(failure);
+    expect(thrown).toBeInstanceOf(DocumentationError);
+    expect(failure.cause).toBe(exploded);
+
+    // One observation of the contextual segment, and it is the one the failure
+    // carries.
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toBe(failure.segment);
   });
 });

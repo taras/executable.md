@@ -42,6 +42,7 @@ import {
 } from "./component-api.ts";
 import {
   AmbientErrorPolicy,
+  attributeCause,
   ContentError,
   DocumentationError,
   durabilityFailure,
@@ -1785,24 +1786,17 @@ function errorSegments(segments: Segment[]): ErrorSegment[] {
  * `DocumentationError` carrying it is what the execution fails with. The failure
  * it was built from is the structural account of how the component got there —
  * a component that recovered from failed content and then reported a failure of
- * its own is the only place the original content failure survives. The link is
- * made inside the observation chain's throw, so no observer downstream of
- * settlement ever sees the failure without it, and only for the segment this
- * call raised.
+ * its own is the only place the original content failure survives.
+ *
+ * The link is attributed to the segment before it is raised, so settlement
+ * constructs a failure that already carries it: middleware that catches what
+ * `raise` throws is an observer like any other, and there is no moment in which
+ * this diagnostic exists without its account. The observation itself is still the
+ * single `raise` of the segment.
  */
-function* raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
-  try {
-    return yield* raise(segment);
-  } catch (failure) {
-    if (
-      failure instanceof DocumentationError &&
-      failure.segment === segment &&
-      failure.cause === undefined
-    ) {
-      failure.cause = from;
-    }
-    throw failure;
-  }
+function raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
+  attributeCause(segment, from);
+  return raise(segment);
 }
 
 /**
@@ -1969,9 +1963,9 @@ function* expandFunctionComponent(
     // reporting it again here would double-observe it. Under a throwing policy
     // that is the original `DocumentationError`, by identity; under a collecting
     // one it is the segments, which the consumer boundary then settles under the
-    // caller's policy. Restored here rather than by `fatalCause`, which stops at
-    // a content failure so that a component reporting a failure of its own keeps
-    // it (see `causesOf`).
+    // caller's policy. Restored here by identity rather than by `fatalCause`,
+    // whose documentation search stops at a content failure so that a component
+    // reporting a failure of its own keeps it (see `isRecoveredContent`).
     if (error instanceof ContentExpansionFailure) {
       if (error.cause instanceof DocumentationError) {
         throw error.cause;

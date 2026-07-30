@@ -1991,10 +1991,12 @@ is ordinary recovery:
   never reaches the component's consumer boundary.
 - a component that recovers and then fails on its own terms reports *its*
   failure, and the failure it reports keeps the content failure in its cause
-  chain, so the original error segments stay reachable from the outside. Fatal
-  discovery stops at a content failure it reaches there rather than continuing
-  into the decision the component replaced: what the document reports is the
-  component's own diagnostic, not the child's.
+  chain, so the original error segments stay reachable from the outside.
+  Recovery decides which failure the document reports: discovery of a
+  documentation failure stops at a content failure it reaches there rather than
+  continuing into the decision the component replaced, so what the document
+  reports is the component's own diagnostic and not the child's. Discovery of a
+  durability failure does not stop there (§6.11).
 - the engine never uses `halt()` or cancellation to make a documentation failure
   uncatchable. Cancellation remains a lifecycle mechanism, not a way to deliver
   a domain error.
@@ -2008,6 +2010,21 @@ consumer's policy, and under `throw` it restores and rethrows the original
 type and the propagated type are deliberately two views of one boundary — a
 component catches `ContentError` at `content()`, and a caller the component did
 not recover for still observes `DocumentationError`.
+
+**A reported failure carries what it was translated from.** A function component
+that throws anything else — an ordinary error, a failure of its own after
+recovering from content — is reported as a diagnostic naming the component, and
+that diagnostic is what the document says. Under fail-fast the
+`DocumentationError` built for it keeps the thrown value itself as its `cause`,
+whatever kind of value it was, so a host inspecting what ended the execution
+reaches the component's own failure and everything beneath it. The link is in
+place before the failure is observable: `Component.raise` middleware that catches
+what the chain throws already sees it, and the segment is still observed exactly
+once.
+
+Under a collecting policy nothing is thrown, so there is no error to carry a
+cause: what the document keeps is the `ErrorSegment` itself, whose own `cause`
+field is structured diagnostic detail (§2.1) and unrelated to this link.
 
 **Resolution priority.** When both `Name.md` and `Name.ts` exist,
 the `.md` file wins. This ensures backward compatibility — existing
@@ -4165,6 +4182,14 @@ to do with where the journal actually stopped describing the run. Every one of
 these is discovered through the same cycle-safe cause traversal, so what the
 caller receives is the failure itself rather than the wrapper it travelled in.
 
+**Durability discovery traverses the whole cause graph.** No wrapper keeps a
+durability failure from being found, including a content failure a component
+recovered from (§5.1.2). Recovery settles which failure the *document* reports,
+which is why documentation discovery stops there; a durability failure is not
+something a document reports, and `ContentError` is a public type an author
+constructs and subclasses, so what one carries underneath is never taken as a
+guarantee that nothing fatal is inside it.
+
 **A durability failure takes precedence over a documentation failure, whatever
 the wrapper order.** A wrapper carries whatever failed together, in whatever
 order the platform happened to collect it: an `AggregateError`'s members and an
@@ -4365,8 +4390,9 @@ which is the only place a reader would otherwise learn what went wrong.
 
 Under fail-fast the reported failure is `<File>`'s as well: the write is what the
 document asked for, and that it did not happen is the fact a reader needs. The
-content failure it was translated from stays reachable through that error's cause
-chain, carrying the same error segments the document reported (§5.1.2), so
+general rule then applies (§5.1.2) — the `DocumentationError` keeps `<File>`'s own
+error as its cause, and the content failure that error was translated from stays
+reachable beneath it, carrying the same error segments the document reported — so
 reporting the component's account costs nothing that a host inspecting the
 failure needs.
 
@@ -5743,6 +5769,11 @@ visible warning blocks, collect into a separate error report).
 | FA12 | Precedence at any depth | Nesting either one deeper than the other does not change the answer |
 | FA13 | No durability failure | A `DocumentationError` is reported when the graph holds none, and `durabilityFailure` finds nothing |
 | FA14 | Precedence with a cycle | A mixed graph that is also cyclic still reports the durability failure |
+| FA15 | A content failure hides nothing fatal | A durability failure beneath a `ContentError` — set by a subclass and by assignment — is found by both `durabilityFailure` and `fatalCause`, for each of the four kinds |
+| FA16 | Wherever the content failure sits | The same holds beneath an ordinary cause, inside an `AggregateError`, inside an `InvocationTeardownError`, and through all three at once |
+| FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
+| FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |
+| FA19 | Cycles through a content failure | A self-caused content failure and one whose cause points back at the wrapper holding it both terminate, and the durability failure is still found |
 
 ### Tier IS — Invocation shape
 
@@ -5962,6 +5993,11 @@ Across the engine's own constructs:
 | OBS15 | Refused captures | `<Capture as>`, `<Each as>` and a component `as` each report the body error once and set no binding |
 | OBS16 | Throwing policy | An ambient `throw` policy aborts at the first error on every path above |
 | OBS17 | Collecting policy | A collected error renders exactly one comment on every path above |
+| OBS18 | Uncaught function content | The invocation comes back as the same segment objects `Component.raise` returned |
+| OBS19 | Refused function capture | The same, with no binding made |
+| OBS20 | Sibling content failures | Two failures keep source order and one observation each |
+| OBS21 | Recovered content failure | The `ContentError` carries the raised segments in source order, and recovery settles nothing |
+| OBS22 | Where the cause is attached | Raise middleware that catches what the chain throws already sees the thrown component failure as the `DocumentationError`'s cause, the same object leaves the expansion, and the contextual segment is observed once |
 
 Provider families carry the same contract in their own tiers: `AC20`
 (`<Prompt>` prop validation), the assertion validation row in
