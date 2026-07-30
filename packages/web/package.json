@@ -1,0 +1,19 @@
+{
+  "name": "@executablemd/web",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Schema-backed local web form input for executable.md documents.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "devDependencies": {
+    "@rjsf/core": "6.7.1",
+    "@rjsf/shadcn": "6.7.1",
+    "@rjsf/utils": "6.7.1",
+    "@rjsf/validator-ajv8": "6.7.1",
+    "ajv": "8.20.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}

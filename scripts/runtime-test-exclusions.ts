@@ -36,6 +36,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "builds the npm package with dnt, which only runs under Deno; the test calls Deno.readTextFileSync",
     issue: DERIVED_SCOPE,
   },
+  {
+    path: "scripts/tests/build-web-client.test.ts",
+    reason:
+      "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/publish-workflow-generator.test.ts",
+    reason:
+      "runs scripts/gen-publish-workflow.md through the xmd CLI with Deno.execPath(); the document is executed by Deno only",
+    issue: DERIVED_SCOPE,
+  },
 ];
 
 /**

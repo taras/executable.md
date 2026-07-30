@@ -68,6 +68,7 @@
     "scripts/runtime-test-exclusions.ts",
     "scripts/lib/runtime-tests.ts",
     "scripts/lib/test-files.ts",
+    "scripts/lib/web-client-module.ts",
     "scripts/lib/workspace.ts"
   ],
   "exclude": [
