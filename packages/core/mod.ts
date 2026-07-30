@@ -24,6 +24,7 @@ export type {
   PropsSchema,
   ReturnsSchema,
   ComponentDefinition,
+  ComponentInvocationMetadata,
   ComponentOrigin,
   ComponentRegistry,
   ComponentSelection,
@@ -61,6 +62,7 @@ export {
   persistent,
   content,
   retain,
+  invocation,
 } from "./src/component-api.ts";
 
 export { renderSegments } from "./src/render.ts";
@@ -156,6 +158,7 @@ export {
   installApproveReads,
   installAskPermission,
   installPermissionMode,
+  installPromptFailurePolicy,
 } from "./src/agent/permission.ts";
 
 // Shared execution config — contextual timeout (re-exported from runtime).

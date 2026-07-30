@@ -194,13 +194,17 @@ describe("Tier AC — agent components", () => {
     expect(output).toContain("[stub-agent:stub:default:hello]");
   });
 
+  // The diagnostic is the engine's own now that <Prompt> is an ordinary
+  // function component: it names the component and lists the offending prop,
+  // where the claimed handler built the same account behind a `<Prompt> `
+  // prefix of its own.
   it("AC19: the removed prompt prop is rejected as an unknown prop", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
     const { output, result } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
     expect(result.ok).toBe(true);
     expect(stub.promptCalls.length).toBe(0);
-    expect(output).toContain("<Prompt>");
+    expect(output).toContain("Prop validation failed for <Prompt />");
     expect(output).toContain("prompt");
   });
 
@@ -216,8 +220,8 @@ describe("Tier AC — agent components", () => {
     });
     const { output } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
     expect(observed).toHaveLength(1);
-    expect(observed[0]).toContain("<Prompt>");
-    expect(output.match(/<Prompt>/g)).toHaveLength(1);
+    expect(observed[0]).toContain("Prop validation failed for <Prompt />");
+    expect(output.match(/<Prompt \/>/g)).toHaveLength(1);
   });
 
   it("AC4: as binding captures the response instead of emitting it", function* () {

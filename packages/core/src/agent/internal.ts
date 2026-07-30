@@ -25,6 +25,14 @@ interface AgentInternalApi {
   defaultAgentName: string | undefined;
   /** Permission mode inherited by `<AgentProvider>`. */
   permissionMode: PermissionMode;
+  /**
+   * Whether a prompt that fails should end the document even though the
+   * author did not ask for it (`installPromptFailurePolicy`).
+   *
+   * Consulted only by the registered `<Prompt>`, and only when the author
+   * wrote no explicit `throwOnError`.
+   */
+  promptFailurePolicy(): Operation<boolean>;
 }
 
 function noExecution(operation: string): Error {
@@ -49,4 +57,8 @@ export const AgentInternal: Api<AgentInternalApi> = createApi<AgentInternalApi>(
   },
   defaultAgentName: undefined,
   permissionMode: "deny-all",
+  // deno-lint-ignore require-yield
+  *promptFailurePolicy(): Operation<boolean> {
+    return false;
+  },
 });

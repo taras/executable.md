@@ -1,11 +1,10 @@
 /**
  * The `<TestAgent>` components (specs/test-agent-spec.md §TestAgent).
  *
- * `installTestAgentComponents` must be installed BEFORE
- * `installAgentComponents` in the same scope: in-scope middleware runs
- * in install order, so the global `<Prompt>` interceptor here sees the
- * element first, forces `throwOnError` only when both `<TestAgent>`
- * and `<Test>` are active, and otherwise delegates unchanged.
+ * A prompt that fails inside a `<Test>` fails that test. `<TestAgent>` says so
+ * with `installPromptFailurePolicy`, a scoped policy the agent `<Prompt>`
+ * consults — so nothing here depends on installation order, and a repository
+ * component named `Prompt` is left alone.
  *
  * Each `<Test>` receives fresh ACPX state keyed by its lease EvalScope;
  * the state is provisioned by a suspended task spawned into that scope,
@@ -26,7 +25,13 @@ import { createContext, scoped, spawn, suspend, useScope, withResolvers } from "
 import type { Operation, Scope } from "effection";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { Agent, Component, evalScope, expandSegments, raise } from "@executablemd/core";
+import {
+  Agent,
+  Component,
+  expandSegments,
+  installPromptFailurePolicy,
+  raise,
+} from "@executablemd/core";
 import type { ComponentElement, ErrorSegment, Segment, Session } from "@executablemd/core";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { command, cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
@@ -232,7 +237,11 @@ export function* installTestAgentComponents(): Operation<void> {
 
       function* boundary(): Operation<BoundaryState> {
         const within = yield* Test.operations.inTest;
-        const lease = yield* evalScope;
+        // The test's own scope, not the nearest one: a `<Prompt>` is a component
+        // invocation with an eval scope of its own, so asking for the nearest
+        // would give every prompt a boundary of its own and nothing a test
+        // established would reach the next prompt in it.
+        const lease = yield* Test.operations.testScope;
         const key = within && lease ? lease : "test-agent-scope";
         const existing = boundaries.get(key);
         if (existing) {
@@ -261,6 +270,13 @@ export function* installTestAgentComponents(): Operation<void> {
 
       const session: TestAgentSession = { defaultAgent, controller, declarations, boundary };
       yield* TestAgentCtx.set(session);
+
+      // A prompt that fails inside a `<Test>` fails that test rather than
+      // rendering its diagnostic and letting the rest of the test run against
+      // an answer that never arrived. Being installed here is what scopes it:
+      // only prompts under this `<TestAgent>` consult it, and only the agent
+      // `<Prompt>` reads it at all.
+      yield* installPromptFailurePolicy(() => Test.operations.inTest);
 
       yield* Agent.around(
         {
@@ -363,16 +379,6 @@ export function* installTestAgentComponents(): Operation<void> {
       }
       if (element.name === "TestAgent.Scenario") {
         return { segments: yield* expandScenario(element) };
-      }
-      if (element.name === "Prompt") {
-        const session = yield* TestAgentCtx.expect();
-        if (
-          session !== undefined &&
-          (yield* Test.operations.inTest) &&
-          element.props.throwOnError !== true
-        ) {
-          return yield* next({ ...element, props: { ...element.props, throwOnError: true } });
-        }
       }
       return yield* next(element);
     },

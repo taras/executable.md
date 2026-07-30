@@ -22,6 +22,7 @@ import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import { Agent, denyPermission } from "./agent-api.ts";
 import type { PermissionMode, PermissionOutcome, PermissionRequest } from "./agent-api.ts";
+import { AgentInternal } from "./internal.ts";
 
 function approve(request: PermissionRequest): PermissionOutcome | undefined {
   const approval =
@@ -92,6 +93,30 @@ export function* installApproveReads(): Operation<void> {
           }
         }
         return (yield* ask(request)) ?? denyPermission(request);
+      },
+    },
+    { at: "min" },
+  );
+}
+
+/**
+ * Decide, for this scope, that a failing `<Prompt>` ends the document even
+ * though the author did not write `throwOnError`.
+ *
+ * A host that runs documents as tests needs a failed prompt to fail the test
+ * rather than render its diagnostic and continue. `decide` is consulted once per
+ * prompt, after its content has rendered and before the durable operation, so a
+ * policy can depend on where the prompt is — inside a test, say. An explicit
+ * `throwOnError={true}` wins without consulting it.
+ *
+ * Only the agent `<Prompt>` reads this. A repository component that happens to
+ * be called `Prompt` is an ordinary component and never sees it.
+ */
+export function* installPromptFailurePolicy(decide: () => Operation<boolean>): Operation<void> {
+  yield* AgentInternal.around(
+    {
+      *promptFailurePolicy(_args, next) {
+        return (yield* decide()) || (yield* next());
       },
     },
     { at: "min" },

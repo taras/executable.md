@@ -7,7 +7,7 @@ import {
   StaleInputError,
 } from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "./invocation.ts";
-import type { ErrorSegment } from "./types.ts";
+import type { ErrorSegment, FunctionComponent } from "./types.ts";
 
 /**
  * How an ErrorSegment settles once it has been reported (spec §6.9).
@@ -127,8 +127,99 @@ export type DurabilityFailure =
   | EarlyReturnDivergenceError
   | ContinuePastCloseDivergenceError;
 
+/** The original failure a component ended the execution with (`componentAbort`). */
+type AbortedFailure = Error;
+
 /** A failure that ends the execution rather than becoming a diagnostic. */
-export type FatalFailure = DocumentationError | DurabilityFailure;
+export type FatalFailure = DocumentationError | DurabilityFailure | AbortedFailure;
+
+/**
+ * Failures that end the execution rather than becoming a diagnostic, remembered
+ * by identity.
+ *
+ * Membership rather than a wrapper, because every boundary rethrows what
+ * `fatalCause()` *returns*. A wrapper would be unwrapped at the first
+ * function-component boundary and the next one out would see an ordinary error
+ * with nothing left to recognise — a component nested in another component
+ * could not end the document. Marking the failure itself survives every
+ * rethrow.
+ *
+ * External membership also leaves the failure untouched, so a frozen error can
+ * be marked.
+ */
+const componentAborts = new WeakSet<Error>();
+
+/**
+ * Mark `failure` as ending the execution, and return what to throw.
+ *
+ * An `Error` is returned as it came in — same object, so identity, type and
+ * cause survive. Anything else becomes an `Error` that carries the original
+ * value as its cause.
+ */
+export function componentAbort(failure: unknown): Error {
+  const error = failure instanceof Error ? failure : new Error(String(failure), { cause: failure });
+  componentAborts.add(error);
+  return error;
+}
+
+function abortedFailure(candidate: unknown): Error | undefined {
+  return candidate instanceof Error && componentAborts.has(candidate) ? candidate : undefined;
+}
+
+/**
+ * Components whose ordinary failures end the execution, remembered by function
+ * identity.
+ *
+ * `<AgentProvider>` needs failures from its own invocation teardown to stay
+ * fatal, and teardown is owned by the invocation boundary rather than by the
+ * component — there is nothing inside the component to catch them. The opt-in
+ * is keyed by the exact function object, never by component name, so a
+ * repository-local component called `AgentProvider` is an ordinary component.
+ */
+const ordinaryAbortComponents = new WeakSet<FunctionComponent>();
+
+/** Opt `fn` into having its ordinary failures end the execution. */
+export function abortOrdinaryComponentFailures(fn: FunctionComponent): FunctionComponent {
+  ordinaryAbortComponents.add(fn);
+  return fn;
+}
+
+export function abortsOrdinaryComponentFailures(fn: FunctionComponent): boolean {
+  return ordinaryAbortComponents.has(fn);
+}
+
+/**
+ * Whether this failure holds anything the engine would otherwise turn into a
+ * diagnostic.
+ *
+ * Everything already fatal, and content the component chose not to recover, is
+ * opaque: the question is only whether something *ordinary* is in here, and
+ * descending past a kind that answers for itself would find the failure it was
+ * translated from and mistake it for one. Aggregating wrappers are walked
+ * through but are never the answer themselves.
+ */
+export function hasOrdinaryFailure(error: unknown): boolean {
+  return firstCause(error, ordinaryLeaf, isOpaqueToOrdinary) !== undefined;
+}
+
+function ordinaryLeaf(candidate: unknown): Error | undefined {
+  if (!(candidate instanceof Error)) {
+    return undefined;
+  }
+  if (candidate instanceof AggregateError || candidate instanceof InvocationTeardownError) {
+    return undefined;
+  }
+  return isOpaqueToOrdinary(candidate) ? undefined : candidate;
+}
+
+function isOpaqueToOrdinary(error: object): boolean {
+  return (
+    error instanceof ContentError ||
+    error instanceof DocumentationError ||
+    asDurabilityFailure(error) !== undefined ||
+    abortedFailure(error) !== undefined
+  );
+}
 
 /**
  * The error that ends the execution, if this failure carries one.
@@ -170,7 +261,11 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  * `isRecoveredContent` for why the asymmetry is the point.
  */
 export function fatalCause(error: unknown): FatalFailure | undefined {
-  return durabilityFailure(error) ?? firstCause(error, asDocumentationError, isRecoveredContent);
+  return (
+    durabilityFailure(error) ??
+    firstCause(error, abortedFailure, isRecoveredContent) ??
+    firstCause(error, asDocumentationError, isRecoveredContent)
+  );
 }
 
 /**
