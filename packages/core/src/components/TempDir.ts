@@ -16,8 +16,8 @@ import { ReplayGuard, StaleInputError } from "@executablemd/durable-streams";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { retain } from "../component-api.ts";
-import { hasContent, useContent } from "../content-context.ts";
+import { content, retain } from "../component-api.ts";
+import { hasContent } from "../content-context.ts";
 
 export const props = {
   type: "object",
@@ -101,7 +101,7 @@ export default function* (): Operation<string> {
       { at: "min" },
     );
     yield* refuseReplayInside(directory);
-    return yield* useContent();
+    return yield* content();
   }
   return yield* retain(useTemporaryDirectory);
 }

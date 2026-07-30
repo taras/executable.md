@@ -8,7 +8,7 @@
  * is retained at the invocation site instead.
  */
 
-import { hasContent, retain, useContent } from "@executablemd/core";
+import { content, hasContent, retain } from "@executablemd/core";
 import { ensure, resource } from "effection";
 import type { Operation } from "effection";
 import { hold, nextHandle, release } from "./thing-registry.ts";
@@ -31,7 +31,7 @@ function useThing(): Operation<string> {
 export default function* (): Operation<string> {
   if (yield* hasContent()) {
     yield* useThing();
-    return yield* useContent();
+    return yield* content();
   }
   return yield* retain(useThing);
 }

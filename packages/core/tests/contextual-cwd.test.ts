@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
  * resolution, invocation, projection — is the one being measured.
  */
 const IN_DIRECTORY = [
-  'import { useContent } from "@executablemd/core";',
+  'import { content } from "@executablemd/core";',
   'import { API } from "@executablemd/runtime";',
   "",
   "export const props = {",
@@ -48,7 +48,7 @@ const IN_DIRECTORY = [
   "",
   "export default function*(props) {",
   "  yield* API.Env.around({ *cwd() { return props.path; } }, { at: 'min' });",
-  "  return yield* useContent();",
+  "  return yield* content();",
   "}",
 ].join("\n");
 

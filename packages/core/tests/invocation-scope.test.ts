@@ -10,11 +10,10 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { race, scoped, sleep } from "effection";
 import { useEvalScope } from "@effectionx/scope-eval";
-import { Component } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
-import { useContent } from "../src/content-context.ts";
 import {
   BOOM_BLOCK,
   component,
@@ -48,7 +47,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       Probe: component("Probe", () =>
         (function* () {
           yield* useWatch(timeline, "own");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };
@@ -69,7 +68,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       Probe: component("Probe", () =>
         (function* () {
           yield* useWatch(timeline, "own");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };
@@ -86,9 +85,9 @@ describe("Tier O — Eval scope hierarchy", () => {
     const definitions = {
       Probe: component("Probe", () =>
         (function* () {
-          const content = yield* useContent();
+          const projected = yield* content();
           yield* useWatch(timeline, "own");
-          return content;
+          return projected;
         })(),
       ),
     };
@@ -105,7 +104,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       Probe: component("Probe", () =>
         (function* () {
           yield* useWatch(timeline, "own");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };
@@ -129,7 +128,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       Probe: component("Probe", () =>
         (function* () {
           yield* useWatch(timeline, "own", true);
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };
@@ -178,7 +177,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       Probe: component("Probe", () =>
         (function* () {
           yield* useWatch(timeline, "own");
-          yield* useContent();
+          yield* content();
           throw new Error("body exploded");
         })(),
       ),
@@ -212,7 +211,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       Probe: component("Probe", () =>
         (function* () {
           yield* useWatch(timeline, "own");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };
@@ -229,13 +228,13 @@ describe("Tier O — Eval scope hierarchy", () => {
       Outer: component("Outer", () =>
         (function* () {
           yield* useWatch(timeline, "outer");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
       Inner: component("Inner", () =>
         (function* () {
           yield* useWatch(timeline, "inner");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };

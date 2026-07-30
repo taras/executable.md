@@ -7,7 +7,7 @@
  * assertions stay in the document.
  */
 
-import { Component, env, useContent } from "@executablemd/core";
+import { Component, content, env } from "@executablemd/core";
 import type { EvalEnv, Json } from "@executablemd/core";
 import { readTextFile } from "@executablemd/runtime";
 import { useTestAgentController } from "@executablemd/test-agent";
@@ -67,5 +67,5 @@ export default function* (props: Record<string, Json>): Operation<string> {
   const bodyEnv: EvalEnv = { values: { ...(parent?.values ?? {}), harness } };
   yield* Component.around({ env: () => bodyEnv }, { at: "min" });
 
-  return yield* useContent();
+  return yield* content();
 }

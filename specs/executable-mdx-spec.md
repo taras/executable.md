@@ -6072,7 +6072,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | BREAK19 | Component body boundary | A `<Break>` a component writes is diagnosed and the caller's loop keeps running |
 | BREAK20 | Projection through `<Content />` | A `<Break>` the caller projects exits the caller's loop; the component still finishes rendering |
 | BREAK21 | Component-written break end to end | Diagnosed, and every iteration keeps its trailing content |
-| BREAK22 | Projection through `useContent()` | The same holds for a component that renders content from a code block |
+| BREAK22 | Projection through `content()` | The same holds for a component that renders content from a code block |
 | LOOP26 | Throwing policy | The first failing iteration aborts the loop |
 | LOOP27 | Collecting policy | The diagnostic renders and the next iteration runs |
 | LOOP28 | Cancellation | Halting mid-loop stops it where it stands |
