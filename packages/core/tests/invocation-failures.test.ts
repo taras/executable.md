@@ -16,15 +16,19 @@ import { InvocationTeardownError, withInvocation } from "../src/invocation.ts";
 import { DocumentationError, fatalCause } from "../src/errors.ts";
 import type { Invocation } from "../src/invocation.ts";
 
+type StageName = "content" | "body" | "eval";
+
 /**
  * Records `start:<label>` on acquisition and `stop:<label>` on teardown, and
- * fails the teardown with the given error. The destructor genuinely yields
+ * fails the teardown with the given error. The teardown genuinely yields
  * before it reports, so a stage has to await it rather than observe a
  * synchronous throw.
  */
 function probe(timeline: string[], label: string, failure?: Error): Operation<void> {
   return resource(function* (provide) {
     timeline.push(`start:${label}`);
+    // Cleanup registers through ensure() rather than a finally around
+    // provide(): `local/no-yield-in-finally` forbids suspending in a finally.
     yield* ensure(function* () {
       yield* sleep(1);
       timeline.push(`stop:${label}`);
@@ -40,13 +44,22 @@ function probe(timeline: string[], label: string, failure?: Error): Operation<vo
 function* plantStages(
   invocation: Invocation,
   timeline: string[],
-  failures: { content?: Error; body?: Error; eval?: Error },
+  failures: Partial<Record<StageName, Error>>,
 ): Operation<void> {
   yield* invocation.evalScope.eval(() => probe(timeline, "eval", failures.eval));
   const content = yield* invocation.useContentScope();
   yield* content.eval(() => probe(timeline, "content", failures.content));
   yield* probe(timeline, "body", failures.body);
 }
+
+const FULL_TIMELINE = [
+  "start:eval",
+  "start:content",
+  "start:body",
+  "stop:content",
+  "stop:body",
+  "stop:eval",
+];
 
 function* capture(op: () => Operation<unknown>): Operation<unknown> {
   try {
@@ -57,7 +70,7 @@ function* capture(op: () => Operation<unknown>): Operation<unknown> {
   throw new Error("expected the invocation to fail");
 }
 
-describe("Tier O — Eval scope hierarchy", () => {
+describe("Tier O — Invocation failure domains", () => {
   it("O34: a body failure is rethrown by identity when teardown succeeds", function* () {
     const timeline: string[] = [];
     const sentinel = new Error("body failure");
@@ -72,34 +85,36 @@ describe("Tier O — Eval scope hierarchy", () => {
 
     expect(caught).toBe(sentinel);
     // Every stage still ran, in the boundary's order.
-    expect(timeline).toEqual([
-      "start:eval",
-      "start:content",
-      "start:body",
-      "stop:content",
-      "stop:body",
-      "stop:eval",
-    ]);
+    expect(timeline).toEqual(FULL_TIMELINE);
   });
 
   it("O35: a lone teardown failure keeps the InvocationTeardownError shape", function* () {
-    const timeline: string[] = [];
-    const stage = new Error("stage failure");
+    // Every stage gets its turn as the only failure; the eval case is the one
+    // that guards the destructor ordering — the frame's re-halt of `evalHost`
+    // would otherwise expose the raw stage failure instead of the wrapper.
+    const stages: StageName[] = ["content", "body", "eval"];
+    for (const stage of stages) {
+      const timeline: string[] = [];
+      const planted = new Error(`${stage} stage failure`);
+      const failures: Partial<Record<StageName, Error>> = {};
+      failures[stage] = planted;
 
-    const caught = yield* capture(() =>
-      withInvocation(function* (invocation) {
-        yield* plantStages(invocation, timeline, { body: stage });
-        return "ok";
-      }),
-    );
+      const caught = yield* capture(() =>
+        withInvocation(function* (invocation) {
+          yield* plantStages(invocation, timeline, failures);
+          return "ok";
+        }),
+      );
 
-    expect(caught).toBeInstanceOf(InvocationTeardownError);
-    if (!(caught instanceof InvocationTeardownError)) {
-      throw new Error("unreachable");
+      expect(caught).toBeInstanceOf(InvocationTeardownError);
+      if (!(caught instanceof InvocationTeardownError)) {
+        throw new Error("unreachable");
+      }
+      expect(caught.causes).toHaveLength(1);
+      expect(caught.causes[0]).toBe(planted);
+      expect(caught.cause).toBe(planted);
+      expect(timeline).toEqual(FULL_TIMELINE);
     }
-    expect(caught.causes).toHaveLength(1);
-    expect(caught.causes[0]).toBe(stage);
-    expect(caught.cause).toBe(stage);
   });
 
   it("O36: a body failure and stage failures produce the two-domain aggregate", function* () {
@@ -199,13 +214,6 @@ describe("Tier O — Eval scope hierarchy", () => {
       }),
     );
 
-    expect(timeline).toEqual([
-      "start:eval",
-      "start:content",
-      "start:body",
-      "stop:content",
-      "stop:body",
-      "stop:eval",
-    ]);
+    expect(timeline).toEqual(FULL_TIMELINE);
   });
 });

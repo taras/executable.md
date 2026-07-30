@@ -5485,7 +5485,7 @@ visible warning blocks, collect into a separate error report).
 | O32 | Caught projection error | A caught `DocumentationError` is explicit recovery: nothing is recorded, the component completes, and the capture succeeds |
 | O33 | Recovery leaks nothing | Work the projected content started is torn down with its scope; catching the error lets none of it escape the invocation |
 | O34 | Body failure, clean teardown | The body's failure is rethrown by identity and every stage still runs |
-| O35 | Lone teardown failure | The single teardown error keeps its shape and carries the stage failure by identity |
+| O35 | Lone teardown failure | Each stage alone — content, body and eval — yields the single teardown error carrying the planted failure by identity, and every stage still runs |
 | O36 | Both domains fail | One aggregate: the body failure first, then one teardown error with every stage failure in stage order, all by identity |
 | O37 | Documentation failure survives teardown | A `DocumentationError` body failure stays discoverable through the aggregate |
 | O38 | Durability failure survives teardown | A durability body failure plus a teardown failure is still fatal |
