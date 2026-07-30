@@ -124,12 +124,13 @@ describe("form server: the submission resolves only after its response is sent",
       expect(yield* failureOf(server)).toContain("closed before the response finished");
     });
 
-    // Waiting on the event rather than reading a flag: this end learns the
-    // socket is gone when it processes the close, not when teardown ran.
+    // Reaching here is itself the proof that the keep-alive connection was
+    // destroyed: teardown awaits the listener's `close`, which a listener emits
+    // only once every established connection has ended.
     if (!leftover) {
       throw new Error("the keep-alive connection was never opened");
     }
-    yield* leftover.closed;
+    expect(leftover.establishedWith).toBe("127.0.0.1");
     expect(yield* portRefuses(refusedPort)).toBe(true);
   });
 });
@@ -165,7 +166,9 @@ describe("form server: failure reaches the caller", () => {
     if (!keepAlive) {
       throw new Error("the keep-alive connection was never opened");
     }
-    yield* keepAlive.closed;
+    // The connection really was established before the failure, so teardown had
+    // something to destroy.
+    expect(keepAlive.establishedWith).toBe("127.0.0.1");
     expect(yield* portRefuses(recordedPort)).toBe(true);
   });
 
@@ -229,7 +232,10 @@ describe("form server: teardown", () => {
       if (!keepAlive) {
         throw new Error("the keep-alive connection was never opened");
       }
-      yield* keepAlive.closed;
+      expect({ label, established: keepAlive.establishedWith }).toEqual({
+        label,
+        established: "127.0.0.1",
+      });
       expect({ label, refused: yield* portRefuses(port) }).toEqual({ label, refused: true });
     }
   });
@@ -247,27 +253,39 @@ function* failureOf(server: FormServer): Operation<string> {
 
 export interface KeepAlive {
   socket: Socket;
-  /** Resolves when this end observes the connection going away. */
-  closed: Operation<void>;
+  /**
+   * The peer address, captured while the socket was connected. Node clears it
+   * on destroy, so reading it after teardown would answer `undefined` — which
+   * is exactly when a test wants to say the connection had been established.
+   */
+  establishedWith: string | undefined;
 }
 
 /**
- * A connection the server has accepted and is holding open.
+ * A connection the server has accepted and is holding open across teardown.
  *
- * Closure is exposed as an event rather than a flag. Teardown destroys the
- * server's end of the socket, and this end learns about it only once it has
- * processed the close — reading `socket.destroyed` straight afterwards is a race
- * that happens to hold on one runtime and not another.
+ * Nothing here observes the connection closing, and that is deliberate. Two
+ * client-side signals looked like the obvious assertion and neither is portable:
+ * `socket.destroyed` flips only once this end has processed the peer's close, so
+ * reading it straight after teardown passes on Deno and fails on Node; waiting
+ * for the `close` event never fires at all for a paused socket under Bun on
+ * Linux, which turns the test into a five-minute timeout.
+ *
+ * Neither is needed. Teardown awaits the listener's `close`, and a listener emits
+ * that only once every established connection has ended — so a keep-alive socket
+ * the server failed to destroy would hang teardown outright. The test returning
+ * is the evidence, and `portRefuses` confirms the port went with it.
  */
 function* openKeepAlive(port: number): Operation<KeepAlive> {
   const socket = connect(port, "127.0.0.1");
   socket.on("error", () => {});
-  const closed = withResolvers<void>();
-  socket.once("close", () => closed.resolve());
+  // Flowing rather than paused, so the connection behaves like a real client's
+  // and never holds unread bytes against teardown.
+  socket.resume();
 
   const opened = withResolvers<void>();
   socket.once("connect", () => opened.resolve());
   yield* opened.operation;
 
-  return { socket, closed: closed.operation };
+  return { socket, establishedWith: socket.remoteAddress };
 }
