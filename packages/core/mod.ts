@@ -70,6 +70,7 @@ export type { EvalEnv } from "./src/types.ts";
 export { compileBlock } from "./src/eval-context.ts";
 
 export { hasContent, useContent } from "./src/content-context.ts";
+export { ContentError } from "./src/errors.ts";
 export { InvocationTeardownError, withInvocation } from "./src/invocation.ts";
 export type { Invocation } from "./src/invocation.ts";
 export { Sample } from "./src/sample-api.ts";

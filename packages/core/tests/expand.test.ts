@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component, raise } from "../src/component-api.ts";
+import { Component, content, raise } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
@@ -83,6 +83,19 @@ function useBrokenExtension(): Operation<void> {
     },
   });
 }
+
+/**
+ * A function component that renders its invocation content through the
+ * canonical `content()` operation, so its content failures cross the
+ * component-consumer boundary the way any TypeScript component's do.
+ */
+const echoComponent: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Echo",
+  path: "components/Echo.ts",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  fn: () => content(),
+};
 
 /** Install a binding environment on the current scope. */
 function useTestEnv(testEnv: EvalEnv): Operation<void> {
@@ -667,6 +680,28 @@ describe("component-declared output", () => {
       threw = true;
     }
     expect(threw).toBe(true);
+  });
+
+  it("throws when a function component's content error is consumed from parent documentation", function* () {
+    const child = makeComponent("Child", "<Output>\n<Echo>\n<Bogus />\n</Echo>\n</Output>");
+    const parent = makeComponent("P", "<Child />\n\n<Output>tail</Output>");
+    const ctx = { Child: child, Echo: echoComponent, P: parent };
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("renders a function component's content error once inside parent Output", function* () {
+    const child = makeComponent("Child", "<Output>\n<Echo>\n<Bogus />\n</Echo>\n</Output>");
+    const parent = makeComponent("P2", "<Output>\n<Child />\n</Output>");
+    const ctx = { Child: child, Echo: echoComponent, P2: parent };
+    const output = yield* expand(scanSegments("<P2 />"), ctx);
+    expect(output).toContain("<!-- ERROR");
+    expect(output.match(/Failed to import component Bogus/g) ?? []).toHaveLength(1);
   });
 
   // --- Structural preflight ---

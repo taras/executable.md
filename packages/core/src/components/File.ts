@@ -71,8 +71,9 @@ import {
   stat,
   writeTextFile,
 } from "@executablemd/runtime";
-import { Component } from "../component-api.ts";
-import { hasContent, useContent } from "../content-context.ts";
+import { content } from "../component-api.ts";
+import { hasContent } from "../content-context.ts";
+import { ContentError } from "../errors.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-diagnostics.ts";
 
@@ -87,8 +88,8 @@ export const props = {
 
 /** A path that leaves the working directory, or a target that cannot be text. */
 export class FileAccessError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "FileAccessError";
   }
 }
@@ -126,7 +127,7 @@ export default function* (props: Record<string, Json>): Operation<string> {
   if (yield* hasContent()) {
     // The children run only once the path is known to be usable, and the
     // destination is resolved only once they are done.
-    const text = yield* content(requested);
+    const text = yield* rendered(requested);
     yield* write(requested, yield* destination(admitted), text);
     return "";
   }
@@ -137,34 +138,38 @@ export default function* (props: Record<string, Json>): Operation<string> {
 /**
  * The rendered children, or a failure if anything went wrong producing them.
  *
- * A code block that fails is a diagnostic under a collecting policy: the
- * children still render, with the diagnostic embedded in the text. For a
- * component that renders its content that is right — the reader sees what
- * failed, in place. A write has nowhere to show it, and writing the diagnostic
- * into the file would be worse than useless, so this watches for one being
- * raised and turns the whole invocation into a failure instead. Nothing
- * reaches the filesystem, and the target keeps whatever it already held.
+ * `content()` is a failure boundary: content that fails to expand throws
+ * `ContentError` there rather than coming back as text with the diagnostic
+ * embedded in it. For a component that renders its content, embedding is the
+ * right outcome — the reader sees what failed, in place. A write has nowhere to
+ * show it, and writing the diagnostic into the file would be worse than
+ * useless, so this recovers from the boundary and turns the whole invocation
+ * into a failure instead. Nothing reaches the filesystem, and the target keeps
+ * whatever it already held.
  *
- * The messages come along, because `<File>` renders nothing: this diagnostic
- * is the only place the reader would learn what actually went wrong.
+ * The original messages come along, because `<File>` renders nothing: this
+ * diagnostic is the only place the reader would learn what actually went wrong.
+ * Anything else thrown is not a content failure and passes through untouched.
+ *
+ * The content failure itself stays in this failure's cause chain. What is
+ * reported is this component's own diagnostic — the write is what the document
+ * asked for, and that it did not happen is the fact a reader needs — while the
+ * failure it was translated from, and the error segments it carries, remain
+ * reachable underneath for a host inspecting what ended the execution.
  */
-function* content(requested: string): Operation<string> {
-  const failures: string[] = [];
-
-  yield* Component.around({
-    *raise([error], next) {
-      failures.push(error.message);
-      return yield* next(error);
-    },
-  });
-
-  const rendered = yield* useContent();
-  if (failures.length > 0) {
+function* rendered(requested: string): Operation<string> {
+  try {
+    return yield* content();
+  } catch (error) {
+    if (!(error instanceof ContentError)) {
+      throw error;
+    }
+    const failures = error.errors.map((segment) => segment.message);
     throw new FileAccessError(
       `did not write "${requested}": its content failed to expand. ${failures.join(" ")}`,
+      { cause: error },
     );
   }
-  return rendered;
 }
 
 /** A path that has passed the lexical stage, carried to the resolving one. */
@@ -303,7 +308,7 @@ function* read(requested: string, target: string): Operation<string> {
 type Step = "preparation" | "commit";
 
 /**
- * Replace `target` with exactly `content`.
+ * Replace `target` with exactly `text`.
  *
  * The content is whole by the time this runs — the children expanded first —
  * so a child that failed never reaches the filesystem at all. What remains is
@@ -337,7 +342,7 @@ type Step = "preparation" | "commit";
  * write did rather than instead of it: both outcomes are collected here and
  * raised together, so neither hides the other.
  */
-function* write(requested: string, target: string, content: string): Operation<void> {
+function* write(requested: string, target: string, text: string): Operation<void> {
   const info = yield* guard(requested, "write", stat(target));
   if (info.exists && !info.isFile) {
     throw new FileAccessError(
@@ -360,7 +365,7 @@ function* write(requested: string, target: string, content: string): Operation<v
     const temporary = `${target}.xmd-${randomUUID().slice(0, 8)}.tmp`;
     yield* ensure(() => discard(requested, temporary, uncleaned));
     try {
-      yield* writeTextFile(temporary, content);
+      yield* writeTextFile(temporary, text);
       step = "commit";
       yield* rename(temporary, target);
     } catch (error) {

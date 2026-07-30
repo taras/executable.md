@@ -17,7 +17,7 @@ import {
   StaleInputError,
 } from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "../src/invocation.ts";
-import { DocumentationError, durabilityFailure, fatalCause } from "../src/errors.ts";
+import { ContentError, DocumentationError, durabilityFailure, fatalCause } from "../src/errors.ts";
 import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -32,6 +32,27 @@ function documentation(): DocumentationError {
     type: "error",
     message: "the document is wrong",
   });
+}
+
+/**
+ * A content failure carrying something underneath, built the way an author can:
+ * the public constructor takes only the segments, so anything beneath an instance
+ * arrives by property assignment.
+ */
+function recovered(cause?: unknown): ContentError {
+  const failure = new ContentError([{ type: "error", message: "content failed to expand" }]);
+  if (cause !== undefined) {
+    failure.cause = cause;
+  }
+  return failure;
+}
+
+/** The other way an author gets there: a subclass that sets its own cause. */
+class AuthorContentError extends ContentError {
+  constructor(cause: unknown) {
+    super([{ type: "error", message: "content failed to expand" }]);
+    this.cause = cause;
+  }
 }
 
 /**
@@ -202,6 +223,87 @@ describe("Tier FA — Fatal error discovery", () => {
     const wrapper = new AggregateError([doc, planted], "mixed");
     doc.cause = wrapper;
 
+    expect(fatalCause(wrapper)).toBe(planted);
+  });
+
+  // FA15–FA19: the two searches reach different parts of the same graph.
+  // `ContentError` is public — an author constructs and subclasses it — so what
+  // an instance carries underneath is arbitrary, and only the documentation
+  // search may treat it as a leaf.
+  it("FA15: a content failure does not hide a durability failure it carries", function* () {
+    for (const make of DURABILITY_FAILURES) {
+      const subclassed = new AuthorContentError(make());
+      expect(durabilityFailure(subclassed)).toBe(subclassed.cause);
+      expect(fatalCause(subclassed)).toBe(subclassed.cause);
+
+      const planted = make();
+      const assigned = recovered(planted);
+      expect(durabilityFailure(assigned)).toBe(planted);
+      expect(fatalCause(assigned)).toBe(planted);
+    }
+  });
+
+  it("FA16: the same holds wherever the content failure sits in the graph", function* () {
+    const planted = stale();
+
+    expect(fatalCause(new Error("component exploded", { cause: recovered(planted) }))).toBe(
+      planted,
+    );
+    expect(fatalCause(new AggregateError([new Error("other"), recovered(planted)], "mixed"))).toBe(
+      planted,
+    );
+    expect(fatalCause(new InvocationTeardownError([recovered(planted)]))).toBe(planted);
+
+    // Every wrapper at once: teardown, aggregate, an ordinary cause, and then
+    // the content failure the component recovered from.
+    const deep = new InvocationTeardownError([
+      new AggregateError(
+        [new Error("noise"), new Error("component exploded", { cause: recovered(planted) })],
+        "mixed",
+      ),
+    ]);
+    expect(durabilityFailure(deep)).toBe(planted);
+    expect(fatalCause(deep)).toBe(planted);
+  });
+
+  it("FA17: a documentation failure a component recovered from is not reported again", function* () {
+    const child = documentation();
+    const contextual = new Error("component exploded", { cause: recovered(child) });
+
+    expect(fatalCause(contextual)).toBeUndefined();
+    expect(durabilityFailure(contextual)).toBeUndefined();
+
+    // Stopped at the content failure, not switched off: the same documentation
+    // failure reached without crossing one is still discovered.
+    expect(fatalCause(new AggregateError([contextual, child], "mixed"))).toBe(child);
+  });
+
+  it("FA18: a durability failure outranks a documentation failure behind a content failure", function* () {
+    const planted = stale();
+    const child = documentation();
+    const contextual = new Error("component exploded", {
+      cause: recovered(new AggregateError([child, planted], "content")),
+    });
+
+    expect(fatalCause(contextual)).toBe(planted);
+    // And against a documentation failure the search would otherwise report.
+    expect(fatalCause(new AggregateError([contextual, documentation()], "mixed"))).toBe(planted);
+    expect(fatalCause(new AggregateError([documentation(), contextual], "mixed"))).toBe(planted);
+  });
+
+  it("FA19: a cyclic graph through a content failure terminates", function* () {
+    const selfCaused = recovered();
+    selfCaused.cause = selfCaused;
+
+    expect(fatalCause(selfCaused)).toBeUndefined();
+    expect(durabilityFailure(selfCaused)).toBeUndefined();
+
+    const planted = stale();
+    const cyclic = recovered();
+    const wrapper = new AggregateError([cyclic, planted], "mixed");
+    cyclic.cause = wrapper;
+
+    expect(durabilityFailure(cyclic)).toBe(planted);
     expect(fatalCause(wrapper)).toBe(planted);
   });
 });

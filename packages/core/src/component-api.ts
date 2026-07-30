@@ -100,7 +100,24 @@ export interface ComponentApi {
   codeBlock(): Operation<CodeBlockContext>;
   /** Whether the current block runs with persistent resource lifetime. */
   persistent: boolean;
-  /** Render the invoking component's children (optionally a named slot). */
+  /**
+   * Render the content the invoking component was written with — the default
+   * content, or a named slot (spec §5.1.2). This is the canonical operation for
+   * a function component; `useContent(slot?)` is a compatibility alias for it.
+   *
+   * Each call is a failure boundary. Requested content that expands cleanly
+   * comes back as its rendered string. Requested content that produces
+   * ErrorSegments throws `ContentError` carrying those original segments, so
+   * normal continuation stops at the `yield* content()` expression: the
+   * component's return is not processed and no `as` binding is made. Left
+   * uncaught, the invocation is replaced by the original errors under a
+   * collecting policy, or the original `DocumentationError` is restored under a
+   * throwing one.
+   *
+   * Catching `ContentError` around the call is explicit recovery — the
+   * component chooses what to render instead, and its consumer never sees the
+   * failure. Only content the component asks for is expanded.
+   */
   content(slot?: string): Operation<string>;
   /** Whether the invoking element was written with content rather than self-closed. */
   hasContent(): Operation<boolean>;
@@ -165,6 +182,11 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
     );
   },
   persistent: false,
+  /**
+   * Calling for content outside an invocation is a mistake in the caller, not a
+   * content failure, so this is an ordinary Error: a component's
+   * `catch (error) { if (error instanceof ContentError) … }` does not absorb it.
+   */
   // deno-lint-ignore require-yield
   *content(_slot?: string): Operation<string> {
     throw new Error(

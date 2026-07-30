@@ -24,6 +24,13 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
+import { builtInComponent } from "../src/components/registry.ts";
+import { Component, raise } from "../src/component-api.ts";
+import { expandSegments } from "../src/expand.ts";
+import { scanSegments } from "../src/scanner.ts";
+import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
+import type { ErrorPolicy } from "../src/errors.ts";
+import type { ErrorSegment, Segment } from "../src/types.ts";
 import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,6 +120,105 @@ function* partial(stream: InMemoryStream): Operation<InMemoryStream> {
   return new InMemoryStream(
     events.filter((event) => !(event.type === "close" && event.coroutineId === "root")),
   );
+}
+
+/** What one expansion observed, and how it ended. */
+interface Observation {
+  /** Every ErrorSegment that passed through `Component.raise`, in order. */
+  raised: ErrorSegment[];
+  /** Every DocumentationError the observation chain constructed, in order. */
+  failures: DocumentationError[];
+  /** What the expansion produced, or nothing when it threw. */
+  segments: Segment[];
+  /** What the expansion threw, if anything. */
+  thrown: unknown;
+}
+
+/**
+ * Expand `source` against the real `<File>` definition under `policy`, observing
+ * every error where it is reported.
+ *
+ * `execute()` is the harness everywhere else here, because what the other tests
+ * assert is what a document produces. This one goes a level down: how often a
+ * failure is reported, and the shape of the failure that leaves the component —
+ * which error object, carrying which others — are not things rendered output can
+ * show. `<Broken />` stands in for a failing child so the segment it reports is
+ * identifiable by reference.
+ */
+function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operation<Observation> {
+  return scoped(function* () {
+    const definition = builtInComponent("File");
+    if (!definition) {
+      throw new Error("the File built-in is missing");
+    }
+    const raised: ErrorSegment[] = [];
+    const failures: DocumentationError[] = [];
+
+    yield* useWorkspaceCwd(fixture);
+    yield* Component.around({
+      *raise([error], next) {
+        raised.push(error);
+        try {
+          return yield* next(error);
+        } catch (failure) {
+          // The chain is where a throwing policy constructs the
+          // DocumentationError, so capturing it here is what lets the test
+          // assert which of them leaves the expansion.
+          if (failure instanceof DocumentationError) {
+            failures.push(failure);
+          }
+          throw failure;
+        }
+      },
+    });
+    yield* Component.around({
+      *expand([element], next) {
+        if (element.name === "Broken") {
+          return {
+            segments: [yield* raise({ type: "error", message: "broken", source: "Broken" })],
+          };
+        }
+        return yield* next(element);
+      },
+    });
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *importComponent([name], _next) {
+          if (name === definition.name) {
+            return definition;
+          }
+          throw new Error(`Component not found: ${name}`);
+        },
+      },
+      { at: "min" },
+    );
+    yield* AmbientErrorPolicy.set(policy);
+
+    let segments: Segment[] = [];
+    let thrown: unknown;
+    try {
+      segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    } catch (error) {
+      thrown = error;
+    }
+    return { raised, failures, segments, thrown };
+  });
+}
+
+/** Everything reachable from `error` by `cause`, nearest first. */
+function causes(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current: unknown = error;
+  while (
+    current instanceof Error &&
+    current.cause !== undefined &&
+    !chain.includes(current.cause)
+  ) {
+    current = current.cause;
+    chain.push(current);
+  }
+  return chain;
 }
 
 function text(output: Json): string {
@@ -502,6 +608,71 @@ describe("Tier FL — File", () => {
     // The block's own failure travels with it — nothing else would report it.
     expect(output).toContain("Command failed (exit 4)");
     expect(yield* read(fixture, "notes.md")).toBe("first");
+  });
+
+  // FL12b: the same translation under fail-fast, where a failure is an object
+  // rather than a rendered line. What ends the execution is `<File>`'s own
+  // failure — the write is what the document asked for — and the content failure
+  // it was translated from stays reachable beneath it, segments and all, so
+  // nothing is lost by reporting the component's account instead of the child's.
+  it("FL12b: the reported failure is File's own, with the content failure beneath it", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const observed = yield* observe(fixture, '<File path="notes.md"><Broken /></File>', "throw");
+
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+
+    // Two errors exist, each reported once: the child's, and the one `<File>`
+    // chose in its place.
+    expect(observed.raised).toHaveLength(2);
+    expect(observed.raised[0].message).toBe("broken");
+    expect(observed.failures).toHaveLength(2);
+    expect(observed.failures[0].segment).toBe(observed.raised[0]);
+    expect(observed.failures[1].segment).toBe(observed.raised[1]);
+
+    const thrown = observed.thrown;
+    expect(thrown).toBeInstanceOf(DocumentationError);
+    if (!(thrown instanceof DocumentationError)) {
+      throw new Error("expected a DocumentationError to leave the expansion");
+    }
+    expect(thrown).toBe(observed.failures[1]);
+    // Not the child's decision resurrected: a different object, carrying the
+    // diagnostic about the write that did not happen.
+    expect(thrown).not.toBe(observed.failures[0]);
+    expect(thrown.message).toContain('did not write "notes.md": its content failed to expand.');
+    expect(thrown.message).toContain("broken");
+
+    const chain = causes(thrown);
+    const recovered = chain.find((link) => link instanceof ContentError);
+    expect(recovered).toBeInstanceOf(ContentError);
+    if (!(recovered instanceof ContentError)) {
+      throw new Error("expected a ContentError in the reported failure's cause chain");
+    }
+    // The same segment objects the document reported, not copies.
+    expect(recovered.errors).toHaveLength(1);
+    expect(recovered.errors[0]).toBe(observed.raised[0]);
+    // And the child's own failure, by identity.
+    expect(chain.includes(observed.failures[0])).toBe(true);
+  });
+
+  // FL12c: the collecting half of the same translation. The component reports
+  // the same diagnostic once, and it is the whole invocation's result — the
+  // child's segment is accounted for inside it rather than appended beside it.
+  it("FL12c: a collected translation reports File's diagnostic once", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const observed = yield* observe(fixture, '<File path="notes.md"><Broken /></File>', "collect");
+
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(observed.thrown).toBeUndefined();
+    expect(observed.failures).toEqual([]);
+    expect(observed.raised).toHaveLength(2);
+    expect(observed.segments).toEqual([observed.raised[1]]);
+    expect(observed.raised[1].message).toContain(
+      'did not write "notes.md": its content failed to expand.',
+    );
   });
 
   // FL13: the write itself failing is the other half. The replacement is a

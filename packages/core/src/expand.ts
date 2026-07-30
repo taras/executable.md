@@ -40,7 +40,15 @@ import {
   importComponent,
   raise,
 } from "./component-api.ts";
-import { AmbientErrorPolicy, durabilityFailure, fatalCause, settle } from "./errors.ts";
+import {
+  AmbientErrorPolicy,
+  attributeCause,
+  ContentError,
+  DocumentationError,
+  durabilityFailure,
+  fatalCause,
+  settle,
+} from "./errors.ts";
 import type { ErrorPolicy } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -205,8 +213,11 @@ interface ProjectionState {
    * loop the author could see.
    */
   callerLoop: LoopFrame | undefined;
-  /** Where a string projection records the errors it renders away. */
-  collect: Segment[];
+  /**
+   * Where a string projection records the errors it renders away. A handle that
+   * only projects structured segments needs none — its caller sees the errors.
+   */
+  collect?: Segment[];
 }
 
 /**
@@ -395,12 +406,18 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     },
     project: runProjection,
     *projectToString(request: ProjectionRequest): Operation<string> {
+      const collect = state.collect;
+      if (collect === undefined) {
+        throw new Error(
+          "projectToString() requires an error collector; this handle only supports project().",
+        );
+      }
       const segments = yield* runProjection(request);
       // A string result must not hide a failure: record the structured errors
       // where the invocation can refuse an `as=` capture.
       for (const segment of segments) {
         if (segment.type === "error") {
-          state.collect.push(segment);
+          collect.push(segment);
         }
       }
       return renderSegments(segments);
@@ -1741,6 +1758,61 @@ function asText(output: Json): string {
 }
 
 /**
+ * The engine's own content failure — the only one the invocation boundary turns
+ * back into transported segments. An author who constructs and throws a
+ * `ContentError` is reporting a component error, not moving errors that were
+ * already observed, so it cannot inject unobserved segments into the document.
+ *
+ * Under a throwing policy the original `DocumentationError` travels as the
+ * cause, which is how the boundary restores it by identity when the component
+ * does not recover.
+ */
+class ContentExpansionFailure extends ContentError {
+  constructor(errors: readonly ErrorSegment[], cause?: DocumentationError) {
+    super(errors);
+    this.cause = cause;
+  }
+}
+
+function errorSegments(segments: Segment[]): ErrorSegment[] {
+  return segments.filter((segment) => segment.type === "error");
+}
+
+/**
+ * Carries a non-Error value a function component threw. The invocation
+ * boundary transports failures as Errors — `withInvocation` wraps anything
+ * else with `asError`, which keeps the string but loses the value — so the
+ * value rides across in this carrier and the diagnostic is translated from
+ * the exact value the component threw, `undefined` included.
+ */
+class ThrownValue extends Error {
+  constructor(readonly value: unknown) {
+    super(String(value));
+  }
+}
+
+/**
+ * Report a diagnostic built from a failure, keeping that failure reachable
+ * underneath whatever settlement produces.
+ *
+ * The diagnostic is what the document says, and under a throwing policy the
+ * `DocumentationError` carrying it is what the execution fails with. The failure
+ * it was built from is the structural account of how the component got there —
+ * a component that recovered from failed content and then reported a failure of
+ * its own is the only place the original content failure survives.
+ *
+ * The link is attributed to the segment before it is raised, so settlement
+ * constructs a failure that already carries it: middleware that catches what
+ * `raise` throws is an observer like any other, and there is no moment in which
+ * this diagnostic exists without its account. The observation itself is still the
+ * single `raise` of the segment.
+ */
+function raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
+  attributeCause(segment, from);
+  return raise(segment);
+}
+
+/**
  * Expand a function component (.ts file).
  *
  * Function components are generator functions that return a rendered
@@ -1817,12 +1889,6 @@ function* expandFunctionComponent(
     ];
   }
 
-  // useContent() must hand the component a string, so a collecting policy would
-  // otherwise let a rendered error comment become the captured value and drop
-  // the ErrorSegment from the document. Keep the structured errors alongside
-  // the string so `as` can refuse the capture below.
-  const contentErrors: Segment[] = [];
-
   // Read before the invocation exists: the eval scope ambient here is the
   // caller's, and it is what `retain()` creates resources in. The loop is read
   // here for the same reason — see expandComponent.
@@ -1846,7 +1912,6 @@ function* expandFunctionComponent(
         hideSet,
         counter,
         callerLoop: siteLoop,
-        collect: contentErrors,
       });
       invocation.evalScope.scope.set(ActiveProjection, handle);
 
@@ -1856,7 +1921,23 @@ function* expandFunctionComponent(
       yield* Component.around(
         {
           *content([slotName], _next) {
-            return yield* handle.projectToString({ kind: "slot", name: slotName });
+            let segments: Segment[];
+            try {
+              segments = yield* handle.project({ kind: "slot", name: slotName });
+            } catch (error) {
+              // A throwing policy already decided this execution fails; the call
+              // site still sees the public shape, and the original failure
+              // travels as the cause so the boundary can restore it.
+              if (error instanceof DocumentationError) {
+                throw new ContentExpansionFailure([error.segment], error);
+              }
+              throw error;
+            }
+            const errors = errorSegments(segments);
+            if (errors.length > 0) {
+              throw new ContentExpansionFailure(errors);
+            }
+            return renderSegments(segments);
           },
           // The element's shape, not its rendered result: content that renders
           // an empty string is still content.
@@ -1867,16 +1948,16 @@ function* expandFunctionComponent(
         },
         { at: "min" },
       );
-      return yield* definition.fn(validatedProps);
+      try {
+        return yield* definition.fn(validatedProps);
+      } catch (error) {
+        if (error instanceof Error) {
+          throw error;
+        }
+        throw new ThrownValue(error);
+      }
     });
     if (asBinding) {
-      // A capture never swallows an error. The projection reported these where
-      // they were created (§6.9), so they are handed back as they are and the
-      // binding stays unset.
-      if (contentErrors.length > 0) {
-        return contentErrors;
-      }
-
       const parentEnv = yield* env;
       if (!parentEnv) {
         return [
@@ -1897,20 +1978,38 @@ function* expandFunctionComponent(
     if (fatal !== undefined) {
       throw fatal;
     }
+    // The content the component asked for failed and it did not recover, so the
+    // invocation is replaced by what the projection already reported (§6.9) and
+    // reporting it again here would double-observe it. Under a throwing policy
+    // that is the original `DocumentationError`, by identity; under a collecting
+    // one it is the segments, which the consumer boundary then settles under the
+    // caller's policy. Restored here by identity rather than by `fatalCause`,
+    // whose documentation search stops at a content failure so that a component
+    // reporting a failure of its own keeps it (see `isRecoveredContent`).
+    if (error instanceof ContentExpansionFailure) {
+      if (error.cause instanceof DocumentationError) {
+        throw error.cause;
+      }
+      return [...error.errors];
+    }
     // A return that failed its schema already names the component and carries
     // its issues; wrapping it would bury both.
     if (error instanceof SchemaValidationError) {
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
+    const from = error instanceof ThrownValue ? error.value : error;
     return [
-      yield* raise({
-        type: "error",
-        message:
-          error instanceof Error
-            ? `Function component ${name} error: ${error.message}`
-            : `Function component ${name} error: ${String(error)}`,
-        source: name,
-      }),
+      yield* raiseFrom(
+        {
+          type: "error",
+          message:
+            from instanceof Error
+              ? `Function component ${name} error: ${from.message}`
+              : `Function component ${name} error: ${String(from)}`,
+          source: name,
+        },
+        from,
+      ),
     ];
   }
 }

@@ -3,12 +3,16 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component, raise } from "../src/component-api.ts";
-import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
+import { Component, content, raise } from "../src/component-api.ts";
+import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { useContent } from "../src/content-context.ts";
-import type { ComponentDefinition, FunctionComponentDefinition, Segment } from "../src/types.ts";
+import type {
+  ComponentDefinition,
+  ErrorSegment,
+  FunctionComponentDefinition,
+  Segment,
+} from "../src/types.ts";
 
 /**
  * The one-observation contract across the extension boundary (spec §6.9).
@@ -179,7 +183,11 @@ function markdownComponent(name: string, body: string): ComponentDefinition {
   };
 }
 
-/** Renders its children through `useContent()`, the string-projection path. */
+function errorSegments(segments: Segment[]): Segment[] {
+  return segments.filter((segment) => segment.type === "error");
+}
+
+/** Renders its content through the canonical `content()` projection. */
 function echoComponent(name: string): FunctionComponentDefinition {
   return {
     kind: "function",
@@ -187,7 +195,47 @@ function echoComponent(name: string): FunctionComponentDefinition {
     path: `${name}.ts`,
     props: OPEN_SCHEMA,
     *fn(_props) {
-      return yield* useContent();
+      return yield* content();
+    },
+  };
+}
+
+/** Fails on its own terms, without asking for content. */
+function throwingComponent(name: string, failure: unknown): FunctionComponentDefinition {
+  return {
+    kind: "function",
+    name,
+    path: `${name}.ts`,
+    props: OPEN_SCHEMA,
+    // deno-lint-ignore require-yield
+    *fn(_props) {
+      throw failure;
+    },
+  };
+}
+
+/**
+ * Recovers from a failed projection and hands the caught `ContentError` to the
+ * test scope, which is the only way to read the errors it carries: recovery
+ * keeps the failure away from the consumer, so nothing else about the run shows
+ * it happened.
+ */
+function recoveringComponent(name: string, caught: ContentError[]): FunctionComponentDefinition {
+  return {
+    kind: "function",
+    name,
+    path: `${name}.ts`,
+    props: OPEN_SCHEMA,
+    *fn(_props) {
+      try {
+        return yield* content();
+      } catch (error) {
+        if (error instanceof ContentError) {
+          caught.push(error);
+          return "recovered";
+        }
+        throw error;
+      }
     },
   };
 }
@@ -199,26 +247,40 @@ function echoComponent(name: string): FunctionComponentDefinition {
  * `<Content />` all expand segments through a nested `expandSegments`, which
  * reports each error where it is produced. None of them is an observation
  * boundary, so what they hand back is appended or settled, never reported twice.
+ *
+ * A function component's `content()` reads that same projection structurally.
+ * ErrorSegments among the projected segments abort the generator at the
+ * `yield* content()` expression, and the invocation is replaced by those
+ * original segment objects — the ones `Component.raise` already returned. Their
+ * identity is what proves the transport reports nothing a second time.
  */
 describe("Tier OBS — construct error observation", () => {
   interface ConstructProbe {
     observed: string[];
+    /** Every segment that passed through `Component.raise`, by reference. */
+    raised: ErrorSegment[];
+    segments: Segment[];
     output: string;
     values: Record<string, unknown>;
   }
 
   interface ProbeOptions {
     markdown?: Record<string, string>;
-    functions?: string[];
+    functions?: Record<string, FunctionComponentDefinition>;
   }
 
-  /** Claims `<Broken />` and reports the diagnostic it creates. */
+  /**
+   * Claims `<Broken />` and reports the diagnostic it creates. A `message` prop
+   * names the failure, so sibling failures stay distinguishable.
+   */
   function useBroken(): Operation<void> {
     return Component.around({
       *expand([element], next) {
         if (element.name === "Broken") {
+          const prop = element.props.message;
+          const message = typeof prop === "string" ? prop : "broken thing";
           return {
-            segments: [yield* raise({ type: "error", message: "broken thing", source: "Broken" })],
+            segments: [yield* raise({ type: "error", message, source: "Broken" })],
           };
         }
         return yield* next(element);
@@ -229,12 +291,14 @@ describe("Tier OBS — construct error observation", () => {
   function runProbe(source: string, options: ProbeOptions = {}): Operation<ConstructProbe> {
     return scoped(function* () {
       const observed: string[] = [];
+      const raised: ErrorSegment[] = [];
       const values: Record<string, unknown> = {};
       const markdown = options.markdown ?? {};
-      const functions = new Set(options.functions ?? []);
+      const functions = options.functions ?? {};
       yield* Component.around({
         *raise([error], next) {
           observed.push(error.message);
+          raised.push(error);
           return yield* next(error);
         },
       });
@@ -248,8 +312,9 @@ describe("Tier OBS — construct error observation", () => {
           },
           // deno-lint-ignore require-yield
           *importComponent([name], _next) {
-            if (functions.has(name)) {
-              return echoComponent(name);
+            const fn = functions[name];
+            if (fn) {
+              return fn;
             }
             const body = markdown[name];
             if (body === undefined) {
@@ -261,7 +326,7 @@ describe("Tier OBS — construct error observation", () => {
         { at: "min" },
       );
       const segments: Segment[] = yield* expandSegments(scanSegments(source), {}, {}, new Set());
-      return { observed, output: renderSegments(segments), values };
+      return { observed, raised, segments, output: renderSegments(segments), values };
     });
   }
 
@@ -285,6 +350,7 @@ describe("Tier OBS — construct error observation", () => {
 
   const BODY = { Wrap: "<Broken />" };
   const PROJECT = { Wrap: "before <Content /> after" };
+  const ECHO: ProbeOptions = { functions: { Echo: echoComponent("Echo") } };
 
   it("OBS7: an inline error is observed once", function* () {
     const probe = yield* runProbe("<Broken />");
@@ -318,10 +384,13 @@ describe("Tier OBS — construct error observation", () => {
     const markdown = yield* runProbe("<Wrap><Broken /></Wrap>", { markdown: PROJECT });
     expect(markdown.observed).toEqual(["broken thing"]);
 
-    // The string-projection path: useContent() renders the segments away, so
-    // the invocation carries the structured errors out separately.
-    const fn = yield* runProbe("<Echo><Broken /></Echo>", { functions: ["Echo"] });
+    // Function content is a structured projection: its ErrorSegments abort the
+    // generator, and the invocation is replaced by those same segments.
+    const fn = yield* runProbe("<Echo><Broken /></Echo>", ECHO);
     expect(fn.observed).toEqual(["broken thing"]);
+    const returned = errorSegments(fn.segments);
+    expect(returned).toHaveLength(1);
+    expect(returned[0]).toBe(fn.raised[0]);
   });
 
   it("OBS13: an error in a <Loop> body is observed once", function* () {
@@ -363,9 +432,10 @@ describe("Tier OBS — construct error observation", () => {
     expect("w" in component.values).toBe(false);
     expect(component.output).toContain("broken thing");
 
-    const fn = yield* runProbe('<Echo as="f"><Broken /></Echo>', { functions: ["Echo"] });
+    const fn = yield* runProbe('<Echo as="f"><Broken /></Echo>', ECHO);
     expect(fn.observed).toEqual(["broken thing"]);
     expect("f" in fn.values).toBe(false);
+    expect(fn.output).toContain("broken thing");
   });
 
   it("OBS16: an ambient throw policy aborts at the first error on every path", function* () {
@@ -376,6 +446,7 @@ describe("Tier OBS — construct error observation", () => {
       ['<Capture as="c"><Broken /><Broken /></Capture>', {}],
       ["<Wrap /><Wrap />", { markdown: BODY }],
       ["<Wrap><Broken /></Wrap><Wrap><Broken /></Wrap>", { markdown: PROJECT }],
+      ["<Echo><Broken /></Echo><Echo><Broken /></Echo>", ECHO],
       ["<Loop max={2}><Broken /></Loop>", {}],
     ];
     for (const [source, options] of cases) {
@@ -393,11 +464,219 @@ describe("Tier OBS — construct error observation", () => {
       ['<Capture as="c"><Broken /></Capture>', {}],
       ["<Wrap />", { markdown: BODY }],
       ["<Wrap><Broken /></Wrap>", { markdown: PROJECT }],
+      ["<Echo><Broken /></Echo>", ECHO],
       ["<Loop max={1}><Broken /></Loop>", {}],
     ];
     for (const [source, options] of cases) {
       const probe = yield* runProbe(source, options);
       expect(probe.output.match(/broken thing/g)).toHaveLength(1);
     }
+  });
+
+  it("OBS18: uncaught function content errors come back as the raised segments", function* () {
+    const probe = yield* runProbe("<Echo><Broken /></Echo>", ECHO);
+    expect(probe.raised).toHaveLength(1);
+    expect(probe.observed).toEqual(["broken thing"]);
+
+    const returned = errorSegments(probe.segments);
+    expect(returned).toHaveLength(1);
+    expect(returned[0]).toBe(probe.raised[0]);
+  });
+
+  it("OBS19: a refused function capture comes back as the raised segment", function* () {
+    const probe = yield* runProbe('<Echo as="f"><Broken /></Echo>', ECHO);
+    expect(probe.observed).toEqual(["broken thing"]);
+    expect("f" in probe.values).toBe(false);
+
+    const returned = errorSegments(probe.segments);
+    expect(returned).toHaveLength(1);
+    expect(returned[0]).toBe(probe.raised[0]);
+  });
+
+  it("OBS20: sibling content failures keep source order and one observation each", function* () {
+    const probe = yield* runProbe(
+      '<Echo><Broken message="first" /><Broken message="second" /></Echo>',
+      ECHO,
+    );
+    expect(probe.observed).toEqual(["first", "second"]);
+
+    const returned = errorSegments(probe.segments);
+    expect(returned).toHaveLength(2);
+    expect(returned[0]).toBe(probe.raised[0]);
+    expect(returned[1]).toBe(probe.raised[1]);
+  });
+
+  it("OBS21: ContentError carries the raised segments in source order", function* () {
+    const caught: ContentError[] = [];
+    const probe = yield* runProbe(
+      '<Recover><Broken message="first" /><Broken message="second" /></Recover>',
+      { functions: { Recover: recoveringComponent("Recover", caught) } },
+    );
+    expect(probe.observed).toEqual(["first", "second"]);
+
+    expect(caught).toHaveLength(1);
+    const [failure] = caught;
+    expect(failure.errors).toHaveLength(2);
+    expect(failure.errors[0]).toBe(probe.raised[0]);
+    expect(failure.errors[1]).toBe(probe.raised[1]);
+
+    // Recovery keeps the failure from the consumer, so nothing settles.
+    expect(errorSegments(probe.segments)).toHaveLength(0);
+    expect(probe.output).toBe("recovered");
+  });
+
+  // OBS22: where the cause is attached, measured from inside the observation
+  // chain. Raise middleware that catches what `next` throws is the earliest any
+  // observer can see the DocumentationError — settlement constructs it at the end
+  // of the chain — so a failure that is complete there is complete everywhere.
+  it("OBS22: a contextual failure carries its cause where the chain throws it", function* () {
+    const exploded = new Error("component exploded");
+    const observed: ErrorSegment[] = [];
+    // The cause is read where the middleware catches, not afterwards: a link
+    // attached once the chain has unwound would be invisible to a test that
+    // inspected the same object at the end of the run.
+    const caught: Array<{ failure: DocumentationError; cause: unknown }> = [];
+    let thrown: unknown;
+
+    yield* scoped(function* () {
+      yield* AmbientErrorPolicy.set("throw");
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error);
+          try {
+            return yield* next(error);
+          } catch (failure) {
+            if (failure instanceof DocumentationError) {
+              caught.push({ failure, cause: failure.cause });
+            }
+            throw failure;
+          }
+        },
+      });
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Boom") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return throwingComponent("Boom", exploded);
+          },
+        },
+        { at: "min" },
+      );
+      try {
+        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set());
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(caught).toHaveLength(1);
+    const [{ failure, cause }] = caught;
+    expect(cause).toBe(exploded);
+    expect(failure.message).toContain("Function component Boom error: component exploded");
+
+    // The same object leaves the expansion, with the same cause.
+    expect(thrown).toBe(failure);
+    expect(thrown).toBeInstanceOf(DocumentationError);
+    expect(failure.cause).toBe(exploded);
+
+    // One observation of the contextual segment, and it is the one the failure
+    // carries.
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toBe(failure.segment);
+  });
+
+  // OBS23: `throw undefined` is still a thrown value. The failure's own `cause`
+  // property records it — membership in the attribution, not comparison with
+  // undefined, is what distinguishes "translated from undefined" from "no
+  // attribution at all".
+  it("OBS23: a contextual failure records a thrown undefined as its cause", function* () {
+    const observed: ErrorSegment[] = [];
+    const caught: Array<{ failure: DocumentationError; hasCause: boolean; cause: unknown }> = [];
+    let thrown: unknown;
+
+    yield* scoped(function* () {
+      yield* AmbientErrorPolicy.set("throw");
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error);
+          try {
+            return yield* next(error);
+          } catch (failure) {
+            if (failure instanceof DocumentationError) {
+              caught.push({
+                failure,
+                hasCause: Object.hasOwn(failure, "cause"),
+                cause: failure.cause,
+              });
+            }
+            throw failure;
+          }
+        },
+      });
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Boom") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return throwingComponent("Boom", undefined);
+          },
+        },
+        { at: "min" },
+      );
+      try {
+        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set());
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(caught).toHaveLength(1);
+    const [{ failure, hasCause, cause }] = caught;
+    // Present and exactly undefined, already inside the middleware's catch.
+    expect(hasCause).toBe(true);
+    expect(cause).toBe(undefined);
+    expect(thrown).toBe(failure);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toBe(failure.segment);
+  });
+
+  it("OBS24: a collected thrown undefined renders a diagnostic and produces no Error", function* () {
+    const observed: ErrorSegment[] = [];
+    const probe = yield* scoped(function* () {
+      yield* Component.around({
+        *raise([error], next) {
+          observed.push(error);
+          return yield* next(error);
+        },
+      });
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Boom") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return throwingComponent("Boom", undefined);
+          },
+        },
+        { at: "min" },
+      );
+      const segments = yield* expandSegments(scanSegments("<Boom />TAIL"), {}, {}, new Set());
+      return { segments, output: renderSegments(segments) };
+    });
+
+    // Collecting settles a segment; no DocumentationError is ever constructed,
+    // so there is no JavaScript Error to carry a cause.
+    expect(observed).toHaveLength(1);
+    expect(probe.output).toContain("Function component Boom error");
+    expect(probe.output).toContain("TAIL");
   });
 });
