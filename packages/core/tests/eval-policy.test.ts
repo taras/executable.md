@@ -242,4 +242,106 @@ describe("Tier O — Eval scope hierarchy", () => {
     // Reported once on the way out, not again when it crosses back.
     expect(String(output).split("Cannot resolve component: Missing").length - 1).toBe(1);
   });
+
+  // O32: a caught DocumentationError is explicit recovery. The throw-bound
+  // projection fails before anything is recorded for the capture refusal, so
+  // the recovered component completes and the capture succeeds.
+  it("O32: a caught projection error recovers without a later capture refusal", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": [
+        "```ts eval",
+        "const projected = yield* call(function* () {",
+        "  try {",
+        "    return yield* renderChildren();",
+        "  } catch (error) {",
+        '    return "recovered";',
+        "  }",
+        "});",
+        "```",
+        "",
+        "<Output>",
+        "```ts eval",
+        "output(projected);",
+        "```",
+        "</Output>",
+      ].join("\n"),
+      "doc.md": '<Wrap as="cap">\n<Missing />\n</Wrap>\n\nvalue:{cap}:end',
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    // The caught error is not reasserted: the binding holds the recovered
+    // output and no error segment reaches the caller.
+    expect(output).toContain("recovered");
+    expect(output).not.toContain("{cap}");
+    expect(output).not.toContain("ERROR");
+  });
+
+  // O33: work the projected content started is torn down with its scope, not
+  // leaked past the invocation because the projection's error was caught.
+  it("O33: projection-owned work does not escape a caught projection error", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Wrap.md": [
+        "```ts eval",
+        "const projected = yield* call(function* () {",
+        "  try {",
+        "    return yield* renderChildren();",
+        "  } catch (error) {",
+        '    return "recovered";',
+        "  }",
+        "});",
+        "```",
+        "",
+        "<Output>",
+        "```ts eval",
+        "output(projected);",
+        "```",
+        "</Output>",
+      ].join("\n"),
+      "doc.md": [
+        "```js eval",
+        "const probe = { started: false, halted: false };",
+        "```",
+        "",
+        '<Wrap as="cap">',
+        "```js persist eval",
+        "yield* spawn(function*() {",
+        "  probe.started = true;",
+        "  try {",
+        "    yield* suspend();",
+        "  } finally {",
+        "    probe.halted = true;",
+        "  }",
+        "});",
+        "```",
+        "",
+        "```js eval",
+        "yield* when(function*() {",
+        '  if (!probe.started) throw new Error("not yet");',
+        "});",
+        "```",
+        "",
+        "<Missing />",
+        "</Wrap>",
+        "",
+        "value:{cap}:end",
+        "",
+        "```js eval",
+        "output(`halted=${probe.halted}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    // The suspended task the children spawned is gone by the time the sibling
+    // runs: recovery completed, and catching the error leaked nothing.
+    expect(output).toContain("recovered");
+    expect(output).toContain("halted=true");
+    expect(output).not.toContain("ERROR");
+  });
 });

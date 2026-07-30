@@ -2503,6 +2503,12 @@ documentation stops the body, and the same error inside an output region renders
 as a comment. It is reported once, where it is created, and passes back to the
 caller as an ordinary segment.
 
+A throwing projection fails toward its caller, not into the content scope. An
+eval block that catches the `DocumentationError` has recovered it explicitly:
+nothing was recorded for a capture refusal, the invocation completes without
+re-reporting the caught failure, and the work the projected content started is
+torn down with its scope rather than escaping past the invocation.
+
 `substituteContent` resolves the slots:
 
 ```typescript
@@ -5468,6 +5474,8 @@ visible warning blocks, collect into a separate error report).
 | O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
 | O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
 | O31 | Captured markdown projection | The same block under `as=` refuses the binding: the interpolation stays literal and the recorded error returns to the caller once |
+| O32 | Caught projection error | A caught `DocumentationError` is explicit recovery: nothing is recorded, the component completes, and the capture succeeds |
+| O33 | Recovery leaks nothing | Work the projected content started is torn down with its scope; catching the error lets none of it escape the invocation |
 | O22 | Durability composes | A component combining a durable effect with a directly acquired resource: across a partial replay the effect's executor runs once, output is identical, and the resource is re-established per execution |
 
 ### Tier CW — Contextual working directory
