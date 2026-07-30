@@ -36,7 +36,7 @@ Review passed: {review.summary}
 const VALUE_ROOT = `$ xmd run review.md
 {"passed":true,"summary":"no findings"}`;
 
-const TS_COMPONENT = `import { useContent } from "@executablemd/core";
+const TS_COMPONENT = `import { content } from "@executablemd/core";
 
 export const props = {
   type: "object",
@@ -47,18 +47,18 @@ export const props = {
 
 export default function*(props) {
   const directory = yield* useTempDir();
-  const body = yield* useContent();
+  const body = yield* content();
   return \`## \${props.title}\\n\\n\${body}\`;
 }`;
 
 const RETAIN_COMPONENT =
-  `import { hasContent, retain, useContent } from "@executablemd/core";
+  `import { content, hasContent, retain } from "@executablemd/core";
 
 export default function*() {
   if (yield* hasContent()) {
     // A wrapper: the resource is alive exactly while the content expands.
     yield* useThing();
-    return yield* useContent();
+    return yield* content();
   }
   // Standalone: the caller uses this handle after the invocation is over.
   return yield* retain(useThing);
@@ -243,7 +243,7 @@ export default define.page(function Components() {
         file whose default export is a generator function is a component too. It
         receives validated props, declares them with a named <code>props</code>
         {" "}
-        export, and reads its children with <code>useContent()</code>.
+        export, and reads its content with <code>content()</code>.
       </p>
       <CodeBlock filename="components/Section.ts">{TS_COMPONENT}</CodeBlock>
       <p>

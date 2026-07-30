@@ -8,7 +8,6 @@ import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
-import { useContent } from "../src/content-context.ts";
 import type {
   Segment,
   ComponentDefinition,
@@ -851,15 +850,15 @@ describe("interpolate", () => {
 });
 
 describe("function component content", () => {
-  it("renders default content and a named slot via useContent", function* () {
+  it("renders default content and a named slot via content", function* () {
     const card: FunctionComponentDefinition = {
       kind: "function",
       name: "Card",
       path: "components/Card.ts",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn(_props) {
-        const header = yield* useContent("header");
-        const body = yield* useContent();
+        const header = yield* content("header");
+        const body = yield* content();
         return `[${header.trim()}|${body.trim()}]`;
       },
     };

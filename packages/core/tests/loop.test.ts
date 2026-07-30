@@ -1521,7 +1521,7 @@ describe("Tier BREAK — the projection boundary", () => {
     expect(output.match(/TAIL/g)).toHaveLength(2);
   });
 
-  it("BREAK22: a projected <Break> reaches a loop through useContent() too", function* () {
+  it("BREAK22: a projected <Break> reaches a loop through content() too", function* () {
     const output = yield* runDoc("<Loop max={3}>HEAD<TempDir><Break /></TempDir>TAIL</Loop>", {});
 
     expect(output).not.toContain("TAIL");

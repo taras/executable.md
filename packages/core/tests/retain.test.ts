@@ -16,8 +16,7 @@ import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
-import { useContent } from "../src/content-context.ts";
-import { retain } from "../src/component-api.ts";
+import { content, retain } from "../src/component-api.ts";
 import {
   component,
   expandAll,
@@ -64,7 +63,7 @@ describe("Tier RT — Retained resources", () => {
       Reader: component("Reader", () =>
         (function* () {
           observed.push(timeline.includes("stop:dir") ? "released" : "live");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };
@@ -161,7 +160,7 @@ describe("Tier RT — Retained resources", () => {
       Outer: component("Outer", () =>
         (function* () {
           yield* useWatch(timeline, "outer");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
       Inner: retainer("Inner", timeline, "inner-retained"),
@@ -297,7 +296,7 @@ describe("Tier RT — Site isolation", () => {
       Outer: component("Outer", () =>
         (function* (): Operation<string> {
           yield* Marker.set("from-caller");
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
       // Installs both kinds of scope mutation, then hands back a value.
@@ -322,7 +321,7 @@ describe("Tier RT — Site isolation", () => {
       Reader: component("Reader", () =>
         (function* (): Operation<string> {
           observed.push(yield* Marker.get());
-          return yield* useContent();
+          return yield* content();
         })(),
       ),
     };

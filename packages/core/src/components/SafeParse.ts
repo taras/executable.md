@@ -10,7 +10,7 @@
  */
 
 import type { Operation } from "effection";
-import { useContent } from "../content-context.ts";
+import { content } from "../component-api.ts";
 import type { Json } from "../types.ts";
 import {
   compileParseSchema,
@@ -72,7 +72,7 @@ export const returns = {
 export default function* (props: Record<string, Json>): Operation<Json> {
   const validate = compileParseSchema("SafeParse", props.schema);
 
-  const text = yield* useContent();
+  const text = yield* content();
 
   const parsed = parseText(text);
   if (!parsed.ok) {
