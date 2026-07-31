@@ -2432,9 +2432,13 @@ function evaluateIn(
     const fn = new Function(...envKeys, `return (${expression})`);
     return fn(...envValues);
   } catch (error) {
+    // The wrapper names where evaluation failed; `cause` keeps what actually
+    // failed, so an author's own error survives by identity rather than being
+    // replaced by a description of it.
     throw new Error(
       `Failed to evaluate expression prop "${propName}={${expression}}" ` +
         `on <${componentName} />: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 }

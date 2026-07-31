@@ -187,12 +187,11 @@ describe("Tier CP — capture props", () => {
 
     // The component owns the failure: it caught it, rather than the engine
     // turning it into a prop diagnostic before the component ever ran. The
-    // engine's expression evaluator wraps rather than rethrowing, so what
-    // arrives names the operand and the failure but is not `boom` itself —
-    // identity survives a capture's *value*, not an evaluation error.
+    // wrapper names the operand, and the original is reachable by identity
+    // through its cause.
     expect(caught).toBeInstanceOf(Error);
-    expect(String(caught)).toContain("operand exploded");
-    expect(reaches(caught, boom)).toBe(false);
+    expect(String(caught)).toContain("actual={detonate()}");
+    expect(reaches(caught, boom)).toBe(true);
   });
 
   it("CP5: the JSON gate still holds for props that are not captures", function* () {

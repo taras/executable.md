@@ -2162,6 +2162,26 @@ runs nothing and acquires nothing. Names and schemas are validated where they
 are installed, so a malformed registration is an error in the host rather than a
 diagnostic that appears the first time a document writes the name.
 
+**What a registration declares.** Beyond its name, origin, function and props
+schema, a registration may declare two things the schema cannot describe.
+
+`captures` names props the engine does not resolve. They are stripped before
+expression resolution and excluded from validation, and the component evaluates
+each itself, so what it receives is the value the author wrote rather than a
+JSON projection of it. A capture may not also be a schema property — a schema
+cannot describe a value it never sees — nor may it be `as` or `slot`, which the
+engine owns.
+
+`liveReturn` says the component's return value is a **binding rather than a
+record**: it is bound under `as` by reference, never validated against a schema,
+never rendered, and never journaled. It is therefore mutually exclusive with
+`returns`, which declares a validated durable JSON value; declaring both is a
+registration error. A live return does not require `as` — an invocation that
+discards the value is still valid — and it renders nothing in either case,
+because rendering it would mean serializing a value that is not text, and making
+that depend on `as` would make output depend on a binding the component cannot
+see. On replay a live return is recomputed with the component, not restored.
+
 #### The components core supplies
 
 Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
@@ -2791,7 +2811,11 @@ component's `props` frontmatter is a validation error.
   validation.
 
 In both cases, the child component never sees the reserved prop in its
-`validatedProps`.
+`validatedProps`. A registration's captures are not reserved names — an author
+chooses them — but they are consumed the same way: stripped before validation
+and delivered through `capture()` rather than forwarded as props. And for a
+component declaring `liveReturn`, `as` binds the returned value itself by
+reference rather than its rendered text.
 
 #### 6.3.6 Interaction with `renderChildren()`
 

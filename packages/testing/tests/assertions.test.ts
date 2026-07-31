@@ -220,4 +220,23 @@ describe("assertion components", () => {
     expect(run.results[0]?.status).toBe("pass");
     expect(run.output).toContain("[object Object]");
   });
+
+  // §5b: `as` and `slot` are the engine's, consumed before validation, so an
+  // assertion accepts them like any other component rather than rejecting them
+  // from a hand-written allowed-list.
+  it("accepts `as` on a value assertion, binding its diagnostic text", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="t">',
+      '<AssertEquals actual={1} expected={1} as="note" />',
+      '<AssertStringIncludes actual={note} expected="AssertEquals" />',
+      "</Test>",
+      "</Testing>",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc({ "README.md": doc });
+
+    expect(run.results[0]?.status).toBe("pass");
+  });
 });
