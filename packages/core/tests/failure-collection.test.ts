@@ -238,19 +238,36 @@ describe("Tier CF — failing is the default", () => {
       },
     };
 
-    const result = yield* scoped(function* () {
+    const observed: ErrorSegment[] = [];
+    const { result, output } = yield* scoped(function* () {
+      yield* Component.around({
+        *raise([segment], next) {
+          observed.push(segment);
+          return yield* next(segment);
+        },
+      });
       yield* registerComponents([registration]);
-      return yield* yield* execute({
+      const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(),
         componentDirs: [dir],
       });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+      return { result: yield* execution, output: next.value };
     });
 
     // Resolved through the registry by the real selector, not a stubbed import:
     // registration alone does not make a component's failure into a note.
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toBe(boom);
+    // Nothing became a diagnostic, and nothing after the failure ran.
+    expect(observed).toEqual([]);
+    expect(output).not.toContain("AFTER");
+    expect(output).not.toContain("registered boom");
   });
 
   it("CF2: a teardown-only failure propagates after teardown finishes", function* () {
@@ -340,13 +357,22 @@ describe("Tier CF — collectFailures(fn)", () => {
       }),
     );
 
-    const result = yield* run("<T />\n\nAFTER\n", { T: marked });
+    const result = yield* scoped(function* () {
+      yield* Component.around({
+        *raise([segment], next) {
+          timeline.push("reported");
+          return yield* next(segment);
+        },
+      });
+      return yield* run("<T />\n\nAFTER\n", { T: marked });
+    });
 
     expect(result.outcome.ok).toBe(true);
     expect(result.observed).toHaveLength(1);
-    // Teardown ran to completion before the boundary converted anything, and
-    // the document carried on afterwards.
-    expect(timeline).toEqual(["cleanup"]);
+    // The boundary sits outside the whole invocation, so teardown had already
+    // run to completion when the failure it produced was converted — not merely
+    // that both happened.
+    expect(timeline).toEqual(["cleanup", "reported"]);
     expect(result.output).toContain("AFTER");
   });
 
@@ -395,9 +421,12 @@ describe("Tier CF — collectFailures(fn)", () => {
       },
     );
 
-    // The diagnostic the boundary built carries the exact failure it converted.
-    expect(documentationError(result).cause).toBe(boom);
     expect(result.observed).toHaveLength(1);
+    // The failure the boundary was handed and the diagnostic's cause are one
+    // object — not two things that describe the same mishap.
+    expect(result.offered).toHaveLength(1);
+    expect(result.offered[0].error).toBe(boom);
+    expect(documentationError(result).cause).toBe(result.offered[0].error);
   });
 
   it("CF7e: a collected teardown-only failure keeps the original inside its cause", function* () {
@@ -412,41 +441,67 @@ describe("Tier CF — collectFailures(fn)", () => {
       }),
     );
 
-    const cause = documentationError(
-      yield* run("<T />\n", { T: marked }, { policy: "throw" }),
-    ).cause;
+    const result = yield* run("<T />\n", { T: marked }, { policy: "throw" });
 
     // A teardown-only invocation hands over the boundary's account of teardown
     // rather than the raw cleanup error — which is a member of it.
-    expect(cause).toBeInstanceOf(InvocationTeardownError);
-    expect(reachableFrom(cause)).toContain(cleanup);
+    expect(result.offered).toHaveLength(1);
+    const offered = result.offered[0].error;
+    expect(offered).toBeInstanceOf(InvocationTeardownError);
+    if (!(offered instanceof InvocationTeardownError)) {
+      throw new Error("expected an InvocationTeardownError");
+    }
+    expect(offered.causes).toContain(cleanup);
+    expect(offered.cause).toBe(cleanup);
+    expect(documentationError(result).cause).toBe(offered);
   });
 
   it("CF7f: body and teardown both failing collect as one complete aggregate", function* () {
     const body = new Error("body");
     const teardown = new Error("teardown");
-    const marked = component(
-      "T",
-      collectFailures(function* (): Operation<Json> {
-        yield* ensure(function* () {
-          throw teardown;
-        });
-        throw body;
-      }),
-    );
+    const marked = () =>
+      component(
+        "T",
+        collectFailures(function* (): Operation<Json> {
+          yield* ensure(function* () {
+            throw teardown;
+          });
+          throw body;
+        }),
+      );
 
-    const result = yield* run("<T />\n", { T: marked }, { policy: "throw" });
-
-    expect(result.observed).toHaveLength(1);
-    const cause = documentationError(result).cause;
-    expect(cause).toBeInstanceOf(AggregateError);
-    if (!(cause instanceof AggregateError)) {
-      throw new Error("expected the cause to be an AggregateError");
+    /** The complete aggregate a run handed to its boundary. */
+    function aggregateOf(result: Run): AggregateError {
+      expect(result.offered).toHaveLength(1);
+      const offered = result.offered[0].error;
+      expect(offered).toBeInstanceOf(AggregateError);
+      if (!(offered instanceof AggregateError)) {
+        throw new Error("expected an AggregateError");
+      }
+      // What the body did, then what dismantling it did: neither replaces the
+      // other, and both originals survive by identity.
+      expect(offered.errors).toHaveLength(2);
+      expect(offered.errors[0]).toBe(body);
+      const [, second] = offered.errors;
+      expect(second).toBeInstanceOf(InvocationTeardownError);
+      if (!(second instanceof InvocationTeardownError)) {
+        throw new Error("expected the second member to be an InvocationTeardownError");
+      }
+      expect(second.causes).toContain(teardown);
+      return offered;
     }
-    // Both originals stay reachable by identity, in teardown order.
-    expect(cause.errors[0]).toBe(body);
-    expect(cause.errors[1]).toBeInstanceOf(InvocationTeardownError);
-    expect(reachableFrom(cause)).toContain(teardown);
+
+    const collected = yield* run("<T />\n\nAFTER\n", { T: marked() });
+    expect(collected.outcome.ok).toBe(true);
+    expect(collected.observed).toHaveLength(1);
+    expect(collected.output).toContain("AFTER");
+    aggregateOf(collected);
+
+    // The same account under the other policy. Each invocation builds its own
+    // aggregate, so identity holds within a run rather than across two.
+    const thrown = yield* run("<T />\n\nAFTER\n", { T: marked() }, { policy: "throw" });
+    expect(thrown.observed).toHaveLength(1);
+    expect(documentationError(thrown).cause).toBe(aggregateOf(thrown));
   });
 
   it("CF7g: the failure carries the invocation's name, position and complete error", function* () {
@@ -478,8 +533,14 @@ describe("Tier CF — collectFailures(fn)", () => {
     expect(seen?.position?.column).toBe(1);
     // A detached copy of the call site, not the element the parser built.
     expect(Object.isFrozen(seen?.position)).toBe(true);
-    // Delivered after teardown, so the error already accounts for it.
-    expect(reachableFrom(seen?.error)).toContain(cleanup);
+    // Delivered after teardown, and complete: the payload carries the
+    // boundary's whole account of dismantling, with the original inside it.
+    expect(seen?.error).toBeInstanceOf(InvocationTeardownError);
+    if (!(seen?.error instanceof InvocationTeardownError)) {
+      throw new Error("expected the offered error to be an InvocationTeardownError");
+    }
+    expect(seen.error.causes).toContain(cleanup);
+    expect(seen.error.cause).toBe(cleanup);
   });
 
   it("CF7h: halting a marked invocation tears down without reporting anything", function* () {
@@ -780,7 +841,15 @@ describe("Tier CF — what a collection boundary is never offered", () => {
     expect(result.offered).toHaveLength(1);
     expect(result.offered[0].name).toBe("Boom");
     expect(result.offered[0].error).toBe(boom);
-    expect(result.output).toContain("boom");
+
+    // Restored, not rebuilt: the segment the document ends up holding is the
+    // very object that was observed when the child's failure was converted.
+    if (!result.outcome.ok) {
+      throw new Error("expected the expansion to complete");
+    }
+    const restored = result.outcome.value.filter((segment) => segment.type === "error");
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toBe(result.observed[0]);
   });
 
   it("CF20: catching a content failure is recovery, and reports nothing further", function* () {
@@ -818,9 +887,11 @@ describe("Tier CF — what a collection boundary is never offered", () => {
     expect(result.output).toContain("RECOVERED");
     expect(result.output).toContain("AFTER");
     // The component decided what the document says instead, so the diagnostic it
-    // caught is not reported again — and the same segment objects reached it.
+    // caught is not reported again — and what reached it is the same object the
+    // document reported, not a copy that merely looks like one.
     expect(result.observed).toHaveLength(1);
-    expect(caught?.errors).toEqual([result.observed[0]]);
+    expect(caught?.errors).toHaveLength(1);
+    expect(caught?.errors[0]).toBe(result.observed[0]);
     expect(result.output).not.toContain("not a number");
     // A schema diagnostic is never a component failure, before or after recovery.
     expect(result.offered).toEqual([]);
