@@ -61,6 +61,12 @@ jobs:
         with:
           deno-version: v2.9.1
 
+      # With the generated bundle absent the negated `publish.exclude` glob
+      # matches nothing and the dry run quietly checks a package the release
+      # would never upload. Building first makes this validate the real shape.
+      - name: Build the browser bundle
+        run: deno task build:web
+
       - name: The workspace is publishable to JSR
         run: deno task check:jsr
 
@@ -107,6 +113,44 @@ jobs:
         run: |
           ./dist/xmd run smoke-test/web-form-preflight.md 2>&1 \
             | grep -q '<WebForm> schema must be a JSON object'
+
+      # The preflight smoke above stops before assets, so it cannot tell a binary
+      # that embedded the browser bundle from one that did not — and a bundle-less
+      # compile succeeds silently. This serves a real form and reads the client
+      # script back over HTTP. Headless is fine: the opener fails and that is a
+      # warning by design, so the URL is still printed and the form still serves.
+      - name: Smoke test the compiled binary serving a real form
+        run: |
+          set -eu
+          ./dist/xmd run smoke-test/web-form-live.md > /tmp/web-form-live.log 2>&1 &
+          xmd_pid=$!
+          trap 'kill "$xmd_pid" 2>/dev/null || true' EXIT
+
+          url=""
+          for _ in $(seq 1 40); do
+            url=$(grep -oE 'http://127\.0\.0\.1:[0-9]+/f/[A-Za-z0-9_-]+/' /tmp/web-form-live.log | head -1 || true)
+            [ -n "$url" ] && break
+            sleep 0.5
+          done
+          if [ -z "$url" ]; then
+            echo "::error::the compiled binary never printed a form URL"
+            cat /tmp/web-form-live.log
+            exit 1
+          fi
+
+          curl -fsS "$url" | grep -q '<div id="root"></div>'
+          bytes=$(curl -fsS "${url}client.js" | wc -c | tr -d ' ')
+          # The real bundle is ~600 KB of React and RJSF; a placeholder or an
+          # empty asset would be orders of magnitude smaller.
+          if [ "$bytes" -lt 100000 ]; then
+            echo "::error::client.js was $bytes bytes — the binary did not embed the browser bundle"
+            exit 1
+          fi
+          echo "served a real client bundle: $bytes bytes"
+
+          # Terminating with the form still open is the interruption path.
+          kill "$xmd_pid"
+          wait "$xmd_pid" 2>/dev/null || true
 
       # Covers the compiled binary relaunching itself as `xmd test-agent`,
       # which the source-mode worker command never exercises.

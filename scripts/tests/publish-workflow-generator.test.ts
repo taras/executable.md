@@ -86,7 +86,34 @@ function beta(pkgJson: Record<string, unknown>): FixtureMember {
   };
 }
 
+/** Workflow lines that run, with comments and prose removed. */
+function commandLines(workflow: string): string[] {
+  return workflow.split("\n").filter((line) => !line.trim().startsWith("#"));
+}
+
 describe("publish-packages.yml generation", () => {
+  /**
+   * `@executablemd/web` carries a generated browser bundle that is not
+   * committed, and a negated `publish.exclude` glob is what puts it in the
+   * package. On a fresh checkout that glob matches nothing and `deno publish`
+   * says so quietly, so a job that published before building would upload a
+   * package whose asset loader can only fail at runtime. The order is asserted
+   * because neither command fails when it is wrong.
+   */
+  it("builds the browser bundle before publishing to JSR", function* () {
+    const workflow = yield* generate([ALPHA]);
+
+    // Executable lines only: the comments beside these steps name the commands
+    // too, and matching prose would compare the wrong positions.
+    const steps = commandLines(workflow);
+    const build = steps.findIndex((line) => line.includes("deno task build:web"));
+    const publish = steps.findIndex((line) => line.includes("deno publish"));
+
+    expect(build).toBeGreaterThan(-1);
+    expect(publish).toBeGreaterThan(-1);
+    expect(build).toBeLessThan(publish);
+  });
+
   it("withholds a member that carries a JSR identity and declares private", function* () {
     const workflow = yield* generate([ALPHA, beta({ private: true })]);
 

@@ -246,18 +246,38 @@ whatever it found rather than removing the module: it is a real artifact other
 work reads, so a test that emptied the path would decide whether an unrelated
 build succeeded by running before or after it.
 
-Because the module is not committed, every job that packages the workspace runs
-`deno task build:web` first:
+Because the module is not committed, every job that builds, packages, publishes,
+or releases the workspace runs `deno task build:web` first:
 
 - **`ci.yml`'s `test-deno` job**, because the suite builds the CLI's npm artifact
   and dnt packages `@executablemd/web` along with it.
+- **`ci.yml`'s `test-node` job**, before `pnpm install` rather than after: the
+  Node typecheck resolves the module's literal dynamic import, and a Deno task
+  run after `pnpm install` rewrites `node_modules` into Deno's layout and fails
+  the typecheck on unrelated packages.
+- **`ci.yml`'s `jsr` job**, so the dry run validates the artifact the release
+  uploads rather than a bundle-less variant of it.
+- **`ci.yml`'s `smoke` job**, through the root `build` task, which chains the
+  bundle build ahead of `deno compile`.
 - **`publish-one.yml`**, unconditionally rather than only for `packages/web` —
-  dnt builds a package's workspace siblings too, so any dependent needs the
-  bundle present as much as the package itself does.
+  dnt builds a package's workspace siblings too.
+- **`publish-packages.yml`'s `jsr` job**, generated from
+  `scripts/gen-publish-workflow.md`.
+- **`release.yml`**, before the matrix compile step. It invokes `deno compile`
+  directly rather than through the root task, so it needs its own step.
 
-A job that skipped it fails with a module-not-found naming a path nobody chose,
-which is why `packages/web/src/assets.ts` reports the missing bundle by naming
-the command instead.
+Neither publishing nor compiling reports the omission. `deno publish` finds the
+negated glob matching nothing and says so quietly; `deno compile` succeeds and
+produces a binary that runs, serves a page, and cannot load its client. The
+ordering is therefore asserted by test — `scripts/tests/publish-workflow-generator.test.ts`
+for the JSR job and `scripts/tests/publish-workflow-membership.test.ts` for the
+release workflow — and `ci.yml`'s smoke job serves a real form from the compiled
+binary and reads the client asset back over HTTP, which is the only check that
+can tell an embedded bundle from a missing one.
+
+A job that skipped the build fails with a module-not-found naming a path nobody
+chose, which is why `packages/web/src/assets.ts` reports the missing bundle by
+naming the command instead.
 
 The module is gitignored, so `deno publish` excludes it by default and then
 refuses the package: it sits in the module graph and would not exist at runtime.

@@ -137,6 +137,14 @@ jobs:
         with:
           deno-version: v2.9.1
 
+      # `@executablemd/web` ships a browser bundle that is generated, not
+      # committed, and a negated `publish.exclude` glob is what puts it in the
+      # package. On a fresh checkout the glob matches nothing and `deno publish`
+      # says so quietly, so JSR would receive a package whose asset loader can
+      # only fail at runtime (spec §8).
+      - name: Build the browser bundle
+        run: deno task build:web
+
       # deno publish filters already-published members itself, so a rerun after
       # a partial publish completes the members that are missing (spec §7).
       - name: Publish the workspace to JSR

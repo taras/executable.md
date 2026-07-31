@@ -5,6 +5,8 @@ import { readTextFile } from "@effectionx/fs";
 
 import { listWorkspacePaths } from "../lib/workspace.ts";
 
+const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.meta.url);
+
 const SCOPE = "@executablemd/";
 const repoRoot = new URL("../../", import.meta.url);
 
@@ -49,6 +51,28 @@ function* members(): Operation<Member[]> {
 function* workflow(): Operation<string> {
   return yield* readTextFile(new URL(".github/workflows/publish-packages.yml", repoRoot));
 }
+
+/**
+ * `deno compile` embeds the generated browser bundle by following its literal
+ * dynamic import, and compiles without complaint when the file is absent —
+ * producing a binary that runs, serves a page, and cannot load its client. The
+ * order is asserted because nothing else reports it.
+ */
+describe("release.yml binary compilation", () => {
+  it("builds the browser bundle before compiling", function* () {
+    const workflow = yield* readTextFile(RELEASE_WORKFLOW);
+
+    // Executable lines only: the comment beside the build step names
+    // `deno compile` too, and matching prose would compare the wrong positions.
+    const steps = workflow.split("\n").filter((line) => !line.trim().startsWith("#"));
+    const build = steps.findIndex((line) => line.includes("deno task build:web"));
+    const compile = steps.findIndex((line) => line.includes("deno compile"));
+
+    expect(build).toBeGreaterThan(-1);
+    expect(compile).toBeGreaterThan(-1);
+    expect(build).toBeLessThan(compile);
+  });
+});
 
 describe("publish-packages.yml membership", () => {
   it("publishes every non-private member to npm", function* () {
