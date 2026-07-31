@@ -150,6 +150,24 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
+      # `tsc` resolves the literal dynamic import of the generated browser
+      # bundle, which `deno check` leaves alone, so the typecheck needs the file
+      # to exist. The specifier stays literal on purpose: `deno compile` follows
+      # it to embed the bundle in the binary, and an opaque one would ship a
+      # binary that cannot serve a form.
+      #
+      # Before `pnpm install`, not after: `deno task build:web` rewrites
+      # node_modules into Deno's layout, which strips the packages pnpm placed
+      # there and fails the typecheck on two dozen unrelated modules. Installing
+      # afterwards restores pnpm's layout, and the bundle is outside
+      # node_modules so it survives.
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      - name: Build the browser bundle
+        run: deno task build:web
+
       - run: pnpm install
 
       - name: Typecheck
