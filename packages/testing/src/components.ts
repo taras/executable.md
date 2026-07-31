@@ -16,13 +16,14 @@
 
 import { Err } from "effection";
 import type { Operation } from "effection";
-import { Component, Execution } from "@executablemd/core";
+import { Component, Execution, registerComponents } from "@executablemd/core";
 import type { DocumentExecution } from "@executablemd/core";
 import { boundary, record, Test, TestFailureError } from "./test-api.ts";
 import type { BoundaryOutcome } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
 import { ASSERTIONS } from "./assertions.ts";
 import { createTestHandlers } from "./handlers.ts";
+import { Testing, TESTING_PROPS } from "./testing-component.ts";
 import type { TestHandlers } from "./handlers.ts";
 
 const TEST_TIMEOUT_MS = 20_000;
@@ -42,11 +43,14 @@ export function* installHandlers(
   if (options?.verbose) {
     yield* Test.around({ verbose: () => true });
   }
+  // `<Testing>` is a registered default: a repository component with that name
+  // replaces it, as with any other. The rest still claim their names until
+  // #202 PR 3b and PR 4 move them.
+  yield* registerComponents([
+    { name: "Testing", origin: "@executablemd/testing", fn: Testing, props: TESTING_PROPS },
+  ]);
   yield* Component.around({
     *expand([element], next) {
-      if (element.name === "Testing") {
-        return { segments: yield* handlers.expandTesting(element) };
-      }
       if (element.name === "Test") {
         return { segments: yield* handlers.expandTest(element) };
       }

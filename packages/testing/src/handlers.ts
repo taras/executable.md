@@ -65,7 +65,6 @@ class TeardownError extends Error {
 }
 
 export interface TestHandlers {
-  expandTesting(element: ComponentElement): Operation<Segment[]>;
   expandTest(element: ComponentElement): Operation<Segment[]>;
   expandAssertion(assertion: AssertionEntry, element: ComponentElement): Operation<Segment[]>;
   expandAssertThrows(element: ComponentElement): Operation<Segment[]>;
@@ -73,38 +72,6 @@ export interface TestHandlers {
 
 export function createTestHandlers(options: { timeoutMs: number }): TestHandlers {
   const { timeoutMs } = options;
-
-  function* expandTesting(element: ComponentElement): Operation<Segment[]> {
-    return yield* scoped(function* () {
-      const local: TestResult[] = [];
-      yield* Test.around(
-        {
-          testing: () => true,
-          // deno-lint-ignore require-yield
-          *results() {
-            return local;
-          },
-          *record([result], next) {
-            local.push(result);
-            yield* next(result);
-          },
-        },
-        { at: "min" },
-      );
-      const report = yield* expandSegments(element.children);
-      // Journal the outcome before the root Close so a full replay can
-      // restore it without re-expanding this boundary.
-      const outcome = yield* persistBoundaryOutcome(
-        {
-          tests: local.length,
-          failed: local.filter((result) => result.status === "fail").length,
-        },
-        formatLocation(element),
-      );
-      yield* boundary(outcome);
-      return report;
-    });
-  }
 
   function* expandTest(element: ComponentElement): Operation<Segment[]> {
     if (!(yield* testing)) {
@@ -380,7 +347,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     ];
   }
 
-  return { expandTesting, expandTest, expandAssertion, expandAssertThrows };
+  return { expandTest, expandAssertion, expandAssertThrows };
 }
 
 function* failAssertThrows(matcher: string | RegExp, actual: string | undefined): Operation<never> {
