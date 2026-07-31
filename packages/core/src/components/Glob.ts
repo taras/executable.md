@@ -42,6 +42,7 @@
 
 import { isAbsolute } from "node:path";
 import type { Operation } from "effection";
+import { collectFailures } from "../component-failures.ts";
 import { cwd, glob, stat } from "@executablemd/runtime";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-diagnostics.ts";
@@ -73,7 +74,7 @@ export class GlobError extends Error {
   }
 }
 
-export default function* (props: Record<string, Json>): Operation<string[]> {
+export default collectFailures(function* (props: Record<string, Json>): Operation<string[]> {
   const include = patterns("include", props.include);
   const exclude = patterns("exclude", props.exclude);
 
@@ -85,7 +86,7 @@ export default function* (props: Record<string, Json>): Operation<string[]> {
   const files = matched.filter((entry) => entry.isFile).map((entry) => entry.path);
 
   return [...new Set(files)].sort(byCodePoint);
-}
+});
 
 /**
  * The patterns a prop holds, checked for the two things that make one unusable.

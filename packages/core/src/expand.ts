@@ -23,6 +23,7 @@ import type {
   ComponentElement,
   ComponentHandling,
   ComponentDefinition,
+  ComponentFailure,
   ComponentInvocationMetadata,
   EvalEnv,
   FunctionComponentDefinition,
@@ -39,21 +40,20 @@ import {
   applyModifiers,
   env,
   evalScope,
+  handleFailure,
   importComponent,
   raise,
 } from "./component-api.ts";
 import {
-  abortsOrdinaryComponentFailures,
   AmbientErrorPolicy,
   attributeCause,
-  componentAbort,
   ContentError,
   DocumentationError,
   durabilityFailure,
   fatalCause,
-  hasOrdinaryFailure,
   settle,
 } from "./errors.ts";
+import { collectsFailures, useFailureCollection } from "./component-failures.ts";
 import type { ErrorPolicy } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -612,6 +612,25 @@ export function* expandSegments(
           // No raise() here, for the same reason as <If>: expandLoop reports
           // the errors it creates, and the body settled its own (§6.9).
           result.push(...(yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter)));
+          break;
+        }
+
+        if (segment.name === "CollectFailures") {
+          // Structured segments, not a rendered string: this is a region of the
+          // caller's document, expanded in the caller's own frame, that happens
+          // to continue after an ordinary component failure.
+          result.push(
+            ...(yield* scoped(function* () {
+              yield* useFailureCollection();
+              return yield* expandSegments(
+                segment.children,
+                parentMeta,
+                parentProps,
+                hideSet,
+                counter,
+              );
+            })),
+          );
           break;
         }
 
@@ -1968,164 +1987,181 @@ function* expandFunctionComponent(
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
 
-  // Detached and frozen: what a component reads about its call site is a copy,
-  // so nothing it does can reach the element the parser built.
-  const metadata: ComponentInvocationMetadata = Object.freeze(
-    position === undefined
-      ? { name }
-      : {
-          name,
-          position: Object.freeze({
-            ...(position.path === undefined ? {} : { path: position.path }),
-            offset: position.offset,
-            line: position.line,
-            column: position.column,
-          }),
-        },
-  );
+  /** The invocation itself, and what a failure of it means. */
+  const invoke = function* (): Operation<Segment[]> {
+    // Detached and frozen: what a component reads about its call site is a copy,
+    // so nothing it does can reach the element the parser built.
+    const metadata: ComponentInvocationMetadata = Object.freeze(
+      position === undefined
+        ? { name }
+        : {
+            name,
+            position: Object.freeze({
+              ...(position.path === undefined ? {} : { path: position.path }),
+              offset: position.offset,
+              line: position.line,
+              column: position.column,
+            }),
+          },
+    );
 
-  // Call the function component inside its invocation, with content middleware
-  // in scope so it can render its invocation content through `yield* content()`.
-  try {
-    const output = yield* withInvocation(function* (invocation) {
-      const enclosing = yield* ActiveProjection.get();
-      const handle = createProjectionHandle({
-        invocation,
-        enclosing,
-        children,
-        // A function component's content inherits whatever environment the
-        // component installed for it — see ProjectionState.callerEnv.
-        callerEnv: undefined,
-        meta: {},
-        props: {},
-        hideSet,
-        counter,
-        callerLoop: siteLoop,
-      });
-      invocation.evalScope.scope.set(ActiveProjection, handle);
+    // Call the function component inside its invocation, with content middleware
+    // in scope so it can render its invocation content through `yield* content()`.
+    try {
+      const output = yield* withInvocation(function* (invocation) {
+        const enclosing = yield* ActiveProjection.get();
+        const handle = createProjectionHandle({
+          invocation,
+          enclosing,
+          children,
+          // A function component's content inherits whatever environment the
+          // component installed for it — see ProjectionState.callerEnv.
+          callerEnv: undefined,
+          meta: {},
+          props: {},
+          hideSet,
+          counter,
+          callerLoop: siteLoop,
+        });
+        invocation.evalScope.scope.set(ActiveProjection, handle);
 
-      yield* ActiveLoop.set(undefined);
-      yield* provideEvalScope(invocation.evalScope);
-      yield* provideRetain(siteEvalScope);
-      yield* Component.around(
-        {
-          *content([slotName], _next) {
-            let segments: Segment[];
-            try {
-              segments = yield* handle.project({ kind: "slot", name: slotName });
-            } catch (error) {
-              // A throwing policy already decided this execution fails; the call
-              // site still sees the public shape, and the original failure
-              // travels as the cause so the boundary can restore it.
-              if (error instanceof DocumentationError) {
-                throw new ContentExpansionFailure([error.segment], error);
+        yield* ActiveLoop.set(undefined);
+        yield* provideEvalScope(invocation.evalScope);
+        yield* provideRetain(siteEvalScope);
+        yield* Component.around(
+          {
+            *content([slotName], _next) {
+              let segments: Segment[];
+              try {
+                segments = yield* handle.project({ kind: "slot", name: slotName });
+              } catch (error) {
+                // A throwing policy already decided this execution fails; the call
+                // site still sees the public shape, and the original failure
+                // travels as the cause so the boundary can restore it.
+                if (error instanceof DocumentationError) {
+                  throw new ContentExpansionFailure([error.segment], error);
+                }
+                throw error;
               }
-              throw error;
-            }
-            const errors = errorSegments(segments);
-            if (errors.length > 0) {
-              throw new ContentExpansionFailure(errors);
-            }
-            return renderSegments(segments);
+              const errors = errorSegments(segments);
+              if (errors.length > 0) {
+                throw new ContentExpansionFailure(errors);
+              }
+              return renderSegments(segments);
+            },
+            // The element's shape, not its rendered result: content that renders
+            // an empty string is still content.
+            // deno-lint-ignore require-yield
+            *hasContent(_args, _next) {
+              return !selfClosing;
+            },
+            // deno-lint-ignore require-yield
+            *invocation(_args, _next) {
+              return metadata;
+            },
+            *tryContent([slotName], _next) {
+              const outcome = yield* handle.tryProject({ kind: "slot", name: slotName });
+              // A documentation failure is presented in the public shape, as
+              // `content()` does, so a component recovering from one sees the
+              // same thing either way.
+              const failure =
+                outcome.failure instanceof DocumentationError
+                  ? new ContentExpansionFailure([outcome.failure.segment], outcome.failure)
+                  : outcome.failure;
+              return failure === undefined
+                ? { text: renderSegments(outcome.segments) }
+                : { text: renderSegments(outcome.segments), failure };
+            },
           },
-          // The element's shape, not its rendered result: content that renders
-          // an empty string is still content.
-          // deno-lint-ignore require-yield
-          *hasContent(_args, _next) {
-            return !selfClosing;
-          },
-          // deno-lint-ignore require-yield
-          *invocation(_args, _next) {
-            return metadata;
-          },
-          *tryContent([slotName], _next) {
-            const outcome = yield* handle.tryProject({ kind: "slot", name: slotName });
-            // A documentation failure is presented in the public shape, as
-            // `content()` does, so a component recovering from one sees the
-            // same thing either way.
-            const failure =
-              outcome.failure instanceof DocumentationError
-                ? new ContentExpansionFailure([outcome.failure.segment], outcome.failure)
-                : outcome.failure;
-            return failure === undefined
-              ? { text: renderSegments(outcome.segments) }
-              : { text: renderSegments(outcome.segments), failure };
-          },
-        },
-        { at: "min" },
-      );
-      try {
-        return yield* definition.fn(validatedProps);
-      } catch (error) {
-        if (error instanceof Error) {
-          throw error;
+          { at: "min" },
+        );
+        try {
+          return yield* definition.fn(validatedProps);
+        } catch (error) {
+          if (error instanceof Error) {
+            throw error;
+          }
+          throw new ThrownValue(error);
         }
-        throw new ThrownValue(error);
+      });
+      if (asBinding) {
+        const parentEnv = yield* env;
+        if (!parentEnv) {
+          return [
+            yield* raise({
+              type: "error",
+              message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+              source: name,
+            }),
+          ];
+        }
+        parentEnv.values[asBinding] =
+          returns === undefined ? asText(output) : validateReturnValue(name, output, returns);
+        return [];
       }
+      return [{ type: "text", content: asText(output) }];
+    } catch (error) {
+      // Everything below runs after `withInvocation()` has dismantled the
+      // invocation, so what is handled here accounts for the body and its
+      // teardown together.
+
+      // Not the document's failure to render: a journal that no longer describes
+      // this run, or a policy that has already decided the document fails.
+      const fatal = fatalCause(error);
+      if (fatal !== undefined) {
+        throw fatal;
+      }
+      // The content the component asked for failed and it did not recover, so the
+      // invocation is replaced by what the projection already reported (§6.9) and
+      // reporting it again here would double-observe it.
+      if (error instanceof ContentExpansionFailure) {
+        if (error.cause instanceof DocumentationError) {
+          throw error.cause;
+        }
+        return [...error.errors];
+      }
+      // A return that failed its schema already names the component and carries
+      // its issues; wrapping it would bury both.
+      if (error instanceof SchemaValidationError) {
+        return [yield* raise(schemaValidationErrorSegment(error, name))];
+      }
+      // An ordinary failure. Whether the document carries on is the nearest
+      // collection boundary's decision, and the default is that it does not.
+      const thrown = error instanceof ThrownValue ? error.value : error;
+      return [
+        yield* handleFailure({
+          name,
+          ...(metadata.position === undefined ? {} : { position: metadata.position }),
+          error: asFailure(thrown),
+        }),
+      ];
+    }
+  };
+
+  // The boundary sits outside the whole invocation, so it is still installed
+  // while the invocation is being dismantled — middleware a component installs
+  // for itself is gone by then. Outside also puts nested components and
+  // projected content inside it, since their scopes descend from this one.
+  // Scoped, so a component that collects its own failures does not quietly
+  // decide the same for its siblings.
+  if (collectsFailures(definition.fn)) {
+    return yield* scoped(function* () {
+      yield* useFailureCollection();
+      return yield* invoke();
     });
-    if (asBinding) {
-      const parentEnv = yield* env;
-      if (!parentEnv) {
-        return [
-          yield* raise({
-            type: "error",
-            message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-            source: name,
-          }),
-        ];
-      }
-      parentEnv.values[asBinding] =
-        returns === undefined ? asText(output) : validateReturnValue(name, output, returns);
-      return [];
-    }
-    return [{ type: "text", content: asText(output) }];
-  } catch (error) {
-    // After the invocation, never before it: only here does the complete
-    // body-and-teardown failure exist. A component that ends the execution on
-    // ordinary failures marks the structure it was handed rather than a member,
-    // so an aggregate keeps every failure it accounts for.
-    const failure =
-      abortsOrdinaryComponentFailures(definition.fn) && hasOrdinaryFailure(error)
-        ? componentAbort(error)
-        : error;
-    const fatal = fatalCause(failure);
-    if (fatal !== undefined) {
-      throw fatal;
-    }
-    // The content the component asked for failed and it did not recover, so the
-    // invocation is replaced by what the projection already reported (§6.9) and
-    // reporting it again here would double-observe it. Under a throwing policy
-    // that is the original `DocumentationError`, by identity; under a collecting
-    // one it is the segments, which the consumer boundary then settles under the
-    // caller's policy. Restored here by identity rather than by `fatalCause`,
-    // whose documentation search stops at a content failure so that a component
-    // reporting a failure of its own keeps it (see `isRecoveredContent`).
-    if (failure instanceof ContentExpansionFailure) {
-      if (failure.cause instanceof DocumentationError) {
-        throw failure.cause;
-      }
-      return [...failure.errors];
-    }
-    // A return that failed its schema already names the component and carries
-    // its issues; wrapping it would bury both.
-    if (failure instanceof SchemaValidationError) {
-      return [yield* raise(schemaValidationErrorSegment(failure, name))];
-    }
-    const from = failure instanceof ThrownValue ? failure.value : failure;
-    return [
-      yield* raiseFrom(
-        {
-          type: "error",
-          message:
-            from instanceof Error
-              ? `Function component ${name} error: ${from.message}`
-              : `Function component ${name} error: ${String(from)}`,
-          source: name,
-        },
-        from,
-      ),
-    ];
   }
+  return yield* invoke();
+}
+
+/**
+ * The thrown value as an `Error`.
+ *
+ * An `Error` is kept by identity, so its type and cause survive. Anything else
+ * becomes one carrying the original value as its cause, because a component may
+ * throw whatever it likes and none of it should be lost.
+ */
+function asFailure(thrown: unknown): Error {
+  return thrown instanceof Error ? thrown : new Error(String(thrown), { cause: thrown });
 }
 
 export function validateBindingName(value: Json | undefined): Result<string | undefined> {

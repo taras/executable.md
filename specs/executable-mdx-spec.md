@@ -2131,7 +2131,7 @@ deterministic from the content, so it needs no separate journal entry.
 A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
-   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`. These are the language's own
+   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a diagnostic, not a
@@ -2485,6 +2485,7 @@ interface, and each operation is also exported directly:
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
+| `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 | `invocation()` | Where this function component was invoked — its name, and the call site's position when the source has one | throws a missing-provider error |
 
@@ -3926,6 +3927,44 @@ All three props are optional with empty-string defaults:
 Every run allocates a current free port, starts the daemon, performs readiness
 polling and child operations, then terminates the daemon when the component
 closes. A previous diagnostic trace does not suppress any of these actions.
+
+### 6.8.1 When a function component fails
+
+A function component that fails fails the operation it is part of, like any
+other Effection work. Its invocation is dismantled first — projected content,
+then the component's own resources, then anything it retained — so the failure
+that leaves the boundary accounts for the body and its teardown together. An
+`Error` propagates by identity, keeping its type and `cause`; a thrown non-Error
+becomes an `Error` carrying the original value as its `cause`. Later siblings do
+not run.
+
+Continuing instead is an explicit, scope-local choice. `collectFailures(fn)`
+says it about one component, keyed by the exact function object — a repository
+component that shares a registered component's name is a different function and
+inherits nothing. `<CollectFailures>` says it about a region of a document:
+
+```md
+<CollectFailures>
+  <MayFail />
+  <StillRuns />
+</CollectFailures>
+```
+
+Both install the same middleware, so the nearest collection boundary is the one
+that handles a failure from the invocation tree beneath it, exactly once. The
+boundary sits outside the whole invocation, which is what lets it see a failure
+that happens while the invocation is being dismantled.
+
+Collection turns a failure into one diagnostic whose `cause` is the complete
+original failure. It does not decide what that diagnostic means: the caller's
+ambient policy still settles it (§6.9), so under documentation a collected
+failure still stops the document.
+
+Some failures are classified before any of this and are never collected: a
+durability failure, a `DocumentationError` the caller's policy already selected,
+the content transport that restores already-reported segments, and a schema
+diagnostic that already has a structured representation. Cancellation is not a
+diagnostic either.
 
 ### 6.9 Component-declared output: `<Output>`
 

@@ -8,21 +8,16 @@
  * exactly as they are for a repository `.ts` component — a document can replace
  * any of these names with a component of its own.
  *
- * What is not ordinary is that some of their failures end the document rather
- * than becoming a diagnostic, which is the behavior they had when they were
- * claimed through `Component.expand`. `<Agent>`, `<Session>` and `<Prompt>` mark
- * the individual failures that must stay fatal. `<AgentProvider>` cannot: the
- * resources its factory installs are dismantled by the invocation boundary
- * *after* the component returns, so the failure does not exist while the
- * component is running. It opts in by function identity instead, and the engine
- * classifies the complete body-and-teardown failure.
+ * They throw when a document cannot sensibly continue — an unknown provider, an
+ * agent that is not there, a duration that is not a duration — and that stops
+ * the document, because an ordinary component failure fails the operation it is
+ * part of. None of them asks for anything special to make that so.
  */
 
 import { Config } from "@executablemd/runtime";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { content, hasContent, invocation } from "../component-api.ts";
-import { abortOrdinaryComponentFailures, componentAbort } from "../errors.ts";
 import { parseDuration } from "../modifiers/timeout.ts";
 import type { ComponentInvocationMetadata, Json, PropsSchema } from "../types.ts";
 import { Agent } from "./agent-api.ts";
@@ -80,21 +75,6 @@ function asString(value: Json | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/**
- * Run `operation`, ending the document if it fails.
- *
- * These are the preconditions a document cannot continue past — an agent that
- * is not there, a duration that is not a duration. Rendering a diagnostic and
- * carrying on would run later siblings as though the agent had answered.
- */
-function* fatally<T>(operation: () => Operation<T>): Operation<T> {
-  try {
-    return yield* operation();
-  } catch (error) {
-    throw componentAbort(error);
-  }
-}
-
 /** `path:line:column`, `line:column`, or `unknown` — the durable prompt key. */
 function formatLocation(metadata: ComponentInvocationMetadata): string {
   const position = metadata.position;
@@ -107,14 +87,11 @@ function formatLocation(metadata: ComponentInvocationMetadata): string {
 
 /**
  * Everything this component installs belongs to its own invocation, so the
- * engine dismantles content before the provider's resources and reports what
- * both did. Nothing here catches: a failure from the factory and a failure from
- * the cleanup it installed are the same kind of problem, and only the boundary
- * sees both.
+ * engine dismantles content before the provider's resources. A failure from the
+ * factory and a failure from the cleanup it installed are the same kind of
+ * problem, and both stop the document — which is what an ordinary failure does.
  */
-export const AgentProvider = abortOrdinaryComponentFailures(function* (
-  props: Record<string, Json>,
-): Operation<Json> {
+export function* AgentProvider(props: Record<string, Json>): Operation<Json> {
   const name = String(props.name);
   const factory = yield* AgentProviders.operations.resolve(name);
   const inheritedDefault = yield* AgentInternal.operations.defaultAgentName;
@@ -138,7 +115,7 @@ export const AgentProvider = abortOrdinaryComponentFailures(function* (
     return "";
   }
   return yield* content();
-});
+}
 
 export function* ApproveAll(): Operation<Json> {
   yield* installApproveAll();
@@ -159,7 +136,7 @@ export function* AskPermission(): Operation<Json> {
 export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
   // Resolving first is the availability boundary: a self-closing invocation is
   // a probe, and it has to fail the same way a wrapping one does.
-  const resolved = yield* fatally(() => Agent.operations.agent(asString(props.name)));
+  const resolved = yield* Agent.operations.agent(asString(props.name));
   if (!(yield* hasContent())) {
     return "";
   }
@@ -178,7 +155,7 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
 }
 
 export function* SessionComponent(props: Record<string, Json>): Operation<Json> {
-  const session: Session = yield* fatally(() => Agent.operations.session(asString(props.name)));
+  const session: Session = yield* Agent.operations.session(asString(props.name));
   if (!(yield* hasContent())) {
     return "";
   }
@@ -209,7 +186,7 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   // boundary: an unavailable agent fails expansion rather than being journaled
   // and collected as a prompt failure.
   const options: PromptOptions = {
-    agent: yield* fatally(() => Agent.operations.agent(asString(props.agent))),
+    agent: yield* Agent.operations.agent(asString(props.agent)),
   };
   const sessionProp = asString(props.session);
   if (sessionProp !== undefined) {
@@ -217,10 +194,7 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   }
   const timeoutProp = asString(props.timeout);
   if (timeoutProp !== undefined) {
-    // deno-lint-ignore require-yield
-    options.timeout = yield* fatally(function* () {
-      return parseDuration(timeoutProp);
-    });
+    options.timeout = parseDuration(timeoutProp);
   }
 
   const throwOnError =
@@ -239,7 +213,7 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
     // Replay decides from the stored marker, not the live prop or policy, so a
     // partial replay reproduces the original throw exactly.
     if (record.raised === true) {
-      throw componentAbort(failure);
+      throw failure;
     }
     yield* AgentInternal.operations.recordPromptFailure(failure, record.sequence);
   }

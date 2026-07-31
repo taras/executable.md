@@ -209,6 +209,18 @@ export interface FunctionComponentDefinition {
 }
 
 /**
+ * An ordinary function-component invocation that failed (spec §6.9).
+ *
+ * Reported only after the invocation has finished being dismantled, so `error`
+ * accounts for the body and its teardown together.
+ */
+export interface ComponentFailure {
+  readonly name: string;
+  readonly position?: Readonly<SourcePosition>;
+  readonly error: Error;
+}
+
+/**
  * What a component's content rendered, and why it stopped if it did.
  *
  * `text` is everything produced before the stop, so a component reporting a

@@ -368,7 +368,9 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  it("FC5: function component error → ErrorSegment", function* () {
+  // The default: a component that fails fails the operation it is part of, so
+  // the document stops rather than rendering a note and carrying on.
+  it("FC5: an unmarked component's failure fails the execution", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
@@ -377,17 +379,54 @@ describe("Tier FC — Function components", () => {
           '  throw new Error("component error");',
           "}",
         ].join("\n"),
-        "doc.md": "<Broken />",
+        "doc.md": "<Broken />\n\nAFTER\n",
       });
-      const stream = new InMemoryStream();
+      const execution = yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream: new InMemoryStream(),
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+      const result = yield* execution;
+
+      // A failed operation, not a completed one holding a diagnostic.
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error.message).toContain("component error");
+      // Nothing after it ran, and nothing was rendered in its place.
+      expect(next.value).not.toContain("AFTER");
+      expect(next.value).not.toContain("<!-- ERROR");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // The explicit choice: `collectFailures` says this component reports rather
+  // than stops, so the failure becomes one diagnostic and the document goes on.
+  it("FC5b: a component marked with collectFailures reports and continues", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/Broken.ts": [
+          'import { collectFailures } from "@executablemd/core";',
+          "export default collectFailures(function*() {",
+          '  throw new Error("component error");',
+          "});",
+        ].join("\n"),
+        "doc.md": "<Broken />\n\nAFTER\n",
+      });
       const output = yield* collect(
         yield* execute({
           path: path.join(tmpDir, "doc.md"),
-          stream,
+          stream: new InMemoryStream(),
           componentDirs: [path.join(tmpDir, "components"), tmpDir],
         }),
       );
-      expect(output).toContain("component error");
+      expect(String(output)).toContain("component error");
+      expect(String(output)).toContain("AFTER");
     } finally {
       cleanup(tmpDir);
     }

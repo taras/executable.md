@@ -12,6 +12,7 @@ import { ensure, resource, scoped, suspend } from "effection";
 import type { Operation } from "effection";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Component } from "../src/component-api.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { ComponentDefinition, FunctionComponentDefinition, Segment } from "../src/types.ts";
@@ -57,7 +58,9 @@ export function component(
   name: string,
   body: () => Operation<string>,
 ): FunctionComponentDefinition {
-  return { kind: "function", name, props: NO_PROPS, fn: body };
+  // These fixtures exist to be observed failing, so they collect rather than
+  // stopping the expansion the assertion is about.
+  return { kind: "function", name, props: NO_PROPS, fn: collectFailures(body) };
 }
 
 /**

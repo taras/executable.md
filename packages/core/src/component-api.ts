@@ -24,6 +24,7 @@ import type {
   ComponentDefinition,
   ComponentElement,
   ComponentHandling,
+  ComponentFailure,
   ComponentInvocationMetadata,
   ComponentRegistry,
   PartialContent,
@@ -162,6 +163,19 @@ export interface ComponentApi {
    */
   tryContent(slot?: string): Operation<PartialContent>;
   /**
+   * Decide what an ordinary function-component failure means (spec §6.9).
+   *
+   * Called only after `withInvocation()` has dismantled the invocation, so the
+   * failure it is handed accounts for the body and its teardown together. The
+   * default fails the operation, which is what an ordinary Effection failure
+   * does; a collection boundary answers with a diagnostic instead.
+   *
+   * Distinct from `raise`: this handles an operation failure, while `raise`
+   * observes an `ErrorSegment`. A collector uses both — it converts, then
+   * observes exactly once.
+   */
+  handleFailure(failure: ComponentFailure): Operation<ErrorSegment>;
+  /**
    * Components made resolvable by name for this scope (spec §5.3).
    *
    * Install with `registerComponents()` rather than by hand: each accepted
@@ -249,6 +263,12 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
       "Component.tryContent() has no provider: not inside a function component invocation.",
     );
   },
+  // deno-lint-ignore require-yield
+  *handleFailure(failure: ComponentFailure): Operation<ErrorSegment> {
+    // The default is to fail, so a component that goes wrong stops the work it
+    // was part of rather than quietly becoming a note in the output.
+    throw failure.error;
+  },
   registry: new Map(),
 });
 
@@ -270,3 +290,5 @@ export const retain: Operations<ComponentApi>["retain"] = Component.operations.r
 export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
 export const invocation: Operations<ComponentApi>["invocation"] = Component.operations.invocation;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;
+export const handleFailure: Operations<ComponentApi>["handleFailure"] =
+  Component.operations.handleFailure;
