@@ -20,6 +20,7 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation } from "effection";
+import { when } from "@effectionx/converge";
 import { cwd, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -87,26 +88,6 @@ function* imported(stream: InMemoryStream): Operation<string[]> {
  * a directory nobody holds a reference to, so the only way to see one is to
  * look at the root they are all created under.
  */
-/**
- * Whether `pid` is gone, waited for rather than sampled.
- *
- * The signal is sent as the invocation unwinds; the process is gone only once
- * the OS has reaped it, and `kill(pid, 0)` still answers for one that has
- * exited but not been reaped. Bounded, so a daemon that really did outlive its
- * invocation is still a failure rather than a hang.
- */
-function* stopped(pid: number): Operation<boolean> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return true;
-    }
-    yield* sleep(20);
-  }
-  return false;
-}
-
 function* temporaries(): Operation<string[]> {
   const root = yield* until(realpath(tmpdir()));
   const entries = yield* until(readdir(root));
@@ -298,13 +279,16 @@ describe("Tier TD — TempDir", () => {
     const [reported, pid] = yield* recorded(dir, "daemon.txt");
     expect(reported).toContain("xmd-tempdir-");
     expect(yield* exists(reported)).toBe(false);
-    // No `@effectionx/fs` equivalent: whether a pid is live is not a file question.
-    // Polled rather than asked once: the daemon is signalled as the invocation
-    // unwinds, and the process is gone only once the OS has reaped it —
+    // No `@effectionx/fs` equivalent: whether a pid is live is not a file
+    // question. Converged on rather than sampled once: the daemon is signalled
+    // as the invocation unwinds and is gone only once the OS has reaped it, so
     // `kill(pid, 0)` still answers for one that has exited but not been reaped.
-    // A bound rather than a wait, so a daemon that genuinely outlived its
-    // invocation still fails.
-    expect(yield* stopped(Number(pid))).toBe(true);
+    yield* when(
+      function* () {
+        expect(() => process.kill(Number(pid), 0)).toThrow();
+      },
+      { timeout: 5000 },
+    );
   });
 
   // TD9: the bare form has no capture to hide behind — the path it returns is
