@@ -1,6 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, withResolvers } from "effection";
+import { scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { connect } from "node:net";
 import type { Socket } from "node:net";
@@ -157,7 +157,10 @@ describe("form server: failure reaches the caller", () => {
         });
         acquired = true;
       } catch (error) {
-        expect((error as Error).message).toContain("setup failed");
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        expect(error.message).toContain("setup failed");
       }
     });
 
@@ -199,45 +202,57 @@ describe("form server: failure reaches the caller", () => {
 });
 
 describe("form server: teardown", () => {
-  it("closes the port and destroys keep-alive sockets on every exit path", function* () {
-    const exits: Array<[string, () => Operation<{ port: number; keepAlive: KeepAlive }>]> = [
-      [
-        "success",
-        () =>
-          scoped(function* () {
-            const server = yield* useFormServer(formInput());
-            const port = addressOf(server.url).port;
-            const keepAlive = yield* openKeepAlive(port);
-            yield* submitValid(server);
-            yield* server.submission;
-            return { port, keepAlive };
-          }),
-      ],
-      [
-        "interruption",
-        () =>
-          scoped(function* () {
-            const server = yield* useFormServer(formInput());
-            const port = addressOf(server.url).port;
-            const keepAlive = yield* openKeepAlive(port);
-            // Leaving the scope with the form still open is the interruption.
-            return { port, keepAlive };
-          }),
-      ],
-    ];
+  it("closes the port and its connections after a successful submission", function* () {
+    let port = 0;
+    let keepAlive: KeepAlive | undefined;
 
-    for (const [label, run] of exits) {
-      const { port, keepAlive } = yield* run();
+    yield* scoped(function* () {
+      const server = yield* useFormServer(formInput());
+      port = addressOf(server.url).port;
+      keepAlive = yield* openKeepAlive(port);
+      yield* submitValid(server);
+      yield* server.submission;
+    });
 
-      if (!keepAlive) {
-        throw new Error("the keep-alive connection was never opened");
-      }
-      expect({ label, established: keepAlive.establishedWith }).toEqual({
-        label,
-        established: "127.0.0.1",
-      });
-      expect({ label, refused: yield* portRefuses(port) }).toEqual({ label, refused: true });
-    }
+    expect(keepAlive?.establishedWith).toBe("127.0.0.1");
+    expect(yield* portRefuses(port)).toBe(true);
+  });
+
+  /**
+   * Cancellation, not completion.
+   *
+   * Returning from a `scoped()` block exercises the ordinary path — the body
+   * finished and the scope unwound because there was nothing left to do. A form
+   * server is normally torn down the other way: the workflow around it is halted
+   * while the form is still open and a browser is still connected. Those reach
+   * teardown differently, and only the second proves that a halt mid-wait
+   * releases the listener.
+   *
+   * The halt is observed with `yield* task.halt()`, so the assertions run after
+   * teardown has actually finished rather than after it was merely requested.
+   */
+  it("releases the listener when the owning task is halted mid-wait", function* () {
+    const ready = withResolvers<{ port: number; keepAlive: KeepAlive }>();
+
+    const owner = yield* spawn(function* () {
+      const server = yield* useFormServer(formInput());
+      const port = addressOf(server.url).port;
+      ready.resolve({ port, keepAlive: yield* openKeepAlive(port) });
+      // Still waiting for a submission that never comes when the halt lands.
+      yield* server.submission;
+    });
+
+    // Synchronized on the listener being live and a connection established.
+    const { port, keepAlive } = yield* ready.operation;
+    expect(keepAlive.establishedWith).toBe("127.0.0.1");
+    expect(yield* portRefuses(port)).toBe(false);
+
+    // `halt()` is observed, and observing it is what makes the assertions below
+    // meaningful: it returns once the task and everything it owned have finished
+    // tearing down, so no second signal is needed to know cleanup ran.
+    yield* owner.halt();
+
+    expect(yield* portRefuses(port)).toBe(true);
   });
 });
 

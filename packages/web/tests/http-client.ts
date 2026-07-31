@@ -27,8 +27,16 @@ export interface HttpResponse {
 }
 
 export interface HttpConnection {
-  /** Send raw bytes. */
+  /** Send text, encoded as UTF-8. */
   write(text: string): void;
+  /**
+   * Send exact bytes.
+   *
+   * Some requests cannot be expressed as a string: a body that is deliberately
+   * not valid UTF-8 has no string form that survives encoding, so the test has
+   * to hand over the octets it means.
+   */
+  writeBytes(bytes: Uint8Array): void;
   /** The next complete response. */
   response(): Operation<HttpResponse>;
   /** Resolves when the peer closes or resets the connection. */
@@ -106,7 +114,10 @@ export function useConnection(port: number): Operation<HttpConnection> {
 
     yield* provide({
       write(text: string): void {
-        socket.write(text);
+        socket.write(new Uint8Array(new TextEncoder().encode(text)));
+      },
+      writeBytes(bytes: Uint8Array): void {
+        socket.write(bytes);
       },
       receivedSoFar(): string {
         return buffer;
@@ -144,6 +155,28 @@ export function requestText(init: RequestInit): string {
   }
   const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
   return `${init.method} ${init.path} HTTP/1.1\r\n${lines.join("\r\n")}\r\n\r\n${body}`;
+}
+
+/**
+ * One request whose body is exact bytes.
+ *
+ * `Content-Length` counts the octets given, not a string's length, so a body
+ * that is not valid UTF-8 is framed correctly and reaches the server as sent.
+ */
+export function requestBytes(init: Omit<RequestInit, "body"> & { body: Uint8Array }): Uint8Array {
+  const headers: Record<string, string> = {
+    Host: init.host,
+    ...init.headers,
+    "Content-Length": String(init.body.byteLength),
+  };
+  const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
+  const head = new TextEncoder().encode(
+    `${init.method} ${init.path} HTTP/1.1\r\n${lines.join("\r\n")}\r\n\r\n`,
+  );
+  const request = new Uint8Array(head.byteLength + init.body.byteLength);
+  request.set(head, 0);
+  request.set(init.body, head.byteLength);
+  return request;
 }
 
 /** The head of a chunked request; the body is written chunk by chunk after it. */

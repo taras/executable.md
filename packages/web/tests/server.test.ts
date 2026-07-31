@@ -17,8 +17,8 @@ import {
   THEME_CSS,
   watchSubmission,
 } from "./server-support.ts";
-import { chunk, chunkedHead, requestText, useConnection } from "./http-client.ts";
-import type { HttpResponse } from "./http-client.ts";
+import { chunk, chunkedHead, requestBytes, requestText, useConnection } from "./http-client.ts";
+import type { HttpConnection, HttpResponse } from "./http-client.ts";
 
 const LIMIT = 1024 * 1024;
 
@@ -42,6 +42,21 @@ function* fetchOnce(
     void origin;
     return yield* connection.response();
   });
+}
+
+function tokenOf(url: string): string {
+  const segments = new URL(url).pathname.split("/").filter((segment) => segment.length > 0);
+  return segments[segments.length - 1];
+}
+
+function decodeBase64Url(token: string): Uint8Array {
+  const padded = token.replaceAll("-", "+").replaceAll("_", "/");
+  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 /** A valid submission, with everything the protocol requires. */
@@ -367,6 +382,108 @@ describe("form server: the streaming limit", () => {
   });
 });
 
+describe("form server: bytes that are not text", () => {
+  /**
+   * A body that is not valid UTF-8 has no string form, so it is sent as octets.
+   * `0xff` cannot begin a UTF-8 sequence, which is what makes this decodable only
+   * by a decoder that does not care — and the server's is `fatal`, so it does.
+   */
+  it("refuses malformed UTF-8, names the encoding, and stays open", function* () {
+    const server = yield* useFormServer(formInput());
+    const { port, origin, prefix } = addressOf(server.url);
+    const state = yield* watchSubmission(server);
+
+    const body = new Uint8Array([0x7b, 0x22, 0xff, 0xfe, 0x22, 0x7d]);
+    expect(() => new TextDecoder("utf-8", { fatal: true }).decode(body)).toThrow();
+
+    const response = yield* scoped(function* () {
+      const connection = yield* useConnection(port);
+      connection.writeBytes(
+        requestBytes({
+          method: "POST",
+          path: `${prefix}submit`,
+          host: `127.0.0.1:${port}`,
+          headers: { Origin: origin, "Content-Type": "application/json" },
+          body,
+        }),
+      );
+      return yield* connection.response();
+    });
+
+    expect(response.status).toBe(422);
+    const payload = JSON.parse(response.body);
+    expect(payload.issues.map((issue: { keyword: string }) => issue.keyword)).toContain("encoding");
+    expect(JSON.stringify(payload.issues)).toContain("UTF-8");
+    expect(state().kind).toBe("pending");
+
+    // Still the sole result afterwards.
+    expect((yield* submit(server, JSON.stringify({ decision: "approve" }))).status).toBe(204);
+    expect(state().kind).toBe("resolved");
+  });
+});
+
+describe("form server: the token", () => {
+  /**
+   * 32 bytes of randomness, base64url, unpadded — 43 characters. The encoding is
+   * asserted rather than the length alone, because a shorter alphabet or a
+   * padded encoding would still be 43-ish and far less unguessable.
+   */
+  it("is 32 random bytes as unpadded base64url, and differs per server", function* () {
+    const first = yield* useFormServer(formInput());
+    const second = yield* useFormServer(formInput());
+
+    const tokens = [first, second].map((server) => tokenOf(server.url));
+
+    for (const token of tokens) {
+      expect(token.length).toBe(43);
+      expect(/^[A-Za-z0-9_-]{43}$/.test(token)).toBe(true);
+      expect(token.includes("=")).toBe(false);
+      // 43 unpadded base64url characters decode to exactly 32 bytes.
+      expect(decodeBase64Url(token).byteLength).toBe(32);
+    }
+    expect(tokens[0]).not.toBe(tokens[1]);
+  });
+
+  it("is not accepted by another server", function* () {
+    const first = yield* useFormServer(formInput());
+    const second = yield* useFormServer(formInput());
+
+    const foreign = addressOf(second.url).prefix;
+    const { port } = addressOf(first.url);
+
+    const response = yield* scoped(function* () {
+      const connection = yield* useConnection(port);
+      connection.write(requestText({ method: "GET", path: foreign, host: `127.0.0.1:${port}` }));
+      return yield* connection.response();
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toBe("");
+  });
+});
+
+describe("form server: where it listens", () => {
+  /**
+   * Read from the listener rather than from the constant the server was given or
+   * the URL it produced: those would agree with each other even if the socket
+   * were bound somewhere else entirely.
+   */
+  it("binds the loopback address, as the listener reports it", function* () {
+    let bound: string | undefined;
+
+    yield* scoped(function* () {
+      yield* useFormServer(formInput(), {
+        // deno-lint-ignore require-yield
+        *afterListen(address) {
+          bound = address.host;
+        },
+      });
+    });
+
+    expect(bound).toBe("127.0.0.1");
+  });
+});
+
 describe("form server: one submission only", () => {
   it("gives exactly one winner when two valid submissions race", function* () {
     const server = yield* useFormServer(formInput());
@@ -377,10 +494,11 @@ describe("form server: one submission only", () => {
       const first = yield* useConnection(port);
       const second = yield* useConnection(port);
 
-      for (const [connection, decision] of [
+      const submissions: [HttpConnection, string][] = [
         [first, "approve"],
         [second, "reject"],
-      ] as const) {
+      ];
+      for (const [connection, decision] of submissions) {
         connection.write(
           requestText({
             method: "POST",

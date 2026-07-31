@@ -89,8 +89,14 @@ export interface FormServer {
  */
 export interface FormServerSeams {
   responseChannel?(res: ServerResponse): ResponseChannel;
-  /** After the listener is up, before `provide()`. Receives the live address. */
-  afterListen?(address: { host: typeof HOST; port: number }): Operation<void>;
+  /**
+   * After the listener is up, before `provide()`.
+   *
+   * The address is the listener's own, read back from `server.address()` rather
+   * than echoed from what `listen` was asked for — so a test can check where the
+   * socket actually ended up instead of confirming its own input.
+   */
+  afterListen?(address: { host: string; port: number }): Operation<void>;
   /** Inside a request task, before dispatch. */
   beforeDispatch?(): Operation<void>;
 }
@@ -199,7 +205,7 @@ export function useFormServer(
     if (!address || typeof address !== "object") {
       throw new Error("the form server bound to an unexpected address");
     }
-    const { port } = address;
+    const { port, address: boundHost } = address;
     const origin = `http://${HOST}:${port}`;
     const prefix = `/f/${token}/`;
 
@@ -286,7 +292,7 @@ export function useFormServer(
     });
 
     if (seams.afterListen) {
-      yield* seams.afterListen({ host: HOST, port });
+      yield* seams.afterListen({ host: boundHost, port });
     }
 
     yield* provide({
@@ -404,13 +410,24 @@ function* readBody(req: IncomingMessage): Operation<Result<Json>> {
   const chunks: Uint8Array[] = [];
   let size = 0;
 
-  for (const chunk of yield* each(fromReadable(req))) {
+  // The subscription is driven directly rather than through `each`. `each` is a
+  // loop protocol: every iteration owes it an `each.next()`, and leaving early
+  // without one abandons it mid-step. Refusing an oversized body *is* leaving
+  // early — the whole point is to stop before the request ends — and asking for
+  // one more chunk first would wait on a client that may never send another.
+  // Advancing the subscription by hand makes stopping an ordinary return, and
+  // the surrounding scope releases the subscription and its listeners.
+  const subscription = yield* fromReadable(req);
+
+  let next = yield* subscription.next();
+  while (!next.done) {
+    const chunk = next.value;
     size += chunk.byteLength;
     if (size > LIMIT) {
       return Err(refusal(413, "size", "the request body exceeds the size limit"));
     }
     chunks.push(chunk);
-    yield* each.next();
+    next = yield* subscription.next();
   }
 
   const joined = new Uint8Array(size);
