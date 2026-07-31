@@ -648,8 +648,11 @@ describe("Tier OBS — construct error observation", () => {
     // is lost, it is just no longer the outermost thing.
     expect(hasCause).toBe(true);
     expect(cause).toBeInstanceOf(Error);
-    expect((cause as Error).cause).toBe(undefined);
-    expect(Object.hasOwn(cause as Error, "cause")).toBe(true);
+    if (!(cause instanceof Error)) {
+      throw new Error("expected the diagnostic's cause to be an Error");
+    }
+    expect(cause.cause).toBe(undefined);
+    expect(Object.hasOwn(cause, "cause")).toBe(true);
     expect(thrown).toBe(failure);
     expect(observed).toHaveLength(1);
     expect(observed[0]).toBe(failure.segment);
