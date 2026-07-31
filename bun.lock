@@ -180,6 +180,8 @@
       "version": "0.6.0",
       "dependencies": {
         "@effectionx/node": "0.2.4",
+        "@executablemd/core": "workspace:*",
+        "@executablemd/durable-streams": "workspace:*",
         "@rjsf/utils": "6.7.1",
         "@rjsf/validator-ajv8": "6.7.1",
         "ajv": "8.20.0",

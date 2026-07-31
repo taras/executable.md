@@ -377,6 +377,12 @@ importers:
       '@effectionx/node':
         specifier: 0.2.4
         version: 0.2.4(effection@4.1.0-alpha.10)
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
       '@rjsf/utils':
         specifier: 6.7.1
         version: 6.7.1(react@19.2.0)
