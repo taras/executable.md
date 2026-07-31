@@ -18,6 +18,18 @@ entire body are skipped without output, bindings, or side effects.
 </Testing>
 ```
 
+Installing the package registers `<Testing>` as an ordinary **non-reserved
+default** (executable-mdx-spec.md §5.3): a repository component named `Testing`
+is chosen ahead of it, exactly as it would be ahead of any other package's
+default, and then decides for itself what a testing boundary means.
+
+A boundary reports how many tests ran and how many failed once its body has
+finished. A body that *stopped* — expansion ended by throwing rather than by
+collecting a diagnostic — never counted the tests it did not reach, so it
+reports no outcome and journals none, and the failure travels on unchanged. An
+error the body merely collected leaves it complete: that diagnostic is part of
+what the boundary rendered, and the tests beside it still ran.
+
 The CLI command is equivalent to wrapping the entrypoint in `<Testing>`:
 
 ```sh
