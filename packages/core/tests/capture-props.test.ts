@@ -66,4 +66,43 @@ describe("Tier CP — capture props", () => {
     expect(seen.actual).toBe(marker);
     expect(seen.expected).toBe(re);
   });
+
+  it("CP2: a live return binds by reference under `as`, and renders nothing", function* () {
+    const payload = { kind: "live" };
+    const def: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Living",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      liveReturn: true,
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        return payload;
+      },
+    };
+
+    const env: EvalEnv = { values: {} };
+    const rendered = yield* scoped(function* () {
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent() {
+            return def;
+          },
+        },
+        { at: "min" },
+      );
+      return yield* expandSegments(
+        scanSegments('<Living as="caught" />\n\n<Living />\n'),
+        {},
+        {},
+        new Set(),
+      );
+    });
+
+    // The very object, not a copy of it.
+    expect(env.values.caught).toBe(payload);
+    // Neither invocation rendered anything of the value.
+    expect(rendered.some((s) => s.type === "text" && s.content.includes("live"))).toBe(false);
+  });
 });

@@ -2204,11 +2204,19 @@ function* expandFunctionComponent(
             }),
           ];
         }
-        parentEnv.values[asBinding] =
-          returns === undefined ? asText(output) : validateReturnValue(name, output, returns);
+        parentEnv.values[asBinding] = definition.liveReturn
+          ? // By reference: no asText, no validation, no clone. The binding is
+            // the object the component returned.
+            output
+          : returns === undefined
+            ? asText(output)
+            : validateReturnValue(name, output, returns);
         return [];
       }
-      return [{ type: "text", content: asText(output) }];
+      // A live return renders nothing, with or without `as`. Rendering it would
+      // mean asText of a value that is not text, and making it depend on `as`
+      // would make output depend on a binding the component cannot see.
+      return definition.liveReturn ? [] : [{ type: "text", content: asText(output) }];
     } catch (error) {
       // Everything below runs after `withInvocation()` has dismantled the
       // invocation, so what is handled here accounts for the body and its
