@@ -3080,6 +3080,17 @@ resolved values can be type-checked. Results must be JSON-serializable
 (validated via JSON round-trip). Evaluation errors are thrown, not
 rendered as ErrorSegments — consistent with PropValidationError.
 
+A **capture** is the exception. A registration may declare props the engine does
+not resolve at all: they are stripped before expression resolution and excluded
+from validation, so they meet neither the JSON round-trip nor the clone, and the
+component evaluates each itself with `capture()` — when, and if, it wants to.
+The value therefore arrives as the author wrote it, which is how an operand that
+JSON cannot describe (a `RegExp`, `undefined`, a particular object) reaches a
+component. Nothing is evaluated for a capture the component never asks for, and
+an expression that throws throws into that component rather than becoming an
+engine prop error. A capture is not durable: it is journaled neither as a prop
+nor as a value, and a replay recomputes it from the restored bindings.
+
 The `expressions` field is always present on `ComponentElement`
 (empty `{}` when no eval expressions exist). A prop name appears in
 either `props` or `expressions`, never both.
@@ -3124,8 +3135,9 @@ Expression props (`count={42}`, `data={{ key: "value" }}`) are parsed
 by the JSX boundary scanner's expression state tracking (brace depth
 counting). The scanner extracts the raw expression string; evaluation
 of the expression to a JSON value is handled during segment
-construction. Only JSON-serializable values are supported; function props are
-outside the component contract.
+construction. Only JSON-serializable values are supported, except for props a
+registration declares as captures (see above); function props are outside the
+component contract.
 
 #### Components with no props
 

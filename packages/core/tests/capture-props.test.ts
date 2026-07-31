@@ -105,4 +105,148 @@ describe("Tier CP — capture props", () => {
     // Neither invocation rendered anything of the value.
     expect(rendered.some((s) => s.type === "text" && s.content.includes("live"))).toBe(false);
   });
+
+  it("CP3: never evaluates a capture the component does not ask for", function* () {
+    let evaluated = 0;
+    const def: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Lazy",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      captures: ["boom"],
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        return "";
+      },
+    };
+
+    yield* scoped(function* () {
+      const env: EvalEnv = {
+        values: {
+          detonate: () => {
+            evaluated += 1;
+            throw new Error("should never run");
+          },
+        },
+      };
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent() {
+            return def;
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(scanSegments("<Lazy boom={detonate()} />\n"), {}, {}, new Set());
+    });
+
+    // Deferred: the expression is not evaluated during prop resolution, so a
+    // capture the component skips is inert.
+    expect(evaluated).toBe(0);
+  });
+
+  it("CP4: an operand expression that throws is the component's failure", function* () {
+    const boom = new Error("operand exploded");
+    let caught: unknown;
+    const def: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Asking",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      captures: ["actual"],
+      *fn(): Operation<Json> {
+        try {
+          yield* capture("actual");
+        } catch (error) {
+          caught = error;
+        }
+        return "";
+      },
+    };
+
+    yield* scoped(function* () {
+      const env: EvalEnv = {
+        values: {
+          detonate: () => {
+            throw boom;
+          },
+        },
+      };
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent() {
+            return def;
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(scanSegments("<Asking actual={detonate()} />\n"), {}, {}, new Set());
+    });
+
+    // The component owns the failure: it caught it, rather than the engine
+    // turning it into a prop diagnostic before the component ever ran. The
+    // engine's expression evaluator wraps rather than rethrowing, so what
+    // arrives names the operand and the failure but is not `boom` itself —
+    // identity survives a capture's *value*, not an evaluation error.
+    expect(caught).toBeInstanceOf(Error);
+    expect(String(caught)).toContain("operand exploded");
+    expect(reaches(caught, boom)).toBe(false);
+  });
+
+  it("CP5: the JSON gate still holds for props that are not captures", function* () {
+    const observed: string[] = [];
+    const def: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Ordinary",
+      props: { type: "object", properties: { n: {} }, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        return "";
+      },
+    };
+
+    yield* scoped(function* () {
+      const env: EvalEnv = { values: { nothing: undefined } };
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around({
+        *raise([segment], next) {
+          observed.push(segment.message);
+          return yield* next(segment);
+        },
+      });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent() {
+            return def;
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(scanSegments("<Ordinary n={nothing} />\n"), {}, {}, new Set());
+    });
+
+    // Undeclared as a capture, so it still meets the gate that rejects a
+    // non-serializable value — the widening is opt-in, not global.
+    expect(observed.join(" ")).toContain("non-serializable");
+  });
 });
+
+/** Whether `target` is reachable from `error` by identity. */
+function reaches(error: unknown, target: unknown, seen = new Set<unknown>()): boolean {
+  if (error === target) {
+    return true;
+  }
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  if (error instanceof AggregateError && error.errors.some((e) => reaches(e, target, seen))) {
+    return true;
+  }
+  return error instanceof Error && error.cause !== undefined
+    ? reaches(error.cause, target, seen)
+    : false;
+}

@@ -25,8 +25,6 @@ import type { TestResult } from "./test-api.ts";
 import {
   AssertionDiagnostic,
   buildDiagnostic,
-  evaluateExpression,
-  expandAssertion,
   failVisiblyThenThrow,
   validationError,
 } from "./assertions.ts";
@@ -61,158 +59,12 @@ class TeardownError extends Error {
 export interface TestHandlers {
   /** The per-test timeout the `<Test>` registration is built from. */
   timeoutMs: number;
-  expandAssertion(assertion: AssertionEntry, element: ComponentElement): Operation<Segment[]>;
-  expandAssertThrows(element: ComponentElement): Operation<Segment[]>;
 }
 
 export function createTestHandlers(options: { timeoutMs: number }): TestHandlers {
   const { timeoutMs } = options;
 
-  function* expandAssertThrows(element: ComponentElement): Operation<Segment[]> {
-    for (const propName of [...Object.keys(element.props), ...Object.keys(element.expressions)]) {
-      if (propName !== "message" && propName !== "as") {
-        return [
-          yield* raise(
-            validationError(
-              "AssertThrows",
-              `does not accept a "${propName}" prop (allowed: message, as).`,
-            ),
-          ),
-        ];
-      }
-    }
-    if (!("message" in element.props) && !("message" in element.expressions)) {
-      return [yield* raise(validationError("AssertThrows", 'requires a "message" prop.'))];
-    }
-    if ("as" in element.expressions) {
-      return [
-        yield* raise(
-          validationError(
-            "AssertThrows",
-            'the "as" prop must be a string literal, not an expression.',
-          ),
-        ),
-      ];
-    }
-
-    const currentEnv = yield* env;
-    const merged = {
-      ...(element.projectedEnv?.values ?? {}),
-      ...(currentEnv?.values ?? {}),
-    };
-
-    let matcher: string | RegExp;
-    if ("message" in element.expressions) {
-      let evaluated: unknown;
-      try {
-        evaluated = evaluateExpression(element.expressions["message"]!, merged);
-      } catch (error) {
-        return [
-          yield* raise(
-            validationError(
-              "AssertThrows",
-              `failed to evaluate the "message" expression: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            ),
-          ),
-        ];
-      }
-      if (typeof evaluated === "string" || evaluated instanceof RegExp) {
-        matcher = evaluated;
-      } else {
-        return [
-          yield* raise(
-            validationError(
-              "AssertThrows",
-              `the "message" expression must evaluate to a string or RegExp, got ${typeof evaluated}.`,
-            ),
-          ),
-        ];
-      }
-    } else {
-      const literal = element.props["message"];
-      if (typeof literal !== "string") {
-        return [
-          yield* raise(validationError("AssertThrows", 'the "message" prop must be a string.')),
-        ];
-      }
-      matcher = literal;
-    }
-
-    let binding: string | undefined;
-    if ("as" in element.props) {
-      if (!currentEnv) {
-        return [
-          yield* raise(
-            validationError("AssertThrows", 'binding with "as" requires an eval scope in context.'),
-          ),
-        ];
-      }
-      const parsed = validateBindingName(element.props["as"]);
-      if (!parsed.ok) {
-        return [
-          yield* raise(validationError("AssertThrows", `the "as" prop ${parsed.error.message}`)),
-        ];
-      }
-      if (parsed.value === undefined) {
-        return [
-          yield* raise(
-            validationError("AssertThrows", 'the "as" prop must be a non-empty string.'),
-          ),
-        ];
-      }
-      binding = parsed.value;
-    }
-
-    // Install a scope-local raise interceptor and expand the body. This hook is
-    // the nearest one, so it answers first and throws CapturedRaise both inside
-    // and outside a <Test>. RaisedSegmentError is still caught: it is what an
-    // enclosing <Test> throws, and reaches here if this hook is ever bypassed.
-    // Catching both makes capture behave identically either way. The first
-    // raised error stops expansion, so later children never execute.
-    let captured: ErrorSegment | undefined;
-    try {
-      yield* scoped(function* () {
-        yield* Component.around({
-          // deno-lint-ignore require-yield
-          *raise([segment]) {
-            throw new CapturedRaise(segment);
-          },
-        });
-        yield* expandSegments(element.children);
-      });
-    } catch (error) {
-      if (error instanceof CapturedRaise || error instanceof RaisedSegmentError) {
-        captured = error.segment;
-      } else {
-        throw error;
-      }
-    }
-
-    if (!captured) {
-      yield* failAssertThrows(matcher, undefined);
-    } else if (!matchesMessage(matcher, captured.message)) {
-      yield* failAssertThrows(matcher, captured.message);
-    }
-
-    if (binding !== undefined && currentEnv) {
-      currentEnv.values[binding] = captured;
-    }
-
-    const visible = (yield* testing) || (yield* verbose);
-    if (!visible) {
-      return [];
-    }
-    return [
-      {
-        type: "text",
-        content: buildDiagnostic("AssertThrows", "passed", describeMatcher(matcher), {}),
-      },
-    ];
-  }
-
-  return { timeoutMs, expandAssertion, expandAssertThrows };
+  return { timeoutMs };
 }
 
 function* failAssertThrows(matcher: string | RegExp, actual: string | undefined): Operation<never> {

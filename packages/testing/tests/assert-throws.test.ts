@@ -83,40 +83,6 @@ describe("<AssertThrows>", () => {
     expect(run.results[0]?.error?.message).toContain("must be a string literal");
   });
 
-  it("rejects an as binding when no eval environment is active", function* () {
-    // Exercised directly: normal expansion always installs a root env, so the
-    // guard is unreachable through a document. Ajv/env context defaults to
-    // undefined when no provider is installed on the scope.
-    const handlers = createTestHandlers({ timeoutMs: 100 });
-    const element: ComponentElement = {
-      type: "component",
-      name: "AssertThrows",
-      props: { message: "must", as: "thrown" },
-      expressions: {},
-      children: [],
-      selfClosing: false,
-    };
-    // The children never expand — the guard answers first — but the handler is
-    // called outside an expansion, so stand in for the engine's provider.
-    const segments = yield* scoped(function* () {
-      yield* Component.around(
-        {
-          // deno-lint-ignore require-yield
-          *expandSegments([segments]) {
-            return segments;
-          },
-        },
-        { at: "min" },
-      );
-      return yield* handlers.expandAssertThrows(element);
-    });
-    const segment = segments[0];
-    expect(segment).toMatchObject({ type: "error" });
-    if (segment && segment.type === "error") {
-      expect(segment.message).toContain("requires an eval scope");
-    }
-  });
-
   it("rejects an invalid as identifier", function* () {
     const run = yield* runDoc(
       inTest('<AssertThrows message="must" as="123bad"><Strict n="x" /></AssertThrows>'),
