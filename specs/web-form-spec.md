@@ -96,7 +96,7 @@ At the time of writing:
 | Asset | UTF-8 bytes |
 |---|---|
 | `clientJs` | 621,345 |
-| `themeCss` | 193,649 |
+| `themeCss` | 193,734 |
 
 The stylesheet is three parts joined in a fixed order: the Shadcn theme's own
 pre-compiled Tailwind output verbatim, six generated `@font-face` rules, and

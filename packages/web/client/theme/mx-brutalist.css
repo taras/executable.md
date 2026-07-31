@@ -22,6 +22,11 @@
  *
  * ## What the page shell does not give us
  *
+ * Layered theme utilities lose to these unlayered rules by cascade design, with
+ * no help from specificity. That is what suppresses the theme's own
+ * unanswered-required red on the select trigger: `.border-red-500` sits in
+ * `@layer utilities`, and the base border rule below simply outranks it.
+ *
  * `PAGE_SHELL` is three sibling divs — `#content`, `#root`, `#status` — and it
  * stays that way. Two of them have to read as one card, which no single element
  * covers, so `body` becomes the grid and `body::before` is the card: it spans
@@ -153,7 +158,6 @@ body::before {
 #content h3 {
   font-weight: 700;
   letter-spacing: var(--tracking-tight);
-  text-transform: uppercase;
 }
 
 #content code {
@@ -206,11 +210,6 @@ body::before {
   color: var(--foreground);
   font-family: inherit;
   letter-spacing: inherit;
-}
-
-/* The theme reds a required select's border before anything is wrong with it. */
-.rjsf [cmdk-root].border-red-500 > button[aria-haspopup="listbox"] {
-  border-color: var(--foreground);
 }
 
 .rjsf [cmdk-root] > button[aria-haspopup="listbox"] > span {
