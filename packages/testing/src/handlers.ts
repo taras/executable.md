@@ -32,17 +32,9 @@ import {
 } from "./assertions.ts";
 import type { AssertionEntry } from "./assertions.ts";
 import { persistBoundaryOutcome, persistTestResult } from "./journal.ts";
-
-/** An ErrorSegment raised anywhere inside a test body. */
-class RaisedSegmentError extends Error {
-  override name = "RaisedSegmentError";
-  segment: ErrorSegment;
-
-  constructor(segment: ErrorSegment) {
-    super(segment.message);
-    this.segment = segment;
-  }
-}
+// One class, not two: `<Test>`'s interceptor throws this and the catch below
+// checks it, so a second identical declaration would make `instanceof` miss.
+import { RaisedSegmentError } from "./test-component.ts";
 
 class CapturedRaise extends Error {
   override name = "CapturedRaise";
@@ -171,13 +163,12 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
       binding = parsed.value;
     }
 
-    // Install a scope-local raise interceptor and expand the body. Inside a
-    // <Test> the enclosing interceptor is installed in an outer scope, and
-    // outer middleware runs first (see @effectionx/context-api ordering), so
-    // it throws RaisedSegmentError before this hook is reached; outside a test
-    // this hook is the only interceptor and throws CapturedRaise. Catching
-    // both makes capture behave identically inside and outside <Test>. The
-    // first raised error stops expansion, so later children never execute.
+    // Install a scope-local raise interceptor and expand the body. This hook is
+    // the nearest one, so it answers first and throws CapturedRaise both inside
+    // and outside a <Test>. RaisedSegmentError is still caught: it is what an
+    // enclosing <Test> throws, and reaches here if this hook is ever bypassed.
+    // Catching both makes capture behave identically either way. The first
+    // raised error stops expansion, so later children never execute.
     let captured: ErrorSegment | undefined;
     try {
       yield* scoped(function* () {
