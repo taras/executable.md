@@ -18,9 +18,9 @@ interface Member {
  * Every `@executablemd` workspace member, identified by `package.json` name —
  * the identity both npm and the generator key membership on — together with
  * whether it is private and whether its `deno.json` carries a JSR identity
- * (`name` and `exports`). A private member such as `packages/web` omits both
- * `deno.json` fields rather than declaring `exports`-less `name`, so it never
- * warns on `deno install` and `deno publish` finds no entry to publish.
+ * (`name` and `exports`). A private member omits both `deno.json` fields rather
+ * than declaring an `exports`-less `name`, so it never warns on `deno install`
+ * and `deno publish` finds no entry to publish.
  */
 function* members(): Operation<Member[]> {
   const root = JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot)));
@@ -50,38 +50,41 @@ function* workflow(): Operation<string> {
   return yield* readTextFile(new URL(".github/workflows/publish-packages.yml", repoRoot));
 }
 
-describe("publish-packages.yml private-member exclusion", () => {
-  it("publishes every non-private member to npm and withholds every private one", function* () {
+describe("publish-packages.yml membership", () => {
+  it("publishes every non-private member to npm", function* () {
     const all = yield* members();
-    const published = all.filter((member) => !member.isPrivate);
-    const withheld = all.filter((member) => member.isPrivate);
-
-    // Without a private member the exclusion would pass vacuously.
-    expect(withheld.length).toBeGreaterThan(0);
-
     const generated = yield* workflow();
-    for (const member of published) {
+
+    // Non-vacuous: the workspace always has publishable members.
+    expect(all.filter((member) => !member.isPrivate).length).toBeGreaterThan(0);
+
+    for (const member of all.filter((member) => !member.isPrivate)) {
       expect(generated).toContain(`package: ${member.dir}`);
-    }
-    for (const member of withheld) {
-      expect(generated).not.toContain(`package: ${member.dir}`);
     }
   });
 
   it("gives every non-private member a JSR identity and no private member one", function* () {
-    const all = yield* members();
-
-    for (const member of all) {
-      expect(member.hasJsrIdentity).toBe(!member.isPrivate);
+    for (const member of yield* members()) {
+      expect({ dir: member.dir, jsr: member.hasJsrIdentity }).toEqual({
+        dir: member.dir,
+        jsr: !member.isPrivate,
+      });
     }
   });
 
-  it("withholds @executablemd/web from both npm and JSR", function* () {
-    const all = yield* members();
-    const web = all.find((member) => member.dir === "packages/web");
+  /**
+   * The exclusion itself is currently unexercised: `packages/web` was the one
+   * private member, and it is published as of #195. The assertion is kept rather
+   * than deleted because it costs nothing and starts working the moment a private
+   * member exists again — but until one does, nothing here proves the generator
+   * skips it, and the guarantee rests on §3 of the release spec alone.
+   */
+  it("withholds any private member from npm", function* () {
+    const withheld = (yield* members()).filter((member) => member.isPrivate);
+    const generated = yield* workflow();
 
-    expect(web?.isPrivate).toBe(true);
-    expect(web?.hasJsrIdentity).toBe(false);
-    expect(yield* workflow()).not.toContain("package: packages/web");
+    for (const member of withheld) {
+      expect(generated).not.toContain(`package: ${member.dir}`);
+    }
   });
 });

@@ -241,7 +241,29 @@ Deno test suite (`scripts/tests/build-web-client.test.ts`) bundles and
 inspects the real output, asserting determinism, absence of eval and
 external-asset paths under the fixed CSP policy, restoration of the patched
 dependency manifest on every exit path, and that `deno task build:web` writes
-the generated module to that path and nowhere in the index.
+the generated module to that path and nowhere in the index. That test restores
+whatever it found rather than removing the module: it is a real artifact other
+work reads, so a test that emptied the path would decide whether an unrelated
+build succeeded by running before or after it.
+
+Because the module is not committed, every job that packages the workspace runs
+`deno task build:web` first:
+
+- **`ci.yml`'s `test-deno` job**, because the suite builds the CLI's npm artifact
+  and dnt packages `@executablemd/web` along with it.
+- **`publish-one.yml`**, unconditionally rather than only for `packages/web` —
+  dnt builds a package's workspace siblings too, so any dependent needs the
+  bundle present as much as the package itself does.
+
+A job that skipped it fails with a module-not-found naming a path nobody chose,
+which is why `packages/web/src/assets.ts` reports the missing bundle by naming
+the command instead.
+
+The module is gitignored, so `deno publish` excludes it by default and then
+refuses the package: it sits in the module graph and would not exist at runtime.
+`packages/web/deno.json` un-excludes it with a negated `publish.exclude` glob, so
+the published package carries the bundle it needs while the repository still does
+not track it.
 
 Restoring that manifest is not something `ensure()` delivers on its own.
 `@effectionx/fs` writes through a promise adapted with `until()`, and halting

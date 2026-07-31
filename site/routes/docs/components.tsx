@@ -84,6 +84,38 @@ const FILE_CAPTURE = `<File path="prompts/review.md" as="instructions" />
 
 <Prompt>{instructions}</Prompt>`;
 
+const WEBFORM = `\`\`\`js eval
+const reviewSchema = {
+  type: "object",
+  properties: {
+    decision: { type: "string", enum: ["approve", "reject"] },
+    note: { type: "string" },
+  },
+  required: ["decision"],
+  additionalProperties: false,
+};
+\`\`\`
+
+<WebForm schema={reviewSchema} as="review">
+# Review required
+
+Read the plan above and decide.
+</WebForm>
+
+\`\`\`js eval
+if (review.decision === "reject") {
+  output(\`Stopping: \${review.note ?? "no reason given"}\`);
+}
+\`\`\``;
+
+const WEBFORM_UI = `<WebForm
+  schema={reviewSchema}
+  uiSchema={{ note: { "ui:widget": "textarea" } }}
+  as="review"
+>
+Read the plan above and decide.
+</WebForm>`;
+
 const FILE_WRITE = `<TempDir>
 <File path="fixtures/request.md">
 Request content
@@ -685,6 +717,40 @@ export default define.page(function Components() {
         branch never expands, so its prompt is never sent. Nothing in the
         failure branch reaches back to the beginning, so there is no third
         attempt to bound.
+      </p>
+
+      <h2>Asking a person</h2>
+      <p>
+        <code>&lt;WebForm&gt;</code>{" "}
+        stops the workflow and asks someone a question. It opens a form in the
+        browser, waits for one answer, binds it, and carries on — so a document
+        can put a human decision in the middle of an otherwise automatic run.
+      </p>
+      <CodeBlock>{WEBFORM}</CodeBlock>
+      <p>
+        The form is generated from{" "}
+        <code>schema</code>, a draft-07 JSON Schema, and the children become the
+        page's own content above it. The component renders nothing: what it
+        produces is the validated answer, so <code>as</code> is required.
+      </p>
+      <p>
+        <code>uiSchema</code>{" "}
+        is optional and controls presentation only — it is RJSF configuration
+        rather than a schema, and is never validated as one.
+      </p>
+      <CodeBlock>{WEBFORM_UI}</CodeBlock>
+      <p>
+        The server runs on <code>127.0.0.1</code>{" "}
+        behind a single-use, unguessable URL, which is printed as well as opened
+        — so a workflow over SSH, or on a machine with no browser, still gives
+        you a link that works. The page is entirely self-contained: it makes no
+        request off the machine, and the answer is validated again on the server
+        before the document ever sees it.
+      </p>
+      <p>
+        Only the answer is journaled. Resuming a document that already has one
+        binds the recorded value without starting a server or asking anyone
+        twice.
       </p>
 
       <h2>How it renders</h2>

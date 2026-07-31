@@ -81,6 +81,32 @@ lifetime, and settlement are core's. The component performs none of them.
 It is unmarked, so a failure fails the document: there is no useful way to
 continue from "the person was never asked".
 
+## The bundled client
+
+The page is entirely self-contained: React, RJSF, the Shadcn theme, the Ajv 8
+validator, and every style it needs are bundled into two assets the form server
+delivers itself. The page makes no request off the machine.
+
+`deno task build:web` produces them into `packages/web/generated/client-bundle.ts`,
+which is gitignored and built at packaging time rather than committed — see
+`specs/release-process-spec.md` §8 for which jobs build it and why. Two clean runs under the pinned Deno produce byte-identical output.
+
+At the time of writing:
+
+| Asset | UTF-8 bytes |
+|---|---|
+| `clientJs` | 620,803 |
+| `themeCss` | 37,258 |
+
+The stylesheet is the Shadcn theme's own pre-compiled Tailwind output, which
+carries no `url()` reference and no `@font-face` rule — so no font or icon file
+is fetched, and none needs embedding. Icons are React components inside the
+bundle.
+
+The generator and the reader agree on the export names by test, not by
+convention: everything else substitutes the asset seam, so a rename would
+otherwise only surface when a real form tried to serve a real page.
+
 ## Durability
 
 Only the validated response is journaled. Ports, tokens, URLs, opener state, and

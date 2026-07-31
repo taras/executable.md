@@ -168,6 +168,9 @@ importers:
       '@executablemd/testing':
         specifier: workspace:*
         version: link:../testing
+      '@executablemd/web':
+        specifier: workspace:*
+        version: link:../web
       '@standard-schema/spec':
         specifier: ^1.0.0
         version: 1.1.0

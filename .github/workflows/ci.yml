@@ -41,6 +41,12 @@ jobs:
           git diff --exit-code .github/workflows/publish-packages.yml \
             || { echo "::error::publish-packages.yml is out of date — run 'deno task gen:publish-workflow' and commit the result"; exit 1; }
 
+      # The npm build packages every workspace dependency of the CLI, and
+      # `@executablemd/web` carries a generated browser bundle that is not
+      # committed. Without this the CLI's npm artifact cannot be built at all.
+      - name: Build the browser bundle
+        run: deno task build:web
+
       - name: Test
         run: deno task test
 
@@ -91,6 +97,16 @@ jobs:
         run: |
           test "$(./dist/xmd run smoke-test/value-root.md)" = \
             '{"passed":true,"summary":"no findings"}'
+
+      # `<WebForm>` is registered by the CLI, so the compiled binary must know it.
+      # The document fails in preflight, before a listener or a browser, which is
+      # what makes this runnable on a headless runner: a binary missing the
+      # registration reports an unresolved component instead, and one that served
+      # before checking would hang.
+      - name: Smoke test WebForm registration and preflight
+        run: |
+          ./dist/xmd run smoke-test/web-form-preflight.md 2>&1 \
+            | grep -q '<WebForm> schema must be a JSON object'
 
       # Covers the compiled binary relaunching itself as `xmd test-agent`,
       # which the source-mode worker command never exercises.
