@@ -51,6 +51,9 @@
       ],
       "@executablemd/testing": [
         "./packages/testing/mod.ts"
+      ],
+      "@executablemd/web": [
+        "./packages/web/mod.ts"
       ]
     }
   },
@@ -64,6 +67,7 @@
     "packages/test-agent/**/*.ts",
     "packages/test-support/**/*.ts",
     "packages/testing/**/*.ts",
+    "packages/web/**/*.ts",
     "scripts/runtime-tests.ts",
     "scripts/runtime-test-exclusions.ts",
     "scripts/lib/runtime-tests.ts",
@@ -71,7 +75,13 @@
     "scripts/lib/web-client-module.ts",
     "scripts/lib/workspace.ts"
   ],
+  // `packages/web/client` runs in a browser, not under Node: these two reach for
+  // XMLHttpRequest and the DOM, which this project's `lib` deliberately omits.
+  // The rest of that directory is pure and stays in scope, because the Node
+  // suite exercises it.
   "exclude": [
-    "packages/durable-streams/demo/**"
+    "packages/durable-streams/demo/**",
+    "packages/web/client/main.tsx",
+    "packages/web/client/request.ts"
   ]
 }

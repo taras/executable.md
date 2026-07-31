@@ -2,7 +2,7 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createChannel, ensure, scoped, spawn, suspend, until } from "effection";
 import type { Operation } from "effection";
-import { copyFile, exists, readTextFile, rm } from "@effectionx/fs";
+import { copyFile, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import fs from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -232,18 +232,28 @@ describe("client assets", () => {
   });
 
   it("writes that exact module to the generated path and nowhere in the index", function* () {
-    yield* scoped(function* () {
-      yield* ensure(() => rm(new URL(GENERATED_MODULE, REPO_ROOT), { force: true }));
-      yield* exec(Deno.execPath(), {
-        arguments: ["task", "build:web"],
-        cwd: fileURLToPath(REPO_ROOT),
-      }).expect();
+    const generated = new URL(GENERATED_MODULE, REPO_ROOT);
 
-      expect(yield* readTextFile(new URL(GENERATED_MODULE, REPO_ROOT))).toEqual(result.module);
-      expect((yield* git(["check-ignore", GENERATED_MODULE])).code).toBe(0);
-      expect((yield* git(["ls-files", "--", GENERATED_MODULE])).stdout).toBe("");
+    // The tree is left as it was found rather than emptied. The generated module
+    // is a real build artifact other work depends on — `build-npm.ts` packages it
+    // when a dependent is built — so a test that removed it would decide whether
+    // an unrelated test passed by running before or after it.
+    const before = (yield* exists(generated)) ? yield* readTextFile(generated) : undefined;
+    yield* ensure(function* () {
+      if (before === undefined) {
+        yield* rm(generated, { force: true });
+      } else {
+        yield* writeTextFile(generated, before);
+      }
     });
 
-    expect(yield* exists(new URL(GENERATED_MODULE, REPO_ROOT))).toBe(false);
+    yield* exec(Deno.execPath(), {
+      arguments: ["task", "build:web"],
+      cwd: fileURLToPath(REPO_ROOT),
+    }).expect();
+
+    expect(yield* readTextFile(generated)).toEqual(result.module);
+    expect((yield* git(["check-ignore", GENERATED_MODULE])).code).toBe(0);
+    expect((yield* git(["ls-files", "--", GENERATED_MODULE])).stdout).toBe("");
   });
 });

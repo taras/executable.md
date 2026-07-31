@@ -4861,6 +4861,41 @@ nothing to restore, and the search runs again against whatever is on disk now.
 
 ---
 
+### 6.15 Asking a person: `<WebForm>`
+
+Not every decision in a document is one a machine should make. `<WebForm>` stops
+the run, asks a person a structured question in their browser, binds the answer,
+and continues:
+
+```md
+<WebForm schema={reviewSchema} as="review">
+# Review required
+
+Read the plan above and decide.
+</WebForm>
+```
+
+It ships in `@executablemd/web` rather than core, and is registered rather than
+reserved (§5.3) — a repository's own `WebForm.md` or `WebForm.ts` outranks it.
+The component declares `returns`, so it renders nothing and requires `as` like
+any other value component (§6.10); what it produces is the answer, validated
+against the author's schema by the server that received it.
+
+Everything that can be judged without opening a port is judged first: the content
+is projected, the declaration is normalized, the body is sanitized, and the schema
+is compiled. Only then is anything served. A document whose content failed, or
+whose schema cannot be used, binds no port, prints no URL, opens no browser, and
+leaves no journal entry.
+
+Only the validated answer is journaled, keyed by a fingerprint of the question, so
+a resumed document restores the answer without asking anyone twice.
+
+`specs/web-form-spec.md` is the full specification: the props, the preflight
+boundary, the loopback protocol and its fixed security policy, the durability
+fingerprint, and the provider-neutral `liveForm()` operation that `<Elicit>`
+(#197) will share.
+
+
 ## 7. Entry point
 
 ### 8.1 `execute`

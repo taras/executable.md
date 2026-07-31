@@ -41,6 +41,12 @@ jobs:
           git diff --exit-code .github/workflows/publish-packages.yml \
             || { echo "::error::publish-packages.yml is out of date — run 'deno task gen:publish-workflow' and commit the result"; exit 1; }
 
+      # The npm build packages every workspace dependency of the CLI, and
+      # `@executablemd/web` carries a generated browser bundle that is not
+      # committed. Without this the CLI's npm artifact cannot be built at all.
+      - name: Build the browser bundle
+        run: deno task build:web
+
       - name: Test
         run: deno task test
 
@@ -54,6 +60,12 @@ jobs:
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.1
+
+      # With the generated bundle absent the negated `publish.exclude` glob
+      # matches nothing and the dry run quietly checks a package the release
+      # would never upload. Building first makes this validate the real shape.
+      - name: Build the browser bundle
+        run: deno task build:web
 
       - name: The workspace is publishable to JSR
         run: deno task check:jsr
@@ -91,6 +103,54 @@ jobs:
         run: |
           test "$(./dist/xmd run smoke-test/value-root.md)" = \
             '{"passed":true,"summary":"no findings"}'
+
+      # `<WebForm>` is registered by the CLI, so the compiled binary must know it.
+      # The document fails in preflight, before a listener or a browser, which is
+      # what makes this runnable on a headless runner: a binary missing the
+      # registration reports an unresolved component instead, and one that served
+      # before checking would hang.
+      - name: Smoke test WebForm registration and preflight
+        run: |
+          ./dist/xmd run smoke-test/web-form-preflight.md 2>&1 \
+            | grep -q '<WebForm> schema must be a JSON object'
+
+      # The preflight smoke above stops before assets, so it cannot tell a binary
+      # that embedded the browser bundle from one that did not — and a bundle-less
+      # compile succeeds silently. This serves a real form and reads the client
+      # script back over HTTP. Headless is fine: the opener fails and that is a
+      # warning by design, so the URL is still printed and the form still serves.
+      - name: Smoke test the compiled binary serving a real form
+        run: |
+          set -eu
+          ./dist/xmd run smoke-test/web-form-live.md > /tmp/web-form-live.log 2>&1 &
+          xmd_pid=$!
+          trap 'kill "$xmd_pid" 2>/dev/null || true' EXIT
+
+          url=""
+          for _ in $(seq 1 40); do
+            url=$(grep -oE 'http://127\.0\.0\.1:[0-9]+/f/[A-Za-z0-9_-]+/' /tmp/web-form-live.log | head -1 || true)
+            [ -n "$url" ] && break
+            sleep 0.5
+          done
+          if [ -z "$url" ]; then
+            echo "::error::the compiled binary never printed a form URL"
+            cat /tmp/web-form-live.log
+            exit 1
+          fi
+
+          curl -fsS "$url" | grep -q '<div id="root"></div>'
+          bytes=$(curl -fsS "${url}client.js" | wc -c | tr -d ' ')
+          # The real bundle is ~600 KB of React and RJSF; a placeholder or an
+          # empty asset would be orders of magnitude smaller.
+          if [ "$bytes" -lt 100000 ]; then
+            echo "::error::client.js was $bytes bytes — the binary did not embed the browser bundle"
+            exit 1
+          fi
+          echo "served a real client bundle: $bytes bytes"
+
+          # Terminating with the form still open is the interruption path.
+          kill "$xmd_pid"
+          wait "$xmd_pid" 2>/dev/null || true
 
       # Covers the compiled binary relaunching itself as `xmd test-agent`,
       # which the source-mode worker command never exercises.
@@ -133,6 +193,24 @@ jobs:
           node-version: "22"
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      # `tsc` resolves the literal dynamic import of the generated browser
+      # bundle, which `deno check` leaves alone, so the typecheck needs the file
+      # to exist. The specifier stays literal on purpose: `deno compile` follows
+      # it to embed the bundle in the binary, and an opaque one would ship a
+      # binary that cannot serve a form.
+      #
+      # Before `pnpm install`, not after: `deno task build:web` rewrites
+      # node_modules into Deno's layout, which strips the packages pnpm placed
+      # there and fails the typecheck on two dozen unrelated modules. Installing
+      # afterwards restores pnpm's layout, and the bundle is outside
+      # node_modules so it survives.
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      - name: Build the browser bundle
+        run: deno task build:web
 
       - run: pnpm install
 

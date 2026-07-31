@@ -52,6 +52,7 @@ import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
 import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/test-agent";
+import { installWebComponents } from "@executablemd/web";
 import { resolveAgentConfig } from "./agent-config.ts";
 import type { AgentFlags } from "./agent-config.ts";
 import { FileStream } from "./file-stream.ts";
@@ -386,6 +387,10 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
   } else {
     yield* installTestingComponents({ verbose });
   }
+
+  // `<WebForm>` for both commands. Registered rather than reserved, so a
+  // repository's own WebForm.md or WebForm.ts still wins.
+  yield* installWebComponents();
 
   // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
   // through the deterministic TestAgent stack instead.

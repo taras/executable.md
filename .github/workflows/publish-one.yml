@@ -46,6 +46,13 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # `@executablemd/web` ships a generated browser bundle that is not committed,
+      # and dnt packages it from the source tree. Building unconditionally keeps
+      # this job independent of which package it was asked for: `web` needs it for
+      # itself, and any dependent needs it because dnt builds siblings too.
+      - name: Build the browser bundle
+        run: deno task build:web
+
       - name: Build with dnt
         # Retry to absorb npm propagation of a just-published sibling dependency.
         run: |
