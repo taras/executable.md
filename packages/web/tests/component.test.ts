@@ -133,6 +133,14 @@ describe("WebForm: nothing happens before the question is ready", () => {
         "an external reference",
         '<WebForm schema={{ type: "object", properties: { a: { $ref: "https://x.test/s.json" } } }} as="r">x</WebForm>',
       ],
+      // The discriminating one, and the only one that reaches the compiler. The
+      // meta-schema has nothing to say about whether a pointer resolves, so this
+      // is valid draft-07 and still unusable — which makes it the case that fails
+      // if compilation moves back inside the durable operation.
+      [
+        "a pointer that resolves to nothing",
+        `<WebForm schema='{"type":"object","properties":{"a":{"$ref":"#/definitions/missing"}}}' as="r">x</WebForm>`,
+      ],
     ];
 
     for (const [label, source] of unusable) {
@@ -142,7 +150,14 @@ describe("WebForm: nothing happens before the question is ready", () => {
       expect({ label, served: run.effects.served }).toEqual({ label, served: 0 });
       expect({ label, opened: run.effects.opened }).toEqual({ label, opened: [] });
       expect({ label, responded: run.effects.responded }).toEqual({ label, responded: [] });
-      expect(yield* journaled(run.stream, "web_form")).toEqual([]);
+      expect({ label, printed: run.effects.printed }).toEqual({ label, printed: [] });
+      // Every durable yield, not the successful ones: an operation that began and
+      // failed leaves an `err` event, and that is still work done for a question
+      // nobody was ever asked.
+      expect({ label, events: yield* journalEvents(run.stream, "web_form") }).toEqual({
+        label,
+        events: [],
+      });
     }
   });
 

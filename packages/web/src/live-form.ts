@@ -83,6 +83,6 @@ export function runPreparedForm(prepared: PreparedForm): Operation<Json> {
 }
 
 /** Compile and serve in one step, for a caller with no durability of its own. */
-export function* liveForm(input: LiveFormInput): Operation<Json> {
-  return yield* runPreparedForm(prepareForm(input));
+export function liveForm(input: LiveFormInput): Operation<Json> {
+  return runPreparedForm(prepareForm(input));
 }

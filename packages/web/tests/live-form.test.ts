@@ -28,16 +28,6 @@ function silentOpener(): Operation<void> {
   });
 }
 
-/** The port a form bound, captured from the URL its opener was handed. */
-function capturingOpener(seen: { url?: string }): Operation<void> {
-  return FormOpener.around({
-    // deno-lint-ignore require-yield
-    *open([url]) {
-      seen.url = url;
-    },
-  });
-}
-
 function portOf(url: string): number {
   return Number(new URL(url).port);
 }
@@ -45,15 +35,29 @@ function portOf(url: string): number {
 describe("liveForm: the assembled scope", () => {
   /**
    * The lower-level PRs proved each resource cleans up on its own. What this
-   * proves is that the operation which assembles them owns them: after an answer,
-   * the listener that served it is gone.
+   * proves is that the operation assembling them owns them — and it holds the
+   * opener open until the answer arrives, so "the scope halted it" is something
+   * the test observes rather than assumes.
    */
-  it("releases its listener once an answer has been returned", function* () {
-    const seen: { url?: string } = {};
+  it("halts an active opener and releases its listener before returning", function* () {
+    const serving = withResolvers<string>();
+    const openerCleaned = withResolvers<void>();
+    let cleanedBeforeReturn = false;
 
     const answer = yield* scoped(function* (): Operation<Json> {
       yield* fixtureAssets();
-      yield* capturingOpener(seen);
+      yield* FormOpener.around({
+        *open([url]) {
+          try {
+            serving.resolve(url);
+            // Still running when the answer arrives, so returning has to halt it.
+            yield* suspend();
+          } finally {
+            openerCleaned.resolve();
+            cleanedBeforeReturn = true;
+          }
+        },
+      });
       yield* FormResponder.around({
         *respond([url]) {
           yield* submitForm(url, { decision: "approve" });
@@ -63,28 +67,50 @@ describe("liveForm: the assembled scope", () => {
       return yield* liveForm({ schema: REVIEW_SCHEMA, content: CONTENT });
     });
 
+    const url = yield* serving.operation;
+
     expect(answer).toEqual({ decision: "approve" });
-    if (!seen.url) {
-      throw new Error("the opener was never given a URL");
-    }
-    expect(yield* portRefuses(portOf(seen.url))).toBe(true);
+    // The opener's cleanup ran as part of returning, not afterwards.
+    expect(cleanedBeforeReturn).toBe(true);
+    yield* openerCleaned.operation;
+    expect(yield* portRefuses(portOf(url))).toBe(true);
   });
 
   /**
-   * A responder that throws is the form failing, and it must take the listener
-   * with it rather than leave a port bound behind a failed operation.
+   * A responder that throws is the form failing. The failure must reach the
+   * caller only after everything the form started has been dismantled — a
+   * failure that outran its own teardown would leave a port bound behind it.
    */
-  it("dismantles everything when the responder fails", function* () {
-    const seen: { url?: string } = {};
+  it("dismantles opener, responder, and listener before the failure propagates", function* () {
+    const serving = withResolvers<string>();
+    const openerCleaned = withResolvers<void>();
+    const responderCleaned = withResolvers<void>();
+    let openerCleanedFirst = false;
+    let responderCleanedFirst = false;
     let raised = "";
 
     yield* scoped(function* () {
       yield* fixtureAssets();
-      yield* capturingOpener(seen);
+      yield* FormOpener.around({
+        *open([url]) {
+          try {
+            serving.resolve(url);
+            yield* suspend();
+          } finally {
+            openerCleaned.resolve();
+            openerCleanedFirst = true;
+          }
+        },
+      });
       yield* FormResponder.around({
         // deno-lint-ignore require-yield
         *respond() {
-          throw new Error("the responder failed");
+          try {
+            throw new Error("the responder failed");
+          } finally {
+            responderCleaned.resolve();
+            responderCleanedFirst = true;
+          }
         },
       });
 
@@ -95,21 +121,28 @@ describe("liveForm: the assembled scope", () => {
       }
     });
 
+    const url = yield* serving.operation;
+
     expect(raised).toContain("the responder failed");
-    if (!seen.url) {
-      throw new Error("the opener was never given a URL");
-    }
-    expect(yield* portRefuses(portOf(seen.url))).toBe(true);
+    // Both cleanups had already run by the time the failure was caught.
+    expect({ openerCleanedFirst, responderCleanedFirst }).toEqual({
+      openerCleanedFirst: true,
+      responderCleanedFirst: true,
+    });
+    yield* openerCleaned.operation;
+    yield* responderCleaned.operation;
+    expect(yield* portRefuses(portOf(url))).toBe(true);
   });
 
   /**
-   * Interruption, not completion. A form is normally torn down while it is still
-   * waiting — the workflow around it was halted — so the halt is observed and the
-   * injected work is proved to have cleaned up, not merely to have stopped being
-   * scheduled.
+   * Interruption, not completion. Both halves are synchronized on separately:
+   * waiting only for the opener would leave whether the responder had started at
+   * the mercy of the scheduler, and a halt that happened to land first would
+   * prove nothing about responder teardown.
    */
   it("releases everything when the owning task is halted mid-wait", function* () {
     const serving = withResolvers<string>();
+    const responderActive = withResolvers<void>();
     const openerCleaned = withResolvers<void>();
     const responderCleaned = withResolvers<void>();
 
@@ -128,6 +161,7 @@ describe("liveForm: the assembled scope", () => {
       yield* FormResponder.around({
         *respond() {
           try {
+            responderActive.resolve();
             // A person who never answers.
             yield* suspend();
           } finally {
@@ -139,13 +173,13 @@ describe("liveForm: the assembled scope", () => {
       yield* liveForm({ schema: REVIEW_SCHEMA, content: CONTENT });
     });
 
-    // Synchronized on the server actually serving and the opener actually running.
+    // Both are genuinely running before anything is halted.
     const url = yield* serving.operation;
+    yield* responderActive.operation;
     expect(yield* portRefuses(portOf(url))).toBe(false);
 
     yield* owner.halt();
 
-    // Both injected operations ran their cleanup, and the port is gone.
     yield* openerCleaned.operation;
     yield* responderCleaned.operation;
     expect(yield* portRefuses(portOf(url))).toBe(true);
