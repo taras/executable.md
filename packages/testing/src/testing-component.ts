@@ -17,6 +17,7 @@ import type { Operation } from "effection";
 import { Test, boundary } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import { persistBoundaryOutcome } from "./journal.ts";
+import { flushStaged } from "./test-component.ts";
 
 export const TESTING_PROPS: PropsSchema = {
   type: "object",
@@ -52,6 +53,11 @@ export function* Testing(): Operation<Json> {
   );
 
   const projected = (yield* hasContent()) ? yield* tryContent() : { text: "" };
+
+  // Every test in this boundary has settled, so their staged results — and any
+  // teardown upgrade applied to them — are final and can be journaled. Doing it
+  // before the outcome below is what makes that outcome count them.
+  yield* flushStaged();
 
   // A body that stopped never finished being a boundary, so there is no outcome
   // to report and nothing to journal: the failure travels on untouched. Only a

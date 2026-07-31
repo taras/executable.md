@@ -8,7 +8,8 @@ behavior in observable results and give authors confidence in their documents.
 ## Testing Mode
 
 Tests run only in testing mode. During regular execution, `<Test>` and its
-entire body are skipped without output, bindings, or side effects.
+entire body are skipped: it renders nothing, binds nothing, and runs no side
+effect.
 
 `<Testing>` enables testing mode for its expanded subtree:
 
@@ -18,10 +19,17 @@ entire body are skipped without output, bindings, or side effects.
 </Testing>
 ```
 
-Installing the package registers `<Testing>` as an ordinary **non-reserved
-default** (executable-mdx-spec.md §5.3): a repository component named `Testing`
-is chosen ahead of it, exactly as it would be ahead of any other package's
-default, and then decides for itself what a testing boundary means.
+Installing the package registers `<Testing>` and `<Test>` as ordinary
+**non-reserved defaults** (executable-mdx-spec.md §5.3): a repository component
+of either name is chosen ahead of the registered one, exactly as it would be
+ahead of any other package's default, and then decides for itself what a testing
+boundary — or a test — means.
+
+A test result is journaled once the invocation that produced it has been
+dismantled, so a teardown failure is part of the outcome recorded for it. That
+is still while expansion runs and before the root close, in discovery order and
+identified by source position. A run that ends between a test finishing and its
+result being written journals nothing for that test, and re-runs it on resume.
 
 A boundary reports how many tests ran and how many failed once its body has
 finished. A body that *stopped* — expansion ended by throwing rather than by
@@ -30,7 +38,10 @@ reports no outcome and journals none, and the failure travels on unchanged. An
 error the body merely collected leaves it complete: that diagnostic is part of
 what the boundary rendered, and the tests beside it still ran.
 
-The CLI command is equivalent to wrapping the entrypoint in `<Testing>`:
+The CLI command is equivalent to wrapping the entrypoint in `<Testing>` for
+activating testing mode and for journaling the results of the tests it runs. It
+is not equivalent for boundary reporting: an explicit `<Testing>` reports and
+journals a boundary outcome, and a root run reports none.
 
 ```sh
 xmd test <entrypoint>
@@ -143,8 +154,12 @@ failed, and fully torn down before execution continues.
 
 An assertion failure, unexpected error, or teardown error fails only the current
 test. Later tests still run. Unexpected errors remain distinct from assertion
-failures. Output produced before a failure remains in the report and is followed
-by the failure diagnostic.
+failures. Output produced before an assertion failure or an unexpected error
+remains in the report and is followed by the failure diagnostic. Two failures
+report the diagnostic alone: a test that timed out was halted mid-body, and a
+test whose teardown failed had already returned, so neither has body output to
+keep. A teardown failure is reported as a diagnostic rather than as report text,
+and carries the original error as its cause.
 
 Nested `<Test>` elements are invalid. Skip, focus, and retry behavior is not
 supported.

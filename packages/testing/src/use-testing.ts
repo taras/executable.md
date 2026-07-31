@@ -20,6 +20,7 @@ import { Execution } from "@executablemd/core";
 import { sessionActive, Test, TestFailureError } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import { decorateCompletion, installTestingComponents } from "./components.ts";
+import { flushStaged } from "./test-component.ts";
 
 export interface Testing {
   /** Immutable snapshot of completed tests, in discovery order. */
@@ -48,9 +49,24 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
     },
   });
 
-  // Root activation — the same install <Testing> performs for its subtree,
-  // applied to the whole execution (`xmd test` ≡ root <Testing>).
+  // Root activation — the activation half of what <Testing> performs for its
+  // subtree, applied to the whole execution. `xmd test` ≡ root <Testing>) for
+  // activation and for flushing staged results; a root run reports no boundary
+  // outcome of its own, which an explicit <Testing> does.
   yield* Test.around({ testing: () => true });
+
+  // The flushing half. A root run has no <Testing> element to flush the last
+  // test's staged result, so the region that settles after the document has
+  // expanded does it — inside durableRun, where the stream is still live, and
+  // before the root Close. Flush-only: no boundary outcome, no journal entry of
+  // its own.
+  yield* Execution.around({
+    *document([documentProps], next) {
+      const value = yield* next(documentProps);
+      yield* flushStaged();
+      return value;
+    },
+  });
 
   // Completion policy: an otherwise successful execution becomes
   // Err(TestFailureError) after its output closes when tests failed or none

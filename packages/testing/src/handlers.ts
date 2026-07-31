@@ -65,142 +65,14 @@ class TeardownError extends Error {
 }
 
 export interface TestHandlers {
-  expandTest(element: ComponentElement): Operation<Segment[]>;
+  /** The per-test timeout the `<Test>` registration is built from. */
+  timeoutMs: number;
   expandAssertion(assertion: AssertionEntry, element: ComponentElement): Operation<Segment[]>;
   expandAssertThrows(element: ComponentElement): Operation<Segment[]>;
 }
 
 export function createTestHandlers(options: { timeoutMs: number }): TestHandlers {
   const { timeoutMs } = options;
-
-  function* expandTest(element: ComponentElement): Operation<Segment[]> {
-    if (!(yield* testing)) {
-      return [];
-    }
-    if (yield* inTest) {
-      // Reported here, while the ENCLOSING test's raise interceptor is still
-      // active, so the nesting fails the current test.
-      const error: ErrorSegment = {
-        type: "error",
-        message: "Nested <Test> elements are invalid.",
-        source: "Test",
-      };
-      return [yield* raise(error)];
-    }
-
-    const name = typeof element.props.name === "string" ? element.props.name : undefined;
-    const location = formatLocation(element);
-
-    const parentEnv = yield* env;
-    const parentScope = yield* evalScope;
-    if (!parentScope) {
-      const result = yield* persistTestResult(
-        failResult(name, location, {
-          kind: "error",
-          message: "<Test> requires an eval scope in context.",
-        }),
-      );
-      yield* record(result);
-      return [failureDiagnostic(result, { detail: true })];
-    }
-
-    // ONE stable binding environment, created before middleware install —
-    // the accessor returns the same object on every read, so <Capture>
-    // writes persist for the assertion that follows. Caller-projected
-    // bindings merge UNDER the current environment (core's precedence,
-    // expand.ts §content projection), so a <Test> projected through
-    // <Content /> still sees the caller's eval bindings.
-    const testEnv: EvalEnv = {
-      values: {
-        ...(element.projectedEnv?.values ?? {}),
-        ...(parentEnv?.values ?? {}),
-      },
-    };
-
-    const testOutput: Segment[] = [];
-    let bodyError: unknown;
-    let timedOut = false;
-    let established = false;
-
-    try {
-      // A test is a component invocation: its resources, its middleware and
-      // anything its body projects are dismantled in that order before the
-      // next test starts (core §4.4).
-      yield* withInvocation(function* (invocation) {
-        yield* Component.around(
-          {
-            env: () => testEnv,
-            evalScope: () => invocation.evalScope,
-          },
-          { at: "min" },
-        );
-        // Published separately from `evalScope`, which a nested component
-        // invocation shadows with its own: this stays the test's for anything
-        // running inside it, however deeply nested.
-        yield* Test.around(
-          { inTest: () => true, testScope: () => invocation.evalScope },
-          { at: "min" },
-        );
-        // ErrorSegments fail the test. Outer instrumentation (default "max")
-        // so nested { at: "min" } policies cannot shadow it: every raise in
-        // the body — components, <Output> regions, code blocks, imports,
-        // validation, nested <Test> — arrives here first.
-        yield* Component.around({
-          // deno-lint-ignore require-yield
-          *raise([segment]) {
-            throw new RaisedSegmentError(segment);
-          },
-        });
-        established = true;
-
-        const boxed = yield* timebox(timeoutMs, function* () {
-          for (const child of element.children) {
-            try {
-              testOutput.push(...(yield* expandSegments([child])));
-            } catch (error) {
-              bodyError = error;
-              throw error;
-            }
-          }
-        });
-        if (boxed.timeout) {
-          timedOut = true;
-        }
-      });
-    } catch (outer) {
-      if (bodyError === undefined && !timedOut) {
-        // Setup failures (invocation startup, middleware install) are
-        // unexpected errors; only failures dismantling an ESTABLISHED
-        // invocation — an InvocationTeardownError — are teardown failures.
-        bodyError = established ? new TeardownError(outer) : outer;
-      }
-    }
-
-    // Journal the result before the root Close. On partial replay the
-    // stored record wins over the recomputation (short-circuited effects
-    // can change what the re-run observes, e.g. a halted exec no longer
-    // times out), keeping the original outcome authoritative.
-    const result = yield* persistTestResult(
-      classify(name, location, bodyError, timedOut, timeoutMs),
-    );
-    yield* record(result);
-
-    if (result.status === "fail") {
-      // Containment invariant: a completed test returns only text segments.
-      // A returned ErrorSegment would be settled under the AMBIENT policy —
-      // after this test's interception scope has ended — so raised segments
-      // are formatted into the diagnostic instead of returned raw.
-      if (bodyError instanceof AssertionDiagnostic) {
-        // The assertion's own diagnostic (built when it threw) follows the
-        // output produced before the failure, then the test-level line.
-        testOutput.push({ type: "text", content: bodyError.diagnostic });
-        testOutput.push(failureDiagnostic(result, { detail: false }));
-      } else {
-        testOutput.push(failureDiagnostic(result, { detail: true }));
-      }
-    }
-    return testOutput;
-  }
 
   function* expandAssertThrows(element: ComponentElement): Operation<Segment[]> {
     for (const propName of [...Object.keys(element.props), ...Object.keys(element.expressions)]) {
@@ -347,7 +219,7 @@ export function createTestHandlers(options: { timeoutMs: number }): TestHandlers
     ];
   }
 
-  return { expandTest, expandAssertion, expandAssertThrows };
+  return { timeoutMs, expandAssertion, expandAssertThrows };
 }
 
 function* failAssertThrows(matcher: string | RegExp, actual: string | undefined): Operation<never> {
