@@ -53,6 +53,14 @@ export function* Testing(): Operation<Json> {
 
   const projected = (yield* hasContent()) ? yield* tryContent() : { text: "" };
 
+  // A body that stopped never finished being a boundary, so there is no outcome
+  // to report and nothing to journal: the failure travels on untouched. Only a
+  // projection that ran to the end has counted every test it contains — errors
+  // it *collected* are part of its text and leave it complete.
+  if (projected.failure !== undefined) {
+    throw projected.failure;
+  }
+
   // Journal the outcome before the root Close so a full replay can restore it
   // without re-expanding this boundary.
   const outcome = yield* persistBoundaryOutcome(
@@ -64,10 +72,5 @@ export function* Testing(): Operation<Json> {
   );
   yield* boundary(outcome);
 
-  // A body that stopped rather than collected is still the caller's failure to
-  // settle: the report is what rendered, and the failure travels on.
-  if (projected.failure !== undefined) {
-    throw projected.failure;
-  }
   return projected.text;
 }

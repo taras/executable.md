@@ -1,5 +1,5 @@
 /**
- * `<Testing>` and `<Test>` handlers (specs/testing-spec.md).
+ * `<Test>`, `<AssertThrows>` and assertion handlers (specs/testing-spec.md).
  *
  * `createTestHandlers` is the internal dependency-injection seam for the
  * fixed 20-second test timeout: the public components always construct

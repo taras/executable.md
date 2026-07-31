@@ -1,10 +1,13 @@
 /**
  * Component registration (specs/testing-spec.md).
  *
- * Teaches the expansion loop the testing words — `<Testing>`, `<Test>`, and
- * the assertion components — via the core `Component.expand` hook, and
- * decorates the core Execution Api so explicit `<Testing>` boundaries affect
- * the execution outcome even when root testing is inactive.
+ * `<Testing>` is registered as an ordinary non-reserved default, so a
+ * repository component of that name replaces it. `<Test>`, `<AssertThrows>`
+ * and the assertion components are claimed through the core `Component.expand`
+ * hook by the expansion middleware installed here.
+ *
+ * Installing also decorates the core Execution Api so explicit `<Testing>`
+ * boundaries affect the execution outcome even when root testing is inactive.
  *
  * Registration is distinct from activation: installing the components
  * leaves `testing` false, so `<Test>` skips and assertions stay usable.
@@ -43,9 +46,8 @@ export function* installHandlers(
   if (options?.verbose) {
     yield* Test.around({ verbose: () => true });
   }
-  // `<Testing>` is a registered default: a repository component with that name
-  // replaces it, as with any other. The rest still claim their names until
-  // #202 PR 3b and PR 4 move them.
+  // A non-reserved default: a repository component named `Testing` is chosen
+  // ahead of this one, as it would be ahead of any other package's.
   yield* registerComponents([
     { name: "Testing", origin: "@executablemd/testing", fn: Testing, props: TESTING_PROPS },
   ]);
