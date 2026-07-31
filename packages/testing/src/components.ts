@@ -1,10 +1,10 @@
 /**
  * Component registration (specs/testing-spec.md).
  *
- * `<Testing>` is registered as an ordinary non-reserved default, so a
- * repository component of that name replaces it. `<Test>`, `<AssertThrows>`
- * and the assertion components are claimed through the core `Component.expand`
- * hook by the expansion middleware installed here.
+ * `<Testing>`, `<Test>` and the value assertions are registered as ordinary
+ * non-reserved defaults, so a repository component of any of those names
+ * replaces it. `<AssertThrows>` is still claimed through the core
+ * `Component.expand` hook below.
  *
  * Installing also decorates the core Execution Api so explicit `<Testing>`
  * boundaries affect the execution outcome even when root testing is inactive.
@@ -24,7 +24,7 @@ import type { ComponentFailure, DocumentExecution } from "@executablemd/core";
 import { boundary, record, Test, TestFailureError } from "./test-api.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
-import { ASSERTIONS } from "./assertions.ts";
+import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
 import { createTestHandlers } from "./handlers.ts";
 import { Testing, TESTING_PROPS } from "./testing-component.ts";
 import {
@@ -95,15 +95,23 @@ export function* installHandlers(
       fn: createTest(handlers.timeoutMs),
       props: TEST_PROPS,
     },
+    // The table stays data: it names the comparison and the props each kind
+    // takes, and the registration is built from it rather than beside it.
+    ...[...ASSERTIONS.values()].map((assertion) => ({
+      name: assertion.name,
+      origin: "@executablemd/testing",
+      fn: assertionComponent(assertion),
+      props: ASSERTION_PROPS,
+      captures: capturesFor(assertion.kind),
+    })),
   ]);
+  // Only `<AssertThrows>` is still claimed here. The value assertions are
+  // registered above; this one needs a live return to bind its caught segment
+  // under `as`, which the function-component return type cannot yet carry.
   yield* Component.around({
     *expand([element], next) {
       if (element.name === "AssertThrows") {
         return { segments: yield* handlers.expandAssertThrows(element) };
-      }
-      const assertion = ASSERTIONS.get(element.name);
-      if (assertion) {
-        return { segments: yield* handlers.expandAssertion(assertion, element) };
       }
       return yield* next(element);
     },

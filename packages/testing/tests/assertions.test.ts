@@ -32,8 +32,11 @@ describe("assertion components", () => {
       "README.md": "<AssertEquals actual={1} expected={1} bogus={2} />\n",
     });
     expect(observed).toHaveLength(1);
-    expect(observed[0]).toContain('does not accept a "bogus"');
-    expect(run.output.match(/does not accept a "bogus"/g)).toHaveLength(1);
+    // Engine wording now: an undeclared prop is rejected by the schema, since a
+    // capture is stripped before validation and everything else must be described.
+    expect(observed[0]).toContain("must NOT have additional properties");
+    expect(observed[0]).toContain('"/bogus"');
+    expect(run.output.match(/must NOT have additional properties/g)).toHaveLength(1);
   });
 
   it("assertions outside a test pass silently during regular execution", function* () {
@@ -127,7 +130,11 @@ describe("assertion components", () => {
   it("unknown props are rejected per kind", function* () {
     const doc = "<Testing><Test><Assert expr={true} actual={1} /></Test></Testing>\n";
     const run = yield* runDoc({ "README.md": doc });
-    expect(run.results[0]?.error?.message).toContain('"actual"');
+    // `actual` is a capture for the binary kinds but not for unary-truthy, so
+    // <Assert> never declares it and the schema rejects it like any other
+    // undeclared prop.
+    expect(run.results[0]?.error?.message).toContain('"/actual"');
+    expect(run.results[0]?.error?.message).toContain("must NOT have additional properties");
   });
 
   it("missing required props are rejected", function* () {

@@ -31,11 +31,28 @@ import {
   fail,
 } from "./assert.ts";
 import type { Operation } from "effection";
-import { DocumentOutput, env, expandSegments, raise, renderSegments } from "@executablemd/core";
-import type { ComponentElement, ErrorSegment, Segment } from "@executablemd/core";
+import {
+  capture,
+  content,
+  DocumentOutput,
+  env,
+  expandSegments,
+  hasCapture,
+  hasContent,
+  raise,
+  renderSegments,
+} from "@executablemd/core";
+import type {
+  ComponentElement,
+  ErrorSegment,
+  FunctionComponent,
+  Json,
+  PropsSchema,
+  Segment,
+} from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
-type AssertionKind =
+export type AssertionKind =
   | "unary-truthy"
   | "unary-exists"
   | "binary-eq"
@@ -358,4 +375,103 @@ export function buildDiagnostic(
     }
   }
   return `\n${lines.join("\n")}\n`;
+}
+
+/** The props an assertion of `kind` captures — its operands, never `msg`. */
+export function capturesFor(kind: AssertionKind): string[] {
+  return KIND_PROPS[kind].allowed.filter((name) => name !== "msg");
+}
+
+/** `msg` is the one prop a schema can describe: an ordinary JSON string. */
+export const ASSERTION_PROPS: PropsSchema = {
+  type: "object",
+  properties: { msg: { type: "string" } },
+  additionalProperties: false,
+};
+
+/**
+ * The function-component form of one assertion.
+ *
+ * Same table, same rules, same order of operations as the handler it replaces:
+ * validate what was written, take the operands raw, run the assertion on them,
+ * and only then format anything — so a hostile `toString` cannot reach a value
+ * before the outcome is fixed.
+ */
+export function assertionComponent(assertion: AssertionEntry): FunctionComponent {
+  const rules = KIND_PROPS[assertion.kind];
+  return function* (props: Record<string, Json>): Operation<Json> {
+    const written: string[] = [];
+    for (const name of rules.allowed) {
+      if (yield* hasCapture(name)) {
+        written.push(name);
+      }
+    }
+
+    const hasChildren = yield* hasContent();
+    if (hasChildren && !assertion.allowsExpectedChildren) {
+      yield* raise(validationError(assertion.name, "does not accept expected children."));
+      return "";
+    }
+    if (hasChildren && written.includes("expected")) {
+      yield* raise(
+        validationError(
+          assertion.name,
+          'accepts either an "expected" prop or expected children, not both.',
+        ),
+      );
+      return "";
+    }
+    for (const name of rules.required) {
+      const suppliedByChildren = name === "expected" && hasChildren;
+      if (!written.includes(name) && !suppliedByChildren) {
+        yield* raise(validationError(assertion.name, `requires the "${name}" prop.`));
+        return "";
+      }
+    }
+
+    // Operands, live. Evaluated here rather than during prop resolution, so an
+    // expression that throws is this assertion's failure to report.
+    const values: ResolvedValues = { msg: undefined };
+    for (const name of written) {
+      const value = yield* capture(name);
+      if (name === "expr") {
+        values.expr = value;
+      } else if (name === "actual") {
+        values.actual = value;
+      } else if (name === "expected") {
+        values.expected = value;
+      }
+    }
+    if (typeof props.msg === "string") {
+      values.msg = props.msg;
+    }
+
+    if (hasChildren) {
+      values.expected = (yield* content()).replace(/\s+$/, "");
+    }
+
+    let failure: Error | undefined;
+    try {
+      assertion.run(values);
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    const detail: { actual?: string; expected?: string } = {};
+    if (assertion.kind === "unary-truthy") {
+      detail.actual = safeFormat(values.expr);
+    } else {
+      detail.actual = safeFormat(values.actual);
+      if (assertion.kind !== "unary-exists") {
+        detail.expected = safeFormat(values.expected);
+      }
+    }
+
+    if (failure) {
+      yield* failVisiblyThenThrow(assertion.name, values.msg, detail, failure);
+    }
+
+    const visible = (yield* testing) || (yield* verbose);
+    return visible ? buildDiagnostic(assertion.name, "passed", values.msg, detail) : "";
+  };
 }
