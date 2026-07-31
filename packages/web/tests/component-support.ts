@@ -136,9 +136,8 @@ export function* runWebFormDoc(source: string, options: RunOptions = {}): Operat
       componentDirs: options.componentDirs,
     });
 
-    // `collect` throws the failure rather than returning it, so the outcome is
-    // captured here — every one of these tests is about what a failure did or did
-    // not cause, which means the failure itself has to survive to be inspected.
+    // Every test here is about what a failure did or did not cause, so the
+    // failure has to survive to be inspected rather than end the run.
     let completion: Result<DurableJson>;
     try {
       completion = Ok(yield* collect(execution));
