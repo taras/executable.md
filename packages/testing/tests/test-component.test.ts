@@ -13,6 +13,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component, registerComponents, useTempFileCompiler } from "@executablemd/core";
 import type { ErrorSegment } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
+import { absorbTestFailure, Staging } from "../src/test-component.ts";
 import { runDoc } from "./helpers.ts";
 
 describe("<Test> as a function component", () => {
@@ -331,5 +332,44 @@ describe("<Test> as a function component", () => {
       ["outer", "fail", "error"],
     ]);
     expect(run.results[0]?.error?.message).toContain("Nested <Test>");
+  });
+
+  // §3a case 2: an invocation that died before it could stage. Pinned at the
+  // harness rather than through a document, because no document can reach it —
+  // to arrive at handleFailure a <Test> must throw before stageResult, and the
+  // only such route is the nested-<Test> raise, which always carries the
+  // enclosing interceptor's RaisedSegmentError and is therefore delegated. The
+  // synthesis still has to be right: a test that died is reported as failed
+  // rather than vanishing from the run.
+  it("synthesizes a result for a failure with nothing staged", function* () {
+    yield* Staging.set({ staged: [] });
+
+    const died = new Error("middleware install exploded");
+    const synthesized = yield* absorbTestFailure("README.md:4:1", died);
+
+    expect(synthesized.status).toBe("fail");
+    expect(synthesized.error?.kind).toBe("error");
+    expect(synthesized.error?.message).toContain("middleware install exploded");
+    expect(synthesized.location).toBe("README.md:4:1");
+
+    // Staged, so the ordinary flush writes and records it like any other.
+    const queue = yield* Staging.get();
+    expect(queue?.staged.map((entry) => entry.location)).toEqual(["README.md:4:1"]);
+  });
+
+  // The same call must NOT synthesize when the position is already staged —
+  // that is the upgrade path, and a second entry would double-count the test.
+  it("upgrades rather than synthesizing when the position is staged", function* () {
+    yield* Staging.set({
+      staged: [
+        { location: "README.md:2:1", result: { status: "pass", location: "README.md:2:1" } },
+      ],
+    });
+
+    const upgraded = yield* absorbTestFailure("README.md:2:1", new Error("late"));
+
+    expect(upgraded.error?.kind).toBe("teardown");
+    const queue = yield* Staging.get();
+    expect(queue?.staged).toHaveLength(1);
   });
 });
