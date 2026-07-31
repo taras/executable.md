@@ -33,7 +33,7 @@ import type { Operation } from "effection";
 import { parseDeclaration } from "./declaration.ts";
 import type { Json } from "./json.ts";
 import { fingerprint, persistResponse } from "./journal.ts";
-import { liveForm } from "./live-form.ts";
+import { prepareForm, runPreparedForm } from "./live-form.ts";
 import { renderBody } from "./markdown.ts";
 
 export const WEB_FORM_PROPS: PropsSchema = {
@@ -67,9 +67,15 @@ export function* WebForm(props: Record<string, Json>): Operation<Json> {
     content: sanitized,
   };
 
+  // Compiled here rather than inside the run: a schema that survives draft-07
+  // meta-validation can still fail to compile — an unresolved same-document
+  // pointer does — and that failure belongs on this side of the durable
+  // operation, where nothing has been read, bound, printed, or recorded.
+  const prepared = prepareForm(question);
+
   return yield* persistResponse(
     { location: formatLocation(yield* invocation()), fingerprint: fingerprint(question) },
-    () => liveForm(question),
+    () => runPreparedForm(prepared),
   );
 }
 

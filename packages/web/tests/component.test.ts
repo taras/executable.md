@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 import {
   journaled,
+  journalEvents,
   journalKinds,
-  recordingPrints,
   REVIEW_SCHEMA,
   runWebFormDoc,
   useLocalFixture,
@@ -58,12 +58,10 @@ describe("WebForm: what a document gets", () => {
   });
 
   it("prints the URL a person can use", function* () {
-    const seen = yield* recordingPrints(function* () {
-      return yield* runWebFormDoc(document("Decide."), { answer: { decision: "approve" } });
-    });
+    const run = yield* runWebFormDoc(document("Decide."), { answer: { decision: "approve" } });
 
-    const url = seen.value.effects.opened[0];
-    expect(seen.printed.some((line) => line.includes(url))).toBe(true);
+    const url = run.effects.opened[0];
+    expect(run.effects.printed.some((line) => line.includes(url))).toBe(true);
   });
 
   it("resolves an expression-valued uiSchema through core", function* () {
@@ -119,7 +117,11 @@ describe("WebForm: nothing happens before the question is ready", () => {
     expect(run.effects.served).toBe(0);
     expect(run.effects.opened).toEqual([]);
     expect(run.effects.responded).toEqual([]);
-    expect(yield* journaled(run.stream, "web_form")).toEqual([]);
+    expect(run.effects.printed).toEqual([]);
+    // No entry at all, not merely no successful one: a durable operation that
+    // began and failed would leave an `err` event, and that is still work done
+    // for a question nobody was ever asked.
+    expect(yield* journalEvents(run.stream, "web_form")).toEqual([]);
   });
 
   it("causes no live effect when the schema cannot be used", function* () {
@@ -192,6 +194,8 @@ describe("WebForm: durability", () => {
     expect(replay.effects.served).toBe(0);
     expect(replay.effects.opened).toEqual([]);
     expect(replay.effects.responded).toEqual([]);
+    // Nobody is asked again, so nobody is shown a URL again either.
+    expect(replay.effects.printed).toEqual([]);
   });
 
   it("restores the response into the document on replay", function* () {

@@ -41,7 +41,7 @@ export const REVIEW_SCHEMA = {
 
 /** Every observable thing a live form does, counted. */
 export interface Effects {
-  /** URLs printed for a person to open. */
+  /** Everything written for a person to read — where the URL appears. */
   printed: string[];
   /** URLs the opener was asked to launch. */
   opened: string[];
@@ -110,6 +110,16 @@ export function* runWebFormDoc(source: string, options: RunOptions = {}): Operat
       },
     });
 
+    // `announceForm` writes through the console, so that is what is observed:
+    // a counter fed by anything else would stay empty however the code behaved.
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      effects.printed.push(args.map((arg) => String(arg)).join(" "));
+    };
+    yield* ensure(() => {
+      console.error = consoleError;
+    });
+
     yield* FormResponder.around({
       *respond([url]) {
         effects.responded.push(url);
@@ -171,15 +181,38 @@ export function* recordingPrints<T>(body: () => Operation<T>): Operation<{
   }
 }
 
-/** Journal entries of one type, for asserting what was and was not recorded. */
-export function* journaled(stream: DurableStream, type: string): Operation<DurableJson[]> {
+/**
+ * Every durable yield of one type, whatever its result.
+ *
+ * Successes alone would not do: a durable operation that began and then failed
+ * leaves an `err` event, and a "nothing was journaled" assertion reading only
+ * successes would call that nothing. What these tests need to say is that the
+ * operation was never entered at all.
+ */
+export function* journalEvents(
+  stream: DurableStream,
+  type: string,
+): Operation<{ status: string; value?: DurableJson }[]> {
   const events = yield* stream.readAll();
-  const values: DurableJson[] = [];
+  const found: { status: string; value?: DurableJson }[] = [];
   for (const event of events) {
     if (event.type === "yield" && event.description.type === type) {
-      if (event.result.status === "ok" && event.result.value !== undefined) {
-        values.push(event.result.value);
-      }
+      found.push(
+        event.result.status === "ok"
+          ? { status: "ok", value: event.result.value }
+          : { status: String(event.result.status) },
+      );
+    }
+  }
+  return found;
+}
+
+/** The successfully stored values of one type. */
+export function* journaled(stream: DurableStream, type: string): Operation<DurableJson[]> {
+  const values: DurableJson[] = [];
+  for (const event of yield* journalEvents(stream, type)) {
+    if (event.status === "ok" && event.value !== undefined) {
+      values.push(event.value);
     }
   }
   return values;

@@ -36,12 +36,19 @@ Everything that can be judged without opening a port is judged first:
 
 1. the content is projected;
 2. `schema` and `uiSchema` are parsed and normalized;
-3. the schema is compiled for the server and for the browser;
-4. the content is rendered to sanitized HTML.
+3. the content is rendered to sanitized HTML;
+4. the schema is compiled for the server and for the browser.
 
-Only then does anything observable happen. A document whose content failed, or
-whose schema cannot be used, binds no port, prints no URL, opens no browser,
-invokes no responder, and writes nothing to the journal.
+Only then does the durable operation begin, and only inside it does anything
+observable happen. A document whose content failed, or whose schema cannot be
+used, reads no assets, binds no port, prints no URL, opens no browser, invokes no
+responder, and leaves no journal entry — not even a failed one.
+
+Compilation is the last of the four and belongs there rather than inside the run,
+because a schema can survive meta-schema validation and still fail to compile: a
+same-document `$ref` that resolves to nothing is valid draft-07 and unusable. Had
+compilation happened during the run, that schema would have read the browser
+assets, begun a durable operation, and recorded its failure.
 
 ## The live form
 
@@ -50,8 +57,11 @@ invokes no responder, and writes nothing to the journal.
 normalized schema, an optional normalized UI schema, and sanitized content — and
 nothing about where those came from.
 
-It starts the loopback server, prints the URL, opens it, invokes the contextual
-responder with that URL, waits for the server-validated answer, and returns it.
+It compiles the schema, then starts the loopback server, prints the URL, opens it,
+invokes the contextual responder with that URL, waits for the server-validated
+answer, and returns it. `<WebForm>` uses the two halves separately so its
+compilation lands outside its journal entry; a caller with no durability of its
+own can use `liveForm` and get both at once.
 The listener, its sockets, the launch, and the responder all live in one scope, so
 returning or failing dismantles every part of it. The server sends and observes
 its 204 before the answer resolves, so the browser is told its submission was
