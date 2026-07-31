@@ -50,6 +50,18 @@ export interface ComponentRegistration {
   props: PropsSchema;
   returns?: ReturnsSchema;
   /**
+   * Props the engine does not resolve. The component evaluates each itself,
+   * when and if it wants to, so the value reaches it live — no JSON gate, no
+   * clone, no identity lost. For operands a schema cannot describe.
+   */
+  captures?: readonly string[];
+  /**
+   * Bind the returned value under `as` by reference rather than rendering it.
+   * Mutually exclusive with `returns`, which declares a validated durable JSON
+   * value; this declares a binding, and journals nothing.
+   */
+  liveReturn?: boolean;
+  /**
    * Whether replacement would break a language or security invariant. A
    * reserved registration outranks repository-local source; an ordinary one is
    * a default a repository file overrides.
@@ -131,6 +143,47 @@ function collision(name: string, kind: Kind, first: string, second: string): Err
  * descendant scope's layer merges over the layers it inherited, which is what
  * lets a nested registration shadow an outer one without touching it.
  */
+/**
+ * A capture is a prop the schema never sees, so it may not also be one the
+ * schema describes, and it may not be a name the engine already owns.
+ */
+function assertUsableCaptures(
+  name: string,
+  captures: readonly string[] | undefined,
+  props: PropsSchema,
+): void {
+  if (captures === undefined) {
+    return;
+  }
+  const declared = props.properties;
+  const described = typeof declared === "object" && declared !== null ? declared : {};
+  const seen = new Set<string>();
+  for (const capture of captures) {
+    if (typeof capture !== "string" || capture.length === 0) {
+      throw new ComponentRegistrationError(
+        `the registration for "${name}" declares a capture that is not a prop name`,
+      );
+    }
+    if (capture === "as" || capture === "slot") {
+      throw new ComponentRegistrationError(
+        `cannot capture "${capture}" on "${name}": the engine owns that prop`,
+      );
+    }
+    if (seen.has(capture)) {
+      throw new ComponentRegistrationError(
+        `the registration for "${name}" declares the capture "${capture}" twice`,
+      );
+    }
+    if (Object.hasOwn(described, capture)) {
+      throw new ComponentRegistrationError(
+        `"${capture}" on "${name}" is both a schema property and a capture: a ` +
+          "schema cannot describe a value it never sees",
+      );
+    }
+    seen.add(capture);
+  }
+}
+
 export function* registerComponents(
   registrations: readonly ComponentRegistration[],
 ): Operation<void> {
@@ -142,7 +195,7 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns } = registration;
+    const { name, origin, fn, props, returns, captures, liveReturn } = registration;
     assertUsableName(name);
     if (origin.length === 0) {
       throw new ComponentRegistrationError(
@@ -152,6 +205,13 @@ export function* registerComponents(
     compilePropsSchema(props);
     if (returns !== undefined) {
       compileReturnsSchema(returns);
+    }
+    assertUsableCaptures(name, registration.captures, props);
+    if (registration.liveReturn && returns !== undefined) {
+      throw new ComponentRegistrationError(
+        `the registration for "${name}" declares both \`returns\` and \`liveReturn\`: ` +
+          "one is a validated durable value, the other a binding by reference",
+      );
     }
 
     const kind = kindOf(registration);
@@ -166,6 +226,8 @@ export function* registerComponents(
       props,
       fn,
       ...(returns ? { returns } : {}),
+      ...(captures && captures.length > 0 ? { captures } : {}),
+      ...(liveReturn ? { liveReturn } : {}),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });

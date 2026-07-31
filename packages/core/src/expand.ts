@@ -1972,10 +1972,33 @@ function* expandFunctionComponent(
     ];
   }
 
+  // Captures are the engine's to hand over unresolved, like `slot` and `as` are
+  // the engine's to consume: they never meet the JSON gate below, and never
+  // appear in `validatedProps`.
+  const captured = new Set(definition.captures ?? []);
+  const literalCaptures: Record<string, Json> = {};
+  const expressionCaptures: Record<string, string> = {};
+  const openProps: Record<string, Json> = {};
+  const openExpressions: Record<string, string> = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (captured.has(key)) {
+      literalCaptures[key] = value;
+    } else {
+      openProps[key] = value;
+    }
+  }
+  for (const [key, value] of Object.entries(expressions)) {
+    if (captured.has(key)) {
+      expressionCaptures[key] = value;
+    } else {
+      openExpressions[key] = value;
+    }
+  }
+
   // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
+    resolvedProps = yield* resolveExpressionProps(openProps, openExpressions, name, projectedEnv);
   } catch (error) {
     return [
       yield* raise({
@@ -2026,6 +2049,14 @@ function* expandFunctionComponent(
   // here for the same reason — see expandComponent.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
+
+  // Resolved once, here: an operand is what the call site meant, not what the
+  // component's own body later did to the environment.
+  const siteEnv = yield* env;
+  const captureEnv: Record<string, unknown> = {
+    ...(projectedEnv?.values ?? {}),
+    ...(siteEnv?.values ?? {}),
+  };
 
   /** The invocation itself, and what a failure of it means. */
   const invoke = function* (): Operation<Segment[]> {
@@ -2102,6 +2133,25 @@ function* expandFunctionComponent(
             // deno-lint-ignore require-yield
             *invocation(_args, _next) {
               return metadata;
+            },
+            // deno-lint-ignore require-yield
+            *hasCapture([captureName], _next) {
+              return captureName in literalCaptures || captureName in expressionCaptures;
+            },
+            *capture([captureName], _next) {
+              if (captureName in literalCaptures) {
+                return literalCaptures[captureName];
+              }
+              const expression = expressionCaptures[captureName];
+              if (expression === undefined) {
+                throw new Error(`<${name} /> was not written with a "${captureName}" prop.`);
+              }
+              // Evaluated here, not during prop resolution: the component asked
+              // for it, and owns whatever the expression does. Against the site
+              // environment resolved before the invocation began.
+              return yield* evaluateExpression(expression, name, captureName, {
+                values: captureEnv,
+              });
             },
             *tryContent([slotName], _next) {
               const outcome = yield* handle.tryProject({ kind: "slot", name: slotName });

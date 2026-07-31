@@ -205,6 +205,10 @@ export interface FunctionComponentDefinition {
   name: string;
   props: PropsSchema;
   returns?: ReturnsSchema;
+  /** Props the engine leaves unresolved for the component to evaluate itself. */
+  captures?: readonly string[];
+  /** Bind the returned value under `as` by reference, and render nothing. */
+  liveReturn?: boolean;
   fn: FunctionComponent;
 }
 
