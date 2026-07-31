@@ -160,10 +160,10 @@ export function useFormServer(
       }
     };
 
-    // Readiness and failure are both observed before `listen`, so neither event
-    // can be emitted into a gap where nothing is listening for it.
     const onListening = (): void => listening.resolve();
 
+    // Attached before `listen`, not after: an event emitted before its listener
+    // exists is simply lost, and readiness is emitted immediately.
     server.once("listening", onListening);
     server.on("connection", onConnection);
     server.on("error", onError);
