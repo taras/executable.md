@@ -165,8 +165,10 @@ export function* absorbTestFailure(location: string, error: unknown): Operation<
       0,
     );
   }
-  // A body that already failed keeps its own account: it is the more useful
-  // one, and the teardown error stays reachable as the diagnostic's cause.
+  // A body that already failed keeps its own account: it is the more useful of
+  // the two. The teardown error itself is NOT carried onward — a TestResult
+  // records a message and `ErrorSegment.cause` is Json, so neither can hold the
+  // Error by identity, and the engine's cause channel is internal to core.
   return staged.result;
 }
 
@@ -270,10 +272,12 @@ export function createTest(timeoutMs: number) {
       { inTest: () => true, ...(scope ? { testScope: () => scope } : {}) },
       { at: "min" },
     );
-    // ErrorSegments fail the test. Outer instrumentation (default "max") so
-    // nested { at: "min" } policies cannot shadow it: every raise in the body —
-    // components, <Output> regions, code blocks, imports, validation, nested
-    // <Test> — arrives here first.
+    // ErrorSegments fail the test. Installed at "min" — nearest answers first —
+    // because the body expands in the invocation's content scope rather than
+    // this frame, so the two layers are no longer ancestor and descendant and
+    // "max" would resolve in the test's favour, preempting <AssertThrows>'s
+    // capture. The property "max" was meant to protect — a raise the test does
+    // not claim still fails it — is pinned by the raise-observer test.
     yield* Component.around(
       {
         // deno-lint-ignore require-yield

@@ -19,7 +19,7 @@
 
 import { Err } from "effection";
 import type { Operation } from "effection";
-import { Component, raise, registerComponents, Execution } from "@executablemd/core";
+import { Component, registerComponents, Execution } from "@executablemd/core";
 import type { ComponentFailure, DocumentExecution } from "@executablemd/core";
 import { boundary, record, Test, TestFailureError } from "./test-api.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
@@ -74,11 +74,15 @@ export function* installHandlers(
       }
       const location = formatLocation(failure);
       const result = yield* absorbTestFailure(location, failure.error);
-      return yield* raise({
+      // Returned, not raised. A raise settles under the ambient policy, which
+      // would let a documentation policy turn one test's teardown failure into
+      // the whole document's — and a test failure fails only that test. The
+      // engine puts what this returns straight into the output.
+      return {
         type: "error",
         message: failureDiagnostic(result, { detail: true }).trim(),
         source: "Test",
-      });
+      };
     },
   });
   // Non-reserved defaults: a repository component of either name is chosen
