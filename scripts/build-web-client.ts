@@ -5,12 +5,23 @@
  *   deno task build:web
  *
  * Bundles `packages/web/client/main.tsx` with Deno's browser bundler and writes
- * the result, together with the default shadcn stylesheet, into the generated
- * module `packages/web/generated/client-bundle.ts` — gitignored, not a
- * repository source file. A release builds it into the package immediately
- * before packaging (specs/release-process-spec.md); this task exists so the
- * server can serve those bytes and so the test suite can bundle and inspect
- * real output without a tracked artifact to keep in sync.
+ * the result, together with the themed stylesheet, into the generated module
+ * `packages/web/generated/client-bundle.ts` — gitignored, not a repository
+ * source file. A release builds it into the package immediately before
+ * packaging (specs/release-process-spec.md); this task exists so the server can
+ * serve those bytes and so the test suite can bundle and inspect real output
+ * without a tracked artifact to keep in sync.
+ *
+ * The stylesheet is three parts joined in a fixed order: the shadcn theme's
+ * compiled `default.css` verbatim, then the `@font-face` rules this script
+ * generates, then `packages/web/client/theme/mx-brutalist.css`. The override
+ * wins because the vendored palette blocks are unlayered and near the end of
+ * `default.css`, so an unlayered `:root` after them wins on source order.
+ *
+ * Fonts are embedded rather than linked: their faces are read from pinned
+ * `@fontsource` packages and inlined as `data:` URIs, so the page still makes
+ * no request off the machine. That is what `font-src data:` in the page's
+ * fixed policy admits, and the only thing it admits.
  *
  * Determinism: run under Deno 2.9.1 (CI pins it). Two clean runs produce
  * byte-identical output, which the test suite asserts.
@@ -38,6 +49,7 @@ import { ensure, main, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { encodeBase64 } from "@std/encoding/base64";
 
 import { patchUntilExit } from "./lib/manifest-patch.ts";
 import { byteLength, generatedModule } from "./lib/web-client-module.ts";
@@ -46,9 +58,39 @@ const repoRoot = new URL("../", import.meta.url);
 
 const CLIENT_ENTRY = "packages/web/client/main.tsx";
 const THEME_CSS = "node_modules/@rjsf/shadcn/dist/default.css";
+const OVERRIDE_CSS = "packages/web/client/theme/mx-brutalist.css";
 const OUTPUT_MODULE = "packages/web/generated/client-bundle.ts";
 const SIDE_EFFECT_FREE_NAME = "@rjsf/validator-ajv8";
 const SIDE_EFFECT_FREE_VERSION = "6.7.1";
+
+const FONT_SCOPE = "@fontsource/";
+
+/** The font packages a build reads bytes out of, pinned the way the theme is. */
+const FONT_PACKAGES: Record<string, string> = {
+  "@fontsource/montserrat": "5.3.0",
+  "@fontsource/space-mono": "5.3.0",
+};
+
+interface FontFace {
+  package: string;
+  family: string;
+  weight: number;
+}
+
+/**
+ * The faces the compiled stylesheet can actually reach: 400 from preflight, 500
+ * and 600 from `--font-weight-medium` and `--font-weight-semibold`, 700 from
+ * `b,strong{font-weight:bolder}`. Space Mono publishes only 400 and 700. Lora
+ * is named by `--font-serif` and read by no rule, so it ships no bytes.
+ */
+const FONT_FACES: FontFace[] = [
+  { package: "@fontsource/montserrat", family: "Montserrat", weight: 400 },
+  { package: "@fontsource/montserrat", family: "Montserrat", weight: 500 },
+  { package: "@fontsource/montserrat", family: "Montserrat", weight: 600 },
+  { package: "@fontsource/montserrat", family: "Montserrat", weight: 700 },
+  { package: "@fontsource/space-mono", family: "Space Mono", weight: 400 },
+  { package: "@fontsource/space-mono", family: "Space Mono", weight: 700 },
+];
 
 /** The manifest a build patches. A suite hands `markSideEffectFree` a copy of it. */
 export const SIDE_EFFECT_FREE_MANIFEST = new URL(
@@ -102,6 +144,56 @@ function* bundleClient(): Operation<string> {
   });
 }
 
+/**
+ * Guard the bytes about to be inlined the way `markSideEffectFree` guards the
+ * manifest it patches: a resolved package that is not the pinned one would be
+ * embedded silently, and the stylesheet has no version to check afterwards.
+ */
+function* verifyFontPackage(name: string, version: string): Operation<void> {
+  const manifest = JSON.parse(
+    yield* readTextFile(new URL(`node_modules/${name}/package.json`, repoRoot)),
+  );
+  if (manifest.name !== name || manifest.version !== version) {
+    throw new Error(
+      `node_modules/${name} resolved to ${manifest.name}@${manifest.version}, expected ` +
+        `${name}@${version}`,
+    );
+  }
+}
+
+/** `@effectionx/fs` reads text only, and a woff2 file is not text. */
+function* fontFace(face: FontFace): Operation<string> {
+  const slug = face.package.slice(FONT_SCOPE.length);
+  const bytes = yield* until(
+    Deno.readFile(
+      new URL(
+        `node_modules/${face.package}/files/${slug}-latin-${face.weight}-normal.woff2`,
+        repoRoot,
+      ),
+    ),
+  );
+  return [
+    "@font-face {",
+    `  font-family: "${face.family}";`,
+    "  font-style: normal;",
+    "  font-display: swap;",
+    `  font-weight: ${face.weight};`,
+    `  src: url(data:font/woff2;base64,${encodeBase64(bytes)}) format("woff2");`,
+    "}",
+  ].join("\n");
+}
+
+function* fontFaces(): Operation<string> {
+  for (const [name, version] of Object.entries(FONT_PACKAGES)) {
+    yield* verifyFontPackage(name, version);
+  }
+  const blocks: string[] = [];
+  for (const face of FONT_FACES) {
+    blocks.push(yield* fontFace(face));
+  }
+  return blocks.join("\n\n");
+}
+
 export interface ClientBuildResult {
   clientJs: string;
   themeCss: string;
@@ -113,7 +205,11 @@ export function* buildWebClient(): Operation<ClientBuildResult> {
   return yield* scoped(function* () {
     yield* markSideEffectFree(SIDE_EFFECT_FREE_MANIFEST);
     const clientJs = yield* bundleClient();
-    const themeCss = yield* readTextFile(new URL(THEME_CSS, repoRoot));
+    const themeCss = [
+      yield* readTextFile(new URL(THEME_CSS, repoRoot)),
+      yield* fontFaces(),
+      yield* readTextFile(new URL(OVERRIDE_CSS, repoRoot)),
+    ].join("\n");
     return { clientJs, themeCss, module: generatedModule(clientJs, themeCss) };
   });
 }

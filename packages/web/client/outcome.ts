@@ -14,6 +14,14 @@
 
 export type OutcomeKind = "accepted" | "already-submitted" | "retryable";
 
+/**
+ * How the status region is coloured. Two states, because there are only two
+ * things a reader needs to tell apart: an answer that landed and one that did
+ * not. `formUsable` already draws that line — an outcome that leaves the form
+ * usable is one the person still has to act on.
+ */
+export type Banner = "accepted" | "failed";
+
 export interface Outcome {
   kind: OutcomeKind;
   message: string;
@@ -28,6 +36,10 @@ export const ALREADY_SUBMITTED_MESSAGE =
   "This form was already submitted. You can safely close this tab.";
 export const INVALID_MESSAGE = "The server rejected this submission. Correct it and try again.";
 export const TRANSPORT_MESSAGE = "The submission could not be delivered. Try again.";
+
+export function bannerFor(outcome: Outcome): Banner {
+  return outcome.formUsable ? "failed" : "accepted";
+}
 
 export function outcomeFor(status: number): Outcome {
   if (status === 204) {

@@ -81,7 +81,7 @@ export function generatedModule(clientJs: string, themeCss: string): string {
     "/** The minified browser client bundle served as the form page's script. */",
     constAssignment("clientJs", quoteString(clientJs)),
     "",
-    "/** The default shadcn stylesheet served as the form page's stylesheet. */",
+    "/** The themed stylesheet, fonts embedded, served as the form page's stylesheet. */",
     constAssignment("themeCss", quoteString(themeCss)),
     "",
     "/** UTF-8 byte length of `clientJs`. */",

@@ -36,10 +36,11 @@ import { action, run, useScope, withResolvers } from "effection";
 import type { Operation, Scope } from "effection";
 
 import { resolveHelper } from "./helpers.ts";
+import { markRequired } from "./field-template.ts";
 import { parseConfig } from "./config.ts";
 import type { FormConfig } from "./config.ts";
-import { outcomeFor, TRANSPORT_MESSAGE } from "./outcome.ts";
-import type { Outcome } from "./outcome.ts";
+import { bannerFor, outcomeFor, TRANSPORT_MESSAGE } from "./outcome.ts";
+import type { Banner, Outcome } from "./outcome.ts";
 import { get, postJson } from "./request.ts";
 
 interface Registration {
@@ -68,7 +69,19 @@ declare global {
 const STARTUP_FAILED =
   "This form could not be prepared. Close this tab and run the workflow again.";
 
-const Form = withTheme(generateTheme());
+const theme = generateTheme();
+
+// Every template is optional to a theme, and this one wraps rather than
+// replaces: without something to delegate to there is no field to render.
+const themed = theme.templates?.FieldTemplate;
+if (!themed) {
+  throw new Error("the shadcn theme provided no FieldTemplate to wrap");
+}
+
+const Form = withTheme({
+  ...theme,
+  templates: { ...theme.templates, FieldTemplate: markRequired(themed) },
+});
 
 const registered = withResolvers<Registration>();
 
@@ -89,9 +102,17 @@ function element(id: string): HTMLElement {
   return found;
 }
 
-/** Fixed text only. Author content never reaches the status region. */
-function say(message: string): void {
-  element("status").textContent = message;
+/**
+ * Fixed text only. Author content never reaches the status region.
+ *
+ * The banner is stamped as an attribute rather than derived in CSS: whether an
+ * answer landed is knowable here and nowhere in the stylesheet. Until the first
+ * message there is no attribute, which is what keeps an empty region unpainted.
+ */
+function say(message: string, banner: Banner): void {
+  const status = element("status");
+  status.textContent = message;
+  status.setAttribute("data-outcome", banner);
 }
 
 /**
@@ -133,7 +154,7 @@ function* submit(formData: unknown): Operation<void> {
 }
 
 function apply(outcome: Outcome): void {
-  say(outcome.message);
+  say(outcome.message, bannerFor(outcome));
   if (!outcome.formUsable) {
     element("root").setAttribute("hidden", "hidden");
   }
@@ -164,7 +185,7 @@ function mount(config: FormConfig, registration: Registration, scope: Scope): vo
           try {
             yield* submit(event.formData);
           } catch {
-            say(TRANSPORT_MESSAGE);
+            say(TRANSPORT_MESSAGE, "failed");
           }
         });
       },
@@ -193,7 +214,7 @@ run(function* () {
   } catch {
     // Fixed text, never the failure's own message: nothing the server or the
     // author wrote is rendered on a path that has already gone wrong.
-    say(STARTUP_FAILED);
+    say(STARTUP_FAILED, "failed");
     return;
   }
   yield* untilPageHide();

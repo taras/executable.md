@@ -21,6 +21,8 @@
   },
   "devDependencies": {
     "@effectionx/fs": "0.3.0",
+    "@fontsource/montserrat": "5.3.0",
+    "@fontsource/space-mono": "5.3.0",
     "@rjsf/core": "6.7.1",
     "@rjsf/shadcn": "6.7.1",
     "react": "19.2.0",
