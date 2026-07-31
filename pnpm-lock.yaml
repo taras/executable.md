@@ -374,6 +374,9 @@ importers:
 
   packages/web:
     dependencies:
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0-alpha.10)
       '@rjsf/utils':
         specifier: 6.7.1
         version: 6.7.1(react@19.2.0)
@@ -383,6 +386,9 @@ importers:
       ajv:
         specifier: 8.20.0
         version: 8.20.0
+      effection:
+        specifier: 4.1.0-alpha.10
+        version: 4.1.0-alpha.10
       rehype-sanitize:
         specifier: 6.0.0
         version: 6.0.0
@@ -405,9 +411,6 @@ importers:
       '@rjsf/shadcn':
         specifier: 6.7.1
         version: 6.7.1(@rjsf/core@6.7.1(@rjsf/utils@6.7.1(react@19.2.0))(react@19.2.0))(@rjsf/utils@6.7.1(react@19.2.0))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-      effection:
-        specifier: 4.1.0-alpha.10
-        version: 4.1.0-alpha.10
       react:
         specifier: 19.2.0
         version: 19.2.0
