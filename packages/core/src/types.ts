@@ -200,17 +200,42 @@ export interface FunctionComponent {
  * `ComponentSelection` that chose it, so source identity lives there rather
  * than being copied onto every definition (spec §5.3).
  */
-export interface FunctionComponentDefinition {
+/**
+ * A function component whose return value is bound by reference rather than
+ * rendered. Its value is never validated, serialized or rendered, so it is not
+ * constrained to `Json` — and the consumer narrows it explicitly, exactly as
+ * `capture()` makes the input side do.
+ */
+export interface LiveFunctionComponent {
+  (props: Record<string, Json>): ComponentExecution<unknown>;
+}
+
+interface FunctionComponentDefinitionBase {
   kind: "function";
   name: string;
   props: PropsSchema;
-  returns?: ReturnsSchema;
   /** Props the engine leaves unresolved for the component to evaluate itself. */
   captures?: readonly string[];
-  /** Bind the returned value under `as` by reference, and render nothing. */
-  liveReturn?: boolean;
-  fn: FunctionComponent;
 }
+
+/**
+ * Declaring `liveReturn` changes what the component may return, so the two are
+ * one choice rather than two independent fields: an ordinary definition returns
+ * `Json` exactly as before, and a live one returns `unknown` and cannot also
+ * declare `returns`. The pairing is in the type, so neither combination that
+ * would be a contradiction is expressible.
+ */
+export type FunctionComponentDefinition =
+  | (FunctionComponentDefinitionBase & {
+      liveReturn?: false;
+      returns?: ReturnsSchema;
+      fn: FunctionComponent;
+    })
+  | (FunctionComponentDefinitionBase & {
+      liveReturn: true;
+      returns?: undefined;
+      fn: LiveFunctionComponent;
+    });
 
 /**
  * An ordinary function-component invocation that failed (spec §6.9).

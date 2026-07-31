@@ -21,6 +21,8 @@ import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
 import type {
   ComponentRegistry,
   FunctionComponent,
+  FunctionComponentDefinition,
+  LiveFunctionComponent,
   PropsSchema,
   RegistryEntry,
   ReturnsSchema,
@@ -41,14 +43,12 @@ export class ComponentRegistrationError extends Error {
   }
 }
 
-export interface ComponentRegistration {
+interface ComponentRegistrationBase {
   /** The name a document writes. Dots address a subdirectory, as paths do. */
   name: string;
   /** Stable, human-readable source identity — reported by inspection. */
   origin: string;
-  fn: FunctionComponent;
   props: PropsSchema;
-  returns?: ReturnsSchema;
   /**
    * Props the engine does not resolve. The component evaluates each itself,
    * when and if it wants to, so the value reaches it live — no JSON gate, no
@@ -56,18 +56,30 @@ export interface ComponentRegistration {
    */
   captures?: readonly string[];
   /**
-   * Bind the returned value under `as` by reference rather than rendering it.
-   * Mutually exclusive with `returns`, which declares a validated durable JSON
-   * value; this declares a binding, and journals nothing.
-   */
-  liveReturn?: boolean;
-  /**
    * Whether replacement would break a language or security invariant. A
    * reserved registration outranks repository-local source; an ordinary one is
    * a default a repository file overrides.
    */
   reserved?: boolean;
 }
+
+/**
+ * Declaring `liveReturn` changes what the component may return, so the two
+ * travel together: a live registration returns `unknown` and declares no
+ * `returns`; an ordinary one returns `Json` exactly as before. The pairing is
+ * in the type, so the contradictory combination is not expressible.
+ */
+export type ComponentRegistration =
+  | (ComponentRegistrationBase & {
+      liveReturn?: false;
+      returns?: ReturnsSchema;
+      fn: FunctionComponent;
+    })
+  | (ComponentRegistrationBase & {
+      liveReturn: true;
+      returns?: undefined;
+      fn: LiveFunctionComponent;
+    });
 
 type Kind = "reserved" | "default";
 
@@ -207,7 +219,9 @@ export function* registerComponents(
       compileReturnsSchema(returns);
     }
     assertUsableCaptures(name, registration.captures, props);
-    if (registration.liveReturn && returns !== undefined) {
+    // The type pairs these, so this is the runtime guard for a caller that
+    // reached here without it — a plain object from JavaScript, say.
+    if (liveReturn && returns !== undefined) {
       throw new ComponentRegistrationError(
         `the registration for "${name}" declares both \`returns\` and \`liveReturn\`: ` +
           "one is a validated durable value, the other a binding by reference",
@@ -220,15 +234,24 @@ export function* registerComponents(
       throw collision(name, kind, already, origin);
     }
 
-    const definition = {
-      kind: "function" as const,
-      name,
-      props,
-      fn,
-      ...(returns ? { returns } : {}),
-      ...(captures && captures.length > 0 ? { captures } : {}),
-      ...(liveReturn ? { liveReturn } : {}),
-    };
+    const definition: FunctionComponentDefinition =
+      registration.liveReturn === true
+        ? {
+            kind: "function",
+            name,
+            props,
+            liveReturn: true,
+            fn: registration.fn,
+            ...(captures && captures.length > 0 ? { captures } : {}),
+          }
+        : {
+            kind: "function",
+            name,
+            props,
+            fn: registration.fn,
+            ...(returns ? { returns } : {}),
+            ...(captures && captures.length > 0 ? { captures } : {}),
+          };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });
   }

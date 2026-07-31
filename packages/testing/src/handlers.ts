@@ -32,6 +32,8 @@ import {
 } from "./assertions.ts";
 import type { AssertionEntry } from "./assertions.ts";
 import { persistBoundaryOutcome, persistTestResult } from "./journal.ts";
+import { capture, content, ContentError, hasCapture } from "@executablemd/core";
+import type { Json, PropsSchema } from "@executablemd/core";
 // One class, not two: `<Test>`'s interceptor throws this and the catch below
 // checks it, so a second identical declaration would make `instanceof` miss.
 import { RaisedSegmentError } from "./test-component.ts";
@@ -299,4 +301,66 @@ function failureDiagnostic(result: TestResult, options: { detail: boolean }): Se
     lines.push(`> expected: ${error.expected}`);
   }
   return { type: "text", content: `\n${lines.join("\n")}\n` };
+}
+
+/** `<AssertThrows>` takes `message` as a capture; `as` is the engine's. */
+export const ASSERT_THROWS_PROPS: PropsSchema = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+};
+
+/**
+ * `<AssertThrows>` as a function component.
+ *
+ * `message` is a capture, so a `RegExp` reaches the matcher — through JSON props
+ * that branch is unreachable, because a round-trip turns one into `{}`. The
+ * caught `ErrorSegment` is the return value and the registration declares
+ * `liveReturn`, so `as` binds that very object rather than a description of it.
+ *
+ * It emits no pass diagnostic. The return channel now carries the segment, and
+ * no other channel preserves a durable rendered segment: `raise()` is the error
+ * observation chain and would abort the document under a throwing policy, and
+ * `DocumentOutput` is ephemeral, so a live run and a replay would disagree.
+ */
+export function* AssertThrows(_props: Record<string, Json>): Operation<unknown> {
+  if (!(yield* hasCapture("message"))) {
+    yield* raise(validationError("AssertThrows", 'requires a "message" prop.'));
+    return undefined;
+  }
+  const evaluated = yield* capture("message");
+  if (typeof evaluated !== "string" && !(evaluated instanceof RegExp)) {
+    yield* raise(validationError("AssertThrows", 'requires "message" to be a string or a RegExp.'));
+    return undefined;
+  }
+  const matcher: string | RegExp = evaluated;
+
+  let captured: ErrorSegment | undefined;
+  try {
+    yield* scoped(function* () {
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *raise([segment]) {
+          throw new CapturedRaise(segment);
+        },
+      });
+      yield* content();
+    });
+  } catch (error) {
+    if (error instanceof CapturedRaise || error instanceof RaisedSegmentError) {
+      captured = error.segment;
+    } else if (error instanceof ContentError) {
+      captured = error.errors[0];
+    } else {
+      throw error;
+    }
+  }
+
+  if (!captured) {
+    yield* failAssertThrows(matcher, undefined);
+  } else if (!matchesMessage(matcher, captured.message)) {
+    yield* failAssertThrows(matcher, captured.message);
+  }
+  // Bound by identity through the live return — the engine owns `as`.
+  return captured;
 }

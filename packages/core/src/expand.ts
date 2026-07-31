@@ -2079,7 +2079,11 @@ function* expandFunctionComponent(
     // Call the function component inside its invocation, with content middleware
     // in scope so it can render its invocation content through `yield* content()`.
     try {
-      const output = yield* withInvocation(function* (invocation) {
+      // Narrowed once, here: the two shapes differ in what the component may
+      // return, so each branch keeps its own type all the way to the binding.
+      const live = definition.liveReturn === true ? definition : undefined;
+      const plain = live === undefined ? definition : undefined;
+      const output: unknown = yield* withInvocation(function* (invocation) {
         const enclosing = yield* ActiveProjection.get();
         const handle = createProjectionHandle({
           invocation,
@@ -2185,7 +2189,9 @@ function* expandFunctionComponent(
           );
         }
         try {
-          return yield* definition.fn(validatedProps);
+          return live !== undefined
+            ? yield* live.fn(validatedProps)
+            : yield* definition.fn(validatedProps);
         } catch (error) {
           if (error instanceof Error) {
             throw error;
@@ -2204,19 +2210,21 @@ function* expandFunctionComponent(
             }),
           ];
         }
-        parentEnv.values[asBinding] = definition.liveReturn
-          ? // By reference: no asText, no validation, no clone. The binding is
-            // the object the component returned.
-            output
-          : returns === undefined
-            ? asText(output)
-            : validateReturnValue(name, output, returns);
+        if (live !== undefined) {
+          // By reference: no asText, no validation, no clone. The binding is the
+          // object the component returned.
+          parentEnv.values[asBinding] = output;
+          return [];
+        }
+        const value = parseJson(output);
+        parentEnv.values[asBinding] =
+          returns === undefined ? asText(value) : validateReturnValue(name, value, returns);
         return [];
       }
       // A live return renders nothing, with or without `as`. Rendering it would
       // mean asText of a value that is not text, and making it depend on `as`
       // would make output depend on a binding the component cannot see.
-      return definition.liveReturn ? [] : [{ type: "text", content: asText(output) }];
+      return plain === undefined ? [] : [{ type: "text", content: asText(parseJson(output)) }];
     } catch (error) {
       // Everything below runs after `withInvocation()` has dismantled the
       // invocation, so what is handled here accounts for the body and its

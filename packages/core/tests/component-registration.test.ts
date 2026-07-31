@@ -57,7 +57,9 @@ function useLocalFixture(): Operation<string> {
 function registration(
   name: string,
   origin: string,
-  extra: Partial<ComponentRegistration> = {},
+  // The ordinary arm: a live registration pairs a different fn type with
+  // liveReturn, so a Partial of the whole union would match neither.
+  extra: Partial<Extract<ComponentRegistration, { liveReturn?: false }>> = {},
 ): ComponentRegistration {
   return {
     name,

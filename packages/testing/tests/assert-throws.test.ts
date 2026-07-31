@@ -68,7 +68,10 @@ describe("<AssertThrows>", () => {
       inTest('<AssertThrows message="must" bogus="y"><Strict n="x" /></AssertThrows>'),
     );
     expect(run.results[0]?.status).toBe("fail");
-    expect(run.output).toContain('does not accept a "bogus"');
+    // Engine wording: an undeclared prop is rejected by the schema now that
+    // `message` is a capture stripped before validation.
+    expect(run.results[0]?.error?.message).toContain('"/bogus"');
+    expect(run.results[0]?.error?.message).toContain("must NOT have additional properties");
   });
 
   it("rejects an expression-valued as", function* () {
@@ -76,7 +79,8 @@ describe("<AssertThrows>", () => {
       inTest('<AssertThrows message="must" as={1 + 1}><Strict n="x" /></AssertThrows>'),
     );
     expect(run.results[0]?.status).toBe("fail");
-    expect(run.output).toContain("must be a string literal, not an expression");
+    // The engine owns `as`, and rejects an expression-valued one itself.
+    expect(run.results[0]?.error?.message).toContain("must be a string literal");
   });
 
   it("rejects an as binding when no eval environment is active", function* () {
@@ -126,7 +130,7 @@ describe("<AssertThrows>", () => {
       inTest('<AssertThrows message={1 + 1}><Strict n="x" /></AssertThrows>'),
     );
     expect(run.results[0]?.status).toBe("fail");
-    expect(run.output).toContain("string or RegExp");
+    expect(run.results[0]?.error?.message).toContain("string or a RegExp");
   });
 
   it("binds the complete caught error (incl. cause) via as", function* () {
@@ -175,7 +179,11 @@ describe("<AssertThrows>", () => {
     expect(run.output).not.toContain("AssertThrows");
   });
 
-  it("emits a pass diagnostic outside a <Test> only with verbose", function* () {
+  // Accepted loss: the return channel now carries the caught segment for `as`
+  // to bind, and no other channel preserves a durable rendered segment — so a
+  // passing <AssertThrows> renders nothing, even with --verbose. Failure
+  // behavior is unchanged, which the cases above pin.
+  it("emits no pass diagnostic, even with verbose", function* () {
     const run = yield* runDoc(
       {
         "Strict.md": STRICT,
@@ -184,7 +192,7 @@ describe("<AssertThrows>", () => {
       { verbose: true },
     );
     expect(run.completion.ok).toBe(true);
-    expect(run.output).toContain("**AssertThrows** passed");
+    expect(run.output).not.toContain("**AssertThrows** passed");
   });
 
   it("aborts the document outside a <Test> when no error is raised, with a visible diagnostic", function* () {

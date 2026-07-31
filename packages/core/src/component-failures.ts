@@ -14,7 +14,15 @@
 
 import { Component, raise } from "./component-api.ts";
 import { attributeCause } from "./errors.ts";
-import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.ts";
+import type {
+  ComponentFailure,
+  ErrorSegment,
+  FunctionComponent,
+  LiveFunctionComponent,
+} from "./types.ts";
+
+/** Either shape a function component can take — marking keys on identity. */
+type AnyFunctionComponent = FunctionComponent | LiveFunctionComponent;
 import type { Operation } from "effection";
 
 /**
@@ -23,7 +31,7 @@ import type { Operation } from "effection";
  * Identity rather than name: a repository component that happens to share a
  * registered component's name is a different function and inherits nothing.
  */
-const collecting = new WeakSet<FunctionComponent>();
+const collecting = new WeakSet<AnyFunctionComponent>();
 
 /**
  * Continue after this component fails, reporting the failure as a diagnostic.
@@ -41,12 +49,12 @@ const collecting = new WeakSet<FunctionComponent>();
  * invocation is being dismantled is collected too, and content the component
  * projects is inside it.
  */
-export function collectFailures<T extends FunctionComponent>(component: T): T {
+export function collectFailures<T extends AnyFunctionComponent>(component: T): T {
   collecting.add(component);
   return component;
 }
 
-export function collectsFailures(component: FunctionComponent): boolean {
+export function collectsFailures(component: AnyFunctionComponent): boolean {
   return collecting.has(component);
 }
 
