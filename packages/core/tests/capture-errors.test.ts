@@ -5,6 +5,7 @@ import type { Operation } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content, raise } from "../src/component-api.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import { useContent } from "../src/content-context.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -125,7 +126,9 @@ function recovering(
     kind: "function",
     name,
     props: OPEN_SCHEMA,
-    *fn(_props) {
+    // Collects: these assert what a recovered — or unrecovered — failure looks
+    // like once it is a diagnostic the capture can see.
+    fn: collectFailures(function* () {
       try {
         const rendered = yield* content();
         if (options.boom) {
@@ -145,7 +148,7 @@ function recovering(
         }
         throw error;
       }
-    },
+    }),
   };
 }
 
@@ -161,10 +164,12 @@ function forging(name: string, log: Trace, fabricated: ErrorSegment): FunctionCo
     kind: "function",
     name,
     props: OPEN_SCHEMA,
-    *fn(_props) {
+    // Collects, because what this asserts is how a fabricated content failure
+    // is treated once it becomes a diagnostic.
+    fn: collectFailures(function* () {
       yield* recordEntry(log.effects, name);
       throw new ContentError([fabricated]);
-    },
+    }),
   };
 }
 

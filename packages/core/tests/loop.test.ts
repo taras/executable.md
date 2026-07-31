@@ -14,6 +14,7 @@ import type { DurableEvent, Json, Result } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
@@ -59,7 +60,9 @@ function runLoop(
             name,
             path: `${name}.ts`,
             props: OBJECT_SCHEMA,
-            fn,
+            // What these assert is how a rendered diagnostic interacts with a
+            // loop and its policy, which needs the failure to become one.
+            fn: collectFailures(fn),
           };
         },
         // deno-lint-ignore require-yield
@@ -1348,7 +1351,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
             path: "Mixed.ts",
             props: OBJECT_SCHEMA,
             // deno-lint-ignore require-yield
-            *fn() {
+            fn: collectFailures(function* () {
               throw new AggregateError(
                 [
                   new DocumentationError({
@@ -1359,7 +1362,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
                 ],
                 "carried together",
               );
-            },
+            }),
           };
         },
       });

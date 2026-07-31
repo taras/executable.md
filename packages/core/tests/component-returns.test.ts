@@ -613,9 +613,13 @@ describe("Tier RV — component return values", () => {
     it("reports a text component that returns a non-string", function* () {
       const result = yield* runFixture({
         "doc.md": "<Verdict />\n",
-        "Verdict.ts": ["export default function*() {", "  return { passed: true };", "}", ""].join(
-          "\n",
-        ),
+        "Verdict.ts": [
+          'import { collectFailures } from "@executablemd/core";',
+          "export default collectFailures(function*() {",
+          "  return { passed: true };",
+          "});",
+          "",
+        ].join("\n"),
       });
       expect(asText(result.value ?? "")).toContain("returned a non-string");
     });

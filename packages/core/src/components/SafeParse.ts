@@ -10,6 +10,7 @@
  */
 
 import type { Operation } from "effection";
+import { collectFailures } from "../component-failures.ts";
 import { content } from "../component-api.ts";
 import type { Json } from "../types.ts";
 import {
@@ -69,7 +70,7 @@ export const returns = {
   ],
 };
 
-export default function* (props: Record<string, Json>): Operation<Json> {
+export default collectFailures(function* (props: Record<string, Json>): Operation<Json> {
   const validate = compileParseSchema("SafeParse", props.schema);
 
   const text = yield* content();
@@ -85,4 +86,4 @@ export default function* (props: Record<string, Json>): Operation<Json> {
   }
 
   return { ok: true, value: parsed.value };
-}
+});

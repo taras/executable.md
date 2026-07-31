@@ -4,6 +4,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content, raise } from "../src/component-api.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -199,16 +200,21 @@ function echoComponent(name: string): FunctionComponentDefinition {
   };
 }
 
-/** Fails on its own terms, without asking for content. */
+/**
+ * Fails on its own terms, without asking for content.
+ *
+ * It collects: what these assert is how a failure that *becomes* a diagnostic
+ * is attributed and observed, which only happens inside a collection boundary.
+ */
 function throwingComponent(name: string, failure: unknown): FunctionComponentDefinition {
   return {
     kind: "function",
     name,
     props: OPEN_SCHEMA,
     // deno-lint-ignore require-yield
-    *fn(_props) {
+    fn: collectFailures(function* () {
       throw failure;
-    },
+    }),
   };
 }
 
@@ -636,9 +642,14 @@ describe("Tier OBS — construct error observation", () => {
 
     expect(caught).toHaveLength(1);
     const [{ failure, hasCause, cause }] = caught;
-    // Present and exactly undefined, already inside the middleware's catch.
+    // Present already inside the middleware's catch. A thrown non-Error is
+    // normalized on its way out of the invocation, so the diagnostic's cause is
+    // that Error and the exact value thrown is one step further down — nothing
+    // is lost, it is just no longer the outermost thing.
     expect(hasCause).toBe(true);
-    expect(cause).toBe(undefined);
+    expect(cause).toBeInstanceOf(Error);
+    expect((cause as Error).cause).toBe(undefined);
+    expect(Object.hasOwn(cause as Error, "cause")).toBe(true);
     expect(thrown).toBe(failure);
     expect(observed).toHaveLength(1);
     expect(observed[0]).toBe(failure.segment);
