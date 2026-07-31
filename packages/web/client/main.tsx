@@ -138,9 +138,8 @@ function apply(outcome: Outcome): void {
     element("root").setAttribute("hidden", "hidden");
   }
   if (outcome.closable) {
-    // The tab may refuse to close itself — a page it did not open cannot always
-    // close itself — which is why the message already tells the person it is
-    // safe to close.
+    // A script can only close a window it opened, so this may do nothing at
+    // all. The message above is the actual fallback.
     globalThis.close();
   }
 }
