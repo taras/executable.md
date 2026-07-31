@@ -2,9 +2,11 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 
 import { ConfigError, parseConfig } from "../client/config.ts";
+import { markingFor, REQUIRED_FIELD_CLASS } from "../client/field-template.ts";
 import {
   ACCEPTED_MESSAGE,
   ALREADY_SUBMITTED_MESSAGE,
+  bannerFor,
   INVALID_MESSAGE,
   outcomeFor,
   TRANSPORT_MESSAGE,
@@ -109,6 +111,48 @@ describe("client: what a person is told after submitting", () => {
       expect({ status, both: outcome.closable && outcome.formUsable }).toEqual({
         status,
         both: false,
+      });
+    }
+  });
+
+  /**
+   * The banner is the styling hook the page shell cannot supply, and it draws
+   * the same line `formUsable` already draws: anything the person still has to
+   * act on reads as a failure, and everything settled reads as accepted.
+   */
+  it("colours a settled outcome as accepted and a retryable one as failed", function* () {
+    expect([204, 409].map((status) => bannerFor(outcomeFor(status)))).toEqual([
+      "accepted",
+      "accepted",
+    ]);
+    expect([0, 403, 422, 500].map((status) => bannerFor(outcomeFor(status)))).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+  });
+});
+
+/**
+ * Spending `required` is the point: it is what stops the theme appending the
+ * marker as a bare text node, which no selector could then colour. The class it
+ * leaves behind is what the stylesheet draws the marker back on with.
+ */
+describe("client: marking a required field", () => {
+  it("spends required and marks the field instead", function* () {
+    expect(markingFor("rjsf-field rjsf-field-string")).toEqual({
+      required: false,
+      classNames: `rjsf-field rjsf-field-string ${REQUIRED_FIELD_CLASS}`,
+    });
+  });
+
+  it("marks a field that carries no classes of its own", function* () {
+    for (const empty of [undefined, ""]) {
+      expect({ empty, ...markingFor(empty) }).toEqual({
+        empty,
+        required: false,
+        classNames: REQUIRED_FIELD_CLASS,
       });
     }
   });

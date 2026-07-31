@@ -263,6 +263,28 @@ describe("client assets", () => {
     expect(dark).toContain("--background: oklch(0.1649 0.0308 162.2739)");
   });
 
+  /**
+   * The palette assertions above would still pass on a stylesheet that themed
+   * the colours and left the page unstyled, which is what this project shipped
+   * before. These literals exist only in the layout half of the override.
+   */
+  it("carries the page layout and the widget treatment, not only the palette", function* () {
+    expect(result.themeCss).toContain("max-width: 720px");
+    expect(result.themeCss).toContain('#status[data-outcome="accepted"]');
+    expect(result.themeCss).toContain('#status[data-outcome="failed"]');
+    expect(result.themeCss).toContain(".rjsf-field-required");
+    expect(result.themeCss).toContain("box-shadow: 8px 8px 0 0 var(--foreground)");
+  });
+
+  /**
+   * The page loads this as a classic script, so a single top-level `export`
+   * makes the whole form a blank page — and nothing else here would notice,
+   * because every other assertion reads the text rather than running it.
+   */
+  it("is a classic script the page can load", function* () {
+    expect(/\bexport\b/.test(result.clientJs)).toBe(false);
+  });
+
   it("generates a TypeScript module that returns the real assets unchanged", function* () {
     const module = yield* loadGeneratedModule(result.module, ".ts");
 

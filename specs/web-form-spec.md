@@ -95,8 +95,8 @@ At the time of writing:
 
 | Asset | UTF-8 bytes |
 |---|---|
-| `clientJs` | 620,803 |
-| `themeCss` | 188,736 |
+| `clientJs` | 621,345 |
+| `themeCss` | 193,649 |
 
 The stylesheet is three parts joined in a fixed order: the Shadcn theme's own
 pre-compiled Tailwind output verbatim, six generated `@font-face` rules, and
@@ -105,11 +105,29 @@ alone — the vendored palette blocks are unlayered and sit near the end of the
 compiled output, so an unlayered `:root` placed after them takes precedence
 without `!important`.
 
-That override carries the MX-Brutalist palette and follows the reader's OS
-light/dark preference. It has no toggle and no script: the compiled `dark:*`
-utilities already resolve through `@media (prefers-color-scheme: dark)`, so the
-override switches on the same media query and the theme's `.dark` class stays
-inert.
+That override carries the whole visual design, not only the palette: the
+centered column, the card that wraps the document body and the form, the status
+banner, and the treatment of every control — square corners, 2px foreground
+borders, and hard offset shadows graded by weight. It reaches all of that
+through the page shell's three ids and the classes RJSF already renders, so
+`PAGE_SHELL` stays static and class-free. Two of those ids have to read as one
+card, which no single element covers, so `body` is the grid and `body::before`
+is the card.
+
+Colours are never written directly: every rule binds to a theme variable, which
+is what makes dark mode a palette swap rather than a second stylesheet. It
+follows the reader's OS preference, with no toggle and no script — the compiled
+`dark:*` utilities already resolve through `@media (prefers-color-scheme: dark)`,
+so the override switches on the same media query and the theme's `.dark` class
+stays inert.
+
+Two things the stylesheet cannot derive are stamped by the client instead.
+`#status` carries `data-outcome`, because whether an answer landed is not in the
+DOM; without it there is no banner, which is what keeps an unanswered form from
+showing an empty box. And a required field carries `rjsf-field-required`,
+because the theme renders its marker as a bare text node that no selector
+reaches — spending `required` suppresses it and the stylesheet draws the same
+marker back on as `::after`.
 
 Fonts are the reason `themeCss` is five times the vendored stylesheet. Montserrat
 (400, 500, 600, 700) and Space Mono (400, 700) are read from pinned `@fontsource`

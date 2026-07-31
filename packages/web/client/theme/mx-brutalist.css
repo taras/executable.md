@@ -19,6 +19,29 @@
  *
  * Lora is named but not embedded. `--font-serif` reaches no rule in the compiled
  * stylesheet, so its faces would be dead bytes.
+ *
+ * ## What the page shell does not give us
+ *
+ * `PAGE_SHELL` is three sibling divs — `#content`, `#root`, `#status` — and it
+ * stays that way. Two of them have to read as one card, which no single element
+ * covers, so `body` becomes the grid and `body::before` is the card: it spans
+ * the content and form rows and carries the border, background, and shadow.
+ * The grid columns are the card's horizontal padding, which is why the children
+ * sit in column 2.
+ *
+ * `#status` gets its colour from `data-outcome`, stamped by the client, because
+ * whether an answer landed is not derivable from the DOM. Without the attribute
+ * there is no banner at all — an unanswered form shows no empty box.
+ *
+ * The required marker is `::after` on the label, and the client suppresses the
+ * theme's own marker to make room for it. The theme renders that marker as a
+ * bare text node, which no selector reaches.
+ *
+ * ## Inline styles
+ *
+ * No rule here carries `!important`. The theme's inline `style` attributes land
+ * only on visually-hidden helpers — the cmdk label, the checkbox's proxy input,
+ * the popover's `top` — and none of them collides with a treatment below.
  */
 
 :root {
@@ -87,6 +110,171 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
   letter-spacing: var(--tracking-normal);
+
+  display: grid;
+  grid-template-columns: 28px 1fr 28px;
+  align-content: start;
+  box-sizing: border-box;
+  max-width: 720px;
+  min-height: 100vh;
+  margin: 0 auto;
+  /* The bottom gutter clears the card's 8px shadow and the status banner's. */
+  padding: 48px 24px 96px;
+}
+
+body::before {
+  content: "";
+  grid-area: 1 / 1 / 3 / 4;
+  background: var(--background);
+  border: 2px solid var(--foreground);
+  box-shadow: 8px 8px 0 0 var(--foreground);
+}
+
+#content {
+  grid-area: 1 / 2 / 2 / 3;
+  padding: 28px 0;
+}
+
+#root {
+  grid-area: 2 / 2 / 3 / 3;
+  padding: 0 0 28px;
+}
+
+#content > :first-child {
+  margin-top: 0;
+}
+
+#content > :last-child {
+  margin-bottom: 0;
+}
+
+#content h1,
+#content h2,
+#content h3 {
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+  text-transform: uppercase;
+}
+
+#content code {
+  font-family: var(--font-mono);
+  background: var(--muted);
+  padding: 0.1em 0.3em;
+}
+
+#status {
+  grid-area: 3 / 1 / 4 / 4;
+}
+
+#status[data-outcome] {
+  margin-top: 24px;
+  padding: 16px 20px;
+  border: 2px solid var(--foreground);
+  box-shadow: 5px 5px 0 0 var(--foreground);
+  font-weight: 700;
+  letter-spacing: var(--tracking-wide);
+}
+
+#status[data-outcome="accepted"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+#status[data-outcome="failed"] {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
+.rjsf label[for] {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+}
+
+.rjsf-field-required > div > label[for]::after {
+  content: "*";
+  color: var(--destructive);
+}
+
+.rjsf input[data-slot="input"],
+.rjsf textarea[data-slot="textarea"],
+.rjsf [cmdk-root] > button[aria-haspopup="listbox"] {
+  border: 2px solid var(--foreground);
+  box-shadow: 4px 4px 0 0 var(--foreground);
+  background: var(--input);
+  color: var(--foreground);
+  font-family: inherit;
+  letter-spacing: inherit;
+}
+
+/* The theme reds a required select's border before anything is wrong with it. */
+.rjsf [cmdk-root].border-red-500 > button[aria-haspopup="listbox"] {
+  border-color: var(--foreground);
+}
+
+.rjsf [cmdk-root] > button[aria-haspopup="listbox"] > span {
+  color: var(--muted-foreground);
+}
+
+.rjsf [cmdk-list] {
+  border: 2px solid var(--foreground);
+  background: var(--popover);
+  box-shadow: 4px 4px 0 0 var(--foreground);
+}
+
+/* The theme rounds this one by a literal 4px, which `--radius` cannot reach. */
+.rjsf button[role="checkbox"] {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--foreground);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 0 var(--foreground);
+  background: var(--input);
+}
+
+.rjsf button[role="checkbox"][data-state="checked"] {
+  background: var(--primary);
+  color: var(--background);
+}
+
+.rjsf button[role="checkbox"] svg {
+  width: 100%;
+  height: 100%;
+}
+
+.rjsf button[data-slot="button"][type="submit"] {
+  padding: 12px 28px;
+  border: 2px solid var(--foreground);
+  box-shadow: 5px 5px 0 0 var(--foreground);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 700;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+}
+
+/* Border and shadow both, so colour is never the only signal. */
+.rjsf-field-error input[data-slot="input"],
+.rjsf-field-error textarea[data-slot="textarea"],
+.rjsf-field-error [cmdk-root] > button[aria-haspopup="listbox"] {
+  border-color: var(--destructive);
+  box-shadow: 4px 4px 0 0 var(--destructive);
+}
+
+.rjsf-field-error > div > label[for] {
+  color: var(--destructive);
+}
+
+.rjsf [id$="__error"] span {
+  font-weight: 700;
+  color: var(--destructive);
+}
+
+.rjsf [data-slot="alert"] {
+  border: 2px solid var(--destructive);
+  box-shadow: 4px 4px 0 0 var(--destructive);
+  background: var(--card);
 }
 
 @media (prefers-color-scheme: dark) {
