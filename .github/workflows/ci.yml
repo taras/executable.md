@@ -148,6 +148,12 @@ jobs:
           fi
           echo "served a real client bundle: $bytes bytes"
 
+          # The themed stylesheet is built the same way and by the same task, so
+          # an embedded font face is the cheapest proof the binary is serving it
+          # rather than the vendored default.
+          curl -fsS "${url}theme.css" | grep -q 'font/woff2;base64'
+          echo "served the themed stylesheet with embedded fonts"
+
           # Terminating with the form still open is the interruption path.
           kill "$xmd_pid"
           wait "$xmd_pid" 2>/dev/null || true

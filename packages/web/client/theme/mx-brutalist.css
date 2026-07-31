@@ -1,0 +1,138 @@
+/*
+ * MX-Brutalist, applied over the vendored @rjsf/shadcn stylesheet.
+ *
+ * `scripts/build-web-client.ts` appends this file to `default.css` verbatim.
+ * The vendored palette blocks are unlayered and sit at the end of that file, so
+ * an unlayered `:root` placed after them wins on source order alone. `body` is
+ * unlayered for the same reason: it has to beat the `@layer base` preflight.
+ *
+ * Dark follows the reader's OS preference and nothing else. The stylesheet's own
+ * `dark:*` utilities compile into `@media (prefers-color-scheme: dark)`, so that
+ * media query — not the vendored `.dark` class, which stays inert — is the one
+ * switch both halves of the page agree on.
+ *
+ * Values transcribed from `mx-brutalist.tweakcn.json`, fetched from
+ * https://tweakcn.com/r/themes/cmllfu8oc000004l1a0tidj2g. Its editor-only keys
+ * (`shadow-color`, `shadow-opacity`, `shadow-blur`, `shadow-spread`,
+ * `shadow-offset-*`, and the light block's `letter-spacing`) are dropped: nothing
+ * reads them, and `--tracking-normal` already carries the letter spacing.
+ *
+ * Lora is named but not embedded. `--font-serif` reaches no rule in the compiled
+ * stylesheet, so its faces would be dead bytes.
+ */
+
+:root {
+  color-scheme: light;
+
+  --font-sans: "Montserrat", sans-serif;
+  --font-mono: "Space Mono", monospace;
+  --font-serif: "Lora", serif;
+
+  --radius: 0px;
+  --radius-xs: 0px;
+  --spacing: 0.25rem;
+
+  --tracking-normal: 0.04em;
+  --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
+  --tracking-tight: calc(var(--tracking-normal) - 0.025em);
+  --tracking-wide: calc(var(--tracking-normal) + 0.025em);
+  --tracking-wider: calc(var(--tracking-normal) + 0.05em);
+  --tracking-widest: calc(var(--tracking-normal) + 0.1em);
+
+  --background: oklch(0.9923 0.0104 91.4994);
+  --foreground: oklch(0.1759 0.0275 161.2531);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.1759 0.0275 161.2531);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.1759 0.0275 161.2531);
+  --primary: oklch(0.5687 0.1498 151.938);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.6088 0.2498 29.2339);
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.9465 0.0314 91.6628);
+  --muted-foreground: oklch(0.3525 0.0379 91.7268);
+  --accent: oklch(0.7721 0.1727 64.1585);
+  --accent-foreground: oklch(0.1759 0.0275 161.2531);
+  --destructive: oklch(0.5799 0.238 29.2339);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0 0 0);
+  --input: oklch(1 0 0);
+  --ring: oklch(0.5687 0.1498 151.938);
+  --chart-1: oklch(0.5687 0.1498 151.938);
+  --chart-2: oklch(0.6088 0.2498 29.2339);
+  --chart-3: oklch(0.7721 0.1727 64.1585);
+  --chart-4: oklch(0.6829 0.2615 345.7533);
+  --chart-5: oklch(0.7443 0.1347 219.0676);
+  --sidebar: oklch(0.3167 0.0793 154.3757);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-primary: oklch(0.7721 0.1727 64.1585);
+  --sidebar-primary-foreground: oklch(0.3167 0.0793 154.3757);
+  --sidebar-accent: oklch(0.4156 0.1071 152.9714);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0 0 0);
+  --sidebar-ring: oklch(0.7721 0.1727 64.1585);
+
+  --shadow-2xs: 4px 4px 0px 0px hsl(0 0% 0% / 0.5);
+  --shadow-xs: 4px 4px 0px 0px hsl(0 0% 0% / 0.5);
+  --shadow-sm: 4px 4px 0px 0px hsl(0 0% 0% / 1), 4px 1px 2px -1px hsl(0 0% 0% / 1);
+  --shadow: 4px 4px 0px 0px hsl(0 0% 0% / 1), 4px 1px 2px -1px hsl(0 0% 0% / 1);
+  --shadow-md: 4px 4px 0px 0px hsl(0 0% 0% / 1), 4px 2px 4px -1px hsl(0 0% 0% / 1);
+  --shadow-lg: 4px 4px 0px 0px hsl(0 0% 0% / 1), 4px 4px 6px -1px hsl(0 0% 0% / 1);
+  --shadow-xl: 4px 4px 0px 0px hsl(0 0% 0% / 1), 4px 8px 10px -1px hsl(0 0% 0% / 1);
+  --shadow-2xl: 4px 4px 0px 0px hsl(0 0% 0% / 2.5);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  letter-spacing: var(--tracking-normal);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --background: oklch(0.1649 0.0308 162.2739);
+    --foreground: oklch(0.9809 0.026 91.6197);
+    --card: oklch(0.2283 0.0445 158.2398);
+    --card-foreground: oklch(0.9809 0.026 91.6197);
+    --popover: oklch(0.2283 0.0445 158.2398);
+    --popover-foreground: oklch(0.9809 0.026 91.6197);
+    --primary: oklch(0.8484 0.2275 151.1487);
+    --primary-foreground: oklch(0.1292 0.027 165.3808);
+    --secondary: oklch(0.6489 0.237 26.9728);
+    --secondary-foreground: oklch(1 0 0);
+    --muted: oklch(0.2724 0.0467 159.1721);
+    --muted-foreground: oklch(0.8253 0.027 91.6606);
+    --accent: oklch(0.7951 0.1631 68.6392);
+    --accent-foreground: oklch(0.1292 0.027 165.3808);
+    --destructive: oklch(0.628 0.2577 29.2339);
+    --destructive-foreground: oklch(1 0 0);
+    --border: oklch(0.9809 0.026 91.6197);
+    --input: oklch(0.2642 0.0387 160.3481);
+    --ring: oklch(0.7951 0.1631 68.6392);
+    --chart-1: oklch(0.8484 0.2275 151.1487);
+    --chart-2: oklch(0.6489 0.237 26.9728);
+    --chart-3: oklch(0.7951 0.1631 68.6392);
+    --chart-4: oklch(0.7337 0.2145 342.8759);
+    --chart-5: oklch(0.8296 0.1375 215.2952);
+    --sidebar: oklch(0.1292 0.027 165.3808);
+    --sidebar-foreground: oklch(0.9809 0.026 91.6197);
+    --sidebar-primary: oklch(0.8484 0.2275 151.1487);
+    --sidebar-primary-foreground: oklch(0.1292 0.027 165.3808);
+    --sidebar-accent: oklch(0.2449 0.0403 159.5177);
+    --sidebar-accent-foreground: oklch(0.9809 0.026 91.6197);
+    --sidebar-border: oklch(0.9809 0.026 91.6197);
+    --sidebar-ring: oklch(0.7951 0.1631 68.6392);
+
+    --shadow-2xs: 4px 4px 0px 0px hsl(45 100% 80% / 0.5);
+    --shadow-xs: 4px 4px 0px 0px hsl(45 100% 80% / 0.5);
+    --shadow-sm: 4px 4px 0px 0px hsl(45 100% 80% / 1), 4px 1px 2px -1px hsl(45 100% 80% / 1);
+    --shadow: 4px 4px 0px 0px hsl(45 100% 80% / 1), 4px 1px 2px -1px hsl(45 100% 80% / 1);
+    --shadow-md: 4px 4px 0px 0px hsl(45 100% 80% / 1), 4px 2px 4px -1px hsl(45 100% 80% / 1);
+    --shadow-lg: 4px 4px 0px 0px hsl(45 100% 80% / 1), 4px 4px 6px -1px hsl(45 100% 80% / 1);
+    --shadow-xl: 4px 4px 0px 0px hsl(45 100% 80% / 1), 4px 8px 10px -1px hsl(45 100% 80% / 1);
+    --shadow-2xl: 4px 4px 0px 0px hsl(45 100% 80% / 2.5);
+  }
+}

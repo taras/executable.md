@@ -13,11 +13,17 @@
  * than interrupting, which is right for a confirmation.
  *
  * The headers are fixed and restrictive, and no author setting relaxes them.
- * `default-src 'none'` denies every resource class that is not named, so fonts,
- * media, frames, objects, workers, and manifests are all forbidden without
- * being listed. `script-src 'self'` admits only same-origin scripts — the
- * client bundle and the server-precompiled validator script — and no
- * inline script, nonce, `unsafe-eval`, blob, or data script.
+ * `default-src 'none'` denies every resource class that is not named, so media,
+ * frames, objects, workers, and manifests are all forbidden without being
+ * listed. `script-src 'self'` admits only same-origin scripts — the client
+ * bundle and the server-precompiled validator script — and no inline script,
+ * nonce, `unsafe-eval`, blob, or data script.
+ *
+ * `font-src data:` is the one place a `data:` URL is admitted, and fonts are
+ * the only resource class it governs. The stylesheet carries its faces inline
+ * as `data:` URIs rather than linking them, so the directive names no origin at
+ * all: it cannot reach the network, and the page still makes no request off the
+ * machine. `'self'` is deliberately absent — nothing serves a font file.
  *
  * Styling is the one place inline content is admitted, and only as attributes.
  * RJSF's shadcn theme sets `style` attributes on ordinary widgets and on the
@@ -34,6 +40,7 @@ export const CONTENT_SECURITY_POLICY = [
   "script-src 'self'",
   "style-src 'self'",
   "style-src-attr 'unsafe-inline'",
+  "font-src data:",
   "img-src 'self'",
   "connect-src 'self'",
   "base-uri 'none'",

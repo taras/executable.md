@@ -47,6 +47,15 @@ function* git(args: string[]): Operation<{ code?: number; stdout: string }> {
   return yield* exec("git", { arguments: args, cwd: fileURLToPath(REPO_ROOT) }).join();
 }
 
+/**
+ * Both the vendored stylesheet's banner and the override's provenance header
+ * name a URL in a comment. A comment is not a reference, so the external-URL
+ * assertion reads the CSS without them.
+ */
+function stripComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 interface Gate {
   promise: Promise<void>;
   open(): void;
@@ -216,10 +225,42 @@ describe("client assets", () => {
     expect(result.clientJs).toContain('"validator.js"');
   });
 
-  it("uses the default shadcn stylesheet, with no external URL or font", function* () {
+  it("themes the shadcn stylesheet and embeds every font it names", function* () {
     expect(result.themeCss).toContain("tailwindcss");
-    expect(result.themeCss.includes("url(")).toBe(false);
-    expect(result.themeCss.includes("@font-face")).toBe(false);
+
+    const faces = result.themeCss.match(/@font-face \{[^}]*\}/g) ?? [];
+    expect(
+      faces.map((face) => {
+        const family = face.match(/font-family: "([^"]+)"/)?.[1];
+        const weight = face.match(/font-weight: (\d+)/)?.[1];
+        return `${family} ${weight}`;
+      }),
+    ).toEqual([
+      "Montserrat 400",
+      "Montserrat 500",
+      "Montserrat 600",
+      "Montserrat 700",
+      "Space Mono 400",
+      "Space Mono 700",
+    ]);
+
+    // Every reference, not just the ones inside a face: an external `url()`
+    // anywhere would be a request the fixed policy has no directive for.
+    const references = result.themeCss.match(/url\([^)]*\)/g) ?? [];
+    expect(references).toHaveLength(6);
+    expect(references.every((url) => url.startsWith("url(data:font/woff2;base64,"))).toBe(true);
+    expect(/https?:\/\//.test(stripComments(result.themeCss))).toBe(false);
+  });
+
+  it("carries the MX-Brutalist palette, light and dark by OS preference", function* () {
+    expect(result.themeCss).toContain("--background: oklch(0.9923 0.0104 91.4994)");
+    expect(result.themeCss).toContain("color-scheme: light");
+    expect(result.themeCss).toContain("--radius: 0px");
+    expect(result.themeCss).toContain("--radius-xs: 0px");
+
+    const dark = result.themeCss.match(/@media \(prefers-color-scheme: dark\) \{[\s\S]*$/)?.[0];
+    expect(dark).toContain("color-scheme: dark");
+    expect(dark).toContain("--background: oklch(0.1649 0.0308 162.2739)");
   });
 
   it("generates a TypeScript module that returns the real assets unchanged", function* () {

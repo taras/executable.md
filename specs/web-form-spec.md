@@ -84,8 +84,8 @@ continue from "the person was never asked".
 ## The bundled client
 
 The page is entirely self-contained: React, RJSF, the Shadcn theme, the Ajv 8
-validator, and every style it needs are bundled into two assets the form server
-delivers itself. The page makes no request off the machine.
+validator, and every style and font it needs are bundled into two assets the
+form server delivers itself. The page makes no request off the machine.
 
 `deno task build:web` produces them into `packages/web/generated/client-bundle.ts`,
 which is gitignored and built at packaging time rather than committed — see
@@ -96,12 +96,33 @@ At the time of writing:
 | Asset | UTF-8 bytes |
 |---|---|
 | `clientJs` | 620,803 |
-| `themeCss` | 37,258 |
+| `themeCss` | 188,736 |
 
-The stylesheet is the Shadcn theme's own pre-compiled Tailwind output, which
-carries no `url()` reference and no `@font-face` rule — so no font or icon file
-is fetched, and none needs embedding. Icons are React components inside the
+The stylesheet is three parts joined in a fixed order: the Shadcn theme's own
+pre-compiled Tailwind output verbatim, six generated `@font-face` rules, and
+`packages/web/client/theme/mx-brutalist.css`. The override wins by source order
+alone — the vendored palette blocks are unlayered and sit near the end of the
+compiled output, so an unlayered `:root` placed after them takes precedence
+without `!important`.
+
+That override carries the MX-Brutalist palette and follows the reader's OS
+light/dark preference. It has no toggle and no script: the compiled `dark:*`
+utilities already resolve through `@media (prefers-color-scheme: dark)`, so the
+override switches on the same media query and the theme's `.dark` class stays
+inert.
+
+Fonts are the reason `themeCss` is five times the vendored stylesheet. Montserrat
+(400, 500, 600, 700) and Space Mono (400, 700) are read from pinned `@fontsource`
+packages at build time and inlined as `data:` URIs — the six faces the compiled
+stylesheet can actually reach. Lora is named by `--font-serif`, which no rule
+reads, so it ships no bytes. Embedding is what keeps "no request off the
+machine" true, and it is the one thing the page's fixed policy relaxes: it gains
+`font-src data:`, which names no origin and admits fonts only. Every `url()` in
+the stylesheet is one of those six faces; icons are React components inside the
 bundle.
+
+The extra ~150 KB is deliberate. The assets are served over loopback to one
+reader, so the cost is a build-output number rather than a transfer one.
 
 The generator and the reader agree on the export names by test, not by
 convention: everything else substitutes the asset seam, so a rename would

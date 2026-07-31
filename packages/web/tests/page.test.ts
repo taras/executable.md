@@ -38,8 +38,9 @@ describe("security headers", () => {
   it("locks the content security policy to same-origin scripts and no other origin", function* () {
     expect(CONTENT_SECURITY_POLICY).toBe(
       "default-src 'none'; script-src 'self'; style-src 'self'; " +
-        "style-src-attr 'unsafe-inline'; img-src 'self'; connect-src 'self'; " +
-        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "style-src-attr 'unsafe-inline'; font-src data:; img-src 'self'; " +
+        "connect-src 'self'; base-uri 'none'; form-action 'self'; " +
+        "frame-ancestors 'none'",
     );
   });
 
@@ -55,7 +56,21 @@ describe("security headers", () => {
     expect(directives.get("style-src")).toEqual(["'self'"]);
     expect(directives.get("script-src")).toEqual(["'self'"]);
     expect(CONTENT_SECURITY_POLICY.includes("unsafe-eval")).toBe(false);
-    expect(/(https?|data|blob):/.test(CONTENT_SECURITY_POLICY)).toBe(false);
+    expect(/(https?|blob):/.test(CONTENT_SECURITY_POLICY)).toBe(false);
     expect(CONTENT_SECURITY_POLICY.includes("*")).toBe(false);
+  });
+
+  it("admits data: for fonts and for nothing else", function* () {
+    const directives = CONTENT_SECURITY_POLICY.split("; ").map((directive) => {
+      const [name, ...values] = directive.split(" ");
+      return { name, values };
+    });
+
+    expect(directives.find(({ name }) => name === "font-src")?.values).toEqual(["data:"]);
+    expect(
+      directives
+        .filter(({ values }) => values.some((value) => value.includes("data:")))
+        .map(({ name }) => name),
+    ).toEqual(["font-src"]);
   });
 });
