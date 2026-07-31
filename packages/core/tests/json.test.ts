@@ -32,6 +32,35 @@ describe("parseJson", () => {
     cyclic["self"] = cyclic;
     expect(() => parseJson(cyclic)).toThrow("circular");
   });
+
+  /**
+   * `JSON.parse` makes `__proto__` an own property, so this arrives here from
+   * any parsed text — including a value a provider or an agent produced.
+   * Writing it back with `result[key] = value` reaches `Object.prototype`'s
+   * inherited setter instead of defining anything, and what that does depends
+   * on the engine: V8 under Node and JavaScriptCore under Bun replace the
+   * object's prototype and drop the key, while Deno keeps it. So the assertion
+   * is both halves — the key survives *and* the prototype is untouched — on
+   * every runtime, or the same document parses to different objects depending
+   * on where it ran.
+   */
+  it("keeps a __proto__ key as data without rewriting the prototype", function* () {
+    const parsed = parseJson(JSON.parse('{"__proto__": {"polluted": true}, "ok": 1}'));
+
+    expect(Object.prototype.hasOwnProperty.call(parsed, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+    expect(Object.keys(parsed as object).sort()).toEqual(["__proto__", "ok"]);
+    expect((parsed as Record<string, unknown>)["__proto__"]).toEqual({ polluted: true });
+  });
+
+  it("keeps a nested __proto__ key, and pollutes nothing above it", function* () {
+    const parsed = parseJson(JSON.parse('{"outer": {"__proto__": {"polluted": true}}}'));
+    const outer = (parsed as Record<string, Record<string, unknown>>).outer;
+
+    expect(Object.prototype.hasOwnProperty.call(outer, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(outer)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBe(undefined);
+  });
 });
 
 describe("parseJsonObject", () => {

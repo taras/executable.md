@@ -63,12 +63,36 @@ function parseValue(value: unknown, seen: Set<object>, path: string): Json {
       if (item === undefined) {
         throw new JsonParseError(`undefined value at ${path}.${key}`);
       }
-      result[key] = parseValue(item, seen, `${path}.${key}`);
+      define(result, key, parseValue(item, seen, `${path}.${key}`));
     }
     return result;
   } finally {
     seen.delete(value);
   }
+}
+
+/**
+ * Add one key as a plain own data property.
+ *
+ * `result[key] = value` is not equivalent, and the difference is not cosmetic:
+ * for the key `__proto__` it reaches `Object.prototype`'s inherited setter
+ * instead of defining anything. What that does depends on the engine — V8 under
+ * Node and JavaScriptCore under Bun replace the object's prototype and drop the
+ * key, while Deno keeps it as an own property — so the same value would parse to
+ * a different object on different runtimes.
+ *
+ * `JSON.parse` makes `__proto__` an own property, so this is reachable from any
+ * parsed text: a component's props, an agent's answer, a schema-validated
+ * response. Defining the property sidesteps the setter, so every key behaves
+ * like every other key everywhere.
+ */
+function define(result: JsonObject, key: string, value: Json): void {
+  Object.defineProperty(result, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
 }
 
 function isPlainObject(value: object): boolean {
