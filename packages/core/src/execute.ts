@@ -538,7 +538,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      const { output, value } = yield* durableRun(() => documentWorkflow(props), {
+      const { output, value } = yield* durableRun(() => Execution.operations.document(props), {
         stream,
       });
 
@@ -577,11 +577,22 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
  */
 export interface ExecutionApi {
   execute(options: ExecuteOptions): Operation<DocumentExecution>;
+  /**
+   * The document's expansion, as `durableRun` runs it.
+   *
+   * A layer here wraps the whole document while the durable stream is still
+   * live and before the root Close is written — the only place work that has to
+   * outlast every element but still be journaled can go.
+   */
+  document(props: Record<string, Json>): Operation<DocumentResult>;
 }
 
 export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution", {
   *execute(options: ExecuteOptions): Operation<DocumentExecution> {
     return yield* executeDocument(options);
+  },
+  *document(props: Record<string, Json>): Operation<DocumentResult> {
+    return yield* documentWorkflow(props);
   },
 });
 

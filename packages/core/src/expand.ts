@@ -648,6 +648,8 @@ export function* expandSegments(
           counter,
           segment.projectedEnv,
           segment.position,
+          parentMeta,
+          parentProps,
         );
         // Consumer boundary: the callee reported these where they were created,
         // under whatever policy its body ran — an `<Output>` region collects,
@@ -1537,6 +1539,9 @@ function* expandComponent(
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
   position?: SourcePosition,
+  /** The invoking frame's meta and props, for content this element projects. */
+  callerMeta: Record<string, unknown> = {},
+  callerProps: Record<string, Json> = {},
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -1594,6 +1599,8 @@ function* expandComponent(
       counter,
       projectedEnv,
       position,
+      callerMeta,
+      callerProps,
     );
   }
 
@@ -1951,6 +1958,9 @@ function* expandFunctionComponent(
   counter: BlockCounter,
   projectedEnv?: EvalEnv,
   position?: SourcePosition,
+  /** The invoking frame's meta and props, for content this component projects. */
+  callerMeta: Record<string, unknown> = {},
+  callerProps: Record<string, Json> = {},
 ): Operation<Segment[]> {
   if ("as" in expressions) {
     return [
@@ -2047,8 +2057,12 @@ function* expandFunctionComponent(
           // A function component's content inherits whatever environment the
           // component installed for it — see ProjectionState.callerEnv.
           callerEnv: undefined,
-          meta: {},
-          props: {},
+          // ...but the content itself is the CALLER's markdown, so `{meta.x}`
+          // and `{props.x}` in it resolve against the frame that wrote it. The
+          // Api form of `expandSegments` carries this through ExpansionFrame;
+          // projection has to be handed it.
+          meta: callerMeta,
+          props: callerProps,
           hideSet,
           counter,
           callerLoop: siteLoop,
@@ -2105,6 +2119,21 @@ function* expandFunctionComponent(
           },
           { at: "min" },
         );
+        // Projection honored the way expandComponent and expandEach honor it:
+        // a component written inside content projected through <Content /> sees
+        // the lexical caller's bindings under the current component's, so what
+        // it reads is what its author wrote beside it.
+        if (projectedEnv) {
+          const siteEnv = yield* env;
+          yield* Component.around(
+            {
+              env: () => ({
+                values: { ...projectedEnv.values, ...(siteEnv?.values ?? {}) },
+              }),
+            },
+            { at: "min" },
+          );
+        }
         try {
           return yield* definition.fn(validatedProps);
         } catch (error) {
