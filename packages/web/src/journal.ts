@@ -13,6 +13,7 @@
  * mismatch means.
  */
 
+import { canonicalize } from "@executablemd/core";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
 import { createHash } from "node:crypto";
@@ -43,25 +44,6 @@ export function fingerprint(question: FormQuestion): string {
     content: question.content,
   });
   return createHash("sha256").update(canonical, "utf8").digest("hex");
-}
-
-function canonicalize(value: Json): Json {
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-  const sorted: JsonObject = {};
-  for (const key of Object.keys(value).sort()) {
-    Object.defineProperty(sorted, key, {
-      value: canonicalize(value[key]),
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  }
-  return sorted;
 }
 
 /**

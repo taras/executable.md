@@ -78,6 +78,22 @@ export type { EvalEnv } from "./src/types.ts";
 
 export { compileBlock } from "./src/eval-context.ts";
 
+export { Elicitation, ElicitationProviderError } from "./src/elicitation-api.ts";
+export type { ElicitationApi, ElicitationRequest } from "./src/elicitation-api.ts";
+export {
+  elicit,
+  ElicitValidationError,
+  prepareElicitation,
+  runPreparedElicitation,
+} from "./src/elicit.ts";
+export type { PreparedElicitation } from "./src/elicit.ts";
+export { scriptElicitations, ScriptedElicitationError } from "./src/elicit-script.ts";
+
+export { canonicalize, canonicalFingerprint } from "./src/canonical.ts";
+export { isJsonObject } from "./src/json.ts";
+export { walkSchema } from "./src/schema-walk.ts";
+export type { NameKind, SchemaVisitor } from "./src/schema-walk.ts";
+
 export { hasContent, useContent } from "./src/content-context.ts";
 export { ContentError } from "./src/errors.ts";
 export { InvocationTeardownError, withInvocation } from "./src/invocation.ts";

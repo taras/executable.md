@@ -4899,7 +4899,111 @@ a resumed document restores the answer without asking anyone twice.
 `specs/web-form-spec.md` is the full specification: the props, the preflight
 boundary, the loopback protocol and its fixed security policy, the durability
 fingerprint, and the provider-neutral `liveForm()` operation that `<Elicit>`
-(#197) will share.
+shares.
+
+### 6.16 Asking without choosing how: `<Elicit>`
+
+`<WebForm>` is a browser form by construction. `<Elicit>` asks the same kind of
+question without saying where the asking happens:
+
+```md
+<Elicit schema={responseSchema} as="response">
+Review the implementation plan and provide your decision.
+</Elicit>
+```
+
+`schema` and `as` are required. `schema` is a draft-07 JSON Schema, as a
+structured value or as captured JSON text. The component declares a broad JSON
+return, so it renders nothing and `as` binds the validated answer. There is no
+`mode`, `provider`, or `uiSchema` prop, and no built-in approve, decline, or
+cancel: the schema defines every response available. An author who wants a
+browser form specifically, or RJSF presentation options, writes `<WebForm>`.
+
+Where the asking happens is the host's decision, made through the **Elicitation
+Api** (§6.16.1). Documents do not select a provider, and changing the provider
+changes no Markdown.
+
+Three steps happen in a fixed order, and the order is the contract:
+
+1. **The schema compiles.** A schema that cannot be used fails here — before the
+   invocation content expands and before any provider is contacted, so an
+   invalid schema produces no content effects and cannot open an interaction.
+2. **The invocation content expands.** What it renders is the request message.
+3. **The provider is asked, and its answer is judged.** Core validates the
+   result against the same compiled schema before it binds or journals anything.
+
+An answer that fails its schema fails once, with normalized validation
+diagnostics. Core does not ask again: interactive correction belongs inside a
+provider, and workflow retry belongs in visible Markdown control flow. A
+provider's own failure propagates as it was raised — the provider knows why it
+could not reach anyone, and `<Elicit>` does not. Halting the execution halts the
+provider and everything it owns; cancellation stays an Effection lifecycle
+event unless the document models it as schema data.
+
+`<Elicit>` is unmarked, so a failure fails the document (§6.8.1). There is no
+useful way to continue from "the person was never asked".
+
+Two refusals are core's rather than any provider's, so a schema's validity never
+depends on which provider is installed. A schema that declares `__proto__` as a
+property, definition, or dependency name is refused with its position: the
+validator loses that name, so the rule would silently not apply, and the
+validated answer binds into the evaluation environment. A `$ref` that leaves the
+supplied schema is refused with its position; only self-contained references
+resolve today (#192).
+
+**Durability.** Only the validated answer is journaled, keyed by a fingerprint of
+the compiled schema and the rendered message. Preflight is not what replay
+skips: compiling and expanding the content run on every execution, replay
+included, because they are how a run knows which recorded answer it is looking
+for. What replay never repeats is the provider call and the interaction it
+stands for. A recorded answer whose question does not match the one this run
+computed is refused rather than bound.
+
+`Elicit.test.md` is the authoring contract in Markdown.
+
+#### 6.16.1 The Elicitation Api
+
+The contextual provider receives the rendered request and the compiled schema,
+and nothing else:
+
+```ts
+interface ElicitationRequest {
+  message: string;
+  schema: JsonObject;
+}
+```
+
+It returns an unknown structured value through an Effection operation. It does
+not receive `as`, workflow run identifiers, journal details, or component
+execution identities, and it owns only its live interaction and transport
+lifetime.
+
+Core owns schema parsing and compilation, final response validation, capture and
+source diagnostics, durable recording and replay, and interruption through the
+surrounding scope.
+
+A host installs a provider with `Elicitation.around({ *elicit([request], next)
+{ … } }, { at: "min" })`. The position matters: at the default position an outer
+install answers ahead of a nested one, which is the opposite of what a provider
+is. At `min` the nearest provider answers and the outer one is restored when its
+scope ends.
+
+When no provider is installed, `<Elicit>` fails immediately with a
+`no elicitation provider configured` diagnostic. There is no fallback
+interaction and no silent skip.
+
+Provider selection happens only through this Api. The CLI composes the WebForm
+implementation as its current provider; an embedding application installs its
+own; automated tests install scripted middleware through
+`scriptElicitations()`, which consumes one response per live elicitation, fails
+when an elicitation has none, and fails at teardown when responses are left
+unused. Future terminal and Inspector integrations replace the provider without
+changing executable Markdown.
+
+The elicitation path is also callable by a host directly — `elicit({ message,
+schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the
+caller needs compilation to happen before it renders its message. That is what
+lets a command elicit with no document executing.
 
 
 ## 7. Entry point

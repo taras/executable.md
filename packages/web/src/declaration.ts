@@ -22,8 +22,8 @@
 import type { JsonObject } from "./json.ts";
 import { JsonParseError, parseJsonObject } from "./json.ts";
 import { createServerAjv } from "./ajv-options.ts";
-import { walkSchema } from "./schema-walk.ts";
-import type { NameKind } from "./schema-walk.ts";
+import { walkSchema } from "@executablemd/core";
+import type { NameKind } from "@executablemd/core";
 
 /** A declaration that cannot be used. Raised before any live effect. */
 export class DeclarationError extends Error {

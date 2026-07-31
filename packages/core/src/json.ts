@@ -11,6 +11,13 @@ export function parseJson(value: unknown): Json {
   return parseValue(value, new Set(), "$");
 }
 
+/** Whether an already-parsed `Json` is an object rather than an array or null. */
+export function isJsonObject(value: Json | undefined): value is JsonObject {
+  return (
+    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value)
+  );
+}
+
 // Never called on a whole module namespace — that carries the default
 // generator function, which is not JSON. Only the `props` export/value.
 export function parseJsonObject(value: unknown): JsonObject {

@@ -16,6 +16,7 @@
  */
 
 import type { ComponentRegistry, RegistryEntry } from "../types.ts";
+import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import File, { props as fileProps } from "./File.ts";
 import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
@@ -51,6 +52,7 @@ function core(
 }
 
 export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
+  core("Elicit", Elicit, parseJsonObject(elicitProps), parseJsonObject(elicitReturns)),
   core("TempDir", TempDir, parseJsonObject(tempDirProps)),
   core("File", File, parseJsonObject(fileProps)),
   core("Glob", Glob, parseJsonObject(globProps), parseJsonObject(globReturns)),

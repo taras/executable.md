@@ -116,6 +116,27 @@ const WEBFORM_UI = `<WebForm
 Read the plan above and decide.
 </WebForm>`;
 
+const ELICIT = `\`\`\`js eval
+const responseSchema = {
+  type: "object",
+  properties: {
+    decision: { type: "string", enum: ["approve", "reject"] },
+    note: { type: "string" },
+  },
+  required: ["decision"],
+};
+\`\`\`
+
+<Elicit schema={responseSchema} as="response">
+Review the implementation plan and provide your decision.
+</Elicit>
+
+\`\`\`js eval
+if (response.decision === "reject") {
+  output(\`Stopping: \${response.note ?? "no reason given"}\`);
+}
+\`\`\``;
+
 const FILE_WRITE = `<TempDir>
 <File path="fixtures/request.md">
 Request content
@@ -751,6 +772,48 @@ export default define.page(function Components() {
         Only the answer is journaled. Resuming a document that already has one
         binds the recorded value without starting a server or asking anyone
         twice.
+      </p>
+
+      <h2>Asking without choosing how</h2>
+      <p>
+        <code>&lt;WebForm&gt;</code>{" "}
+        is a browser form by construction — a document that writes it has picked
+        a transport. <code>&lt;Elicit&gt;</code>{" "}
+        asks the same kind of question without saying where the asking happens.
+      </p>
+      <CodeBlock>{ELICIT}</CodeBlock>
+      <p>
+        <code>schema</code> and <code>as</code>{" "}
+        are required, and that is the whole surface. There is no{" "}
+        <code>mode</code> or <code>provider</code> prop, no{" "}
+        <code>uiSchema</code>, and no built-in approve, decline, or cancel: the
+        schema defines every response available. Where the question is actually
+        put to someone is the host's decision, installed through the Elicitation
+        Api — a browser form under the CLI today, a terminal or an editor
+        integration later, scripted answers under a test. Swapping it changes no
+        Markdown.
+      </p>
+      <p>
+        That is the reason it is contextual rather than an author-facing option.
+        A <code>mode</code>{" "}
+        prop would make every document that used it a document about its own
+        transport, and a workflow written for a browser could not then run
+        anywhere else.
+      </p>
+      <p>
+        The order is fixed and observable: the schema compiles first, so an
+        unusable one fails before anything is asked; the content expands into
+        the request; and the answer is validated against the same schema before
+        it binds. An answer that fails it fails once — correction belongs inside
+        the provider, and retry belongs in visible <code>&lt;If&gt;</code>{" "}
+        control flow rather than in a hidden loop. Resuming restores the
+        recorded answer without asking again.
+      </p>
+      <p>
+        Reach for <code>&lt;WebForm&gt;</code>{" "}
+        when the browser form itself is the point and you want RJSF presentation
+        control; reach for <code>&lt;Elicit&gt;</code>{" "}
+        when what matters is the question.
       </p>
 
       <h2>How it renders</h2>
