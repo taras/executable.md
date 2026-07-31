@@ -616,20 +616,10 @@ export function* expandSegments(
         }
 
         if (segment.name === "CollectFailures") {
-          // Structured segments, not a rendered string: this is a region of the
-          // caller's document, expanded in the caller's own frame, that happens
-          // to continue after an ordinary component failure.
+          // No raise() here, like the branches above: expandCollectFailures
+          // reports the errors it creates, and the body settled its own (§6.9).
           result.push(
-            ...(yield* scoped(function* () {
-              yield* useFailureCollection();
-              return yield* expandSegments(
-                segment.children,
-                parentMeta,
-                parentProps,
-                hideSet,
-                counter,
-              );
-            })),
+            ...(yield* expandCollectFailures(segment, parentMeta, parentProps, hideSet, counter)),
           );
           break;
         }
@@ -1495,6 +1485,46 @@ function* expandBreak(
     reported.push(yield* raise(breakError(segment, violation)));
   }
   return reported;
+}
+
+function collectFailuresError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "CollectFailures" };
+}
+
+/**
+ * Continue past ordinary component failures in this region (spec §6.8.1
+ * `<CollectFailures>`).
+ *
+ * The body expands as structured segments rather than a rendered string: this
+ * is a region of the caller's document, expanded in the caller's own frame,
+ * that happens to continue after an ordinary component failure.
+ *
+ * The element names a region and nothing else, so it takes no props at all —
+ * including `as` and `slot`, which are ordinary prop entries here rather than
+ * fields of their own. An invalid element performs no action: the body is not
+ * expanded and a prop expression is never evaluated, because the mistake is the
+ * prop being written at all rather than anything its value turns out to be.
+ */
+function* expandCollectFailures(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+): Operation<Segment[]> {
+  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
+  if (names.length > 0) {
+    return [
+      yield* raise(
+        collectFailuresError(segment, `<CollectFailures> accepts no props. Got: "${names[0]}".`),
+      ),
+    ];
+  }
+
+  return yield* scoped(function* () {
+    yield* useFailureCollection();
+    return yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter);
+  });
 }
 
 function* expandComponent(

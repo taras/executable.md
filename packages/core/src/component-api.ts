@@ -265,8 +265,6 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
   },
   // deno-lint-ignore require-yield
   *handleFailure(failure: ComponentFailure): Operation<ErrorSegment> {
-    // The default is to fail, so a component that goes wrong stops the work it
-    // was part of rather than quietly becoming a note in the output.
     throw failure.error;
   },
   registry: new Map(),

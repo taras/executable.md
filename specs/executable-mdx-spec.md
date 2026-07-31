@@ -3950,6 +3950,12 @@ inherits nothing. `<CollectFailures>` says it about a region of a document:
 </CollectFailures>
 ```
 
+`<CollectFailures>` accepts no props: it names a region and nothing else, so any
+prop — `as` and `slot` included, written as a literal or as an expression — is a
+syntax error reported against the element. An element written that way performs
+no action at all: its body does not expand, and a prop expression is never
+evaluated.
+
 Both install the same middleware, so the nearest collection boundary is the one
 that handles a failure from the invocation tree beneath it, exactly once. The
 boundary sits outside the whole invocation, which is what lets it see a failure
