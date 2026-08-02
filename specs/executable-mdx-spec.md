@@ -5032,13 +5032,20 @@ When no provider is installed, `<Elicit>` fails immediately with a
 `no elicitation provider configured` diagnostic. There is no fallback
 interaction and no silent skip.
 
-Provider selection happens only through this Api. A host — an embedding
-application, or a command that runs documents — installs the provider it wants;
-automated tests install scripted middleware through `scriptElicitations()`,
-which consumes one response per live elicitation, fails when an elicitation has
-none, and fails at teardown when responses are left unused. A browser form, a
-terminal, and an editor integration are all the same shape of provider, and
-replacing one with another changes no executable Markdown.
+Provider selection happens only through this Api. `xmd run` composes the WebForm
+implementation as its current provider, so an `<Elicit>` under the CLI opens the
+same loopback form `<WebForm>` serves. An embedding application installs the
+provider it wants; automated tests install scripted middleware through
+`scriptElicitations()`, which consumes one response per live elicitation, fails
+when an elicitation has none, and fails at teardown when responses are left
+unused. A browser form, a terminal, and an editor integration are all the same
+shape of provider, and replacing one with another changes no executable Markdown.
+
+`xmd test` deliberately installs no provider. A test document that elicits
+without saying what the answer is would otherwise open a browser and wait for
+somebody who is not coming; with none installed it fails immediately, and an
+`<Answers>` region (§6.16.2) or scripted middleware is how a test says what the
+answer is.
 
 The elicitation path is also callable by a host directly — `elicit({ message,
 schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the

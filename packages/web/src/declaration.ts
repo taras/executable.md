@@ -41,19 +41,23 @@ export interface Declaration {
  * Normalize and check a declaration.
  *
  * `schema` is required; `uiSchema` is optional and `undefined` means absent.
+ *
+ * `label` names the component the author actually wrote, so a diagnostic from a
+ * form served for `<Elicit>` does not claim to come from `<WebForm>`. It mirrors
+ * `compileParseSchema(componentName, …)` in core.
  */
-export function parseDeclaration(schema: unknown, uiSchema?: unknown): Declaration {
-  const normalizedSchema = readObject("schema", schema);
+export function parseDeclaration(label: string, schema: unknown, uiSchema?: unknown): Declaration {
+  const normalizedSchema = readObject(label, "schema", schema);
 
-  rejectAsyncSchema(normalizedSchema);
-  rejectUnsupportedNames(normalizedSchema);
-  rejectExternalReferences(normalizedSchema);
-  rejectInvalidDraft07(normalizedSchema);
+  rejectAsyncSchema(label, normalizedSchema);
+  rejectUnsupportedNames(label, normalizedSchema);
+  rejectExternalReferences(label, normalizedSchema);
+  rejectInvalidDraft07(label, normalizedSchema);
 
   if (uiSchema === undefined) {
     return { schema: normalizedSchema };
   }
-  return { schema: normalizedSchema, uiSchema: readObject("uiSchema", uiSchema) };
+  return { schema: normalizedSchema, uiSchema: readObject(label, "uiSchema", uiSchema) };
 }
 
 /**
@@ -64,26 +68,26 @@ export function parseDeclaration(schema: unknown, uiSchema?: unknown): Declarati
  * asserted one, and it costs one walk of a value that is about to be walked
  * again anyway.
  */
-function readObject(name: string, value: unknown): JsonObject {
+function readObject(label: string, name: string, value: unknown): JsonObject {
   if (typeof value === "string") {
     let decoded: unknown;
     try {
       decoded = JSON.parse(value);
     } catch (error) {
-      throw new DeclarationError(`<WebForm> ${name} text is not JSON: ${messageOf(error)}`);
+      throw new DeclarationError(`<${label}> ${name} text is not JSON: ${messageOf(error)}`);
     }
-    return asObject(name, decoded);
+    return asObject(label, name, decoded);
   }
-  return asObject(name, value);
+  return asObject(label, name, value);
 }
 
-function asObject(name: string, value: unknown): JsonObject {
+function asObject(label: string, name: string, value: unknown): JsonObject {
   try {
     return parseJsonObject(value);
   } catch (error) {
     if (error instanceof JsonParseError) {
       throw new DeclarationError(
-        `<WebForm> ${name} must be a JSON object or JSON text describing one: ${error.message}`,
+        `<${label}> ${name} must be a JSON object or JSON text describing one: ${error.message}`,
       );
     }
     throw error;
@@ -98,10 +102,10 @@ function asObject(name: string, value: unknown): JsonObject {
  * sides, so such a validator would report every submission as valid — a promise
  * is truthy. Refusing the declaration is the only place this is cheap to see.
  */
-function rejectAsyncSchema(schema: JsonObject): void {
+function rejectAsyncSchema(label: string, schema: JsonObject): void {
   if (schema["$async"] === true) {
     throw new DeclarationError(
-      "<WebForm> schema must not be asynchronous ($async: true): submission validation is synchronous.",
+      `<${label}> schema must not be asynchronous ($async: true): submission validation is synchronous.`,
     );
   }
 }
@@ -122,7 +126,7 @@ function rejectAsyncSchema(schema: JsonObject): void {
  * not have. The same string as *data* — a `const`, an `enum` member, a title, a
  * default — is untouched, because nothing reads it as a key.
  */
-function rejectUnsupportedNames(schema: JsonObject): void {
+function rejectUnsupportedNames(label: string, schema: JsonObject): void {
   walkSchema(schema, {
     subschema() {},
     declaredName(name: string, kind: NameKind, path: string) {
@@ -130,7 +134,7 @@ function rejectUnsupportedNames(schema: JsonObject): void {
         return;
       }
       throw new DeclarationError(
-        `<WebForm> schema declares "__proto__" as a ${kind} at ${path}, which is not ` +
+        `<${label}> schema declares "__proto__" as a ${kind} at ${path}, which is not ` +
           "supported: the underlying validator loses that name, so the rule would " +
           "silently not apply. Rename it, or carry the value under a different key.",
       );
@@ -151,7 +155,7 @@ function rejectUnsupportedNames(schema: JsonObject): void {
  * a `const` or an `enum` member is a JSON value the author wants matched, not a
  * reference, and Ajv never resolves it — so neither does this.
  */
-function rejectExternalReferences(schema: JsonObject): void {
+function rejectExternalReferences(label: string, schema: JsonObject): void {
   walkSchema(schema, {
     subschema(subschema: JsonObject, path: string) {
       const reference = subschema["$ref"];
@@ -159,7 +163,7 @@ function rejectExternalReferences(schema: JsonObject): void {
         return;
       }
       throw new DeclarationError(
-        `<WebForm> schema references "${reference}" at ${path}, which is outside the ` +
+        `<${label}> schema references "${reference}" at ${path}, which is outside the ` +
           "supplied schema. Only references contained within it resolve; external file " +
           "and HTTP(S) references are deferred to #192.",
       );
@@ -176,13 +180,13 @@ function rejectExternalReferences(schema: JsonObject): void {
  * pointer that does not resolve is not visible here — it surfaces when the
  * compiler runs, and is reported there.
  */
-function rejectInvalidDraft07(schema: JsonObject): void {
+function rejectInvalidDraft07(label: string, schema: JsonObject): void {
   const ajv = createServerAjv();
   if (ajv.validateSchema(schema)) {
     return;
   }
   throw new DeclarationError(
-    `<WebForm> schema is not a valid draft-07 JSON Schema: ${ajv.errorsText(ajv.errors)}`,
+    `<${label}> schema is not a valid draft-07 JSON Schema: ${ajv.errorsText(ajv.errors)}`,
   );
 }
 

@@ -1,6 +1,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import type { Operation } from "effection";
 import { join } from "node:path";
 
 import {
@@ -174,6 +175,30 @@ describe("WebForm: nothing happens before the question is ready", () => {
   });
 });
 
+/**
+ * The same journal, with the recorded question replaced.
+ *
+ * Rewriting the fingerprint is how a journal that answers something else is
+ * built without also having to fabricate an execution that produced it.
+ *
+ * The root's close is dropped as well, which is what makes the replay reach the
+ * effect at all: a journal that holds it restores the completed run whole and
+ * never consults a guard.
+ */
+function* withDifferentQuestion(stream: InMemoryStream): Operation<InMemoryStream> {
+  const events = yield* stream.readAll();
+  return new InMemoryStream(
+    events
+      .filter((event) => !(event.type === "close" && event.coroutineId === "root"))
+      .map((event) => {
+        if (event.type !== "yield" || event.description.type !== "web_form") {
+          return event;
+        }
+        return { ...event, description: { ...event.description, input: "a-different-question" } };
+      }),
+  );
+}
+
 describe("WebForm: durability", () => {
   it("journals the validated response and no transport detail", function* () {
     const run = yield* runWebFormDoc(document("Decide."), {
@@ -211,6 +236,47 @@ describe("WebForm: durability", () => {
     expect(replay.effects.responded).toEqual([]);
     // Nobody is asked again, so nobody is shown a URL again either.
     expect(replay.effects.printed).toEqual([]);
+  });
+
+  /**
+   * The guard exists for the journal that does not describe this run's question
+   * — one merged, hand-edited, or carried over from a document that has since
+   * changed. Only `type` and `name` decide whether an entry matches, and the
+   * name is a source position, so without this a resumed document would bind an
+   * answer nobody gave to the question being asked.
+   *
+   * The recorded fingerprint is rewritten rather than the document edited: the
+   * journal holds the root document's source, so a partial replay runs the
+   * recorded text and editing the file changes nothing.
+   */
+  it("refuses a recorded answer whose question does not match this run", function* () {
+    const stream = new InMemoryStream();
+    const source = document("Decide.");
+
+    yield* runWebFormDoc(source, { answer: { decision: "approve" }, stream });
+
+    const doctored = yield* runWebFormDoc(source, {
+      stream: yield* withDifferentQuestion(stream),
+    });
+
+    expect(doctored.completion.ok).toBe(false);
+    expect(String(doctored.completion.ok ? "" : doctored.completion.error)).toContain(
+      "given to a different question",
+    );
+    // Refused before anything is served: nobody is asked on the strength of a
+    // journal that answers something else.
+    expect(doctored.effects.responded).toEqual([]);
+  });
+
+  it("still restores when the question is unchanged", function* () {
+    const stream = new InMemoryStream();
+    const source = [document("Decide."), "", "An unrelated sentence."].join("\n");
+
+    yield* runWebFormDoc(source, { answer: { decision: "approve", note: "kept" }, stream });
+    const replay = yield* runWebFormDoc(source, { stream });
+
+    expect(replay.completion.ok).toBe(true);
+    expect(replay.effects.responded).toEqual([]);
   });
 
   it("restores the response into the document on replay", function* () {

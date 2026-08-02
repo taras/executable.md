@@ -42,29 +42,29 @@ function failure(run: () => void): Error {
 
 describe("declaration: both spellings", () => {
   it("normalizes a structured schema and its captured text identically", function* () {
-    const structured = parseDeclaration(REVIEW_SCHEMA);
-    const captured = parseDeclaration(JSON.stringify(REVIEW_SCHEMA));
+    const structured = parseDeclaration("WebForm", REVIEW_SCHEMA);
+    const captured = parseDeclaration("WebForm", JSON.stringify(REVIEW_SCHEMA));
 
     expect(captured.schema).toEqual(structured.schema);
     expect(captured.schema).toEqual(REVIEW_SCHEMA);
   });
 
   it("normalizes a structured uiSchema and its captured text identically", function* () {
-    const structured = parseDeclaration(REVIEW_SCHEMA, REVIEW_UI_SCHEMA);
-    const captured = parseDeclaration(REVIEW_SCHEMA, JSON.stringify(REVIEW_UI_SCHEMA));
+    const structured = parseDeclaration("WebForm", REVIEW_SCHEMA, REVIEW_UI_SCHEMA);
+    const captured = parseDeclaration("WebForm", REVIEW_SCHEMA, JSON.stringify(REVIEW_UI_SCHEMA));
 
     expect(captured.uiSchema).toEqual(structured.uiSchema);
     expect(captured.uiSchema).toEqual(REVIEW_UI_SCHEMA);
   });
 
   it("reads an absent uiSchema as absent rather than empty", function* () {
-    expect(parseDeclaration(REVIEW_SCHEMA).uiSchema).toBe(undefined);
-    expect("uiSchema" in parseDeclaration(REVIEW_SCHEMA)).toBe(false);
+    expect(parseDeclaration("WebForm", REVIEW_SCHEMA).uiSchema).toBe(undefined);
+    expect("uiSchema" in parseDeclaration("WebForm", REVIEW_SCHEMA)).toBe(false);
   });
 
   it("does not alias the caller's value: the normalized schema is its own object", function* () {
     const source = { type: "object", properties: { a: { type: "string" } } };
-    const declaration = parseDeclaration(source);
+    const declaration = parseDeclaration("WebForm", source);
 
     expect(declaration.schema).toEqual(source);
     expect(declaration.schema).not.toBe(source);
@@ -73,25 +73,25 @@ describe("declaration: both spellings", () => {
 
 describe("declaration: refusals", () => {
   it("refuses malformed schema text", function* () {
-    expect(failure(() => parseDeclaration("{ not json")).message).toContain(
+    expect(failure(() => parseDeclaration("WebForm", "{ not json")).message).toContain(
       "schema text is not JSON",
     );
   });
 
   it("refuses malformed uiSchema text", function* () {
-    expect(failure(() => parseDeclaration(REVIEW_SCHEMA, "{ not json")).message).toContain(
-      "uiSchema text is not JSON",
-    );
+    expect(
+      failure(() => parseDeclaration("WebForm", REVIEW_SCHEMA, "{ not json")).message,
+    ).toContain("uiSchema text is not JSON");
   });
 
   it("refuses a non-object root in either spelling", function* () {
     for (const value of ["[]", "42", '"text"', "null", "true"]) {
-      expect(failure(() => parseDeclaration(value)).message).toContain(
+      expect(failure(() => parseDeclaration("WebForm", value)).message).toContain(
         "schema must be a JSON object",
       );
     }
     for (const value of [[], 42, null, true]) {
-      expect(failure(() => parseDeclaration(value)).message).toContain(
+      expect(failure(() => parseDeclaration("WebForm", value)).message).toContain(
         "schema must be a JSON object",
       );
     }
@@ -111,12 +111,12 @@ describe("declaration: refusals", () => {
     ];
 
     for (const value of nonJson) {
-      expect(failure(() => parseDeclaration(value))).toBeInstanceOf(DeclarationError);
+      expect(failure(() => parseDeclaration("WebForm", value))).toBeInstanceOf(DeclarationError);
     }
   });
 
   it("refuses an asynchronous schema", function* () {
-    const error = failure(() => parseDeclaration({ $async: true, type: "object" }));
+    const error = failure(() => parseDeclaration("WebForm", { $async: true, type: "object" }));
 
     expect(error).toBeInstanceOf(DeclarationError);
     expect(error.message).toContain("must not be asynchronous");
@@ -124,7 +124,7 @@ describe("declaration: refusals", () => {
 
   it("refuses a schema draft-07 does not describe", function* () {
     for (const invalid of [{ type: "not-a-type" }, { type: "string", minLength: "long" }]) {
-      const error = failure(() => parseDeclaration(invalid));
+      const error = failure(() => parseDeclaration("WebForm", invalid));
 
       expect(error).toBeInstanceOf(DeclarationError);
       expect(error.message).toContain("not a valid draft-07 JSON Schema");
@@ -148,7 +148,7 @@ describe("declaration: refusals", () => {
     ];
 
     for (const [position, schema] of external) {
-      const error = failure(() => parseDeclaration(schema));
+      const error = failure(() => parseDeclaration("WebForm", schema));
 
       expect({ position, kind: error.name }).toEqual({ position, kind: "DeclarationError" });
       expect(error.message).toContain("outside the supplied schema");
@@ -179,7 +179,7 @@ describe("declaration: refusals", () => {
     ];
 
     for (const [position, schema] of data) {
-      const compiled = compileForm(parseDeclaration(schema));
+      const compiled = compileForm(parseDeclaration("WebForm", schema));
 
       expect({ position, compiled: typeof compiled.validate }).toEqual({
         position,
@@ -189,7 +189,7 @@ describe("declaration: refusals", () => {
   });
 
   it("accepts a schema property named $ref", function* () {
-    const declaration = parseDeclaration({
+    const declaration = parseDeclaration("WebForm", {
       type: "object",
       properties: { $ref: { type: "string" } },
     });
@@ -203,7 +203,7 @@ describe("declaration: refusals", () => {
    * deferred external case.
    */
   it("does not blame #192 for a local pointer that cannot resolve", function* () {
-    const declaration = parseDeclaration({
+    const declaration = parseDeclaration("WebForm", {
       type: "object",
       properties: { a: { $ref: "#/definitions/missing" } },
     });
@@ -227,7 +227,7 @@ describe("declaration: what refusal precedes", () => {
       { type: "not-a-type" },
       { type: "object", properties: { a: { $ref: "https://example.test/s.json" } } },
     ]) {
-      const error = failure(() => parseDeclaration(schema));
+      const error = failure(() => parseDeclaration("WebForm", schema));
 
       expect(error).toBeInstanceOf(DeclarationError);
       expect(error).not.toBeInstanceOf(SchemaCompileError);
@@ -235,7 +235,7 @@ describe("declaration: what refusal precedes", () => {
   });
 
   it("accepts a local reference", function* () {
-    const declaration = parseDeclaration({
+    const declaration = parseDeclaration("WebForm", {
       type: "object",
       properties: { note: { $ref: "#/definitions/note" } },
       definitions: { note: { type: "string" } },
@@ -294,7 +294,7 @@ describe("declaration: __proto__ in a schema position", () => {
     ];
 
     for (const { kind, path, text } of unsupported) {
-      const error = failure(() => parseDeclaration(text));
+      const error = failure(() => parseDeclaration("WebForm", text));
 
       expect({ path, name: error.name }).toEqual({ path, name: "DeclarationError" });
       expect(error.message).toContain(`"__proto__" as a ${kind} at ${path}`);
@@ -303,7 +303,7 @@ describe("declaration: __proto__ in a schema position", () => {
 
   it("refuses before anything compiles", function* () {
     const error = failure(() =>
-      parseDeclaration('{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
+      parseDeclaration("WebForm", '{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
     );
 
     expect(error).toBeInstanceOf(DeclarationError);
@@ -319,7 +319,7 @@ describe("declaration: __proto__ in a schema position", () => {
     ];
 
     for (const schema of accepted) {
-      expect(typeof compileForm(parseDeclaration(schema)).validate).toBe("function");
+      expect(typeof compileForm(parseDeclaration("WebForm", schema)).validate).toBe("function");
     }
   });
 });
@@ -335,6 +335,7 @@ describe("declaration: the JSON parser keeps every key", () => {
    */
   it("keeps an own __proto__ key in a uiSchema", function* () {
     const declaration = parseDeclaration(
+      "WebForm",
       { type: "object" },
       '{"__proto__":{"ui:widget":"hidden"},"ui:order":["a"]}',
     );
@@ -346,7 +347,11 @@ describe("declaration: the JSON parser keeps every key", () => {
   });
 
   it("leaves the normalized object an ordinary object", function* () {
-    const declaration = parseDeclaration({ type: "object" }, '{"__proto__":{"reached":true}}');
+    const declaration = parseDeclaration(
+      "WebForm",
+      { type: "object" },
+      '{"__proto__":{"reached":true}}',
+    );
 
     expect(Object.getPrototypeOf(asObject(declaration.uiSchema))).toBe(Object.prototype);
     expect("reached" in {}).toBe(false);
@@ -354,10 +359,15 @@ describe("declaration: the JSON parser keeps every key", () => {
 
   it("normalizes an own __proto__ key identically from text and structure", function* () {
     const structured = parseDeclaration(
+      "WebForm",
       { type: "object" },
       JSON.parse('{"__proto__":{"ui:widget":"hidden"}}'),
     );
-    const captured = parseDeclaration({ type: "object" }, '{"__proto__":{"ui:widget":"hidden"}}');
+    const captured = parseDeclaration(
+      "WebForm",
+      { type: "object" },
+      '{"__proto__":{"ui:widget":"hidden"}}',
+    );
 
     expect(Object.keys(asObject(captured.uiSchema))).toEqual(
       Object.keys(asObject(structured.uiSchema)),
@@ -374,7 +384,7 @@ describe("declaration: uiSchema is not a schema", () => {
    * is not.
    */
   it("accepts a uiSchema that is not a valid JSON Schema", function* () {
-    const declaration = parseDeclaration(REVIEW_SCHEMA, {
+    const declaration = parseDeclaration("WebForm", REVIEW_SCHEMA, {
       "ui:order": ["decision", "*"],
       type: "not-a-type",
     });
@@ -383,13 +393,16 @@ describe("declaration: uiSchema is not a schema", () => {
   });
 
   it("accepts a uiSchema carrying $async", function* () {
-    const declaration = parseDeclaration(REVIEW_SCHEMA, { $async: true, "ui:order": ["decision"] });
+    const declaration = parseDeclaration("WebForm", REVIEW_SCHEMA, {
+      $async: true,
+      "ui:order": ["decision"],
+    });
 
     expect(declaration.uiSchema).toEqual({ $async: true, "ui:order": ["decision"] });
   });
 
   it("accepts a uiSchema carrying an external reference", function* () {
-    const declaration = parseDeclaration(REVIEW_SCHEMA, {
+    const declaration = parseDeclaration("WebForm", REVIEW_SCHEMA, {
       $ref: "https://example.test/ui.json",
     });
 
@@ -403,6 +416,6 @@ describe("declaration: uiSchema is not a schema", () => {
       notes: { "ui:widget": "textarea", "ui:options": { rows: 4 } },
     };
 
-    expect(parseDeclaration(REVIEW_SCHEMA, uiSchema).uiSchema).toEqual(uiSchema);
+    expect(parseDeclaration("WebForm", REVIEW_SCHEMA, uiSchema).uiSchema).toEqual(uiSchema);
   });
 });
