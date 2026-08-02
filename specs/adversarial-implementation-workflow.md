@@ -1,12 +1,14 @@
 # Adversarial Implementation Workflow
 
-- **Status:** Design exploration
+- **Status:** Living end-goal target
 - **Audience:** Maintainers and contributors
 
-This document describes an experimental workflow for developing software with a
-user, a planner agent, and an implementor agent. It captures the current design
-well enough to exercise the workflow and discover which Executable.md
-capabilities it needs. It does not define an implemented runtime contract.
+This document describes a workflow for developing software with a user, a
+planner agent, and an implementor agent. It is the target the runtime is being
+built toward, and it is kept current as capabilities land: a settled contract is
+described in the present tense, and a capability that does not exist yet says
+so. Sections marked as not implemented define what must be built, not what the
+runtime does today.
 
 The compact workflow map and its stage-level details live in
 [the adversarial implementation workflow directory](../workflows/adversarial-implementation/start.md).
@@ -74,10 +76,17 @@ first applicable signal in this priority order:
 2. A configured file is created or updated in a configured directory.
 3. The user provides direct input.
 
-The manual exercise records where each signal would have been used, but it does
-not implement their detection or arbitration. In particular, runtime user input
-waits for the Effection ecosystem's terminal user-interface tooling to mature.
-The user supplies decisions between manually invoked stages in the meantime.
+Stop arbitration is not implemented. The manual exercise records where each
+signal would have been used without detecting or prioritizing them.
+
+Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
+question during execution and binds the validated answer, and `xmd run`
+composes the WebForm provider so that question opens a loopback browser form.
+What remains missing is the cross-process case: stopping at a stage boundary
+and resuming in a later invocation. That belongs to `<Stage>` and `<Workflow>`,
+so the user still supplies decisions between manually invoked stages whenever a
+stage boundary — rather than a question inside one run — is what stopped the
+work.
 
 ### Runtime intervention
 
@@ -172,15 +181,31 @@ that controls a branch or deterministic effect is JSON validated against
 draft-07 JSON Schema captured as ordinary document content.
 
 `<SafeParse>` returns either a validated value or the candidate and normalized
-validation errors. A bounded loop uses nested `<If><Else>` control flow to show
-any correction prompt explicitly in the producing agent's session. Correction
-turns receive the candidate, validation errors, and schema; they do not run
-tools, modify files, or perform additional analysis. A final `<Parse>` fails the
-stage if the candidate remains invalid.
+validation errors, preserving the rendered input exactly so a correction prompt
+can quote what was said. A bounded `<Loop>` uses nested `<If><Else>` control
+flow to show any correction prompt explicitly in the producing agent's session.
+Correction turns receive the candidate, validation errors, and schema; they do
+not run tools, modify files, or perform additional analysis. A final `<Parse>`
+fails the stage if the candidate remains invalid.
 
-Parsing and validation are provider-neutral core behavior. ACP supplies an
-agent provider but does not own parsing or hidden repair behavior. The workflow
-does not use named schema strings or a `<Prompt schema>` prop.
+Validation judges the value and never edits it: no declared default is
+inserted, no type is coerced, and no undeclared property is removed. What a
+document binds is exactly what its content said.
+
+Parsing and validation are shipped, provider-neutral core behavior. ACP
+supplies an agent provider but does not own parsing or hidden repair behavior.
+The workflow does not use named schema strings or a `<Prompt schema>` prop.
+
+This in-document parsing is separate from a component's own return value, and
+both are shipped. A component that declares no `returns` returns its rendered
+Markdown, and `as` binds that text; a component that declares `returns` renders
+nothing, holds one direct top-level `<Return>`, must be invoked with `as`, and
+binds one schema-validated JSON value. The two are mutually exclusive. A
+registered function component returns by reference by default — which is how
+`<Glob>` binds a `string[]` — and declaring `returns` is the opt-in that makes
+a return a validated JSON record instead. Every stage component in this
+workflow is a text component, because each stage's output is also material a
+user reads at a checkpoint.
 
 ## Workflow-owned development assets
 
@@ -188,20 +213,27 @@ The workflow owns worktrees, working directories, captured handoffs, plans,
 feedback, decisions, branches, issues, and pull requests. An agent does not own
 an asset merely because its process created it.
 
-Deterministic components provide and pass those assets:
+Deterministic components provide and pass those assets. Two of them are
+shipped:
+
+- `<Glob>` resolves explicit include and exclude patterns against `Env.cwd`
+  into a `string[]` of relative paths — `/`-separated on every platform,
+  deduplicated, and sorted lexically by code point. Directories and symbolic
+  links are never results.
+- A self-closing `<File>` reads and renders exact repository content relative
+  to `Env.cwd`, and `as` captures that text. Its content-writing form
+  atomically replaces the target and renders nothing at all: no output, no
+  path, no write handle. It is used for source changes, explicit exports, or
+  external tools that require a path, not as the default agent handoff.
+
+Two are not implemented:
 
 - `<Worktree>` creates or resolves a workspace and sets `Env.cwd` while
-  rendering its children.
-- `<Glob>` resolves explicit include and exclude patterns against `Env.cwd`
-  into a deterministic list of normalized relative paths.
-- A self-closing `<File>` reads and renders exact repository content. Its
-  content-writing form is used for source changes, explicit exports, or
-  external tools that require a path, not as the default agent handoff.
+  rendering its children. The contextual working directory it would establish
+  is itself shipped and already inherited by files, globs, processes, and
+  agents.
 - `<PullRequest>` creates or resolves the pull request for a branch and returns
   its identity and state.
-
-These names illustrate the intended authoring model; they are not implemented
-syntax.
 
 Each environmental operation declares its inputs and preconditions, reconciles
 existing state, returns a structured handle, and records its observed effects.
@@ -215,6 +247,9 @@ investigation. The workflow does not depend on a user copying output between
 agent transcripts or asking an agent to locate and read another agent's file.
 
 ### Lab artifact history
+
+Sidecar run history is not implemented. This section defines what `<Workflow>`
+must provide.
 
 Handoffs, plans, reviews, user decisions, and execution events live in a
 sidecar Git history rooted at `refs/xmd/runs`. They are Git objects in the same
@@ -240,8 +275,20 @@ the identity.
 
 Run history snapshots are automatic. A completed manual execution, completed
 loop iteration, terminal success, failure, or cancellation records the observed
-inputs, artifacts, decisions, effects, outcome, and stop reason. Authors do not
+props, artifacts, decisions, effects, outcome, and stop reason. Authors do not
 repeat those paths in an explicit checkpoint.
+
+The execution journal already holds part of that material. `<Loop>` records
+every iteration it enters and one terminal record whose outcome is `break`,
+`exhausted`, or `error`, and refuses a replay whose stored outcome or iteration
+count disagrees with what this run reached — there is no `cancelled` outcome
+and no stage-stop record. Each `<Prompt>` is one durable operation carrying its
+identity, input, agent and session, terminal status, text, and structured
+failure. `<Elicit>` journals only its validated answer, keyed by a fingerprint
+of the compiled schema and the rendered message, and refuses a recorded answer
+whose question does not match the one this run computed. What is missing is one
+run identity correlating those records, immutable artifact versions above them,
+and persistence outside the executing process.
 
 The first exercise creates and reads this history with ordinary Git commands.
 It does not require an Executable.md component for artifact storage. Content is
@@ -260,6 +307,13 @@ but it is not a security boundary. A supervised manual exercise combines that
 disposable worktree, the narrowest available agent permission policy, a
 deliberately limited task, and explicit user approval before durable or remote
 effects.
+
+`<Worktree>` and `<Sandbox>` are not implemented. `<File>` and `<Glob>` confine
+traversal to `Env.cwd` today, but that guarantee is about traversal rather than
+about the filesystem being stable: a directory that is real when it is read
+could be replaced afterwards. Containment that does not depend on observed
+filesystem state is issue #227, and an unattended loop is bound to its
+resolution.
 
 An unattended implementation loop requires an enforceable sandbox boundary. Its
 policy declares:
@@ -381,9 +435,15 @@ captured values and renders required content directly into later prompts.
 Generated artifacts do not appear in the repository or worktree unless the
 user explicitly exports them.
 
+Until `<Workflow>` and `<Stage>` exist, the exercise runs in one process and
+one existing working directory. The document logic — instruction discovery,
+the planner interview, plan convergence, the bounded repair turns, and the user
+gate — is executable on shipped syntax today; what is not yet executable is the
+workflow spine around it.
+
 The exercise succeeds when:
 
-1. Each manually invoked stage declares its inputs, records named results in
+1. Each manually invoked stage declares its props, records named results in
    run history, and returns.
 2. The planner completes the technical interview and produces an implementor
    handoff.
@@ -406,38 +466,67 @@ The exercise succeeds when:
 12. Those observations determine the smallest useful runtime implementation
    rather than a speculative complete orchestration system.
 
-## Technical questions for the first exercise
+## Technical questions
 
-The exercise must resolve enough of these questions to implement one vertical
-slice:
+### Settled
 
-1. How does a component return a structured asset handle that later components
-   can consume without prose parsing?
-2. How does `<Worktree>` choose an idempotent identity, branch name, location,
+These were open when this document was written and have since been answered by
+shipped behavior. They are recorded because the answers constrain what remains.
+
+1. **How does a component return a structured value later components consume
+   without prose parsing?** A component declaring `returns` renders nothing,
+   holds one direct top-level `<Return>`, requires `as`, and binds one
+   schema-validated JSON value; a registered function component returns by
+   reference by default.
+2. **Which repository reads and writes belong in `<File>`, and how are writes
+   confined?** Self-closing reads and renders exact content; the content form
+   atomically replaces the target and renders nothing. Confinement is lexical
+   path arithmetic against `Env.cwd` before any filesystem call, re-checked
+   against resolved symlinks immediately before the write.
+3. **How does `<Elicit>` present document-defined options and bind a validated
+   response without assuming decision policy?** The author's schema defines
+   every available response; there is no built-in approve, decline, or cancel,
+   and no `mode`, `provider`, or `uiSchema` prop. The schema compiles, the
+   content expands, the provider answers, and core validates that answer
+   against the same compiled schema. `<Answers>` supplies answers from the
+   document without choosing a transport.
+4. **How do `<Parse>` and `<SafeParse>` bind values and report errors without
+   conflating them with component output?** Both require `schema` and `as` and
+   render nothing. `<SafeParse>` absorbs JSON syntax and schema-validation
+   failures and nothing else, so an unusable schema and a child execution
+   failure both still fail.
+5. **What `<Loop>`, `<If><Else>`, and `<Break>` semantics repeat stages without
+   hiding why they stopped?** `<Loop>` requires `max`, opens no binding scope,
+   records every iteration it enters, and writes one terminal `break`,
+   `exhausted`, or `error` outcome that a stale replay cannot contradict.
+   Reaching `max` completes normally; whether that means success is the
+   document's own `<If>` to write.
+6. **How does `<Glob>` define ordering, duplicate removal, symlink traversal,
+   and confinement?** Relative `/`-separated paths, deduplicated, sorted
+   lexically by code point; directories and symlinks are never results, which
+   is what keeps traversal inside `Env.cwd`.
+7. **How is the contextual working directory inherited?** `Env.cwd` is
+   installed by a component for its content and read by files, globs,
+   processes, daemons, and agents without any of them being handed a path.
+
+### Open
+
+The exercise must resolve enough of these to implement one vertical slice:
+
+1. How does `<Worktree>` choose an idempotent identity, branch name, location,
    and cleanup policy from the source revision already pinned by the run?
-3. How does a worktree set the contextual working directory inherited by agent,
-   file, process, and Git operations?
-4. Which repository reads, source writes, explicit exports, and path-requiring
-   tool operations belong in the first `<File>` component, and how are writes
-   constrained to the provided workspace?
-5. What assessment does `<UserCheckpoint>` require from its supplied agent, and
-   how does the lower-level `<Elicit>` runtime primitive present
-   document-defined options and bind a validated response without assuming
-   decision policy?
-6. How do `<Parse>` and `<SafeParse>` bind validated JSON values and report
-   syntax and schema errors without conflating them with component output?
-7. What `<Loop>`, nested `<If><Else>`, and `<Break>` semantics repeat plan,
-   review, and correction stages without hiding the reason they stopped?
-8. Which permission policies distinguish planner investigation from implementor
+2. Which permission policies distinguish planner investigation from implementor
    modification?
-9. What state makes environmental operations safe to repeat or resume after
-   interruption?
-10. Which pull-request and issue operations belong in the first local experiment
-    and which can follow after plan convergence works?
-11. Which existing host sandbox can enforce the first experiment's filesystem,
-    process, environment, and network policy?
-12. How does `<Glob>` define ordering, duplicate removal, ignored paths,
-    symlink traversal, and workspace confinement?
+3. What state makes environmental operations safe to repeat or resume after
+   interruption, including an effect recorded inside an ephemeral environment
+   the current run did not create (#218)?
+4. Which pull-request and issue operations belong in the first local experiment
+   and which can follow after plan convergence works?
+5. Which host sandbox can enforce the first experiment's filesystem, process,
+   environment, and network policy, given that traversal confinement alone does
+   not survive concurrent filesystem mutation (#227)?
+6. How does a later invocation select and resume the same workflow run and
+   stage without hidden transcript state?
 
 The first implementation need not answer every question. It establishes one
 observable, testable path and leaves explicit follow-up issues for the rest.

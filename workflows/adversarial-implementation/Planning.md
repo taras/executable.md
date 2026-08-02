@@ -1,24 +1,12 @@
 ---
-inputs:
-  type: object
-  properties:
-    handoff:
-      type: string
-    handoffCheckpoint:
-      type: string
-    instructions:
-      type: string
-    planner:
-      type: string
-    implementor:
-      type: string
-  required:
-    - handoff
-    - handoffCheckpoint
-    - instructions
-    - planner
-    - implementor
-  additionalProperties: false
+required: [handoff, handoffCheckpoint, instructions, planner, implementor]
+
+props:
+  handoff: { type: string }
+  handoffCheckpoint: { type: string }
+  instructions: { type: string }
+  planner: { type: string }
+  implementor: { type: string }
 ---
 
 # Planning
@@ -187,7 +175,20 @@ resolves factual disagreement, while the user resolves material choices.
   {verdict.review}
 </Output>
 
-The loop is bounded and reports why it stopped: passed, user stopped, failed,
-cancelled, or retry limit reached. The surrounding workflow records every
-`plan`, `verdict`, and `planCheckpoint` version under its loop iteration; the
-component does not create handoff files.
+The loop is bounded and records why it stopped. `<Loop>` journals every
+iteration it enters and one terminal record whose outcome is `break` — the
+passing verdict above — `exhausted`, or `error`, and it refuses a replay whose
+stored outcome or iteration count disagrees with what this run reached.
+Reaching `max` completes the loop normally; that an exhausted planning loop has
+not converged is this document's policy to state, written as an ordinary `<If>`
+on `verdict.passed` after `</Loop>`. `<Loop>` opens no binding scope, so `plan`,
+`verdict`, and `planCheckpoint` hold their final values in the `<Output>`
+region below.
+
+The surrounding workflow will record every `plan`, `verdict`, and
+`planCheckpoint` version under its loop iteration. That artifact ledger does not
+exist yet, and neither does a `cancelled` loop outcome — workflow-level
+cancellation and stop reasons belong to `<Workflow>`. The component does not
+create handoff files either way.
+
+Everything in this component's body runs today.

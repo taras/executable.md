@@ -186,8 +186,9 @@ feedback, decisions, branches, and pull requests do not belong to whichever
 agent happened to create them. The document captures or resolves those assets
 deterministically and passes required content into agent prompts explicitly.
 
-Illustrative components such as `<Workflow>`, `<Worktree>`, `<File>`, and
-`<PullRequest>` perform operations that should not depend on model judgment:
+`<File>` and `<Glob>` already perform such operations. Illustrative components
+such as `<Workflow>`, `<Worktree>`, and `<PullRequest>` describe the rest.
+Together they cover the work that should not depend on model judgment:
 
 - record immutable handoff, plan, review, and decision versions;
 - create or resolve a named workspace, branch, file, or pull request only when

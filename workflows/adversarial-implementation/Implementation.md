@@ -1,24 +1,12 @@
 ---
-inputs:
-  type: object
-  properties:
-    plan:
-      type: string
-    authorization:
-      type: string
-    instructions:
-      type: string
-    planner:
-      type: string
-    implementor:
-      type: string
-  required:
-    - plan
-    - authorization
-    - instructions
-    - planner
-    - implementor
-  additionalProperties: false
+required: [plan, authorization, instructions, planner, implementor]
+
+props:
+  plan: { type: string }
+  authorization: { type: string }
+  instructions: { type: string }
+  planner: { type: string }
+  implementor: { type: string }
 ---
 
 # Implementation
@@ -311,8 +299,13 @@ remote effects.
   </Each>
 </Output>
 
-The surrounding workflow records each parsed implementation result, commit and
-pull-request handle, planner verdict, and user-checkpoint result. Only
+The agent, parsing, and control-flow syntax in this component runs today.
+`<Commit>`, `<PullRequest>`, and `<Issue>` do not exist: until they land, the
+loop above cannot execute, and the effects they stand for remain explicit
+user-run steps between manual stages.
+
+The surrounding workflow will record each parsed implementation result, commit
+and pull-request handle, planner verdict, and user-checkpoint result. Only
 implementation source files are written into the worktree.
 
 ## Finding dispositions

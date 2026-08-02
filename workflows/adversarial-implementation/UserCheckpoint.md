@@ -1,15 +1,9 @@
 ---
-inputs:
-  type: object
-  properties:
-    purpose:
-      type: string
-    agent:
-      type: string
-  required:
-    - purpose
-    - agent
-  additionalProperties: false
+required: [purpose, agent]
+
+props:
+  purpose: { type: string }
+  agent: { type: string }
 ---
 
 # User Checkpoint
@@ -171,13 +165,34 @@ Rationale: {elicitation.rationale}
 
 `UserInvolvementAssessment` distinguishes whether involvement is required from
 the choice itself. The caller renders the complete material to assess as child
-content rather than asking the agent to locate or read it. `<Elicit>` only
-transports and records a response as a runtime primitive. During the manual
-exercise an explicit user-run step records that response in run history;
-runtime input can implement the same narrow contract later.
+content rather than asking the agent to locate or read it.
+
+`<Elicit>` asks without choosing how. It requires `schema` and `as`, compiles
+the schema before its content expands, renders that content as the request
+message, and validates the provider's answer against the same compiled schema
+before binding it. There is no `mode`, `provider`, or `uiSchema` prop and no
+built-in approve, decline, or cancel — `elicitationSchema` above defines every
+response available. Where the asking happens is the host's decision, made
+through the Elicitation Api: `xmd run` composes WebForm as its current
+provider, so this checkpoint opens a loopback browser form under the CLI.
+Only the validated answer is journaled, keyed by a fingerprint of the compiled
+schema and the rendered message, so a resumed run restores the answer instead
+of asking twice and refuses a recorded answer whose question does not match.
+A document that already knows the answer — a test, a demo, a non-interactive
+region — wraps this component in an `<Answers>` region and supplies it with
+`<Answer>` matchers, which changes who answers without changing this file.
+
+What `<Elicit>` does not solve is stopping between processes. It answers a
+question inside one run; selecting and resuming a stopped stage in a later
+invocation belongs to `<Stage>` and `<Workflow>`, which do not exist yet.
 
 `<SafeParse>` exposes validation failures as data so the document can show the
-repair turn explicitly. The final `<Parse>` prevents the workflow from
-continuing after the bounded repair loop with malformed output. The schema is
-ordinary captured document content rather than a registry entry or
-`<Prompt schema>` prop.
+repair turn explicitly. It absorbs JSON syntax and schema-validation failures
+and nothing else: an unusable schema still fails, and a child execution failure
+propagates unchanged. Its failure shape preserves the rendered input exactly,
+which is what lets the correction prompt quote what the agent actually said.
+The final `<Parse>` prevents the workflow from continuing after the bounded
+repair loop with malformed output. The schema is ordinary captured document
+content rather than a registry entry or `<Prompt schema>` prop.
+
+This component runs today.

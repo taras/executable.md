@@ -1,15 +1,9 @@
 ---
-inputs:
-  type: object
-  properties:
-    instructions:
-      type: string
-    planner:
-      type: string
-  required:
-    - instructions
-    - planner
-  additionalProperties: false
+required: [instructions, planner]
+
+props:
+  instructions: { type: string }
+  planner: { type: string }
 ---
 
 # Discovery
@@ -51,7 +45,12 @@ issue may enter directly at implementor planning.
 - Likely pull-request topology
 - Decisions that remain with the user
 
-The component renders the handoff content. Its caller supplies the request as
-content and decides whether and where to persist the result. The handoff is a
-theory for investigation, not an implementation plan that the implementor
-follows unquestioningly.
+The component declares no `returns`, so its `<Output>` region is its return
+value and a caller's `as` binds that rendered text. `<Agent name={props.planner}>`
+selects the agent from a validated prop rather than a literal: the agent
+components take their props from a literal or from an expression that resolves
+to a string. Its caller supplies the request as content and decides whether and
+where to persist the result. The handoff is a theory for investigation, not an
+implementation plan that the implementor follows unquestioningly.
+
+This component runs today.

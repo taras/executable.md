@@ -1,31 +1,34 @@
 ---
-inputs:
-  type: object
-  properties:
-    request: { type: string }
-    base: { type: string, default: main }
-    planner: { type: string, default: codex }
-    implementor: { type: string, default: claude }
-  required: [request]
-  additionalProperties: false
+required: [request]
+
+props:
+  request: { type: string }
+  base: { type: string, default: main }
+  planner: { type: string, default: codex }
+  implementor: { type: string, default: claude }
 ---
 
 # Adversarial Implementation Workflow
 
-- **Status:** Executable design sketch
+- **Status:** Living end-goal target
 - **Execution:** Manual, one stage at a time
 
 This entry document is the complete workflow map. The linked files define the
 prompts, artifacts, permissions, and deterministic effects used by each stage.
-Its component markup is the intended executable form even where the current
-runtime does not yet provide the required primitive.
+Its component markup is the intended executable form. In this file, everything
+inside `<Worktree>` uses shipped syntax; the three wrappers around it —
+`<Workflow>`, `<Sandbox>`, and `<Worktree>` — are workflow-owned capabilities
+that do not exist yet.
 
-Each invoked component renders its result through its `<Output>` region. The
-caller's `as` prop captures that result and passes it explicitly to the next
-component. `<Workflow>` creates an internal run, persists its captured results,
-and restores them when a later manual stage resumes. Generated handoffs are
+Each stage component is a text component: it declares no `returns`, so its
+`<Output>` region is its return value and the caller's `as` binds that rendered
+text. `<Glob>` declares `returns` and binds a `string[]` by reference instead.
+The [executable MDX specification](../../specs/executable-mdx-spec.md) is the
+authority for both. `<Workflow>` will create an internal run, persist those
+captured results, and restore them when a later manual stage resumes; today
+each stage's values live only in the executing process. Generated handoffs are
 prompt content, not files that an agent must choose to read. Root `props`
-supplies `request`, `base`, `planner`, and `implementor`.
+supplies `request`, `base`, `planner`, and `implementor` (#179).
 
 ## Complete flow
 
@@ -37,9 +40,7 @@ supplies `request`, `base`, `planner`, and `implementor`.
         exclude={[".git/**", "**/node_modules/**"]}
         as="instructionPaths"
       />
-      <Capture as="instructions">
-        <InstructionFiles paths={instructionPaths} />
-      </Capture>
+      <InstructionFiles paths={instructionPaths} as="instructions" />
       <Discovery
         instructions={instructions}
         planner={props.planner}
@@ -85,16 +86,33 @@ supplies `request`, `base`, `planner`, and `implementor`.
   </Sandbox>
 </Workflow>
 
-`Workflow` resolves `props.base` to a source revision before creating the
+`Workflow` will resolve `props.base` to a source revision before creating the
 worktree. Its internal run keeps discovery through implementation on that
 pinned filesystem even if the branch moves while execution is in progress.
+
+## What runs today
+
+`InstructionFiles`, `Discovery`, `UserCheckpoint`, and `Planning` are written
+entirely in shipped syntax: `<Glob>`, `<File>`, `<Parse>`, `<SafeParse>`,
+`<Elicit>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<Each>`, `<Capture>`,
+`<Output>`, and the `<Agent>`, `<Session>`, and `<Prompt>` agent components. A
+caller that already knows an answer wraps a checkpoint in an `<Answers>` region
+instead of reaching a person.
+
+`<Workflow>`, `<Sandbox>`, `<Worktree>`, `<Stage>`, `<Commit>`,
+`<PullRequest>`, and `<Issue>` are not implemented, and neither is sidecar run
+history nor cross-process stage resumption. `Implementation` therefore does not
+run yet — its agent, parsing, and control flow are shipped, but its loop
+contains the three Git and GitHub effects. Until those exist, the flow above
+runs in one process and one existing working directory, and its durable effects
+remain explicit user-run steps between manual stages.
 
 ## Rendered data flow
 
 | Captured value         | Produced by                | Consumed by                                         |
 | ---------------------- | -------------------------- | --------------------------------------------------- |
-| `instructionPaths`     | `Glob`                      | `InstructionFiles`                                  |
-| `instructions`         | `InstructionFiles` capture | every agent prompt                                  |
+| `instructionPaths`     | `Glob` (`string[]`)         | `InstructionFiles`                                  |
+| `instructions`         | `InstructionFiles`         | every agent prompt                                  |
 | `handoff`              | `Discovery`                 | handoff `UserCheckpoint`, `Planning`                |
 | `handoffCheckpoint`    | handoff `UserCheckpoint`    | `Planning`                                          |
 | `plan`                 | `Planning`                  | authorization `UserCheckpoint`, `Implementation` |
