@@ -396,9 +396,8 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
   // Under `xmd test` a document that elicits without supplying an answer would
   // open a browser and wait for somebody who is not coming, which is a hang
   // rather than a test result. Leaving the provider out makes that document
-  // fail immediately with "no elicitation provider configured", and the two
-  // deterministic answers — an `<Answers>` region, or scripted middleware —
-  // stay the way a test says what the answer is.
+  // fail immediately with "no elicitation provider configured", and an
+  // `<Answers>` region stays the way a test says what the answer is.
   if (!mode.testing) {
     yield* installWebElicitation();
   }
