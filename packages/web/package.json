@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/web",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Schema-backed local web form input for executable.md documents.",
   "type": "module",
   "exports": {
@@ -10,6 +10,7 @@
     "@effectionx/node": "0.2.4",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
     "@rjsf/utils": "6.7.1",
     "@rjsf/validator-ajv8": "6.7.1",
     "ajv": "8.20.0",

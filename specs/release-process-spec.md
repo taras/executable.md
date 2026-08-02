@@ -48,10 +48,13 @@ sequenceDiagram
 
 ## 2. Version lockstep
 
-Every package (`packages/core`, `packages/cli`, `packages/durable-streams`,
-`packages/runtime`, `packages/testing`, `packages/code-review-agent`,
-`packages/test-agent`, `packages/acp`) declares
-the same version in its `deno.json` and `package.json`. `packages/cli/src/cli.ts`
+Every publishable package (`packages/core`, `packages/cli`,
+`packages/durable-streams`, `packages/runtime`, `packages/testing`,
+`packages/code-review-agent`, `packages/test-agent`, `packages/acp`,
+`packages/web`) declares the same version in its `deno.json` and
+`package.json`. A member marked `"private": true` is outside the lockstep
+because it never publishes — `packages/test-support` is the one, and it stays
+at `0.0.0`. `packages/cli/src/cli.ts`
 imports `packages/cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
 are the single source. The npm version derives from the tag, and both
@@ -59,10 +62,16 @@ workflows refuse a tag the manifests do not declare, so the two cannot
 diverge.
 
 To cut a release: run `deno task bump <version>` (stamps every manifest),
-merge to `main`, then publish the draft release — its tag follows the
-manifests (§3).
+restamp the workspace versions in `bun.lock`, merge to `main`, then publish the
+draft release — its tag follows the manifests (§3).
 
-The bump touches nothing but the manifests. PR Review and Repo Analysis install
+`bun.lock` records a `version` for every workspace member, and the bump task
+does not touch it — `bun install` will not restamp those entries either, since
+they already satisfy the lockfile. Left alone they keep the previous release's
+number. Only the members whose `name` is an `@executablemd` package change; an
+unrelated dependency that happens to share the old version number must not.
+
+The bump touches nothing else. PR Review and Repo Analysis install
 the latest published release rather than a pinned version, so preparing a
 release never depends on a binary that release has not published yet.
 
