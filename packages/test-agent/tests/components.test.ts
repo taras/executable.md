@@ -442,4 +442,50 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
     expect(run.output).not.toContain("owner-reply");
     expect(run.output).not.toContain("other-reply");
   });
+
+  // The regression the scoped() removal fixes: content projected by
+  // tryContent() anchors to the invocation, so anything <TestAgent> installs
+  // inside a child frame is invisible to its own body. Wrapping the region in
+  // scoped() again turns every scenario into "valid only inside <TestAgent>"
+  // and every prompt into "Agent.agent() has no provider".
+  it("TV13: a scenario in the body sees the session <TestAgent> installed", function* () {
+    const run = yield* runDoc({
+      "agents/hi.md": HI,
+      "doc.md": [
+        "<TestAgent>",
+        '<TestAgent.Scenario src="./agents/hi.md" />',
+        '<Test name="reaches it"><Prompt text="hi" /></Test>',
+        "</TestAgent>",
+        "",
+      ].join("\n"),
+    });
+
+    expect(run.output).not.toContain("is valid only inside <TestAgent>");
+    expect(run.output).not.toContain("has no provider");
+    expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
+  });
+
+  // TC1's analog: a settled diagnostic beside healthy scenarios renders inline
+  // and the rest of the body still runs. content() would replace the whole
+  // invocation's output with that diagnostic instead. The empty-string src also
+  // pins that the component's own check still owns that wording — the schema
+  // accepts "" as a string, so only the fn can catch it.
+  it("TV14: a scenario diagnostic renders inline beside a healthy one", function* () {
+    const run = yield* runDoc({
+      "agents/hi.md": HI,
+      "doc.md": [
+        "<TestAgent>",
+        '<TestAgent.Scenario src="" />',
+        '<TestAgent.Scenario src="./agents/hi.md" />',
+        "BODY TEXT",
+        '<Test name="still runs"><Prompt text="hi" /></Test>',
+        "</TestAgent>",
+        "",
+      ].join("\n"),
+    });
+
+    expect(run.output).toContain('requires a "src" prop');
+    expect(run.output).toContain("BODY TEXT");
+    expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
+  });
 });
