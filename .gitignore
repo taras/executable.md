@@ -9,6 +9,10 @@ node_modules/
 dist/
 .DS_Store
 
+# Claude Code local settings and scratch state
+**/.claude/settings.local.json
+**/.claude/local/
+
 # dnt npm build output
 npm/
 **/npm/
