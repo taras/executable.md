@@ -6465,8 +6465,11 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 ### Tier OBS — error observation
 
 The one-observation contract of §6.9, measured with counting `Component.raise`
-middleware. Identifiers match `packages/core/tests/error-observation.test.ts` one
-to one.
+middleware. The two halves are measured against different subjects and live in
+different files: OBS1–OBS6 match `packages/core/tests/error-observation.test.ts`,
+where a claiming handler *is* the subject, and OBS7–OBS24 match
+`packages/core/tests/construct-error-observation.test.ts`, which installs no
+extension at all. Identifiers match one to one within each.
 
 Across the extension boundary:
 
@@ -6499,6 +6502,8 @@ Across the engine's own constructs:
 | OBS20 | Sibling content failures | Two failures keep source order and one observation each |
 | OBS21 | Recovered content failure | The `ContentError` carries the raised segments in source order, and recovery settles nothing |
 | OBS22 | Where the cause is attached | Raise middleware that catches what the chain throws already sees the thrown component failure as the `DocumentationError`'s cause, the same object leaves the expansion, and the contextual segment is observed once |
+| OBS23 | Thrown `undefined` under a throwing policy | The diagnostic records it as its own `cause` — an Error whose own `cause` is the `undefined` that was thrown — so "translated from undefined" stays distinguishable from "no attribution at all" |
+| OBS24 | Thrown `undefined` under a collecting policy | It settles as a rendered diagnostic and constructs no `DocumentationError`, so there is no Error to carry a cause, and later content still renders |
 
 Provider families carry the same contract in their own tiers: `AC20`
 (`<Prompt>` prop validation), the assertion validation row in

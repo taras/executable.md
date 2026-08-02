@@ -64,7 +64,7 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { Component, env, expandSegments, raise } from "./component-api.ts";
+import { env, expandSegments, raise } from "./component-api.ts";
 import { renderSegments } from "./render.ts";
 import { evaluateExpression } from "./expand.ts";
 import { Elicitation } from "./elicitation-api.ts";

@@ -13,6 +13,7 @@ import type {
   ErrorSegment,
   FunctionComponentDefinition,
   Json,
+  PropsSchema,
   Segment,
 } from "../src/types.ts";
 
@@ -32,13 +33,15 @@ import type {
  * identity is what proves the transport reports nothing a second time.
  *
  * The constructs under test are the engine's, so nothing here claims a name.
- * `<Broken />` is a registered component that fails on its own terms, and the
- * diagnostic the engine builds for a failed invocation is the ErrorSegment these
- * observe — see `error-observation.test.ts` for the same contract measured
- * across the extension boundary instead.
+ * `<Broken />` is a component that fails on its own terms, resolved through the
+ * `importComponent` middleware these install because they drive `expandSegments`
+ * directly — there is no registry in this harness. The diagnostic the engine
+ * builds for a failed invocation is the ErrorSegment they observe. See
+ * `error-observation.test.ts` for the same contract measured across the
+ * extension boundary instead.
  */
 
-const OPEN_SCHEMA = { type: "object", properties: {}, additionalProperties: true } as const;
+const OPEN_SCHEMA: PropsSchema = { type: "object", properties: {}, additionalProperties: true };
 
 function markdownComponent(name: string, body: string): ComponentDefinition {
   return {
@@ -111,7 +114,7 @@ function recoveringComponent(name: string, caught: ContentError[]): FunctionComp
 }
 
 /**
- * `<Broken />` — a component that fails, which is how a document plants an
+ * `<Broken />` — a component that fails, which is how these plant an
  * ErrorSegment without any extension installed.
  *
  * A `message` prop names the failure so sibling failures stay distinguishable.
