@@ -25,12 +25,13 @@ import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
-import { Component, raise } from "../src/component-api.ts";
+import { Component } from "../src/component-api.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
 import type { ErrorPolicy } from "../src/errors.ts";
-import type { ErrorSegment, Segment } from "../src/types.ts";
+import type { ErrorSegment, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -135,6 +136,27 @@ interface Observation {
 }
 
 /**
+ * A failing child, so the segment it reports is identifiable by reference.
+ *
+ * Failing rather than returning is what makes it a stand-in at all: the engine
+ * reports a diagnostic for the failed invocation, and that segment — not text a
+ * component chose to render — is the one `<File>` finds among its content and
+ * the one the assertions below follow by identity.
+ */
+const BROKEN: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Broken",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  // deno-lint-ignore require-yield
+  fn: collectFailures(function* () {
+    throw new Error("broken");
+  }),
+};
+
+/** What the engine's diagnostic for a failed `<Broken />` reads. */
+const BROKE = "Function component Broken error: broken";
+
+/**
  * Expand `source` against the real `<File>` definition under `policy`, observing
  * every error where it is reported.
  *
@@ -142,8 +164,7 @@ interface Observation {
  * assert is what a document produces. This one goes a level down: how often a
  * failure is reported, and the shape of the failure that leaves the component —
  * which error object, carrying which others — are not things rendered output can
- * show. `<Broken />` stands in for a failing child so the segment it reports is
- * identifiable by reference.
+ * show.
  */
 function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operation<Observation> {
   return scoped(function* () {
@@ -171,22 +192,15 @@ function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operati
         }
       },
     });
-    yield* Component.around({
-      *expand([element], next) {
-        if (element.name === "Broken") {
-          return {
-            segments: [yield* raise({ type: "error", message: "broken", source: "Broken" })],
-          };
-        }
-        return yield* next(element);
-      },
-    });
     yield* Component.around(
       {
         // deno-lint-ignore require-yield
         *importComponent([name], _next) {
           if (name === definition.name) {
             return definition;
+          }
+          if (name === "Broken") {
+            return BROKEN;
           }
           throw new Error(`Component not found: ${name}`);
         },
@@ -626,7 +640,7 @@ describe("Tier FL — File", () => {
     // Two errors exist, each reported once: the child's, and the one `<File>`
     // chose in its place.
     expect(observed.raised).toHaveLength(2);
-    expect(observed.raised[0].message).toBe("broken");
+    expect(observed.raised[0].message).toBe(BROKE);
     expect(observed.failures).toHaveLength(2);
     expect(observed.failures[0].segment).toBe(observed.raised[0]);
     expect(observed.failures[1].segment).toBe(observed.raised[1]);
@@ -641,7 +655,7 @@ describe("Tier FL — File", () => {
     // diagnostic about the write that did not happen.
     expect(thrown).not.toBe(observed.failures[0]);
     expect(thrown.message).toContain('did not write "notes.md": its content failed to expand.');
-    expect(thrown.message).toContain("broken");
+    expect(thrown.message).toContain(BROKE);
 
     const chain = causes(thrown);
     const recovered = chain.find((link) => link instanceof ContentError);

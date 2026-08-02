@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execute } from "../src/execute.ts";
-import { Component } from "../src/component-api.ts";
+import { registerComponents } from "../src/components/registration.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { PermissionOutcome, PermissionRequest } from "../src/agent/agent-api.ts";
 import { AgentProviders, registerAgentProvider } from "../src/agent/provider-api.ts";
@@ -108,16 +108,22 @@ function* decide(kind?: string): Operation<PermissionOutcome> {
  * outside a component body.
  */
 function* installAskComponent(outcomes: string[]): Operation<void> {
-  yield* Component.around({
-    *expand([element], next) {
-      if (element.name === "Ask") {
+  // Registered, not an importComponent stub: execute() installs its own
+  // terminal importComponent provider at { at: "min" } that does not delegate,
+  // so an outer stub never sees the name. The middleware seam is only for tests
+  // driving expandSegments directly.
+  yield* registerComponents([
+    {
+      name: "Ask",
+      origin: "test",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
         const outcome = yield* decide();
         outcomes.push(outcome.outcome === "selected" ? outcome.optionId : "cancelled");
-        return { segments: [] };
-      }
-      return yield* next(element);
+        return "";
+      },
     },
-  });
+  ]);
 }
 
 describe("Tier AG — provider registry and permission policies", () => {

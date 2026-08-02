@@ -25,18 +25,17 @@
  *
  * ## Why these are structural rather than registered
  *
- * A registered function component sees `content()` — rendered text. Matchers
- * are structure: `value` is an expression prop, `template` is a prop-or-children
- * pair, and each needs its own position for diagnostics. Only the expansion hook
- * hands over the element itself, which is why `<Test>` and `<WhenPrompt>` are
- * claimed the same way. Being claimed means being reserved: a repository file
- * named `Answers.md` never stands in, and it could not implement matcher
- * semantics if it did.
+ * A function component sees `content()` — rendered text. Matchers are
+ * structure: `value` is an expression prop, `template` is a prop-or-children
+ * pair, and each needs its own position for diagnostics, and only the element
+ * itself carries those. That is why these are structural rather than
+ * components: being reserved means a repository file named `Answers.md` never
+ * stands in, and it could not implement matcher semantics if it did.
  *
- * Partitioning before expanding is what the hook buys. Matchers are collected
- * from the whole child list first, so where an `<Answer>` is written does not
- * decide what it can answer; and "an `<Answers>` with no body" is a structural
- * fact rather than a guess from empty rendered text.
+ * Partitioning before expanding is what the structural dispatch buys. Matchers
+ * are collected from the whole child list first, so where an `<Answer>` is
+ * written does not decide what it can answer; and "an `<Answers>` with no body"
+ * is a structural fact rather than a guess from empty rendered text.
  *
  * ## Selection
  *
@@ -65,7 +64,7 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { Component, env, expandSegments, raise } from "./component-api.ts";
+import { env, expandSegments, raise } from "./component-api.ts";
 import { renderSegments } from "./render.ts";
 import { evaluateExpression } from "./expand.ts";
 import { Elicitation } from "./elicitation-api.ts";
@@ -73,7 +72,7 @@ import type { ElicitationRequest } from "./elicitation-api.ts";
 import { JsonParseError, parseJson } from "./json.ts";
 import { matchPrompt, parseTemplate } from "./template.ts";
 import type { ParsedTemplate } from "./template.ts";
-import type { ComponentElement, ComponentHandling, ErrorSegment, Json, Segment } from "./types.ts";
+import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
 
 const ANSWERS = "Answers";
 const ANSWER = "Answer";
@@ -106,44 +105,17 @@ function isBlankText(segment: Segment): boolean {
   return segment.type === "text" && segment.content.trim() === "";
 }
 
-/**
- * Install the handler for both constructs.
- *
- * Offered every element, it claims only these two names and delegates the rest,
- * so it composes with any other expansion support a host has installed.
- */
-export function installAnswers(): Operation<void> {
-  return Component.around(
-    {
-      *expand([element], next) {
-        if (element.name === ANSWERS) {
-          return { segments: yield* expandAnswers(element) };
-        }
-        if (element.name === ANSWER) {
-          // Reaching here means no enclosing `<Answers>` consumed it: a
-          // well-placed matcher is partitioned out and never expanded on its
-          // own. Same shape as `<Else>` outside `<If>`.
-          return {
-            segments: [
-              yield* raise(
-                configError(
-                  ANSWER,
-                  "must be a direct child of <Answers>. It is reserved: it never resolves a " +
-                    "component, and only the <Answers> it belongs to can read it.",
-                  element,
-                ),
-              ),
-            ],
-          };
-        }
-        return yield* next(element);
-      },
-    },
-    { at: "min" },
+/** A `<Answer>` written outside the `<Answers>` that would have read it. */
+export function strayAnswerError(element: ComponentElement): ErrorSegment {
+  return configError(
+    ANSWER,
+    "must be a direct child of <Answers>. It is reserved: it never resolves a " +
+      "component, and only the <Answers> it belongs to can read it.",
+    element,
   );
 }
 
-function* expandAnswers(element: ComponentElement): Operation<Segment[]> {
+export function* expandAnswers(element: ComponentElement): Operation<Segment[]> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "delegate") {
       return [

@@ -5057,6 +5057,13 @@ lets a command elicit with no document executing.
 
 #### 6.16.2 Supplying answers from the document: `<Answers>`
 
+`<Answers>` and `<Answer>` are reserved structural syntax (§5.3), not
+components: `<Answers>` reads its `<Answer>` children as elements before they
+expand, and a registered component only ever sees `content()` — rendered text,
+by which point a matcher's `value` expression and its own position are gone. A
+repository file named `Answers.md` therefore never stands in for one, and could
+not implement matcher semantics if it did.
+
 A component that elicits internally asks whoever the host's provider reaches.
 Sometimes the surrounding document already knows the answer — a workflow
 exercising somebody else's component non-interactively, a demo, a region of a
@@ -5125,12 +5132,10 @@ elicitation passes to the next provider outward, which is an enclosing
 `<Answers>` if there is one and the host's provider otherwise. Regions install
 at `{ at: "min" }`, so the nearest answers first and the chain composes outward.
 
-**Both names are structural** (§5.3). A construct whose children are read as
-structure rather than rendered text cannot be an ordinary registered component,
-which only ever sees `content()` — so `<Answers>`/`<Answer>` are claimed through
-the expansion hook, as `<Test>` and `<WhenPrompt>` are, and a repository file
-named after either never stands in. An `<Answer>` outside an `<Answers>` is a
-positioned diagnostic, mirroring `<Else>` outside `<If>`.
+**A stray `<Answer>`** — one written outside the `<Answers>` that would have
+read it — is a positioned diagnostic, mirroring `<Else>` outside `<If>`. It
+names no component: being structural (§5.3) means the name resolves to nothing
+else, wherever it is written.
 
 **Configuration diagnostics** are positioned and raised under the ambient
 policy: a misplaced `<Answer>`, an `<Answers>` with no body (self-closing, or
@@ -6455,7 +6460,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF41 | Unselected import (execution) | A component in the unselected branch is never imported end to end |
 | IF42 | Partial replay | From a journal prefix without the root Close, `<If>` is reached live, selects from the restored binding, and reproduces the output |
 | IF43 | Projection | An `<If>` through `<Content />` resolves its condition from the caller's bindings |
-| IF44 | Expand hook | No element in the unselected branch is offered to `Component.expand` |
+| IF44 | Unselected expansion | A component in the unselected branch never expands, so its body reaches no output |
 | IF45 | Filesystem | No `stat` or read happens for the unselected branch's component |
 | IF46 | Process runtime | `exec` is never invoked for an unselected block |
 | IF47 | Durable events | The unselected branch writes no exec or eval event |
@@ -6470,8 +6475,11 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 ### Tier OBS — error observation
 
 The one-observation contract of §6.9, measured with counting `Component.raise`
-middleware. Identifiers match `packages/core/tests/error-observation.test.ts` one
-to one.
+middleware. The two halves are measured against different subjects and live in
+different files: OBS1–OBS6 match `packages/core/tests/error-observation.test.ts`,
+where a claiming handler *is* the subject, and OBS7–OBS24 match
+`packages/core/tests/construct-error-observation.test.ts`, which installs no
+extension at all. Identifiers match one to one within each.
 
 Across the extension boundary:
 
@@ -6504,6 +6512,8 @@ Across the engine's own constructs:
 | OBS20 | Sibling content failures | Two failures keep source order and one observation each |
 | OBS21 | Recovered content failure | The `ContentError` carries the raised segments in source order, and recovery settles nothing |
 | OBS22 | Where the cause is attached | Raise middleware that catches what the chain throws already sees the thrown component failure as the `DocumentationError`'s cause, the same object leaves the expansion, and the contextual segment is observed once |
+| OBS23 | Thrown `undefined` under a throwing policy | The diagnostic records it as its own `cause` — an Error whose own `cause` is the `undefined` that was thrown — so "translated from undefined" stays distinguishable from "no attribution at all" |
+| OBS24 | Thrown `undefined` under a collecting policy | It settles as a rendered diagnostic and constructs no `DocumentationError`, so there is no Error to carry a cause, and later content still renders |
 
 Provider families carry the same contract in their own tiers: `AC20`
 (`<Prompt>` prop validation), the assertion validation row in

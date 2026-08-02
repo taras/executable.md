@@ -67,6 +67,7 @@ import { SchemaValidationError, validateProps, validateReturnValue } from "./val
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
+import { expandAnswers, strayAnswerError } from "./answers.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
 import { remark } from "remark";
@@ -149,25 +150,45 @@ function* rejectRetain(): Operation<never> {
  * interpolation inputs, hide set, and block counter — bound for exactly the
  * length of the offer. A claiming handler reaches it through
  * `Component.expandSegments`; a nested claim replaces the binding for its own
- * offer and restores this one. Nothing else in expansion sees a frame, so a
- * code block or modifier running between elements finds none active.
+ * offer and restores this one.
  */
-function* offerElement(
+function offerElement(
   element: ComponentElement,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
 ): Operation<ComponentHandling | undefined> {
+  return withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
+    Component.operations.expand(element),
+  );
+}
+
+/**
+ * Bind this expansion's recursion for the length of `body`.
+ *
+ * Two callers need it. An offer publishes it for a claiming handler, and a
+ * structural construct that renders segments of its own — `<Answers>` — reaches
+ * them through the Api form of `expandSegments` rather than this module's
+ * function. Nothing else in expansion binds one, so a code block or modifier
+ * running between elements finds none active.
+ */
+function* withExpansionFrame<T>(
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  body: () => Operation<T>,
+): Operation<T> {
   const scope = yield* useScope();
-  const enclosingFrame = scope.get(ExpansionFrame);
+  const enclosing = scope.get(ExpansionFrame);
   scope.set(ExpansionFrame, (inner: Segment[]) =>
     expandSegments(inner, parentMeta, parentProps, hideSet, counter),
   );
   try {
-    return yield* Component.operations.expand(element);
+    return yield* body();
   } finally {
-    scope.set(ExpansionFrame, enclosingFrame);
+    scope.set(ExpansionFrame, enclosing);
   }
 }
 
@@ -621,6 +642,28 @@ export function* expandSegments(
           result.push(
             ...(yield* expandCollectFailures(segment, parentMeta, parentProps, hideSet, counter)),
           );
+          break;
+        }
+
+        if (segment.name === "Answers") {
+          // No raise() here, like the branches above: expandAnswers reports the
+          // errors it creates, and the selected answer settled its own (§6.9).
+          // It renders the answer it chose through the Api form of
+          // `expandSegments`, so it needs this frame — the same one the
+          // retired claim hook used to publish for a handler.
+          result.push(
+            ...(yield* withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
+              expandAnswers(segment),
+            )),
+          );
+          break;
+        }
+
+        if (segment.name === "Answer") {
+          // A well-placed <Answer> is partitioned out by its <Answers> and never
+          // expanded on its own. Reaching here means it sits outside one, so it
+          // names no component — the same shape as a stray <Else>.
+          result.push(yield* raise(strayAnswerError(segment)));
           break;
         }
 

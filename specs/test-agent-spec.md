@@ -125,6 +125,13 @@ the actual prompt.
 `<WhenPrompt>` accepts a single-line `template` prop or rendered children for a
 multiline template. Supplying both forms is a configuration error.
 
+The tag's shape chooses the form, not whether children happen to be present:
+
+- `<WhenPrompt template="…" />` is the prop form;
+- `<WhenPrompt>…</WhenPrompt>` is the content form, and a paired tag with
+  nothing between it is the content form with an empty template;
+- `<WhenPrompt template="…"></WhenPrompt>` supplies both and is rejected.
+
 Templates match the complete prompt. Literal text is a constraint. Two forms of
 interpolation are available:
 
@@ -132,8 +139,10 @@ interpolation are available:
 - `{binding}` interpolates an existing value and requires the prompt to contain
   that value at the same position.
 
-Captures require an `as` prop. They are stored as strings in one flat object
-under that binding:
+Captures are stored as strings in one flat object bound under `as`, by
+reference — the binding becomes that object. An `as` naming a binding that
+already exists is **replaced**, not merged into. A template with captures
+invoked without `as` has nowhere to put them, so they are discarded:
 
 ```md
 <WhenPrompt

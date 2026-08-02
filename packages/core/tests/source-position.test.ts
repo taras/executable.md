@@ -3,7 +3,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { scanSegments } from "../src/scanner.ts";
-import { Component } from "../src/component-api.ts";
+import { invocation } from "../src/component-api.ts";
+import { registerComponents } from "../src/components/registration.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { ComponentElement, SourcePosition } from "../src/types.ts";
@@ -65,15 +66,24 @@ describe("source positions", () => {
 
     const positions: SourcePosition[] = [];
     const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": doc, "components/Probe.md": "probed\n" });
-    yield* Component.around({
-      *expand([element], next) {
-        if (element.position) {
-          positions.push(element.position);
-        }
-        return yield* next(element);
+    yield* useStubFs({ "README.md": doc });
+    // Registered rather than a repository file, so the probe can record what
+    // the engine tells a component about its own call site. That is the public
+    // guarantee now — `invocation()` — rather than what a claim was offered.
+    yield* registerComponents([
+      {
+        name: "Probe",
+        origin: "test",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          const position = (yield* invocation()).position;
+          if (position) {
+            positions.push(position);
+          }
+          return "probed";
+        },
       },
-    });
+    ]);
 
     const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("probed");
@@ -98,14 +108,22 @@ describe("source positions", () => {
     yield* useStubFs({
       "README.md": readme,
       "components/Wrapper.md": wrapper,
-      "components/Probe.md": "probed\n",
     });
-    yield* Component.around({
-      *expand([element], next) {
-        positions.push({ name: element.name, position: element.position });
-        return yield* next(element);
+    yield* registerComponents([
+      {
+        name: "Probe",
+        origin: "test",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          const metadata = yield* invocation();
+          positions.push({
+            name: metadata.name,
+            ...(metadata.position ? { position: metadata.position } : {}),
+          });
+          return "probed";
+        },
       },
-    });
+    ]);
 
     const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("probed");
