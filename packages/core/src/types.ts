@@ -100,14 +100,6 @@ export interface EvalEnv {
   values: Record<string, unknown>;
 }
 
-/**
- * A claimed element's replacement segments. `{ segments: [] }` means
- * handled-with-no-output — distinct from `undefined` (unhandled).
- */
-export interface ComponentHandling {
-  segments: Segment[];
-}
-
 export interface ParsedInfoString {
   language: string;
   modifiers: Modifier[];

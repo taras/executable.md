@@ -393,12 +393,6 @@ export function* installTestAgentComponents(): Operation<void> {
       props: SCENARIO_PROPS,
     },
   ]);
-  // Claims nothing now. Kept until the legacy-removal slice retires the surface.
-  yield* Component.around({
-    *expand([element], next) {
-      return yield* next(element);
-    },
-  });
 }
 
 const TEST_AGENT_PROPS: PropsSchema = {

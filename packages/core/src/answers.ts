@@ -64,7 +64,7 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { env, expandSegments, raise } from "./component-api.ts";
+import { env, raise } from "./component-api.ts";
 import { renderSegments } from "./render.ts";
 import { evaluateExpression } from "./expand.ts";
 import { Elicitation } from "./elicitation-api.ts";
@@ -73,6 +73,18 @@ import { JsonParseError, parseJson } from "./json.ts";
 import { matchPrompt, parseTemplate } from "./template.ts";
 import type { ParsedTemplate } from "./template.ts";
 import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
+
+/**
+ * The enclosing expansion's recursion, handed in by the loop that dispatched
+ * the region.
+ *
+ * A region renders segments of its own — its body, and each matcher's template
+ * children — and those have to expand with the interpolation inputs, hide set
+ * and block counter of the expansion they were written in. This module cannot
+ * reach `expandSegments` directly (that module imports this one), and it does
+ * not hold that state anyway, so the caller supplies both as one closure.
+ */
+export type ExpandSegments = (segments: Segment[]) => Operation<Segment[]>;
 
 const ANSWERS = "Answers";
 const ANSWER = "Answer";
@@ -115,7 +127,10 @@ export function strayAnswerError(element: ComponentElement): ErrorSegment {
   );
 }
 
-export function* expandAnswers(element: ComponentElement): Operation<Segment[]> {
+export function* expandAnswers(
+  element: ComponentElement,
+  expand: ExpandSegments,
+): Operation<Segment[]> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "delegate") {
       return [
@@ -134,7 +149,7 @@ export function* expandAnswers(element: ComponentElement): Operation<Segment[]> 
   const matchers: Matcher[] = [];
   for (const child of element.children) {
     if (isAnswer(child)) {
-      const parsed = yield* readAnswer(child);
+      const parsed = yield* readAnswer(child, expand);
       if (isErrorSegment(parsed)) {
         // The region cannot be trusted to answer anything, so it does not
         // expand a body that would ask. The diagnostic is returned rather than
@@ -185,7 +200,7 @@ export function* expandAnswers(element: ComponentElement): Operation<Segment[]> 
       { at: "min" },
     );
 
-    return yield* expandSegments(body);
+    return yield* expand(body);
   });
 }
 
@@ -231,7 +246,10 @@ function isErrorSegment(value: Matcher | ErrorSegment): value is ErrorSegment {
 }
 
 /** One `<Answer>`, or the diagnostic that says why it is not one. */
-function* readAnswer(element: ComponentElement): Operation<Matcher | ErrorSegment> {
+function* readAnswer(
+  element: ComponentElement,
+  expand: ExpandSegments,
+): Operation<Matcher | ErrorSegment> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "template" && name !== "value") {
       return yield* refuse(element, `does not accept a "${name}" prop (allowed: template, value).`);
@@ -261,7 +279,7 @@ function* readAnswer(element: ComponentElement): Operation<Matcher | ErrorSegmen
     typeof templateProp === "string"
       ? templateProp
       : hasChildren
-        ? renderSegments(yield* expandSegments(element.children)).trim()
+        ? renderSegments(yield* expand(element.children)).trim()
         : undefined;
   if (source !== undefined) {
     const parsed = parseTemplate(source);

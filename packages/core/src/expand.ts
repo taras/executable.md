@@ -21,7 +21,6 @@ import type {
   TextSegment,
   ErrorSegment,
   ComponentElement,
-  ComponentHandling,
   ComponentDefinition,
   ComponentFailure,
   ComponentInvocationMetadata,
@@ -36,7 +35,6 @@ import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
   Component,
-  ExpansionFrame,
   applyModifiers,
   env,
   evalScope,
@@ -143,53 +141,6 @@ function* rejectRetain(): Operation<never> {
       "without one — no document scope and no enclosing invocation — can only create " +
       "resources with invocation lifetime.",
   );
-}
-
-/**
- * Offer an element to extensions, with this expansion's recursion — its
- * interpolation inputs, hide set, and block counter — bound for exactly the
- * length of the offer. A claiming handler reaches it through
- * `Component.expandSegments`; a nested claim replaces the binding for its own
- * offer and restores this one.
- */
-function offerElement(
-  element: ComponentElement,
-  parentMeta: Record<string, unknown>,
-  parentProps: Record<string, Json>,
-  hideSet: Set<string>,
-  counter: BlockCounter,
-): Operation<ComponentHandling | undefined> {
-  return withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
-    Component.operations.expand(element),
-  );
-}
-
-/**
- * Bind this expansion's recursion for the length of `body`.
- *
- * Two callers need it. An offer publishes it for a claiming handler, and a
- * structural construct that renders segments of its own — `<Answers>` — reaches
- * them through the Api form of `expandSegments` rather than this module's
- * function. Nothing else in expansion binds one, so a code block or modifier
- * running between elements finds none active.
- */
-function* withExpansionFrame<T>(
-  parentMeta: Record<string, unknown>,
-  parentProps: Record<string, Json>,
-  hideSet: Set<string>,
-  counter: BlockCounter,
-  body: () => Operation<T>,
-): Operation<T> {
-  const scope = yield* useScope();
-  const enclosing = scope.get(ExpansionFrame);
-  scope.set(ExpansionFrame, (inner: Segment[]) =>
-    expandSegments(inner, parentMeta, parentProps, hideSet, counter),
-  );
-  try {
-    return yield* body();
-  } finally {
-    scope.set(ExpansionFrame, enclosing);
-  }
 }
 
 /**
@@ -548,22 +499,6 @@ export function* expandSegments(
       }
 
       case "component": {
-        // Extension hook: installed component support may claim this element
-        // before built-in expansion. A handler reports the errors it creates
-        // (§6.9), so returned segments are settled here rather than reported
-        // again: a collecting policy keeps them, a throwing one aborts.
-        const handling = yield* offerElement(segment, parentMeta, parentProps, hideSet, counter);
-        if (handling) {
-          for (const handled of handling.segments) {
-            if (handled.type === "error") {
-              result.push(yield* settle(handled));
-            } else {
-              result.push(handled);
-            }
-          }
-          break;
-        }
-
         if (segment.name === "Content") {
           // A `<Content />` the invocation claimed carries its resolved
           // projection; expanding it here runs that content in the
@@ -648,12 +583,12 @@ export function* expandSegments(
         if (segment.name === "Answers") {
           // No raise() here, like the branches above: expandAnswers reports the
           // errors it creates, and the selected answer settled its own (§6.9).
-          // It renders the answer it chose through the Api form of
-          // `expandSegments`, so it needs this frame — the same one the
-          // retired claim hook used to publish for a handler.
+          // The region renders segments of its own — its body, and each
+          // matcher's template children — so it is handed this expansion's
+          // recursion to render them with.
           result.push(
-            ...(yield* withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
-              expandAnswers(segment),
+            ...(yield* expandAnswers(segment, (inner) =>
+              expandSegments(inner, parentMeta, parentProps, hideSet, counter),
             )),
           );
           break;
@@ -2132,9 +2067,8 @@ function* expandFunctionComponent(
           // component installed for it — see ProjectionState.callerEnv.
           callerEnv: undefined,
           // ...but the content itself is the CALLER's markdown, so `{meta.x}`
-          // and `{props.x}` in it resolve against the frame that wrote it. The
-          // Api form of `expandSegments` carries this through ExpansionFrame;
-          // projection has to be handed it.
+          // and `{props.x}` in it resolve against the expansion that wrote it,
+          // which projection has to be handed.
           meta: callerMeta,
           props: callerProps,
           hideSet,

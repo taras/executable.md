@@ -69,8 +69,8 @@ describe("<Test> as a function component", () => {
   });
 
   // Content a component projects is the CALLER's markdown, so `{meta.x}` in it
-  // resolves against the frame that wrote it. The legacy handler got this from
-  // the Api form of `expandSegments`; projection has to be handed it.
+  // resolves against the expansion that wrote it, which projection has to be
+  // handed.
   it("resolves the document's frontmatter inside a test body", function* () {
     const doc = [
       "---",
