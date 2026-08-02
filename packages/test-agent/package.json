@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/test-agent",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Build reliable ACP integration tests with deterministic, document-driven agent behavior.",
   "type": "module",
   "exports": {

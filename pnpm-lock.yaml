@@ -386,6 +386,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@rjsf/utils':
         specifier: 6.7.1
         version: 6.7.1(react@19.2.0)
