@@ -14,7 +14,7 @@
  * declare. Everything else is passed over.
  */
 
-import type { Json, JsonObject } from "./json.ts";
+import type { Json, JsonObject } from "./types.ts";
 import { isJsonObject } from "./json.ts";
 
 /** Where a declared name came from, for diagnostics. */

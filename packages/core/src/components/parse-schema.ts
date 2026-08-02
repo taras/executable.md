@@ -17,7 +17,7 @@ import type { Result } from "effection";
 import { SchemaValidationError, normalizeIssues } from "../validate.ts";
 import type { NormalizedIssue } from "../validate.ts";
 import { parseJson, parseJsonObject } from "../json.ts";
-import type { Json } from "../types.ts";
+import type { Json, JsonObject } from "../types.ts";
 
 const ajv = new Ajv({
   strict: true,
@@ -137,6 +137,17 @@ export function parseIssue(error: Error): NormalizedIssue {
     params: {},
     message: error.message,
   };
+}
+
+/**
+ * Read the `schema` prop into a normalized object, in either accepted form.
+ *
+ * Exported because a caller may need the normalized declaration itself and not
+ * only a validator: `<Elicit>` hands its schema to a provider, and inspects it
+ * for names and references it cannot support, before compiling.
+ */
+export function readParseSchema(componentName: string, schema: Json): JsonObject {
+  return readSchema(componentName, schema);
 }
 
 function readSchema(componentName: string, schema: Json): Record<string, Json> {
