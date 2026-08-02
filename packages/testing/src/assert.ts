@@ -38,27 +38,51 @@ export function assert(expr: unknown, msg?: string): void {
 }
 
 export function assertEquals(actual: unknown, expected: unknown, msg?: string): void {
-  deepStrictEqual(actual, expected, msg);
+  if (msg === undefined) {
+    deepStrictEqual(actual, expected);
+  } else {
+    deepStrictEqual(actual, expected, msg);
+  }
 }
 
 export function assertNotEquals(actual: unknown, expected: unknown, msg?: string): void {
-  notDeepStrictEqual(actual, expected, msg);
+  if (msg === undefined) {
+    notDeepStrictEqual(actual, expected);
+  } else {
+    notDeepStrictEqual(actual, expected, msg);
+  }
 }
 
 export function assertStrictEquals(actual: unknown, expected: unknown, msg?: string): void {
-  strictEqual(actual, expected, msg);
+  if (msg === undefined) {
+    strictEqual(actual, expected);
+  } else {
+    strictEqual(actual, expected, msg);
+  }
 }
 
 export function assertNotStrictEquals(actual: unknown, expected: unknown, msg?: string): void {
-  notStrictEqual(actual, expected, msg);
+  if (msg === undefined) {
+    notStrictEqual(actual, expected);
+  } else {
+    notStrictEqual(actual, expected, msg);
+  }
 }
 
 export function assertMatch(actual: string, expected: RegExp, msg?: string): void {
-  match(actual, expected, msg);
+  if (msg === undefined) {
+    match(actual, expected);
+  } else {
+    match(actual, expected, msg);
+  }
 }
 
 export function assertNotMatch(actual: string, expected: RegExp, msg?: string): void {
-  doesNotMatch(actual, expected, msg);
+  if (msg === undefined) {
+    doesNotMatch(actual, expected);
+  } else {
+    doesNotMatch(actual, expected, msg);
+  }
 }
 
 /**

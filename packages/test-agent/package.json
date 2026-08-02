@@ -18,7 +18,7 @@
     "@executablemd/testing": "workspace:*",
     "acorn": "^8.16.0",
     "acpx": "0.12.0",
-    "effection": "4.1.0-alpha.10",
+    "effection": "4.1.0",
     "zod": "^4.3.6"
   }
 }
