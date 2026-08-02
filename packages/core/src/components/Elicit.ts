@@ -34,9 +34,9 @@ import type { Operation } from "effection";
 
 import { content, invocation } from "../component-api.ts";
 import {
-  guardRecordedQuestion,
   persistElicitation,
   questionFingerprint,
+  refuseChangedQuestion,
 } from "../elicit-journal.ts";
 import { prepareElicitation, runPreparedElicitation } from "../elicit.ts";
 import type { ComponentInvocationMetadata, Json } from "../types.ts";
@@ -75,7 +75,7 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
 
   // Before the record is read, so a resumed document cannot bind an answer that
   // was given to a different question.
-  yield* guardRecordedQuestion(identity);
+  yield* refuseChangedQuestion(identity);
 
   return yield* persistElicitation(identity, () => runPreparedElicitation(prepared, message));
 }

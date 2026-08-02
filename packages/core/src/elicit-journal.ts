@@ -78,7 +78,7 @@ export function questionFingerprint(question: ElicitationQuestion): string {
  * the question changed is the safe half of that; #218's re-execution work is
  * where the other half belongs.
  */
-export function guardRecordedQuestion(identity: ElicitationIdentity): Operation<void> {
+export function refuseChangedQuestion(identity: ElicitationIdentity): Operation<void> {
   const name = recordName(identity.location);
   return ReplayGuard.around({
     decide([event], next) {
