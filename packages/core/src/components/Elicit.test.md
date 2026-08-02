@@ -1,8 +1,9 @@
 # Elicit
 
 `<Elicit>` asks a person a question and binds their answer. It does not choose
-how they are asked — the host installs a provider through the Elicitation Api,
-and the document is the same either way.
+how they are reached: which interaction happens — a browser form, a terminal, an
+editor integration — is the host's, installed on the Elicitation Api, and the
+document is the same under any of them.
 
 Most of the tests below say what the answer is with an `<Answers>` region, which
 is the document's own vocabulary for it: a matcher names a question and supplies

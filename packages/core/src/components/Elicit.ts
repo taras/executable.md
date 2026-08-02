@@ -8,12 +8,19 @@
  * </Elicit>
  * ```
  *
- * The document says what it is asking and what shape the answer must have. Where
- * the asking happens is the host's decision, installed through the Elicitation
- * Api: a browser form, a terminal, an editor integration, or an `<Answers>`
- * region the document wrote itself. None of that is expressible in Markdown, on purpose — a `mode`
- * prop would make every document that used it a document about its own
- * transport.
+ * The document says what it is asking and what shape the answer must have. It
+ * never says how the asking happens, and there is no prop for it: a `mode` prop
+ * would make every document that used one a document about its own transport.
+ *
+ * Which *interaction* reaches a person — a browser form, a terminal, an editor
+ * integration — is the host's decision, installed as middleware on the
+ * Elicitation Api. That is what has no Markdown spelling, and hosts and tests
+ * that need to observe an elicitation reach the same seam directly.
+ *
+ * A document can still answer its own question, and that is not a transport
+ * choice: an `<Answers>` region (§6.16.2) supplies answers to the elicitations
+ * inside it, so nobody is asked at all. Writing one says what the answer is, not
+ * where the asking would have happened.
  *
  * This function is three steps and the order is the whole of it. The schema
  * compiles first, so a schema that cannot be used fails before the body expands

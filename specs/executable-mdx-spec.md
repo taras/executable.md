@@ -5039,9 +5039,11 @@ provider it wants. A document says what an answer is with an `<Answers>` region
 (§6.16.2), which is a provider like any other and needs no host; a test that
 must *observe* an elicitation — what message it carried, what schema — installs
 middleware on this Api directly, because a matcher answers a question rather
-than reporting it. A browser form, a terminal, an editor integration, and an
-`<Answers>` region are all the same shape of provider, and replacing one with
-another changes no executable Markdown.
+than reporting it. Which *interaction* reaches a person — a browser form, a
+terminal, an editor integration — is the host's alone, and replacing one with
+another changes no executable Markdown. An `<Answers>` region is not one of
+those: it answers rather than asks, so a document that writes one has said what
+the answer is, not where the asking would have happened.
 
 `xmd test` deliberately installs no provider. A test document that elicits
 without saying what the answer is would otherwise open a browser and wait for
