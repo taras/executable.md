@@ -5044,8 +5044,7 @@ shape of provider, and replacing one with another changes no executable Markdown
 `xmd test` deliberately installs no provider. A test document that elicits
 without saying what the answer is would otherwise open a browser and wait for
 somebody who is not coming; with none installed it fails immediately, and an
-`<Answers>` region (§6.16.2) or scripted middleware is how a test says what the
-answer is.
+`<Answers>` region (§6.16.2) is how a test says what the answer is.
 
 The elicitation path is also callable by a host directly — `elicit({ message,
 schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the

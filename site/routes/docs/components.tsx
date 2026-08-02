@@ -806,8 +806,8 @@ export default define.page(function Components() {
         schema defines every response available. Where the question is actually
         put to someone is the host's decision, installed through the Elicitation
         Api — a browser form under the CLI today, a terminal or an editor
-        integration later, scripted answers under a test. Swapping one for
-        another changes no Markdown.
+        integration later, or answers the document supplies itself. Swapping one
+        for another changes no Markdown.
       </p>
       <p>
         That is the reason it is contextual rather than an author-facing option.

@@ -65,7 +65,7 @@ export const Elicitation: Api<ElicitationApi> = createApi<ElicitationApi>("Elici
       "no elicitation provider configured — a host installs one with " +
         'yield* Elicitation.around({ *elicit([request], next) { ... } }, { at: "min" }). ' +
         "`xmd run` installs the WebForm provider; under `xmd test`, supply the answer " +
-        "with an <Answers> region or scriptElicitations().",
+        "with an <Answers> region.",
     );
   },
 });
