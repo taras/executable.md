@@ -5047,6 +5047,11 @@ lets a command elicit with no document executing.
 
 #### 6.16.2 Supplying answers from the document: `<Answers>`
 
+`<Answers>` and `<Answer>` are reserved structural syntax (§5.3), not
+components: `<Answers>` reads its `<Answer>` children as elements before they
+expand, which is something only the language's own constructs do. A repository
+file named `Answers.md` therefore never stands in for one.
+
 A component that elicits internally asks whoever the host's provider reaches.
 Sometimes the surrounding document already knows the answer — a workflow
 exercising somebody else's component non-interactively, a demo, a region of a
