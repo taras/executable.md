@@ -12,16 +12,21 @@ import type { Operation } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
 import {
-  Component,
   env,
-  expandSegments,
-  raise,
-  renderSegments,
-  validateBindingName,
+  hasContent,
+  invocation,
   matchPrompt,
   parseTemplate,
+  raise,
+  registerComponents,
+  tryContent,
 } from "@executablemd/core";
-import type { ComponentElement, ErrorSegment, ParsedTemplate, Segment } from "@executablemd/core";
+import type {
+  ComponentInvocationMetadata,
+  ErrorSegment,
+  ParsedTemplate,
+  PropsSchema,
+} from "@executablemd/core";
 
 import type { TurnBridge } from "./bridge.ts";
 
@@ -60,8 +65,8 @@ function configError(message: string): ErrorSegment {
   return { type: "error", message: `<WhenPrompt> ${message}`, source: "WhenPrompt" };
 }
 
-function formatLocation(element: ComponentElement): string {
-  const position = element.position;
+function formatLocation(metadata: ComponentInvocationMetadata): string {
+  const position = metadata.position;
   if (!position) {
     return "unknown";
   }
@@ -109,51 +114,46 @@ function* persistStage(
 export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void> {
   const ordinals = new Map<string, number>();
 
-  function* expandWhenPrompt(element: ComponentElement): Operation<Segment[]> {
-    for (const name of Object.keys({ ...element.props, ...element.expressions })) {
-      if (name !== "template" && name !== "as") {
-        return [
-          yield* raise(configError(`does not accept a "${name}" prop (allowed: template, as).`)),
-        ];
-      }
-    }
-    const templateProp = element.props.template;
-    const hasChildren = !element.selfClosing && element.children.length > 0;
+  function* WhenPrompt(props: Record<string, Json>): Operation<unknown> {
+    const templateProp = props.template;
+    const hasChildren = yield* hasContent();
     if (typeof templateProp === "string" && hasChildren) {
-      return [yield* raise(configError("accepts either a template prop or children, not both."))];
+      const reported = yield* raise(
+        configError("accepts either a template prop or children, not both."),
+      );
+      return reported.message;
     }
     let source: string;
     if (typeof templateProp === "string") {
       source = templateProp;
     } else if (hasChildren) {
-      source = renderSegments(yield* expandSegments(element.children)).trim();
+      // tryContent(), not content(): the template is whatever the children
+      // rendered, diagnostics included, exactly as renderSegments did here. A
+      // body that genuinely stopped is a different thing and travels on.
+      const projected = yield* tryContent();
+      if (projected.failure !== undefined) {
+        throw projected.failure;
+      }
+      source = projected.text.trim();
     } else {
-      return [yield* raise(configError("requires a template prop or template children."))];
+      const reported = yield* raise(configError("requires a template prop or template children."));
+      return reported.message;
     }
 
     const parsed = parseTemplate(source);
     if (!parsed.ok) {
-      return [yield* raise(configError(parsed.error.message))];
-    }
-    const binding = element.props.as;
-    if (parsed.value.captureNames.length > 0 && typeof binding !== "string") {
-      return [yield* raise(configError('captures require an "as" prop.'))];
-    }
-    let bindingName: string | undefined;
-    if (binding !== undefined) {
-      const validated = validateBindingName(binding);
-      if (!validated.ok || validated.value === undefined) {
-        return [yield* raise(configError('the "as" prop must be a valid binding name.'))];
-      }
-      bindingName = validated.value;
+      const reported = yield* raise(configError(parsed.error.message));
+      return reported.message;
     }
 
+    // The matcher resolves capture references against the caller's bindings.
     const currentEnv = yield* env;
     if (!currentEnv) {
-      return [yield* raise(configError("requires an eval scope in context."))];
+      const reported = yield* raise(configError("requires an eval scope in context."));
+      return reported.message;
     }
 
-    const location = formatLocation(element);
+    const location = formatLocation(yield* invocation());
     const ordinal = ordinals.get(location) ?? 0;
     ordinals.set(location, ordinal + 1);
 
@@ -170,24 +170,27 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
       }),
     );
 
-    if (bindingName !== undefined) {
-      const existing = currentEnv.values[bindingName];
-      const merged: Record<string, unknown> =
-        typeof existing === "object" && existing !== null && !Array.isArray(existing)
-          ? { ...existing }
-          : {};
-      Object.assign(merged, record.captures);
-      currentEnv.values[bindingName] = merged;
-    }
-    return [];
+    // Returned rather than bound here: `as` is the engine's, and a return binds
+    // by reference under it. A template with captures invoked without `as`
+    // discards them — the component cannot see whether `as` was written.
+    return record.captures;
   }
 
-  yield* Component.around({
-    *expand([element], next) {
-      if (element.name === "WhenPrompt") {
-        return { segments: yield* expandWhenPrompt(element) };
-      }
-      return yield* next(element);
+  // Registered inside the worker's execution, so it never reaches a user
+  // document. `as` is absent from the schema: it is a reserved prop name and
+  // declaring it would throw at registration.
+  yield* registerComponents([
+    {
+      name: "WhenPrompt",
+      origin: "@executablemd/test-agent/worker",
+      fn: WhenPrompt,
+      props: WHEN_PROMPT_PROPS,
     },
-  });
+  ]);
 }
+
+const WHEN_PROMPT_PROPS: PropsSchema = {
+  type: "object",
+  properties: { template: { type: "string" } },
+  additionalProperties: false,
+};

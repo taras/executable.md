@@ -22,7 +22,6 @@ import {
 import { exec, readTextFile, cwd } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
-import { installAnswers } from "./answers.ts";
 import { createReplayStream } from "./replay-stream.ts";
 import type {
   ComponentDefinition,
@@ -543,7 +542,6 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       // needs its children as elements is claimed through this hook rather than
       // handled in the expansion switch. Installed after the providers above so
       // it sits nearest the expansion it claims for.
-      yield* installAnswers();
 
       const { output, value } = yield* durableRun(() => Execution.operations.document(props), {
         stream,

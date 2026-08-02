@@ -67,6 +67,7 @@ import { SchemaValidationError, validateProps, validateReturnValue } from "./val
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
+import { expandAnswers, strayAnswerError } from "./answers.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
 import { remark } from "remark";
@@ -152,6 +153,21 @@ function* rejectRetain(): Operation<never> {
  * offer and restores this one. Nothing else in expansion sees a frame, so a
  * code block or modifier running between elements finds none active.
  */
+
+/**
+ * Run `body` with the frame the Api form of `expandSegments` needs.
+ *
+ * A structural construct that renders segments of its own reaches them through
+ * that operation rather than through this module's function, so the frame has
+ * to name where those segments belong.
+ */
+/**
+ * Offer an element to installed component support before built-in expansion.
+ *
+ * The frame it publishes is what `Component.expandSegments` binds to, so a
+ * handler's recursion carries this element's interpolation inputs and cycle
+ * detection; a nested claim replaces the binding for its own subtree.
+ */
 function* offerElement(
   element: ComponentElement,
   parentMeta: Record<string, unknown>,
@@ -159,15 +175,27 @@ function* offerElement(
   hideSet: Set<string>,
   counter: BlockCounter,
 ): Operation<ComponentHandling | undefined> {
+  return yield* withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
+    Component.operations.expand(element),
+  );
+}
+
+function* withExpansionFrame<T>(
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  body: () => Operation<T>,
+): Operation<T> {
   const scope = yield* useScope();
-  const enclosingFrame = scope.get(ExpansionFrame);
+  const enclosing = scope.get(ExpansionFrame);
   scope.set(ExpansionFrame, (inner: Segment[]) =>
     expandSegments(inner, parentMeta, parentProps, hideSet, counter),
   );
   try {
-    return yield* Component.operations.expand(element);
+    return yield* body();
   } finally {
-    scope.set(ExpansionFrame, enclosingFrame);
+    scope.set(ExpansionFrame, enclosing);
   }
 }
 
@@ -531,6 +559,10 @@ export function* expandSegments(
         // before built-in expansion. A handler reports the errors it creates
         // (§6.9), so returned segments are settled here rather than reported
         // again: a collecting policy keeps them, a throwing one aborts.
+        //
+        // Nothing in this repository claims a name any more — every component
+        // family resolves through registration or a repository file. The hook
+        // itself is retired separately.
         const handling = yield* offerElement(segment, parentMeta, parentProps, hideSet, counter);
         if (handling) {
           for (const handled of handling.segments) {
@@ -621,6 +653,28 @@ export function* expandSegments(
           result.push(
             ...(yield* expandCollectFailures(segment, parentMeta, parentProps, hideSet, counter)),
           );
+          break;
+        }
+
+        if (segment.name === "Answers") {
+          // No raise() here, like the branches above: expandAnswers reports the
+          // errors it creates, and the selected answer settled its own (§6.9).
+          // It renders the answer it chose through the Api form of
+          // `expandSegments`, so it needs this frame — the same one the
+          // retired claim hook used to publish for a handler.
+          result.push(
+            ...(yield* withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
+              expandAnswers(segment),
+            )),
+          );
+          break;
+        }
+
+        if (segment.name === "Answer") {
+          // A well-placed <Answer> is partitioned out by its <Answers> and never
+          // expanded on its own. Reaching here means it sits outside one, so it
+          // names no component — the same shape as a stray <Else>.
+          result.push(yield* raise(strayAnswerError(segment)));
           break;
         }
 

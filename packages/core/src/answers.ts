@@ -73,7 +73,7 @@ import type { ElicitationRequest } from "./elicitation-api.ts";
 import { JsonParseError, parseJson } from "./json.ts";
 import { matchPrompt, parseTemplate } from "./template.ts";
 import type { ParsedTemplate } from "./template.ts";
-import type { ComponentElement, ComponentHandling, ErrorSegment, Json, Segment } from "./types.ts";
+import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
 
 const ANSWERS = "Answers";
 const ANSWER = "Answer";
@@ -112,38 +112,17 @@ function isBlankText(segment: Segment): boolean {
  * Offered every element, it claims only these two names and delegates the rest,
  * so it composes with any other expansion support a host has installed.
  */
-export function installAnswers(): Operation<void> {
-  return Component.around(
-    {
-      *expand([element], next) {
-        if (element.name === ANSWERS) {
-          return { segments: yield* expandAnswers(element) };
-        }
-        if (element.name === ANSWER) {
-          // Reaching here means no enclosing `<Answers>` consumed it: a
-          // well-placed matcher is partitioned out and never expanded on its
-          // own. Same shape as `<Else>` outside `<If>`.
-          return {
-            segments: [
-              yield* raise(
-                configError(
-                  ANSWER,
-                  "must be a direct child of <Answers>. It is reserved: it never resolves a " +
-                    "component, and only the <Answers> it belongs to can read it.",
-                  element,
-                ),
-              ),
-            ],
-          };
-        }
-        return yield* next(element);
-      },
-    },
-    { at: "min" },
+/** A `<Answer>` written outside the `<Answers>` that would have read it. */
+export function strayAnswerError(element: ComponentElement): ErrorSegment {
+  return configError(
+    ANSWER,
+    "must be a direct child of <Answers>. It is reserved: it never resolves a " +
+      "component, and only the <Answers> it belongs to can read it.",
+    element,
   );
 }
 
-function* expandAnswers(element: ComponentElement): Operation<Segment[]> {
+export function* expandAnswers(element: ComponentElement): Operation<Segment[]> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "delegate") {
       return [

@@ -4,6 +4,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
+import { registerComponents } from "../src/components/registration.ts";
 import { Component } from "../src/component-api.ts";
 import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
@@ -1302,17 +1303,21 @@ describe("Tier LOOP — replay validates the terminal record", () => {
       const stream = new InMemoryStream();
       yield* useStubFs({ "test.md": "<Loop max={3}>a<Wrapped />b</Loop>" });
       yield* useEchoExec();
-      // The expansion hook has no generic catch above it, so the wrapper
-      // reaches the loop intact — which is what makes this observable.
-      yield* Component.around({
-        // deno-lint-ignore require-yield
-        *expand([element], _next) {
-          if (element.name === "Wrapped") {
+      // No generic catch sits above the component, so the wrapper reaches the
+      // loop intact — which is what makes this observable. Registered rather
+      // than stubbed through importComponent: execute() installs its own
+      // terminal provider at { at: "min" }, so an outer stub is never asked.
+      yield* registerComponents([
+        {
+          name: "Wrapped",
+          origin: "test",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
             throw new AggregateError([planted], "carried by a wrapper");
-          }
-          return undefined;
+          },
         },
-      });
+      ]);
       let failure: unknown;
       try {
         yield* collect(yield* execute({ path: "test.md", stream }));
