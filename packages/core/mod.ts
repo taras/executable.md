@@ -80,6 +80,7 @@ export type { EvalEnv } from "./src/types.ts";
 
 export { compileBlock } from "./src/eval-context.ts";
 
+export { AnswersError } from "./src/components/Answers.ts";
 export { Elicitation, ElicitationProviderError } from "./src/elicitation-api.ts";
 export type { ElicitationApi, ElicitationRequest } from "./src/elicitation-api.ts";
 export {

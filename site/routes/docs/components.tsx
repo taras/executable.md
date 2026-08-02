@@ -137,6 +137,16 @@ if (response.decision === "reject") {
 }
 \`\`\``;
 
+const ANSWERS = `<Answers values={[{ decision: "approve" }]}>
+<ReviewGate plan={plan} as="verdict" />
+</Answers>`;
+
+const ANSWERS_DELEGATE =
+  `<Answers values={[{ decision: "approve" }]} delegate={true}>
+<ReviewGate plan={plan} as="first" />
+<ReviewGate plan={other} as="second" />
+</Answers>`;
+
 const FILE_WRITE = `<TempDir>
 <File path="fixtures/request.md">
 Request content
@@ -814,6 +824,43 @@ export default define.page(function Components() {
         when the browser form itself is the point and you want RJSF presentation
         control; reach for <code>&lt;Elicit&gt;</code>{" "}
         when what matters is the question.
+      </p>
+
+      <h2>Answering from the document</h2>
+      <p>
+        A component that elicits internally asks whoever the host's provider
+        reaches. Sometimes the document already knows the answer — exercising
+        somebody else's component non-interactively, a demo, a documented
+        example, a stretch of a longer run that should not stop for a person.
+        {" "}
+        <code>&lt;Answers&gt;</code> is how a document says so.
+      </p>
+      <CodeBlock>{ANSWERS}</CodeBlock>
+      <p>
+        It is elicitation middleware wearing a component's clothes: for as long
+        as its body lasts, it is the provider. Everything else is unchanged —
+        each answer is still checked against the schema of whatever asked for
+        it, so a value that does not fit fails exactly as a person's answer
+        would.
+      </p>
+      <p>
+        Running past the last value is an error by default. A document supplying
+        answers is saying what will be asked, and being wrong about that is a
+        mistake rather than a reason to go find someone. <code>delegate</code>
+        {" "}
+        says the other thing on purpose: whatever this region cannot answer
+        passes outward, to an enclosing region or to whatever the host
+        installed.
+      </p>
+      <CodeBlock>{ANSWERS_DELEGATE}</CodeBlock>
+      <p>
+        Regions nest, and the nearest one answers — ordinary middleware nesting.
+        Values left over when the body ends are fine, which is the one place
+        this is deliberately laxer than the <code>scriptElicitations()</code>
+        {" "}
+        helper a TypeScript suite uses: a branch that did not run is not a
+        failure. Resuming consumes nothing, so the list needs only what the run
+        will actually ask.
       </p>
 
       <h2>How it renders</h2>

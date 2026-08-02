@@ -5044,6 +5044,60 @@ schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the
 caller needs compilation to happen before it renders its message. That is what
 lets a command elicit with no document executing.
 
+#### 6.16.2 Supplying answers from the document: `<Answers>`
+
+A component that elicits internally asks whoever the host's provider reaches.
+Sometimes the surrounding document already knows the answer — a workflow
+exercising a third-party component non-interactively, a demo, a documented
+example, a region of a larger run that should not stop for a person:
+
+```md
+<Answers values={[{ decision: "approve" }]}>
+<ReviewGate plan={plan} as="verdict" />
+</Answers>
+```
+
+`<Answers>` is elicitation middleware written as a component. It installs a
+provider for the duration of its body and answers from an ordered list, and it
+adds no other mechanism: every elicitation inside it is an ordinary one, judged
+by core against the *asking* component's schema before it binds. A supplied
+value that does not fit fails exactly as a live provider's answer would.
+`<Answers>` validates nothing of its own beyond reading its list.
+
+| Prop | Required | Value |
+|---|---|---|
+| `values` | yes | An ordered array of JSON answers, as an expression or as captured JSON text describing one |
+| `delegate` | no | Whether an unanswered elicitation passes outward. Default `false` |
+
+The list is read when the region is entered, so a malformed one is reported at
+the wrapper rather than surfacing inside a child as a provider failure. There is
+no `as`: the region renders its body and changes only who answers, never what
+the body produces.
+
+It installs at `{ at: "min" }`, so the nearest enclosing region answers first
+and nesting means what middleware nesting means.
+
+**Running out.** By default an elicitation past the last value fails, with a
+diagnostic counting what was provided against what was consumed: a document that
+supplies answers is stating what will be asked, and being wrong about that is a
+mistake rather than a cue to find someone. `delegate={true}` says the other
+thing explicitly — the unanswered elicitation passes to the next provider
+outward, which is an enclosing `<Answers>` if there is one and the host's
+provider otherwise. With it, an enclosing region's values continue the sequence.
+
+**Values left unused when the body ends are allowed.** This is deliberately
+laxer than `scriptElicitations()`, which fails on them so that a test which has
+quietly stopped eliciting stops passing. `<Answers>` is a document construct,
+and a branch that did not run is not an error. A suite that wants exact-queue
+semantics keeps using `scriptElicitations()`.
+
+Replay consumes nothing: a restored answer never reaches a provider, so `values`
+needs only what this run will actually ask.
+
+`<Answers>` is unmarked, so a failure fails the document (§6.8.1), and it is an
+ordinary registered default — a repository `Answers.md` or `Answers.ts` is
+chosen ahead of it. `Answers.test.md` is the authoring contract in Markdown.
+
 
 ## 7. Entry point
 
