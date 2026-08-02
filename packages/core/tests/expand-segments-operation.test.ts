@@ -6,6 +6,11 @@
  * difference from ordinary expansion is attributable to that operation: the
  * frame it binds to must carry the interpolation inputs, the cycle-detection
  * hide set, and the block counter of the expansion that offered the element.
+ *
+ * A claim is the subject here, so these go where the hook goes. The same frame
+ * is what `<Answers>` renders its body through, and
+ * `answers-expansion-frame.test.ts` states every invariant below over that path
+ * instead — with nothing claimed, so it keeps holding once the hook is gone.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";

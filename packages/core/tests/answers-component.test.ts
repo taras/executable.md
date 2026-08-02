@@ -29,6 +29,7 @@ import { collect } from "../src/collect.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { execute } from "../src/execute.ts";
+import { ComponentRegistrationError, registerComponents } from "../src/components/registration.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 
 const SCHEMA =
@@ -835,6 +836,96 @@ describe("Answers: configuration diagnostics", () => {
     );
 
     expect(diagnostics(result)).not.toContain("a body nobody should see");
+  });
+});
+
+describe("Answers: reservation", () => {
+  /**
+   * Repository files named after both constructs, in the directory `run()`
+   * searches — so the only thing keeping them out of the document is the names
+   * being reserved (§5.3).
+   *
+   * Each body renders a marker and answers nothing. That makes standing in
+   * observable from two directions at once: the marker reaches the output, and
+   * the elicitation the region was supposed to answer goes unanswered.
+   */
+  function* writeStandIns(workspace: string): Operation<void> {
+    yield* ensureDir(workspace);
+    yield* writeTextFile(join(workspace, "Answers.md"), "REPOSITORY_ANSWERS\n");
+    yield* writeTextFile(join(workspace, "Answer.md"), "REPOSITORY_ANSWER\n");
+  }
+
+  it("does not let a repository Answers.md stand in for the construct", function* () {
+    const workspace = yield* useWorkspace();
+    yield* writeStandIns(workspace);
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "supplied" }} />',
+          "",
+          elicits("v", "Approve?"),
+          "",
+          "Got: {v.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.failure).toBe(undefined);
+    expect(result.output).toContain("Got: supplied");
+    expect(result.output).not.toContain("REPOSITORY_ANSWERS");
+    expect(result.output).not.toContain("REPOSITORY_ANSWER");
+  });
+
+  /**
+   * Membership in the reserved set, which nothing above reaches.
+   *
+   * Keeping a repository file out is the expansion loop's doing — it dispatches
+   * both names before resolution runs, and would go on doing so if they were
+   * dropped from the set. What the set uniquely decides is that a *registration*
+   * cannot claim either name, so this is the assertion that fails if they are.
+   */
+  it("refuses a registration for either name", function* () {
+    for (const name of ["Answers", "Answer"]) {
+      let thrown: unknown;
+      try {
+        yield* scoped(() =>
+          registerComponents([
+            {
+              name,
+              origin: "a-host",
+              // deno-lint-ignore require-yield
+              *fn() {
+                return "";
+              },
+              props: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ]),
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ComponentRegistrationError);
+      expect(thrown instanceof Error ? thrown.message : "").toContain("structural syntax");
+    }
+  });
+
+  it("does not let a repository Answer.md rescue a stray matcher", function* () {
+    const workspace = yield* useWorkspace();
+    yield* writeStandIns(workspace);
+
+    const result = yield* run(
+      workspace,
+      '<Answer template="Approve?" value={{ decision: "a" }} />\n',
+    );
+
+    // A reserved name resolves to nothing else wherever it is written, so the
+    // misplacement is still a diagnostic rather than a component that renders.
+    expect(diagnostics(result)).toContain("<Answer> must be a direct child of <Answers>");
+    expect(result.output).not.toContain("REPOSITORY_ANSWER");
   });
 });
 
