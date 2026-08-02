@@ -36,20 +36,12 @@ import {
   content,
   DocumentOutput,
   env,
-  expandSegments,
   hasCapture,
   hasContent,
   raise,
   renderSegments,
 } from "@executablemd/core";
-import type {
-  ComponentElement,
-  ErrorSegment,
-  FunctionComponent,
-  Json,
-  PropsSchema,
-  Segment,
-} from "@executablemd/core";
+import type { ErrorSegment, FunctionComponent, Json, PropsSchema } from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
 export type AssertionKind =

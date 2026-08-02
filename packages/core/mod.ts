@@ -36,7 +36,6 @@ export type {
   Json,
   JsonObject,
   SourcePosition,
-  ComponentHandling,
 } from "./src/types.ts";
 
 export type { Workflow } from "@executablemd/durable-streams";
@@ -58,8 +57,6 @@ export {
   raise,
   env,
   evalScope,
-  expand,
-  expandSegments,
   codeBlock,
   persistent,
   content,

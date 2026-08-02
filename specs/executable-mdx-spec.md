@@ -2501,11 +2501,9 @@ interface, and each operation is also exported directly:
 |---|---|---|
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
-| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9); whoever creates one calls this, including an `expand` handler | settles it: collected, or thrown inside documentation |
+| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9); whoever creates one calls this | settles it: collected, or thrown inside documentation |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
-| `expand(element)` | Offer a component element to extensions before built-in expansion (§6.1); a handler reports the errors it creates and the engine settles what it returns (§6.9) | returns `undefined` — unclaimed |
-| `expandSegments(segments)` | Expand segments within the expansion that offered the current element; any `ErrorSegment` it returns was already reported (§6.9) | throws: no expansion is active |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
@@ -2522,17 +2520,16 @@ component runs; a nested invocation shadows it and the enclosing one is restored
 Nothing else about the invocation is reachable through it — not the element, its
 props, its expressions, its `as`, or its content.
 
-An extension claims component names by wrapping `expand`: it answers
-`{ segments }` for the names it owns and delegates the rest with
-`next(element)`. For the length of that offer — and no longer —
-`expandSegments` is the engine's own expansion bound to the offering
-expansion's interpolation inputs, hide set (§6.2), and block counter
-(§6.1), so a handler recursing into `element.children` produces exactly
-what built-in expansion would, and cycle detection and block IDs
-continue across the claim. A nested claim binds its own expansion for
-its offer and restores the enclosing one. Outside an offer — ordinary
-expansion, a code block, a modifier chain, or a task that outlives the
-offer — no expansion is active and the operation reports that.
+**There is no operation for claiming a name.** A component name means what §5.3
+says it means — a structural construct, a reserved registration, a repository
+file, or a registered default — and nothing installed at runtime preempts that
+ordering. A host contributes components with `registerComponents`, and the
+registration itself says which tier they land in: an ordinary registration is a
+default, which a repository file of the same name overrides, while one marked
+`reserved` sits above the repository because replacing it would break a language
+or security invariant. Reserving is a property of the registration, declared
+where it is installed and visible to inspection — not something a name acquires
+by being handled first.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.
@@ -4109,22 +4106,10 @@ A documentation chunk and an `<Output>` region select the policy by value rather
 than by installing reporting middleware, so an error crossing from a component's
 own policy into its caller's is settled again without being reported twice.
 
-**An extension owns the observation of the errors it creates.** A
-`Component.expand` handler returns two kinds of `ErrorSegment`, and nothing in
-the segment distinguishes them:
-
-- one the handler created — an invalid prop, a structural violation. The handler
-  calls `Component.raise` for it, at the point it decided the element was wrong.
-  A diagnostic returned without that call never passes the observation chain, so
-  middleware that counts, logs, or forwards failures never sees it.
-- one that came back from `Component.expandSegments`. It was already reported
-  inside that expansion, where it was produced, and is returned untouched.
-
-The engine settles whatever the handler returns under the caller's ambient
-policy: a collecting caller keeps the error in the document, a throwing caller
-aborts. Settling is not reporting, so a handler that ran its children under its
-own policy — collecting them the way an `<Output>` region does — still fails a
-throwing caller, and still without a second observation.
+**Whoever creates an `ErrorSegment` reports it.** `Component.raise` is called at
+the point the failure is decided, and a diagnostic that reaches the document
+without that call never passes the observation chain — middleware that counts,
+logs, or forwards failures never sees it.
 
 **Every path reports once.** The rule is the same wherever segments cross a
 construct: `<If>`, `<Else>`, `<Each>`, `<Capture>`, `<Loop>` and `<Break>` report
@@ -6475,24 +6460,9 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 ### Tier OBS — error observation
 
 The one-observation contract of §6.9, measured with counting `Component.raise`
-middleware. The two halves are measured against different subjects and live in
-different files: OBS1–OBS6 match `packages/core/tests/error-observation.test.ts`,
-where a claiming handler *is* the subject, and OBS7–OBS24 match
-`packages/core/tests/construct-error-observation.test.ts`, which installs no
-extension at all. Identifiers match one to one within each.
-
-Across the extension boundary:
-
-| # | Test | Verify |
-|---|------|--------|
-| OBS1 | Extension-created error | An error a `Component.expand` handler creates and reports is observed once |
-| OBS2 | Transported error | An error returned from `Component.expandSegments` is not observed again at the extension boundary |
-| OBS3 | Layered passthrough | Two nested claiming handlers still yield one observation |
-| OBS4 | Collecting policy | Both kinds render exactly one error comment, in place |
-| OBS5 | Throwing policy | Both kinds abort at the first error, having reported it once |
-| OBS6 | Policy change across recursion | An error collected under a handler's own policy is settled again at the boundary and throws for a throwing caller, without a second observation |
-
-Across the engine's own constructs:
+middleware. Identifiers match
+`packages/core/tests/construct-error-observation.test.ts` one to one, and start
+at OBS7: OBS1–OBS6 measured the retired extension boundary and went with it.
 
 | # | Test | Verify |
 |---|------|--------|

@@ -1,20 +1,16 @@
 /**
- * The expansion frame `<Answers>` renders through (spec §6.16.2, §5.3).
+ * The recursion `<Answers>` renders through (spec §6.16.2, §5.3).
  *
- * `<Answers>` is dispatched by the expansion loop but renders its body — and
- * each `<Answer>`'s template children — through the *Api* form of
- * `expandSegments`, which resolves against a frame rather than taking the
- * expansion's state as arguments. `withExpansionFrame` is what publishes it.
+ * `<Answers>` is dispatched by the expansion loop, which hands it a closure over
+ * that expansion's own state — its interpolation inputs, cycle-detection hide
+ * set and block counter. The region renders its body, and each `<Answer>`'s
+ * template children, through that closure and nothing else.
  *
- * These restate, over the `<Answers>` path, every invariant
- * `expand-segments-operation.test.ts` states over a claimed element — so they
- * keep holding once the hook is retired. Each is written so the region can only
- * come out right if the frame carries this expansion's own recursion: the
- * cycle-detection hide set, the block counter, the interpolation inputs, and the
- * bindings projected content was tagged with. Take the frame away and all of
- * them fail with "no active expansion"; build it from anything else and each
- * fails on the field it reads. The last two read from *outside* a region, where
- * the answer has to be that no frame is bound at all.
+ * Each case is written so the region can only come out right if the closure
+ * carries the enclosing expansion's state rather than a fresh one: build it from
+ * anything else and each fails on the field it reads. These were the coverage
+ * the retired `Component.expandSegments` suite held, restated over the one path
+ * that still needs it.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -75,8 +71,8 @@ function useTestComponents(
  * Wrap `body` in a region with nothing to answer.
  *
  * An `<Answers>` with no matcher still installs its provider and still renders
- * its body through the frame, and no elicitation is raised here — so what these
- * observe is the expansion and not the matching.
+ * its body, and no elicitation is raised here — so what these observe is the
+ * expansion and not the matching.
  */
 function region(body: string): string {
   return `<Answers>\n\n${body}\n\n</Answers>`;
@@ -109,7 +105,7 @@ function render(
   });
 }
 
-describe("Answers: the expansion frame its body renders through", () => {
+describe("Answers: the recursion its body renders through", () => {
   it("inherits the hide set, so a self-reference is a cycle and not runaway depth", function* () {
     const output = yield* render("<Recurse />", {
       Recurse: makeComponent("Recurse", region("<Recurse />")),
@@ -158,7 +154,7 @@ describe("Answers: the expansion frame its body renders through", () => {
     expect(new Set(ids).size).toBe(3);
   });
 
-  it("keeps the frame's meta and props interpolating inside a region", function* () {
+  it("keeps the enclosing meta and props interpolating inside a region", function* () {
     const output = yield* render('<Card label="x" />', {
       Card: makeComponent(
         "Card",
@@ -221,7 +217,7 @@ describe("Answers: the expansion frame its body renders through", () => {
 
   /**
    * The second call site: a matcher's template children go through the same
-   * operation, so an interpolation in one resolves against the frame too.
+   * closure, so an interpolation in one resolves against it too.
    *
    * A built template is never rendered, so it is read here through the one
    * channel that quotes it — a parse failure. The prop interpolates to a pair of
@@ -230,7 +226,7 @@ describe("Answers: the expansion frame its body renders through", () => {
    * have handed `parseTemplate` the literal `{props.label}`, which parses
    * cleanly as a binding hole and reports nothing at all.
    */
-  it("expands a matcher's template children through the same frame", function* () {
+  it("expands a matcher's template children through the same closure", function* () {
     const output = yield* render('<Card label="{?a}{?b}" />', {
       Card: makeComponent(
         "Card",
@@ -249,54 +245,5 @@ describe("Answers: the expansion frame its body renders through", () => {
     expect(output).toContain('"Review {?a}{?b}"');
     // A region whose matchers are malformed does not expand its body (§6.16.2).
     expect(output).not.toContain("BODY");
-  });
-
-  /**
-   * The frame is bound for the length of the region and no longer. Both cases
-   * below read it from outside one, where the answer must be that there is
-   * none — a frame left bound would let a later code block, or the caller,
-   * recurse with a region's expansion state.
-   */
-  it("has no active expansion for ordinary work after a region", function* () {
-    let message = "";
-    const source = [region("done"), "", "```bash exec", "one", "```", ""].join("\n");
-
-    yield* scoped(function* () {
-      yield* useTestComponents({});
-      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      yield* Component.around(
-        {
-          *applyModifiers(_args, _next) {
-            try {
-              yield* Component.operations.expandSegments([]);
-            } catch (error) {
-              message = error instanceof Error ? error.message : String(error);
-            }
-            return { output: "", exitCode: 0, stderr: "" };
-          },
-        },
-        { at: "min" },
-      );
-      yield* expandSegments(scanSegments(source), {}, {}, new Set());
-    });
-
-    expect(message).toContain("no active expansion");
-  });
-
-  it("restores the enclosing frame when a region is done", function* () {
-    let message = "";
-
-    yield* scoped(function* () {
-      yield* useTestComponents({});
-      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      yield* expandSegments(scanSegments(region("done")), {}, {}, new Set());
-      try {
-        yield* Component.operations.expandSegments([]);
-      } catch (error) {
-        message = error instanceof Error ? error.message : String(error);
-      }
-    });
-
-    expect(message).toContain("no active expansion");
   });
 });

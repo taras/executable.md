@@ -3,8 +3,7 @@
  *
  * `<Testing>`, `<Test>`, the value assertions and `<AssertThrows>` are all
  * registered as ordinary non-reserved defaults, so a repository component of
- * any of those names replaces it. The `Component.expand` install below claims
- * nothing — it is kept until the legacy-removal slice retires the surface.
+ * any of those names replaces it.
  *
  * Installing also decorates the core Execution Api so explicit `<Testing>`
  * boundaries affect the execution outcome even when root testing is inactive.
@@ -117,15 +116,6 @@ export function* installHandlers(
     })),
   ];
   yield* registerComponents(registrations);
-  // Nothing claims an element here any more. The install is kept rather than
-  // deleted: retiring the legacy extension surface is the legacy-removal
-  // slice's job, and taking it out here would be cleanup this slice did not
-  // budget for.
-  yield* Component.around({
-    *expand([element], next) {
-      return yield* next(element);
-    },
-  });
   yield* Execution.around({
     *execute([executeOptions], next) {
       // Fresh boundary collection per execution: outcomes reported by

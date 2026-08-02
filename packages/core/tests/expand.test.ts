@@ -2,7 +2,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component, content, raise } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
@@ -66,22 +67,20 @@ function useTestComponents(
 }
 
 /**
- * An extension that claims `<Broken />` and answers with an error segment. The
- * handler reports what it creates (§6.9); the engine settles the returned
- * segment under whatever policy the region installed.
+ * `<Broken />` — a component that fails, which plants an ErrorSegment inside a
+ * region so the region's policy is what settles it. It collects, so the failure
+ * becomes one reported diagnostic rather than stopping the expansion the
+ * assertion is about.
  */
-function useBrokenExtension(): Operation<void> {
-  return Component.around({
-    *expand([element], next) {
-      if (element.name === "Broken") {
-        return {
-          segments: [yield* raise({ type: "error", message: "broken thing", source: "Broken" })],
-        };
-      }
-      return yield* next(element);
-    },
-  });
-}
+const BROKEN: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Broken",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  // deno-lint-ignore require-yield
+  fn: collectFailures(function* () {
+    throw new Error("broken thing");
+  }),
+};
 
 /**
  * A function component that renders its invocation content through the
@@ -605,26 +604,20 @@ describe("component-declared output", () => {
     expect(output).toContain("ok");
   });
 
-  it("renders a claimed element's error inside <Output> under the collecting policy", function* () {
+  it("renders a failing component's error inside <Output> under the collecting policy", function* () {
     const comp = makeComponent("Region", "<Output>\n<Broken />\n</Output>");
-    const output = yield* scoped(function* () {
-      yield* useBrokenExtension();
-      return yield* expand(scanSegments("<Region />"), { Region: comp });
-    });
+    const output = yield* expand(scanSegments("<Region />"), { Region: comp, Broken: BROKEN });
     expect(output).toContain("broken thing");
   });
 
-  it("throws a claimed element's error from documentation, where errors are fatal", function* () {
+  it("throws a failing component's error from documentation, where errors are fatal", function* () {
     const comp = makeComponent("Doc", "<Broken />\n\n<Output>ok</Output>");
     let threw = false;
-    yield* scoped(function* () {
-      yield* useBrokenExtension();
-      try {
-        yield* expand(scanSegments("<Doc />"), { Doc: comp });
-      } catch {
-        threw = true;
-      }
-    });
+    try {
+      yield* expand(scanSegments("<Doc />"), { Doc: comp, Broken: BROKEN });
+    } catch {
+      threw = true;
+    }
     expect(threw).toBe(true);
   });
 

@@ -14,12 +14,11 @@ import {
   Component,
   env,
   evalScope,
-  expandSegments,
   raise,
   validateBindingName,
   withInvocation,
 } from "@executablemd/core";
-import type { ComponentElement, ErrorSegment, EvalEnv, Segment } from "@executablemd/core";
+import type { ErrorSegment, EvalEnv, Segment } from "@executablemd/core";
 import { Test, boundary, inTest, record, testing, verbose } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import {
@@ -89,15 +88,6 @@ function matchesMessage(matcher: string | RegExp, message: string): boolean {
 
 function describeMatcher(matcher: string | RegExp): string {
   return matcher instanceof RegExp ? String(matcher) : `substring ${JSON.stringify(matcher)}`;
-}
-
-function formatLocation(element: ComponentElement): string {
-  const position = element.position;
-  if (!position) {
-    return "unknown";
-  }
-  const at = `${position.line}:${position.column}`;
-  return position.path ? `${position.path}:${at}` : at;
 }
 
 function failResult(
