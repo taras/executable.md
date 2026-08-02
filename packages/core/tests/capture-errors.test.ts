@@ -29,6 +29,8 @@ interface Trace {
   recoveries: string[];
   /** Projection-owned work that unwound, in the order it did. */
   torn: string[];
+  /** What `torn` held at the moment a failure was reported. */
+  tornAtRaise: string[][];
   /** What `torn` held at the moment a recovery catch was entered. */
   tornAtRecovery: string[][];
   /** Every ErrorSegment that passed through `Component.raise`, in order. */
@@ -44,6 +46,7 @@ function trace(): Trace {
     effects: [],
     recoveries: [],
     torn: [],
+    tornAtRaise: [],
     tornAtRecovery: [],
     raised: [],
     failures: [],
@@ -220,38 +223,40 @@ function useStale(planted: StaleInputError): Operation<void> {
 }
 
 /**
- * Claims `<Spawner />` and spawns ordinary suspended work inside the expansion
- * that projects it. Nothing retains it, so it belongs to the projection's task
- * and must unwind when that task does.
+ * Spawns ordinary suspended work from a `spawn` modifier, which runs on the
+ * task expanding the block — the projection's own, when the block is written in
+ * projected content. Nothing retains it, so it belongs to that task and must
+ * unwind when it does.
+ *
+ * A modifier rather than a component: a component's work is owned by its
+ * invocation, which returns as soon as the body does. Such a task unwinds at
+ * the end of `<Spawner />` rather than at the end of the projection, and every
+ * ordering downstream of it would then hold for the wrong reason.
  */
 function useSpawner(log: Trace): Operation<void> {
   return Component.around({
-    *importComponent([name], next) {
-      if (name !== "Spawner") {
-        return yield* next(name);
+    *applyModifiers([modifiers, block], next) {
+      if (!modifiers.some((modifier) => modifier.name === "spawn")) {
+        return yield* next(modifiers, block);
       }
-      return {
-        kind: "function",
-        name: "Spawner",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        *fn() {
-          const started = withResolvers<void>();
-          yield* spawn(function* () {
-            yield* ensure(() => {
-              log.torn.push("spawner");
-            });
-            started.resolve();
-            yield* suspend();
-          });
-          // Wait for it to reach its suspension: a task halted before its first
-          // step registers no teardown and would prove nothing.
-          yield* started.operation;
-          return "";
-        },
-      };
+      const started = withResolvers<void>();
+      yield* spawn(function* () {
+        yield* ensure(() => {
+          log.torn.push("spawner");
+        });
+        started.resolve();
+        yield* suspend();
+      });
+      // Wait for it to reach its suspension: a task halted before its first
+      // step registers no teardown and would prove nothing.
+      yield* started.operation;
+      return { output: "", exitCode: 0, stderr: "" };
     },
   });
 }
+
+/** Spawns projection-owned work where it is written. */
+const SPAWN_BLOCK = "```sh spawn exec\nspawner\n```";
 
 interface RunOptions {
   throwing?: boolean;
@@ -271,6 +276,7 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
     yield* Component.around({
       *raise([error], next) {
         log.raised.push(error);
+        log.tornAtRaise.push([...log.torn]);
         try {
           return yield* next(error);
         } catch (failure) {
@@ -653,23 +659,42 @@ describe("capture error propagation", () => {
     expect(result.output).toContain("Function component Boom error: unrelated");
   });
 
-  it("CE22: projection-owned work unwinds before the recovery effect runs", function* () {
+  it("CE22: projection-owned work unwinds between the failure and the recovery effect", function* () {
     const log = trace();
-    const result = yield* run("<Recover><Spawner /><Broken /></Recover>", {
+    const result = yield* run(`<Recover>\n${SPAWN_BLOCK}\n<Broken />\n</Recover>`, {
       functions: { Recover: recovering("Recover", log) },
       trace: log,
     });
 
-    // The snapshot, not the final array, is what proves the ordering: the same
-    // `<Spawner />` written outside the invocation still unwinds by the end of
-    // the run, but has not unwound when the catch is entered.
+    // Both sides of the ordering, because either alone is satisfied by work with
+    // the wrong owner. Still live where the failure is reported rules out a task
+    // that unwound with whatever produced it; already torn down at the catch
+    // rules out one that outlives the projection.
+    expect(log.tornAtRaise).toEqual([[]]);
     expect(log.tornAtRecovery).toEqual([["spawner"]]);
     expect(log.torn).toEqual(["spawner"]);
     expect(log.recoveries).toEqual(["Recover"]);
     expect(result.output).toBe("fallback");
   });
 
-  it("CE23: the useContent() alias is the same failure boundary", function* () {
+  it("CE23: the same work written outside the projection outlives the recovery", function* () {
+    const log = trace();
+    const result = yield* run(`${SPAWN_BLOCK}\n<Recover><Broken /></Recover>`, {
+      functions: { Recover: recovering("Recover", log) },
+      trace: log,
+    });
+
+    // The contrast CE22 rests on. Identical work, one level out: the projection
+    // unwinding does not reach it, so it is still live at the catch and unwinds
+    // only when the run itself ends.
+    expect(log.tornAtRaise).toEqual([[]]);
+    expect(log.tornAtRecovery).toEqual([[]]);
+    expect(log.torn).toEqual(["spawner"]);
+    expect(log.recoveries).toEqual(["Recover"]);
+    expect(result.output).toBe("fallback");
+  });
+
+  it("CE24: the useContent() alias is the same failure boundary", function* () {
     const log = trace();
     const values: Record<string, unknown> = {};
     const result = yield* run('<Alias as="cap"><Broken /></Alias>AFTER', {
@@ -686,7 +711,7 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE24: an author-thrown ContentError is an ordinary function-component error", function* () {
+  it("CE25: an author-thrown ContentError is an ordinary function-component error", function* () {
     const log = trace();
     const fabricated: ErrorSegment = {
       type: "error",
@@ -718,7 +743,7 @@ describe("capture error propagation", () => {
     );
   });
 
-  it("CE25: a durability failure crossing content() is neither a ContentError nor a diagnostic", function* () {
+  it("CE26: a durability failure crossing content() is neither a ContentError nor a diagnostic", function* () {
     const log = trace();
     const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
     let thrown: unknown;
@@ -745,7 +770,7 @@ describe("capture error propagation", () => {
     expect(log.failures).toEqual([]);
   });
 
-  it("CE26: a durability failure at the content boundary outranks the throwing policy", function* () {
+  it("CE27: a durability failure at the content boundary outranks the throwing policy", function* () {
     const log = trace();
     const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
     let thrown: unknown;
