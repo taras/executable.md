@@ -610,18 +610,21 @@ describe("Tier RV — component return values", () => {
       expect(asText(result.value ?? "")).toContain("Return validation failed for <Verdict />");
     });
 
-    it("reports a text component that returns a non-string", function* () {
+    // A return binds by reference, so a non-string is a perfectly ordinary
+    // return value — it simply has nowhere to go without `as`, and renders
+    // nothing rather than being stringified into the document or diagnosed.
+    it("renders nothing for a component that returns a non-string", function* () {
       const result = yield* runFixture({
-        "doc.md": "<Verdict />\n",
-        "Verdict.ts": [
-          'import { collectFailures } from "@executablemd/core";',
-          "export default collectFailures(function*() {",
-          "  return { passed: true };",
-          "});",
-          "",
-        ].join("\n"),
+        "doc.md": "before\n\n<Verdict />\n\nafter\n",
+        "Verdict.ts": ["export default function*() {", "  return { passed: true };", "};", ""].join(
+          "\n",
+        ),
       });
-      expect(asText(result.value ?? "")).toContain("returned a non-string");
+      const rendered = asText(result.value ?? "");
+      expect(rendered).not.toContain("non-string");
+      expect(rendered).not.toContain("passed");
+      expect(rendered).toContain("before");
+      expect(rendered).toContain("after");
     });
   });
 

@@ -57,9 +57,7 @@ function useLocalFixture(): Operation<string> {
 function registration(
   name: string,
   origin: string,
-  // The ordinary arm: a live registration pairs a different fn type with
-  // liveReturn, so a Partial of the whole union would match neither.
-  extra: Partial<Extract<ComponentRegistration, { liveReturn?: false }>> = {},
+  extra: Partial<ComponentRegistration> = {},
 ): ComponentRegistration {
   return {
     name,
@@ -746,35 +744,5 @@ describe("Tier CR — selection is journaled", () => {
       });
       expect(thrown).toBeInstanceOf(ComponentRegistrationError);
     }
-  });
-
-  // `liveReturn` with `returns` is illegal in TypeScript — the union pairs each
-  // arm with its own `fn` — so the directive below both documents that and
-  // drives the runtime guard a JavaScript caller would reach. It maintains
-  // itself: if the union ever admitted the combination, the directive would
-  // become an error of its own.
-  it("CR-LIVE: rejects liveReturn together with returns", function* () {
-    let thrown: unknown;
-    yield* scoped(function* () {
-      try {
-        yield* registerComponents([
-          // @ts-expect-error the type forbids this pairing; the guard is for JS callers
-          {
-            name: "Widget",
-            origin: "host",
-            props: NO_PROPS,
-            liveReturn: true,
-            returns: { type: "string" },
-            // deno-lint-ignore require-yield
-            *fn(): Operation<CoreJson> {
-              return "";
-            },
-          },
-        ]);
-      } catch (error) {
-        thrown = error;
-      }
-    });
-    expect(thrown).toBeInstanceOf(ComponentRegistrationError);
   });
 });

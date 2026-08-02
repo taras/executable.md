@@ -2172,15 +2172,19 @@ JSON projection of it. A capture may not also be a schema property — a schema
 cannot describe a value it never sees — nor may it be `as` or `slot`, which the
 engine owns.
 
-`liveReturn` says the component's return value is a **binding rather than a
-record**: it is bound under `as` by reference, never validated against a schema,
-never rendered, and never journaled. It is therefore mutually exclusive with
-`returns`, which declares a validated durable JSON value; declaring both is a
-registration error. A live return does not require `as` — an invocation that
-discards the value is still valid — and it renders nothing in either case,
-because rendering it would mean serializing a value that is not text, and making
-that depend on `as` would make output depend on a binding the component cannot
-see. On replay a live return is recomputed with the component, not restored.
+**A return binds by reference.** `as` binds the value the component returned —
+the object itself, not a rendering of it — so a component can hand its caller
+something a schema could not describe. Such a binding is not durable: nothing is
+journaled for it, and a re-expansion recomputes it by running the component
+again.
+
+`returns` is the opt-in that says a particular return is instead a **validated
+JSON record**: the value is checked against the schema before it is bound, and a
+component declaring it must be invoked with `as`, since it renders nothing.
+
+Without `as` there is nowhere to bind, so only text can be observed: a component
+returning a string renders it, and a component returning anything else renders
+nothing. A non-string is not an error — it is a value with no destination.
 
 #### The components core supplies
 
@@ -2813,9 +2817,8 @@ component's `props` frontmatter is a validation error.
 In both cases, the child component never sees the reserved prop in its
 `validatedProps`. A registration's captures are not reserved names — an author
 chooses them — but they are consumed the same way: stripped before validation
-and delivered through `capture()` rather than forwarded as props. And for a
-component declaring `liveReturn`, `as` binds the returned value itself by
-reference rather than its rendered text.
+and delivered through `capture()` rather than forwarded as props. And `as` binds
+the returned value itself by reference rather than its rendered text.
 
 #### 6.3.6 Interaction with `renderChildren()`
 

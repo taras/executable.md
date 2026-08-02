@@ -22,7 +22,6 @@ import type {
   ComponentRegistry,
   FunctionComponent,
   FunctionComponentDefinition,
-  LiveFunctionComponent,
   PropsSchema,
   RegistryEntry,
   ReturnsSchema,
@@ -43,7 +42,7 @@ export class ComponentRegistrationError extends Error {
   }
 }
 
-interface ComponentRegistrationBase {
+export interface ComponentRegistration {
   /** The name a document writes. Dots address a subdirectory, as paths do. */
   name: string;
   /** Stable, human-readable source identity — reported by inspection. */
@@ -51,8 +50,8 @@ interface ComponentRegistrationBase {
   props: PropsSchema;
   /**
    * Props the engine does not resolve. The component evaluates each itself,
-   * when and if it wants to, so the value reaches it live — no JSON gate, no
-   * clone, no identity lost. For operands a schema cannot describe.
+   * when and if it wants to, so the value reaches it by reference — no JSON
+   * gate, no clone, no identity lost. For operands a schema cannot describe.
    */
   captures?: readonly string[];
   /**
@@ -61,25 +60,13 @@ interface ComponentRegistrationBase {
    * a default a repository file overrides.
    */
   reserved?: boolean;
+  /**
+   * Opt-in validation: the return is a validated JSON record. Without it the
+   * return binds by reference under `as`, unchecked.
+   */
+  returns?: ReturnsSchema;
+  fn: FunctionComponent;
 }
-
-/**
- * Declaring `liveReturn` changes what the component may return, so the two
- * travel together: a live registration returns `unknown` and declares no
- * `returns`; an ordinary one returns `Json` exactly as before. The pairing is
- * in the type, so the contradictory combination is not expressible.
- */
-export type ComponentRegistration =
-  | (ComponentRegistrationBase & {
-      liveReturn?: false;
-      returns?: ReturnsSchema;
-      fn: FunctionComponent;
-    })
-  | (ComponentRegistrationBase & {
-      liveReturn: true;
-      returns?: undefined;
-      fn: LiveFunctionComponent;
-    });
 
 type Kind = "reserved" | "default";
 
@@ -207,7 +194,7 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns, captures, liveReturn } = registration;
+    const { name, origin, fn, props, returns, captures } = registration;
     assertUsableName(name);
     if (origin.length === 0) {
       throw new ComponentRegistrationError(
@@ -219,14 +206,6 @@ export function* registerComponents(
       compileReturnsSchema(returns);
     }
     assertUsableCaptures(name, registration.captures, props);
-    // The type pairs these, so this is the runtime guard for a caller that
-    // reached here without it — a plain object from JavaScript, say.
-    if (liveReturn && returns !== undefined) {
-      throw new ComponentRegistrationError(
-        `the registration for "${name}" declares both \`returns\` and \`liveReturn\`: ` +
-          "one is a validated durable value, the other a binding by reference",
-      );
-    }
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];
@@ -234,24 +213,14 @@ export function* registerComponents(
       throw collision(name, kind, already, origin);
     }
 
-    const definition: FunctionComponentDefinition =
-      registration.liveReturn === true
-        ? {
-            kind: "function",
-            name,
-            props,
-            liveReturn: true,
-            fn: registration.fn,
-            ...(captures && captures.length > 0 ? { captures } : {}),
-          }
-        : {
-            kind: "function",
-            name,
-            props,
-            fn: registration.fn,
-            ...(returns ? { returns } : {}),
-            ...(captures && captures.length > 0 ? { captures } : {}),
-          };
+    const definition: FunctionComponentDefinition = {
+      kind: "function",
+      name,
+      props,
+      fn,
+      ...(returns ? { returns } : {}),
+      ...(captures && captures.length > 0 ? { captures } : {}),
+    };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });
   }

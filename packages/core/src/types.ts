@@ -188,7 +188,7 @@ export type ComponentExecution<T> = Operation<T>;
  * compatibility alias with the same behavior.
  */
 export interface FunctionComponent {
-  (props: Record<string, Json>): ComponentExecution<Json>;
+  (props: Record<string, Json>): ComponentExecution<unknown>;
 }
 
 /**
@@ -200,42 +200,19 @@ export interface FunctionComponent {
  * `ComponentSelection` that chose it, so source identity lives there rather
  * than being copied onto every definition (spec §5.3).
  */
-/**
- * A function component whose return value is bound by reference rather than
- * rendered. Its value is never validated, serialized or rendered, so it is not
- * constrained to `Json` — and the consumer narrows it explicitly, exactly as
- * `capture()` makes the input side do.
- */
-export interface LiveFunctionComponent {
-  (props: Record<string, Json>): ComponentExecution<unknown>;
-}
-
-interface FunctionComponentDefinitionBase {
+export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   props: PropsSchema;
   /** Props the engine leaves unresolved for the component to evaluate itself. */
   captures?: readonly string[];
+  /**
+   * Opt-in validation: this return is a validated JSON record, bound under
+   * `as` after checking. Without it a return binds by reference, unchecked.
+   */
+  returns?: ReturnsSchema;
+  fn: FunctionComponent;
 }
-
-/**
- * Declaring `liveReturn` changes what the component may return, so the two are
- * one choice rather than two independent fields: an ordinary definition returns
- * `Json` exactly as before, and a live one returns `unknown` and cannot also
- * declare `returns`. The pairing is in the type, so neither combination that
- * would be a contradiction is expressible.
- */
-export type FunctionComponentDefinition =
-  | (FunctionComponentDefinitionBase & {
-      liveReturn?: false;
-      returns?: ReturnsSchema;
-      fn: FunctionComponent;
-    })
-  | (FunctionComponentDefinitionBase & {
-      liveReturn: true;
-      returns?: undefined;
-      fn: LiveFunctionComponent;
-    });
 
 /**
  * An ordinary function-component invocation that failed (spec §6.9).

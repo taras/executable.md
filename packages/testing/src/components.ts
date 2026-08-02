@@ -107,7 +107,6 @@ export function* installHandlers(
       fn: AssertThrows,
       props: ASSERT_THROWS_PROPS,
       captures: ["message"],
-      liveReturn: true,
     },
     ...[...ASSERTIONS.values()].map((assertion) => ({
       name: assertion.name,

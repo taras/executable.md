@@ -167,13 +167,13 @@ export const ASSERT_THROWS_PROPS: PropsSchema = {
  *
  * `message` is a capture, so a `RegExp` reaches the matcher — through JSON props
  * that branch is unreachable, because a round-trip turns one into `{}`. The
- * caught `ErrorSegment` is the return value and the registration declares
- * `liveReturn`, so `as` binds that very object rather than a description of it.
+ * caught `ErrorSegment` is the return value, and a return binds by reference, so
+ * `as` binds that very object rather than a description of it.
  *
- * It emits no pass diagnostic. The return channel now carries the segment, and
- * no other channel preserves a durable rendered segment: `raise()` is the error
+ * It emits no pass diagnostic. The return channel carries the segment, and no
+ * other channel preserves a durable rendered segment: `raise()` is the error
  * observation chain and would abort the document under a throwing policy, and
- * `DocumentOutput` is ephemeral, so a live run and a replay would disagree.
+ * `DocumentOutput` is ephemeral, so a run and a replay would disagree.
  */
 export function* AssertThrows(_props: Record<string, Json>): Operation<unknown> {
   if (!(yield* hasCapture("message"))) {

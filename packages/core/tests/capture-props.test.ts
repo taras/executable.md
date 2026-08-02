@@ -26,13 +26,13 @@ describe("Tier CP — capture props", () => {
       props: { type: "object", properties: {}, additionalProperties: false },
       captures: ["actual", "expected"],
       // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
+      *fn(): Operation<unknown> {
         return "";
       },
     };
     const probing: FunctionComponentDefinition = {
       ...def,
-      *fn(): Operation<Json> {
+      *fn(): Operation<unknown> {
         seen = {
           hasActual: yield* hasCapture("actual"),
           hasMissing: yield* hasCapture("nope"),
@@ -67,15 +67,14 @@ describe("Tier CP — capture props", () => {
     expect(seen.expected).toBe(re);
   });
 
-  it("CP2: a live return binds by reference under `as`, and renders nothing", function* () {
-    const payload = { kind: "live" };
+  it("CP2: a return binds by reference under `as`, and renders nothing without it", function* () {
+    const payload = { kind: "by-ref" };
     const def: FunctionComponentDefinition = {
       kind: "function",
       name: "Living",
       props: { type: "object", properties: {}, additionalProperties: false },
-      liveReturn: true,
       // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
+      *fn(): Operation<unknown> {
         return payload;
       },
     };
@@ -100,10 +99,10 @@ describe("Tier CP — capture props", () => {
       );
     });
 
-    // The very object, not a copy of it.
+    // The very object, not a copy of it, and not its stringified text.
     expect(env.values.caught).toBe(payload);
-    // Neither invocation rendered anything of the value.
-    expect(rendered.some((s) => s.type === "text" && s.content.includes("live"))).toBe(false);
+    // A non-string return renders nothing rather than being stringified in.
+    expect(rendered.some((s) => s.type === "text" && s.content.includes("by-ref"))).toBe(false);
   });
 
   it("CP3: never evaluates a capture the component does not ask for", function* () {
@@ -114,7 +113,7 @@ describe("Tier CP — capture props", () => {
       props: { type: "object", properties: {}, additionalProperties: false },
       captures: ["boom"],
       // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
+      *fn(): Operation<unknown> {
         return "";
       },
     };
@@ -154,7 +153,7 @@ describe("Tier CP — capture props", () => {
       name: "Asking",
       props: { type: "object", properties: {}, additionalProperties: false },
       captures: ["actual"],
-      *fn(): Operation<Json> {
+      *fn(): Operation<unknown> {
         try {
           yield* capture("actual");
         } catch (error) {
@@ -201,7 +200,7 @@ describe("Tier CP — capture props", () => {
       name: "Ordinary",
       props: { type: "object", properties: { n: {} }, additionalProperties: false },
       // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
+      *fn(): Operation<unknown> {
         return "";
       },
     };
@@ -230,6 +229,82 @@ describe("Tier CP — capture props", () => {
     // Undeclared as a capture, so it still meets the gate that rejects a
     // non-serializable value — the widening is opt-in, not global.
     expect(observed.join(" ")).toContain("non-serializable");
+  });
+
+  it("CP6: `as` binds a non-string return by identity, not its text", function* () {
+    const payload = { verdict: "kept" };
+    const def: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Verdict",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<unknown> {
+        return payload;
+      },
+    };
+
+    const env: EvalEnv = { values: {} };
+    yield* scoped(function* () {
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent() {
+            return def;
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(scanSegments('<Verdict as="v" />\n'), {}, {}, new Set());
+    });
+
+    // Before this became the default, `as` bound the stringified text.
+    expect(env.values.v).toBe(payload);
+    expect(typeof env.values.v).not.toBe("string");
+  });
+
+  it("CP7: a string return still renders, a non-string does not", function* () {
+    function definition(name: string, value: unknown): FunctionComponentDefinition {
+      return {
+        kind: "function",
+        name,
+        props: { type: "object", properties: {}, additionalProperties: false },
+        // deno-lint-ignore require-yield
+        *fn(): Operation<unknown> {
+          return value;
+        },
+      };
+    }
+    const defs: Record<string, FunctionComponentDefinition> = {
+      Texty: definition("Texty", "RENDERED TEXT"),
+      Objecty: definition("Objecty", { hidden: true }),
+    };
+
+    const rendered = yield* scoped(function* () {
+      const env: EvalEnv = { values: {} };
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent([name]) {
+            const found = defs[name];
+            if (!found) {
+              throw new Error(`no component ${name}`);
+            }
+            return found;
+          },
+        },
+        { at: "min" },
+      );
+      return yield* expandSegments(scanSegments("<Texty />\n\n<Objecty />\n"), {}, {}, new Set());
+    });
+
+    const text = rendered
+      .filter((s) => s.type === "text")
+      .map((s) => (s.type === "text" ? s.content : ""))
+      .join("");
+    expect(text).toContain("RENDERED TEXT");
+    expect(text).not.toContain("hidden");
   });
 });
 
