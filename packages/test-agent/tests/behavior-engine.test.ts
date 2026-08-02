@@ -17,7 +17,7 @@ import { Component, DocumentOutput, execute } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collectTurn, createTurnBridge } from "../src/worker/bridge.ts";
 import type { BridgeEvent } from "../src/worker/bridge.ts";
-import type { Captures } from "../src/template.ts";
+import type { Captures } from "@executablemd/core";
 import { installWhenPromptComponent } from "../src/worker/when-prompt.ts";
 
 const REVIEW = [

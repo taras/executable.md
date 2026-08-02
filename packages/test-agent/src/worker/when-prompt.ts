@@ -18,10 +18,11 @@ import {
   raise,
   renderSegments,
   validateBindingName,
+  matchPrompt,
+  parseTemplate,
 } from "@executablemd/core";
-import type { ComponentElement, ErrorSegment, Segment } from "@executablemd/core";
-import { matchPrompt, parseTemplate } from "../template.ts";
-import type { ParsedTemplate } from "../template.ts";
+import type { ComponentElement, ErrorSegment, ParsedTemplate, Segment } from "@executablemd/core";
+
 import type { TurnBridge } from "./bridge.ts";
 
 const WHEN_PROMPT = "when_prompt";

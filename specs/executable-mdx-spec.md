@@ -2131,7 +2131,8 @@ deterministic from the content, so it needs no separate journal entry.
 A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
-   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`. These are the language's own
+   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`,
+   `<Answers>`/`<Answer>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a diagnostic, not a
@@ -5043,6 +5044,107 @@ The elicitation path is also callable by a host directly — `elicit({ message,
 schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the
 caller needs compilation to happen before it renders its message. That is what
 lets a command elicit with no document executing.
+
+#### 6.16.2 Supplying answers from the document: `<Answers>`
+
+A component that elicits internally asks whoever the host's provider reaches.
+Sometimes the surrounding document already knows the answer — a workflow
+exercising somebody else's component non-interactively, a demo, a region of a
+run that should not stop for a person:
+
+```md
+<Answers>
+<Answer template="Approve {?what}?" value={{ decision: "approve" }} />
+<Answer value={{ decision: "reject", note: "unreviewed" }}>
+Deploy {?service} to production?
+</Answer>
+
+<ReviewGate plan={plan} as="verdict" />
+</Answers>
+```
+
+`<Answers>` is elicitation middleware written as a construct. It installs a
+provider around its body's expansion and answers from its `<Answer>` matchers;
+every other child is the body, rendered transparently. The wrapper changes who
+answers, never what the body produces, and it adds nothing to what the
+Elicitation Api already does — each elicitation inside it is an ordinary one,
+judged by core against the *asking* component's schema before it binds, so a
+supplied value that does not fit fails exactly as a live provider's answer
+would. `<Answers>` validates nothing of its own beyond reading its matchers.
+
+**`<Answer>` matchers.** A matcher carries a template and a value:
+
+| Prop | Required | Value |
+|---|---|---|
+| `template` | no | A single-line template, as a **literal string** prop. Children carry a multiline one; supplying both is a configuration error |
+| `value` | yes | The answer, as an expression or captured JSON text |
+
+`template` is never an expression: `template={x}` is refused, because a template
+that came from a binding could not be read and would silently become a matcher
+with no template — which selection would then let shadow everything below it. A
+template references bindings through `{binding}` holes inside itself, which is
+what those holes are for.
+
+`value` follows the ordinary prop convention, and the consequence is worth
+stating: a prop *string* is captured JSON text, so an answer that is itself a
+string is written JSON-quoted — `value='"approve"'`. An object literal written
+as an expression, `value={{ decision: "approve" }}`, arrives already structured
+and needs no quoting. `value="approve"` and `value={"approve"}` are the same
+un-quoted string and are refused, with a diagnostic naming the spelling that
+works.
+
+Templates match the **whole rendered message**: literal text constrains,
+`{?name}` matches any text and binds nothing, and `{binding}` interpolates an
+existing binding and requires it at that position. A matcher with no template
+matches any message. The engine is the one `<WhenPrompt>` uses, and `{?name}`
+is a wildcard only — capturing into the value is deferred until a use case asks
+for it.
+
+**Selection is two rules.** The first declared matching `<Answer>` answers, and
+a matcher is reusable — it answers every elicitation it matches for as long as
+the region lasts. The consequence is deliberate: declaration order is
+significant, and a broad template above a narrow one shadows it permanently. A
+matcher that never fires is not an error.
+
+**Unmatched elicitations.** `delegate` on `<Answers>` is a boolean, default
+`false`. By default an elicitation no matcher answers fails, with a diagnostic
+naming the message and every template tried — a document supplying answers is
+stating what will be asked, and being wrong about that is a mistake rather than
+a cue to find someone. `delegate={true}` says the other thing explicitly: the
+elicitation passes to the next provider outward, which is an enclosing
+`<Answers>` if there is one and the host's provider otherwise. Regions install
+at `{ at: "min" }`, so the nearest answers first and the chain composes outward.
+
+**Both names are structural** (§5.3). A construct whose children are read as
+structure rather than rendered text cannot be an ordinary registered component,
+which only ever sees `content()` — so `<Answers>`/`<Answer>` are claimed through
+the expansion hook, as `<Test>` and `<WhenPrompt>` are, and a repository file
+named after either never stands in. An `<Answer>` outside an `<Answers>` is a
+positioned diagnostic, mirroring `<Else>` outside `<If>`.
+
+**Configuration diagnostics** are positioned and raised under the ambient
+policy: a misplaced `<Answer>`, an `<Answers>` with no body (self-closing, or
+nothing but matchers — it could never answer anything), both template forms at
+once, a template that will not parse, a missing `value`, and a `value` that is
+not JSON. A region whose matchers are malformed does not expand its body: one
+that cannot be trusted to answer should not run something that will ask.
+
+Replay restores recorded answers through the ordinary durability path, so
+matchers see nothing on replay and a region needs only what this run will
+actually ask. `Answers.test.md` is the authoring contract in Markdown.
+
+##### The `{binding}` asymmetry
+
+The two template spellings are not identical for `{binding}`, in `<Answers>` and
+in `<WhenPrompt>` alike. Written as the `template` prop, the string is a literal:
+`{binding}` reaches the engine intact, and the engine resolves it — an unbound
+name is a configuration error naming the template. Written as children, the text
+is interpolated during expansion, so an in-scope binding is substituted before
+the engine sees it and an out-of-scope one survives to be reported by the engine.
+
+The matching constraint is the same either way; only which layer reports an
+absent binding differs. This is documented rather than normalized — the two
+paths agree on every question a document can ask about matching.
 
 
 ## 7. Entry point

@@ -137,6 +137,22 @@ if (response.decision === "reject") {
 }
 \`\`\``;
 
+const ANSWERS = `<Answers>
+<Answer template="Approve {?what}?" value={{ decision: "approve" }} />
+<Answer value={{ decision: "reject", note: "unreviewed" }}>
+Deploy {?service} to production?
+</Answer>
+
+<ReviewGate plan={plan} as="verdict" />
+</Answers>`;
+
+const ANSWERS_DELEGATE = `<Answers delegate={true}>
+<Answer template="Approve {?what}?" value={{ decision: "approve" }} />
+
+<ReviewGate plan={plan} as="first" />
+<ReviewGate plan={other} as="second" />
+</Answers>`;
+
 const FILE_WRITE = `<TempDir>
 <File path="fixtures/request.md">
 Request content
@@ -814,6 +830,56 @@ export default define.page(function Components() {
         when the browser form itself is the point and you want RJSF presentation
         control; reach for <code>&lt;Elicit&gt;</code>{" "}
         when what matters is the question.
+      </p>
+
+      <h2>Answering from the document</h2>
+      <p>
+        A component that elicits internally asks whoever the host's provider
+        reaches. Sometimes the document already knows the answer — exercising
+        somebody else's component non-interactively, a demo, a stretch of a
+        longer run that should not stop for a person.{" "}
+        <code>&lt;Answers&gt;</code> is how a document says so.
+      </p>
+      <CodeBlock>{ANSWERS}</CodeBlock>
+      <p>
+        Each <code>&lt;Answer&gt;</code>{" "}
+        is a matcher. Its template is compared against the whole message the
+        elicitation asked: literal text constrains, <code>{"{?name}"}</code>
+        {" "}
+        matches any text and binds nothing, and <code>{"{binding}"}</code>{" "}
+        requires an existing value at that spot. A matcher with no template
+        matches anything. Write the template as a prop for one line, or as
+        children when the question runs long.
+      </p>
+      <p>
+        Selection is two rules and nothing else: the{" "}
+        <strong>first declared</strong>{" "}
+        matching answer wins, and a matcher is not used up by answering — it
+        keeps answering everything it matches. Which means declaration order is
+        real: a broad template above a narrow one shadows it for good.
+      </p>
+      <p>
+        For as long as its body lasts, the region is the provider. Everything
+        else is unchanged — each answer is still checked against the schema of
+        whatever asked for it, so a value that does not fit fails exactly as a
+        person's answer would.
+      </p>
+      <p>
+        An elicitation no matcher answers is an error by default, and the
+        diagnostic names both the message and every template that was tried. A
+        document supplying answers is saying what will be asked, and being wrong
+        about that is a mistake rather than a reason to go find someone.{" "}
+        <code>delegate</code>{" "}
+        says the other thing on purpose: whatever this region cannot answer
+        passes outward, to an enclosing region or to whatever the host
+        installed.
+      </p>
+      <CodeBlock>{ANSWERS_DELEGATE}</CodeBlock>
+      <p>
+        Regions nest, and the nearest one answers — ordinary middleware nesting.
+        A matcher that never fires is not a mistake; a branch that did not run
+        is still a branch you were right to describe. Resuming matches nothing,
+        so a region needs only what the run will actually ask.
       </p>
 
       <h2>How it renders</h2>

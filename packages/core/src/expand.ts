@@ -2373,7 +2373,15 @@ function* resolveExpressionProps(
  * `JSON.stringify`, while a `<Return>` value is parsed strictly so a value
  * that could not survive replay is rejected rather than quietly rewritten.
  */
-function* evaluateExpression(
+/**
+ * Evaluate one expression prop against the binding environment.
+ *
+ * Exported within the package because a claimed construct resolves its own
+ * props: the expansion hook is offered the element before prop resolution runs,
+ * so `<Answers>` and `<Answer>` reach their `value` and `delegate` expressions
+ * through here rather than receiving them already evaluated.
+ */
+export function* evaluateExpression(
   expression: string,
   componentName: string,
   propName: string,

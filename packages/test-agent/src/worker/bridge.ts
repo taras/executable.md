@@ -8,7 +8,7 @@
 
 import { createChannel, withResolvers } from "effection";
 import type { Channel, Operation, Result, Subscription } from "effection";
-import type { Captures } from "../template.ts";
+import type { Captures } from "@executablemd/core";
 
 export type BridgeEvent =
   | { kind: "output"; text: string }

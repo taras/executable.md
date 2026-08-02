@@ -5,8 +5,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Result } from "effection";
-import { matchPrompt, parseTemplate, PromptMismatchError } from "../src/template.ts";
-import type { Captures, ParsedTemplate } from "../src/template.ts";
+import { matchPrompt, parseTemplate, PromptMismatchError } from "@executablemd/core";
+import type { Captures, ParsedTemplate } from "@executablemd/core";
 
 function parsed(source: string): ParsedTemplate {
   const result = parseTemplate(source);

@@ -141,7 +141,16 @@ constrain the prompt with those values:
 ```
 
 `as` is optional when the template has no captures. An unresolved ordinary
-binding is a configuration error and never becomes an implicit capture. Repeated
+binding is a configuration error and never becomes an implicit capture.
+
+The two spellings are not identical for `{binding}`, and the same asymmetry
+applies to `<Answers>`, which shares this engine. Written as the `template`
+prop, the string is a literal: `{binding}` reaches the engine intact and the
+engine resolves it, so an unbound name is the configuration error described
+above. Written as children, the text is interpolated during expansion, so an
+in-scope binding is substituted before the engine sees it and only an
+out-of-scope one survives to be reported here. The matching constraint is the
+same either way; only which layer reports an absent binding differs. Repeated
 uses of one capture name must match the same text. Adjacent capture holes
 without literal text between them are rejected as ambiguous.
 

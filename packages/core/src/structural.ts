@@ -19,6 +19,8 @@ export const RESERVED_STRUCTURAL: ReadonlySet<string> = new Set([
   "Loop",
   "Break",
   "CollectFailures",
+  "Answers",
+  "Answer",
 ]);
 
 export function isStructural(name: string): boolean {

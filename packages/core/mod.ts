@@ -80,6 +80,9 @@ export type { EvalEnv } from "./src/types.ts";
 
 export { compileBlock } from "./src/eval-context.ts";
 
+export { matchPrompt, parseTemplate, PromptMismatchError } from "./src/template.ts";
+export type { Captures, ParsedTemplate, TemplateToken } from "./src/template.ts";
+
 export { Elicitation, ElicitationProviderError } from "./src/elicitation-api.ts";
 export type { ElicitationApi, ElicitationRequest } from "./src/elicitation-api.ts";
 export {
