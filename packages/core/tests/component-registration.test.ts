@@ -748,8 +748,33 @@ describe("Tier CR — selection is journaled", () => {
     }
   });
 
-  // `liveReturn` with `returns` is enforced by the type: the discriminated
-  // union pairs each with its own `fn` shape, so no TypeScript caller can build
-  // it. The runtime guard in registerComponents remains for JavaScript callers;
-  // exercising it here would need a cast, which AGENTS.md rule 6 forbids.
+  // `liveReturn` with `returns` is illegal in TypeScript — the union pairs each
+  // arm with its own `fn` — so the directive below both documents that and
+  // drives the runtime guard a JavaScript caller would reach. It maintains
+  // itself: if the union ever admitted the combination, the directive would
+  // become an error of its own.
+  it("CR-LIVE: rejects liveReturn together with returns", function* () {
+    let thrown: unknown;
+    yield* scoped(function* () {
+      try {
+        yield* registerComponents([
+          // @ts-expect-error the type forbids this pairing; the guard is for JS callers
+          {
+            name: "Widget",
+            origin: "host",
+            props: NO_PROPS,
+            liveReturn: true,
+            returns: { type: "string" },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<CoreJson> {
+              return "";
+            },
+          },
+        ]);
+      } catch (error) {
+        thrown = error;
+      }
+    });
+    expect(thrown).toBeInstanceOf(ComponentRegistrationError);
+  });
 });

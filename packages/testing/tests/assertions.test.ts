@@ -239,4 +239,76 @@ describe("assertion components", () => {
 
     expect(run.results[0]?.status).toBe("pass");
   });
+
+  // A registration is a default, so a repository file of the same name wins.
+  // The local component declares a props schema: a markdown component without
+  // one accepts no props at all, and would be rejected before it could answer.
+  it("a repository AssertEquals overrides the registered default", function* () {
+    const local = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    actual: {}",
+      "    expected: {}",
+      "---",
+      "",
+      "LOCAL ASSERT",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc({
+      "README.md": [
+        "<Testing>",
+        '<Test name="t"><AssertEquals actual={1} expected={2} /></Test>',
+        "</Testing>",
+        "",
+      ].join("\n"),
+      "components/AssertEquals.md": local,
+    });
+
+    // Mismatched operands that the registered assertion would fail on. It
+    // passes, so the repository component answered instead.
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  // Parity with the handler this replaced: an operand that throws is reported
+  // by the assertion that owns it, not as the invocation's own failure.
+  it("reports an operand expression that throws as its own diagnostic", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="t">',
+      '<AssertEquals actual={(() => { throw new Error("operand exploded"); })()} expected={1} />',
+      "</Test>",
+      "</Testing>",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc({ "README.md": doc });
+
+    expect(run.results[0]?.status).toBe("fail");
+    expect(run.results[0]?.error?.message).toContain('failed to evaluate the "actual" expression');
+    expect(run.results[0]?.error?.message).toContain("operand exploded");
+  });
+
+  // `undefined` cannot survive the JSON gate, so before captures this could not
+  // be written at all — the engine rejected the prop before the assertion ran.
+  it("<AssertExists> fails on undefined rather than rejecting the prop", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="t">',
+      "<AssertExists actual={undefined} />",
+      "</Test>",
+      "</Testing>",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc({ "README.md": doc });
+
+    // The assertion's own comparison failed — not the engine refusing the prop,
+    // which is what happened before `actual` became a capture.
+    expect(run.results[0]?.status).toBe("fail");
+    expect(run.results[0]?.error?.kind).toBe("assertion");
+    expect(run.results[0]?.error?.message).not.toContain("non-serializable");
+  });
 });

@@ -278,10 +278,20 @@ export function assertionComponent(assertion: AssertionEntry): FunctionComponent
     }
 
     // Operands, live. Evaluated here rather than during prop resolution, so an
-    // expression that throws is this assertion's failure to report.
+    // expression that throws is this assertion's failure to report — the
+    // assertion that owns the operand, not the invocation that contains it.
     const values: ResolvedValues = { msg: undefined };
     for (const name of written) {
-      const value = yield* capture(name);
+      let value: unknown;
+      try {
+        value = yield* capture(name);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        yield* raise(
+          validationError(assertion.name, `failed to evaluate the "${name}" expression: ${detail}`),
+        );
+        return "";
+      }
       if (name === "expr") {
         values.expr = value;
       } else if (name === "actual") {
