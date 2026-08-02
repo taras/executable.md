@@ -5,7 +5,35 @@ Before proposing or implementing changes:
 1. Read this repository's `AGENTS.md`.
 2. Read the Effection v4 `AGENTS.md` linked from it.
 
-<!-- BEGIN PINNED UPSTREAM CLAUDE.md -->
+<!--
+Third-party notice
+
+The following pinned configuration is from the TechNomadCode/AI-Product-Development-Toolkit
+repository at commit ed41972dff92cdbc94a60b2464531669900e602f.
+
+MIT License
+
+Copyright (c) 2025 Tech Nomad
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
 # Global Behavioral & Agentic Guidelines
 
 ## Scope & Local Project Override
@@ -51,4 +79,3 @@ Before proposing or implementing changes:
 ## Grounding & Hallucination Prevention
 - **Admit Uncertainty**: If required information is missing or no available tool fits what is requested, state so directly rather than guessing.
 - **Document Analysis**: When summarizing or analyzing long context documents (>20k tokens), extract direct quotes to ground conclusions before performing tasks.
-<!-- END PINNED UPSTREAM CLAUDE.md -->
