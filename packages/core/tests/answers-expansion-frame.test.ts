@@ -6,11 +6,15 @@
  * `expandSegments`, which resolves against a frame rather than taking the
  * expansion's state as arguments. `withExpansionFrame` is what publishes it.
  *
- * Every case below is written so the body it expands can only come out right if
- * the frame carries this expansion's own recursion: the cycle-detection hide
- * set, the block counter, and the interpolation inputs. Take the frame away and
- * they fail with "no active expansion"; give them a frame built from anything
- * else and they fail on what it carried.
+ * These restate, over the `<Answers>` path, every invariant
+ * `expand-segments-operation.test.ts` states over a claimed element — so they
+ * keep holding once the hook is retired. Each is written so the region can only
+ * come out right if the frame carries this expansion's own recursion: the
+ * cycle-detection hide set, the block counter, the interpolation inputs, and the
+ * bindings projected content was tagged with. Take the frame away and all of
+ * them fail with "no active expansion"; build it from anything else and each
+ * fails on the field it reads. The last two read from *outside* a region, where
+ * the answer has to be that no frame is bound at all.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -27,14 +31,14 @@ function makeComponent(
   name: string,
   body: string,
   meta: Record<string, unknown> = {},
-  props?: Json,
+  props?: ComponentDefinition["props"],
 ): ComponentDefinition {
   return {
     kind: "markdown",
     name,
     path: `components/${name}.md`,
     meta,
-    props: (props as ComponentDefinition["props"]) ?? {
+    props: props ?? {
       type: "object",
       properties: {},
       additionalProperties: false,
@@ -62,7 +66,6 @@ function useTestComponents(
         blocks?.push(block);
         return { output: "", exitCode: 0, stderr: "" };
       },
-      env: () => ({ values: {} }),
     },
     { at: "min" },
   );
@@ -91,9 +94,11 @@ function render(
 ): Operation<string> {
   return scoped(function* () {
     yield* useTestComponents(components, options.blocks);
-    if (options.env) {
-      yield* Component.around({ env: () => options.env }, { at: "min" });
-    }
+    // One environment object for the whole expansion. A provider returning a
+    // fresh one per read would hand every caller its own, and the caller
+    // bindings a projection is supposed to carry would be unobservable.
+    const env = options.env ?? { values: {} };
+    yield* Component.around({ env: () => env }, { at: "min" });
     const expanded = yield* expandSegments(
       scanSegments(source),
       options.meta ?? {},
@@ -177,6 +182,44 @@ describe("Answers: the expansion frame its body renders through", () => {
   });
 
   /**
+   * A region written in projected content resolves the caller's bindings.
+   *
+   * The engine tags children projected through `<Content />` with the bindings
+   * of the scope they were written in, and the region's expansion has to hand
+   * those on to what it expands. An **expression prop** is the channel that
+   * reads them: `<Wrap>`'s own body has an environment of its own and `who` is
+   * not in it, so `{who}` survives only as the projected tag on the element.
+   *
+   * `outside=` is the control — the same element, the same projection, one level
+   * up. Both reading `caller` is what puts the region's expansion on the hook
+   * for a loss rather than the projection that fed it.
+   */
+  it("keeps the caller's bindings on a region projected through <Content />", function* () {
+    const components = {
+      Wrap: makeComponent("Wrap", "<Content />"),
+      Echo: makeComponent(
+        "Echo",
+        "{props.text}",
+        {},
+        {
+          type: "object",
+          properties: { text: { type: "string" } },
+          additionalProperties: false,
+        },
+      ),
+    };
+
+    const output = yield* render(
+      `<Wrap>outside=<Echo text={who} />${region("inside=<Echo text={who} />")}</Wrap>`,
+      components,
+      { env: { values: { who: "caller" } } },
+    );
+
+    expect(output).toContain("outside=caller");
+    expect(output).toContain("inside=caller");
+  });
+
+  /**
    * The second call site: a matcher's template children go through the same
    * operation, so an interpolation in one resolves against the frame too.
    *
@@ -206,5 +249,54 @@ describe("Answers: the expansion frame its body renders through", () => {
     expect(output).toContain('"Review {?a}{?b}"');
     // A region whose matchers are malformed does not expand its body (§6.16.2).
     expect(output).not.toContain("BODY");
+  });
+
+  /**
+   * The frame is bound for the length of the region and no longer. Both cases
+   * below read it from outside one, where the answer must be that there is
+   * none — a frame left bound would let a later code block, or the caller,
+   * recurse with a region's expansion state.
+   */
+  it("has no active expansion for ordinary work after a region", function* () {
+    let message = "";
+    const source = [region("done"), "", "```bash exec", "one", "```", ""].join("\n");
+
+    yield* scoped(function* () {
+      yield* useTestComponents({});
+      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
+      yield* Component.around(
+        {
+          *applyModifiers(_args, _next) {
+            try {
+              yield* Component.operations.expandSegments([]);
+            } catch (error) {
+              message = error instanceof Error ? error.message : String(error);
+            }
+            return { output: "", exitCode: 0, stderr: "" };
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    });
+
+    expect(message).toContain("no active expansion");
+  });
+
+  it("restores the enclosing frame when a region is done", function* () {
+    let message = "";
+
+    yield* scoped(function* () {
+      yield* useTestComponents({});
+      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
+      yield* expandSegments(scanSegments(region("done")), {}, {}, new Set());
+      try {
+        yield* Component.operations.expandSegments([]);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    expect(message).toContain("no active expansion");
   });
 });

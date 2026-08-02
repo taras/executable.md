@@ -9,8 +9,10 @@
  *
  * A claim is the subject here, so these go where the hook goes. The same frame
  * is what `<Answers>` renders its body through, and
- * `answers-expansion-frame.test.ts` states every invariant below over that path
- * instead — with nothing claimed, so it keeps holding once the hook is gone.
+ * `answers-expansion-frame.test.ts` restates all eight cases below over that
+ * path — hide set, sibling isolation, block counter, meta and props, nesting,
+ * projected caller bindings, and both readings from outside a frame — with
+ * nothing claimed, so they keep holding once the hook is gone.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
