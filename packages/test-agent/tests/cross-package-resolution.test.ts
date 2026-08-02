@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import {
   collect,
+  Component,
   execute,
   inspectComponent,
   installAgentComponents,
@@ -35,9 +36,34 @@ import type { ComponentInfo } from "@executablemd/core";
 import { installTestingComponents } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
 
-/** Every name the three packages register. All are non-reserved defaults. */
+/**
+ * Every name the three packages register. All are non-reserved defaults.
+ *
+ * Written out rather than derived, so the coverage each test claims is visible
+ * in the file — and checked against the live registry by XP0, which is what
+ * keeps the two from drifting apart as packages gain components.
+ */
 const AGENT = ["AgentProvider", "Agent", "Session", "Prompt", "ApproveAll", "AskPermission"];
-const TESTING = ["Testing", "Test", "AssertEquals", "AssertThrows"];
+const TESTING = [
+  "Testing",
+  "Test",
+  "AssertThrows",
+  // The fourteen entries of the assertion table, each registered from it.
+  "Assert",
+  "AssertFalse",
+  "AssertExists",
+  "AssertEquals",
+  "AssertNotEquals",
+  "AssertStrictEquals",
+  "AssertNotStrictEquals",
+  "AssertStringIncludes",
+  "AssertMatch",
+  "AssertNotMatch",
+  "AssertGreater",
+  "AssertGreaterOrEqual",
+  "AssertLess",
+  "AssertLessOrEqual",
+];
 const TEST_AGENT = ["TestAgent", "TestAgent.Scenario"];
 const REGISTERED = [...AGENT, ...TESTING, ...TEST_AGENT];
 
@@ -141,6 +167,20 @@ function describeOrigin(info: ComponentInfo): string {
 }
 
 describe("Tier XP — cross-package resolution", () => {
+  /**
+   * The inventory below is what every other case iterates, so a name missing
+   * from it is coverage silently not taken. Comparing against the live registry
+   * is what makes "every registered name" a checked claim rather than a comment.
+   */
+  it("XP0: the names under test are exactly the ones the three packages register", function* () {
+    const installed = yield* scoped(function* () {
+      yield* installAll("agent-first");
+      return [...(yield* Component.operations.registry).keys()].sort();
+    });
+
+    expect(installed).toEqual([...REGISTERED].sort());
+  });
+
   it("XP1: a repository component runs in place of every registered default", function* () {
     const workspace = yield* useWorkspace();
     yield* writeStandIns(workspace);
