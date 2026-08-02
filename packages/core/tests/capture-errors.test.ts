@@ -4,7 +4,7 @@ import { ensure, scoped, sleep, spawn, suspend, withResolvers } from "effection"
 import type { Operation } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import { expandSegments } from "../src/expand.ts";
-import { Component, content, raise } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
 import { collectFailures } from "../src/component-failures.ts";
 import { useContent } from "../src/content-context.ts";
 import { scanSegments } from "../src/scanner.ts";
@@ -184,22 +184,35 @@ function forging(name: string, log: Trace, fabricated: ErrorSegment): FunctionCo
 const BAD = "<Missing />";
 
 /**
- * Claims `<Broken />` and reports the diagnostic it creates, numbering each so
- * source order and object identity are both checkable.
+ * `<Broken />` — a component that fails, numbering each failure so source order
+ * and object identity are both checkable.
+ *
+ * It fails rather than returning anything: the ErrorSegment these assert on is
+ * the diagnostic the engine builds for a failed invocation, which is a real
+ * reported segment and not prose a component chose to render. That is what keeps
+ * the identity assertions meaning something — the object a capture refuses, or
+ * that replaces an invocation, is the one `Component.raise` returned.
+ *
+ * One instance per run, so the numbering restarts with the sequence the
+ * assertions read.
  */
-function useBroken(): Operation<void> {
+function brokenComponent(): FunctionComponentDefinition {
   let seq = 0;
-  return Component.around({
-    *expand([element], next) {
-      if (element.name === "Broken") {
-        seq += 1;
-        return {
-          segments: [yield* raise({ type: "error", message: `broken ${seq}`, source: "Broken" })],
-        };
-      }
-      return yield* next(element);
-    },
-  });
+  return {
+    kind: "function",
+    name: "Broken",
+    props: OPEN_SCHEMA,
+    // deno-lint-ignore require-yield
+    fn: collectFailures(function* () {
+      seq += 1;
+      throw new Error(`broken ${seq}`);
+    }),
+  };
+}
+
+/** What the engine's diagnostic for the nth failed `<Broken />` reads. */
+function broke(n: number): string {
+  return `Function component Broken error: broken ${n}`;
 }
 
 /**
@@ -271,7 +284,10 @@ interface RunOptions {
 function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
   return scoped(function* () {
     const markdown = opts.components ?? {};
-    const functions = opts.functions ?? {};
+    const functions: Record<string, FunctionComponentDefinition> = {
+      Broken: brokenComponent(),
+      ...(opts.functions ?? {}),
+    };
     const log = opts.trace ?? trace();
     yield* Component.around({
       *raise([error], next) {
@@ -290,7 +306,6 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
         }
       },
     });
-    yield* useBroken();
     yield* useSpawner(log);
     const planted = opts.stale;
     if (planted) {
@@ -413,7 +428,7 @@ describe("capture error propagation", () => {
 
     expect(errors(result.segments)).toHaveLength(1);
     expect(errors(result.segments)[0]).toBe(log.raised[0]);
-    expect(result.output).toContain("broken 1");
+    expect(result.output).toContain(broke(1));
     expect(result.output).toContain("AFTER");
     expect(result.output).not.toContain("wrapped:");
     expect(log.effects).toEqual([]);
@@ -469,7 +484,7 @@ describe("capture error propagation", () => {
 
     expect(errors(result.segments)).toHaveLength(1);
     expect(errors(result.segments)[0]).toBe(log.raised[0]);
-    expect(result.output).toBe("<!-- ERROR: broken 1 -->TAIL");
+    expect(result.output).toBe(`<!-- ERROR: ${broke(1)} -->TAIL`);
     expect(result.output).not.toContain("before");
     expect(result.output).not.toContain("after");
     expect(result.output).not.toContain("wrapped:");
@@ -487,7 +502,7 @@ describe("capture error propagation", () => {
 
     expect(errors(result.segments)).toHaveLength(1);
     expect(errors(result.segments)[0]).toBe(log.raised[0]);
-    expect(result.output).toContain("broken 1");
+    expect(result.output).toContain(broke(1));
     expect(result.output).toContain("AFTER");
     expect(result.output).not.toContain("wrapped:");
     expect(log.effects).toEqual([]);
@@ -595,7 +610,7 @@ describe("capture error propagation", () => {
     expect(caught.errors).toHaveLength(2);
     expect(caught.errors[0]).toBe(log.raised[0]);
     expect(caught.errors[1]).toBe(log.raised[1]);
-    expect(caught.errors.map((error) => error.message)).toEqual(["broken 1", "broken 2"]);
+    expect(caught.errors.map((error) => error.message)).toEqual([broke(1), broke(2)]);
   });
 
   it("CE19: the same recovery source recovers identically under a throwing policy", function* () {
@@ -705,7 +720,7 @@ describe("capture error propagation", () => {
 
     expect(errors(result.segments)).toHaveLength(1);
     expect(errors(result.segments)[0]).toBe(log.raised[0]);
-    expect(result.output).toContain("broken 1");
+    expect(result.output).toContain(broke(1));
     expect(result.output).toContain("AFTER");
     expect(log.effects).toEqual([]);
     expect("cap" in values).toBe(false);
