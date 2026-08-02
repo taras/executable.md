@@ -538,11 +538,6 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      // `<Answers>`/`<Answer>` are structural, and a structural construct that
-      // needs its children as elements is claimed through this hook rather than
-      // handled in the expansion switch. Installed after the providers above so
-      // it sits nearest the expansion it claims for.
-
       const { output, value } = yield* durableRun(() => Execution.operations.document(props), {
         stream,
       });

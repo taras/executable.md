@@ -168,14 +168,14 @@ function* rejectRetain(): Operation<never> {
  * handler's recursion carries this element's interpolation inputs and cycle
  * detection; a nested claim replaces the binding for its own subtree.
  */
-function* offerElement(
+function offerElement(
   element: ComponentElement,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
 ): Operation<ComponentHandling | undefined> {
-  return yield* withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
+  return withExpansionFrame(parentMeta, parentProps, hideSet, counter, () =>
     Component.operations.expand(element),
   );
 }
@@ -559,10 +559,6 @@ export function* expandSegments(
         // before built-in expansion. A handler reports the errors it creates
         // (§6.9), so returned segments are settled here rather than reported
         // again: a collecting policy keeps them, a throwing one aborts.
-        //
-        // Nothing in this repository claims a name any more — every component
-        // family resolves through registration or a repository file. The hook
-        // itself is retired separately.
         const handling = yield* offerElement(segment, parentMeta, parentProps, hideSet, counter);
         if (handling) {
           for (const handled of handling.segments) {

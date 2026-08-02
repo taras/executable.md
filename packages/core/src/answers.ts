@@ -25,15 +25,14 @@
  *
  * ## Why these are structural rather than registered
  *
- * A registered function component sees `content()` — rendered text. Matchers
- * are structure: `value` is an expression prop, `template` is a prop-or-children
- * pair, and each needs its own position for diagnostics. Only the expansion hook
- * hands over the element itself, which is why `<Test>` and `<WhenPrompt>` are
- * claimed the same way. Being claimed means being reserved: a repository file
- * named `Answers.md` never stands in, and it could not implement matcher
- * semantics if it did.
+ * A function component sees `content()` — rendered text. Matchers are
+ * structure: `value` is an expression prop, `template` is a prop-or-children
+ * pair, and each needs its own position for diagnostics, and only the element
+ * itself carries those. That is why these are structural rather than
+ * components: being reserved means a repository file named `Answers.md` never
+ * stands in, and it could not implement matcher semantics if it did.
  *
- * Partitioning before expanding is what the hook buys. Matchers are collected
+ * Partitioning before expanding is what the structural dispatch buys. Matchers are collected
  * from the whole child list first, so where an `<Answer>` is written does not
  * decide what it can answer; and "an `<Answers>` with no body" is a structural
  * fact rather than a guess from empty rendered text.
@@ -106,12 +105,6 @@ function isBlankText(segment: Segment): boolean {
   return segment.type === "text" && segment.content.trim() === "";
 }
 
-/**
- * Install the handler for both constructs.
- *
- * Offered every element, it claims only these two names and delegates the rest,
- * so it composes with any other expansion support a host has installed.
- */
 /** A `<Answer>` written outside the `<Answers>` that would have read it. */
 export function strayAnswerError(element: ComponentElement): ErrorSegment {
   return configError(

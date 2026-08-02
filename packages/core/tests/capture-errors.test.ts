@@ -212,8 +212,8 @@ function useStale(planted: StaleInputError): Operation<void> {
       if (name !== "Stale") {
         return yield* next(name);
       }
-      // Thrown from resolution, as the claim did: what reaches the caller must
-      // be the planted failure itself, not a diagnostic built from it.
+      // Thrown from resolution: what reaches the caller must be the planted
+      // failure itself, not a diagnostic built from it.
       throw planted;
     },
   });
@@ -231,7 +231,7 @@ function useSpawner(log: Trace): Operation<void> {
         return yield* next(name);
       }
       return {
-        kind: "function" as const,
+        kind: "function",
         name: "Spawner",
         props: { type: "object", properties: {}, additionalProperties: false },
         *fn() {
