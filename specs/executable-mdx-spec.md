@@ -5076,8 +5076,22 @@ would. `<Answers>` validates nothing of its own beyond reading its matchers.
 
 | Prop | Required | Value |
 |---|---|---|
-| `template` | no | A single-line template. Children carry a multiline one; supplying both is a configuration error |
+| `template` | no | A single-line template, as a **literal string** prop. Children carry a multiline one; supplying both is a configuration error |
 | `value` | yes | The answer, as an expression or captured JSON text |
+
+`template` is never an expression: `template={x}` is refused, because a template
+that came from a binding could not be read and would silently become a matcher
+with no template — which selection would then let shadow everything below it. A
+template references bindings through `{binding}` holes inside itself, which is
+what those holes are for.
+
+`value` follows the ordinary prop convention, and the consequence is worth
+stating: a prop *string* is captured JSON text, so an answer that is itself a
+string is written JSON-quoted — `value='"approve"'`. An object literal written
+as an expression, `value={{ decision: "approve" }}`, arrives already structured
+and needs no quoting. `value="approve"` and `value={"approve"}` are the same
+un-quoted string and are refused, with a diagnostic naming the spelling that
+works.
 
 Templates match the **whole rendered message**: literal text constrains,
 `{?name}` matches any text and binds nothing, and `{binding}` interpolates an

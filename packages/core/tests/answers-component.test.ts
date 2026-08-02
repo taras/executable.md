@@ -313,6 +313,33 @@ describe("Answers: choosing by template", () => {
     expect(result.failure).toContain("no matcher for this elicitation");
   });
 
+  /** A string answer is JSON text like any other, so it is written quoted. */
+  it("round-trips a string answer written as quoted JSON", function* () {
+    const workspace = yield* useWorkspace();
+    const stringSchema = '{"type":"string"}';
+
+    const result = yield* run(
+      workspace,
+      [
+        "```js eval",
+        `const str = JSON.parse(${JSON.stringify(stringSchema)});`,
+        "```",
+        "",
+        "<Answers>",
+        `<Answer template="Approve?" value='"approve"' />`,
+        "",
+        '<Elicit schema={str} as="v">Approve?</Elicit>',
+        "",
+        "Got: {v}",
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(result.failure).toBe(undefined);
+    expect(result.output).toContain("Got: approve");
+  });
+
   it("reads a value written as captured JSON text", function* () {
     const workspace = yield* useWorkspace();
 
@@ -718,6 +745,34 @@ describe("Answers: configuration diagnostics", () => {
     expect(diagnostics(result)).toContain('requires a "value" prop');
   });
 
+  /**
+   * An expression template is never read, so without this it would silently
+   * become a match-anything matcher — and first-wins plus reusable would turn
+   * that into permanent shadowing of every matcher below it.
+   */
+  it("refuses a template written as an expression", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      [
+        "```js eval",
+        'const question = "Approve?";',
+        "```",
+        "",
+        "<Answers>",
+        '<Answer template={question} value={{ decision: "a" }} />',
+        "",
+        "body",
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(diagnostics(result)).toContain("template must be a literal string prop");
+    expect(diagnostics(result)).toContain("{binding} holes");
+  });
+
   it("refuses a value that is not JSON", function* () {
     const workspace = yield* useWorkspace();
 
@@ -734,6 +789,30 @@ describe("Answers: configuration diagnostics", () => {
     );
 
     expect(diagnostics(result)).toContain("value text is not JSON");
+  });
+
+  /**
+   * `value={"approve"}` and `value="approve"` both arrive as the prop string
+   * `approve`, which is not JSON. The diagnostic points at the spelling that
+   * works rather than only reporting the parse failure.
+   */
+  it("points a bare string value at the JSON-quoted spelling", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      [
+        "<Answers>",
+        '<Answer template="Approve?" value={"approve"} />',
+        "",
+        "body",
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(diagnostics(result)).toContain("captured JSON text");
+    expect(diagnostics(result)).toContain(`value='\"approve\"'`);
   });
 
   /**

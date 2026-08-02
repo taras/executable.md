@@ -2376,10 +2376,10 @@ function* resolveExpressionProps(
 /**
  * Evaluate one expression prop against the binding environment.
  *
- * Exported because a claimed construct resolves its own props: the expansion
- * hook is offered the element before prop resolution runs, so `<Answers>` and
- * `<Answer>` reach their `value` and `delegate` expressions through here rather
- * than receiving them already evaluated.
+ * Exported within the package because a claimed construct resolves its own
+ * props: the expansion hook is offered the element before prop resolution runs,
+ * so `<Answers>` and `<Answer>` reach their `value` and `delegate` expressions
+ * through here rather than receiving them already evaluated.
  */
 export function* evaluateExpression(
   expression: string,

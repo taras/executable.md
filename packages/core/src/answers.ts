@@ -266,6 +266,18 @@ function* readAnswer(element: ComponentElement): Operation<Matcher | ErrorSegmen
     }
   }
 
+  // An expression template is never read, and silently produces a matcher with
+  // no template — which first-wins plus reusable turns into permanent shadowing
+  // of everything below it. `<WhenPrompt>` reaches its "requires a template"
+  // error by the same route; this says so directly.
+  if ("template" in element.expressions) {
+    return yield* refuse(
+      element,
+      "template must be a literal string prop or template children, not an expression. " +
+        "Write the bindings a template references as {binding} holes inside it.",
+    );
+  }
+
   const templateProp = element.props.template;
   const hasChildren = !element.selfClosing && element.children.length > 0;
   if (typeof templateProp === "string" && hasChildren) {
@@ -327,7 +339,11 @@ function* readValue(element: ComponentElement): Operation<{ parsed: Json; error?
     } catch (error) {
       return {
         parsed: null,
-        error: `value text is not JSON: ${error instanceof Error ? error.message : String(error)}`,
+        error:
+          `value text is not JSON: ${
+            error instanceof Error ? error.message : String(error)
+          }. A prop string is captured JSON text, so a string answer is written ` +
+          `JSON-quoted — value='"approve"' rather than value="approve".`,
       };
     }
     return read(decoded);

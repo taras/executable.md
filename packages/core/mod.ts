@@ -80,7 +80,6 @@ export type { EvalEnv } from "./src/types.ts";
 
 export { compileBlock } from "./src/eval-context.ts";
 
-export { evaluateExpression } from "./src/expand.ts";
 export { matchPrompt, parseTemplate, PromptMismatchError } from "./src/template.ts";
 export type { Captures, ParsedTemplate, TemplateToken } from "./src/template.ts";
 
