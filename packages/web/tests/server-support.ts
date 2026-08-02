@@ -42,7 +42,7 @@ export const BODY_HTML = "<h1>Review</h1>\n<p>Please decide.</p>";
 
 export function formInput(schema: unknown = REVIEW_SCHEMA): FormServerInput {
   return {
-    compiled: compileForm(parseDeclaration(schema)),
+    compiled: compileForm(parseDeclaration("WebForm", schema)),
     bodyHtml: BODY_HTML,
     clientJs: CLIENT_JS,
     themeCss: THEME_CSS,

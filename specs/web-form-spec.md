@@ -158,6 +158,17 @@ and the sanitized content, serialized with object keys sorted so that two
 spellings of one question fingerprint alike.
 
 A replay returns the recorded answer without starting a listener, printing a URL,
-opening a browser, or invoking the responder. A changed question changes the
-fingerprint, and the repository's ordinary durability semantics decide what that
-means — `<WebForm>` adds no replay policy of its own.
+opening a browser, or invoking the responder.
+
+The fingerprint is enforced, not merely recorded. Only an effect's type and name
+decide whether a journal entry matches, and the name is a source position — so a
+journal describing a different question would otherwise bind its answer here.
+`<WebForm>` installs a replay guard that compares the recorded fingerprint with
+the one this run computed and fails with a `StaleInputError` when they differ,
+before anything is served. Binding an answer to a question nobody was asked is
+the failure a human-decision component must not have.
+
+It refuses rather than asking again. A replay guard decides between replaying and
+erroring; re-execution is named in the durable protocol as a future outcome, and
+asking again where the question changed belongs with it. `<Elicit>` enforces its
+own fingerprint the same way.

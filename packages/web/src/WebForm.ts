@@ -32,7 +32,7 @@ import type { Operation } from "effection";
 
 import { parseDeclaration } from "./declaration.ts";
 import type { Json } from "./json.ts";
-import { fingerprint, persistResponse } from "./journal.ts";
+import { fingerprint, persistResponse, refuseChangedQuestion } from "./journal.ts";
 import { prepareForm, runPreparedForm } from "./live-form.ts";
 import { renderBody } from "./markdown.ts";
 
@@ -58,7 +58,7 @@ export function* WebForm(props: Record<string, Json>): Operation<Json> {
   // First, so a failing body fails here — before a port exists to leak.
   const body = yield* content();
 
-  const declaration = parseDeclaration(props.schema, props.uiSchema);
+  const declaration = parseDeclaration("WebForm", props.schema, props.uiSchema);
   const sanitized = renderBody(body);
 
   const question = {
@@ -73,10 +73,16 @@ export function* WebForm(props: Record<string, Json>): Operation<Json> {
   // operation, where nothing has been read, bound, printed, or recorded.
   const prepared = prepareForm(question);
 
-  return yield* persistResponse(
-    { location: formatLocation(yield* invocation()), fingerprint: fingerprint(question) },
-    () => runPreparedForm(prepared),
-  );
+  const identity = {
+    location: formatLocation(yield* invocation()),
+    fingerprint: fingerprint(question),
+  };
+
+  // Before the record is read, so a resumed document cannot bind an answer that
+  // was given to a different question.
+  yield* refuseChangedQuestion(identity);
+
+  return yield* persistResponse(identity, () => runPreparedForm(prepared));
 }
 
 /** `path:line:column`, `line:column`, or `unknown` — the durable identity. */

@@ -42,7 +42,7 @@ const AXES_SCHEMA = {
 };
 
 function compileAxes(): ReturnType<typeof compileForm> {
-  return compileForm(parseDeclaration(AXES_SCHEMA));
+  return compileForm(parseDeclaration("WebForm", AXES_SCHEMA));
 }
 
 /** Every case, with the verdict both validators must reach. */
@@ -188,7 +188,7 @@ describe("compile: the browser validator, executed", () => {
       $ref: "https://example.test/ui.json",
       notes: { "ui:widget": "textarea" },
     };
-    const compiled = compileForm(parseDeclaration(AXES_SCHEMA, uiSchema));
+    const compiled = compileForm(parseDeclaration("WebForm", AXES_SCHEMA, uiSchema));
     const registration = yield* runValidatorScript(compiled.validatorScript);
 
     expect(registration.uiSchema).toEqual(uiSchema);
@@ -213,7 +213,7 @@ describe("compile: the server is built the way the browser is", () => {
    * single default instead of sharing the construction path would still fail it.
    */
   it("agrees on decimal multipleOf values, executed on both sides", function* () {
-    const compiled = compileForm(parseDeclaration({ type: "number", multipleOf: 0.01 }));
+    const compiled = compileForm(parseDeclaration("WebForm", { type: "number", multipleOf: 0.01 }));
     const registration = yield* runValidatorScript(compiled.validatorScript);
     const browser = rootValidator(registration);
 
@@ -246,7 +246,7 @@ describe("compile: what the browser receives is JSON, not source", () => {
    */
   it("delivers an own __proto__ key in a uiSchema byte-for-byte", function* () {
     const uiSchemaText = '{"__proto__":{"ui:widget":"hidden"},"ui:order":["decision"]}';
-    const compiled = compileForm(parseDeclaration(AXES_SCHEMA, uiSchemaText));
+    const compiled = compileForm(parseDeclaration("WebForm", AXES_SCHEMA, uiSchemaText));
     const registration = yield* runValidatorScript(compiled.validatorScript);
     const delivered = registration.uiSchema;
 
@@ -260,7 +260,7 @@ describe("compile: what the browser receives is JSON, not source", () => {
   });
 
   it("reconstructs the schema through JSON.parse rather than as source", function* () {
-    const { validatorScript } = compileForm(parseDeclaration(AXES_SCHEMA));
+    const { validatorScript } = compileForm(parseDeclaration("WebForm", AXES_SCHEMA));
 
     expect(validatorScript).toContain("bridge.register(exports, JSON.parse(");
   });
@@ -314,7 +314,7 @@ describe("compile: what the generated script is allowed to reach", () => {
     // the text arrives byte-for-byte.
     const title = "close </script> and \u2028 and \u2029";
     const compiled = compileForm(
-      parseDeclaration({ type: "object", properties: { a: { type: "string" } }, title }),
+      parseDeclaration("WebForm", { type: "object", properties: { a: { type: "string" } }, title }),
     );
 
     expect(compiled.validatorScript).toContain("\\u003c");
@@ -326,7 +326,7 @@ describe("compile: what the generated script is allowed to reach", () => {
 
 describe("compile: refusals", () => {
   it("refuses a local pointer that cannot resolve", function* () {
-    const declaration = parseDeclaration({
+    const declaration = parseDeclaration("WebForm", {
       type: "object",
       properties: { a: { $ref: "#/definitions/missing" } },
     });
@@ -348,7 +348,11 @@ describe("compile: refusals", () => {
 describe("compile: what the browser and the fingerprint see", () => {
   it("carries the normalized declaration through unchanged", function* () {
     const uiSchema = { "ui:order": ["decision", "*"] };
-    const declaration = parseDeclaration(JSON.stringify(AXES_SCHEMA), JSON.stringify(uiSchema));
+    const declaration = parseDeclaration(
+      "WebForm",
+      JSON.stringify(AXES_SCHEMA),
+      JSON.stringify(uiSchema),
+    );
     const compiled = compileForm(declaration);
 
     expect(compiled.schema).toEqual(AXES_SCHEMA);
