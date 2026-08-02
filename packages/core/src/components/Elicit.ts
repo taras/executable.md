@@ -10,9 +10,9 @@
  *
  * The document says what it is asking and what shape the answer must have. Where
  * the asking happens is the host's decision, installed through the Elicitation
- * Api: a browser form under the CLI, scripted responses under a test, a terminal
- * or the Inspector later. None of that is expressible in Markdown, on purpose —
- * a `mode` prop would make every document that used it a document about its own
+ * Api: a browser form, a terminal, an editor integration, scripted responses
+ * under a test. None of that is expressible in Markdown, on purpose — a `mode`
+ * prop would make every document that used it a document about its own
  * transport.
  *
  * This function is three steps and the order is the whole of it. The schema

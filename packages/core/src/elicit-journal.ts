@@ -7,11 +7,13 @@
  * that is over.
  *
  * The description carries a fingerprint of what the person was actually asked:
- * the normalized schema and the rendered message. A document that changes the
- * question changes the fingerprint, so a message-only edit asks again rather
- * than binding an answer to a question nobody was given — which is the failure a
- * human-decision component must not have. The repository's ordinary durability
- * semantics take it from there; nothing here decides what a mismatch means.
+ * the normalized schema and the rendered message. This module decides what a
+ * mismatch means, because nothing else does — only `type` and `name` decide
+ * whether a journal entry matches, and neither of those changes when the
+ * question does. A recorded answer whose fingerprint is not this run's is
+ * refused with a `StaleInputError` rather than bound: binding an answer to a
+ * question nobody was given is the failure a human-decision component must not
+ * have. Refusing is as far as it goes; `refuseChangedQuestion` below says why.
  *
  * Preflight is not what replay skips. Compiling the schema and expanding the
  * invocation content run on every execution, replay included — they are how this

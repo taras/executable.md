@@ -4992,13 +4992,13 @@ When no provider is installed, `<Elicit>` fails immediately with a
 `no elicitation provider configured` diagnostic. There is no fallback
 interaction and no silent skip.
 
-Provider selection happens only through this Api. The CLI composes the WebForm
-implementation as its current provider; an embedding application installs its
-own; automated tests install scripted middleware through
-`scriptElicitations()`, which consumes one response per live elicitation, fails
-when an elicitation has none, and fails at teardown when responses are left
-unused. Future terminal and Inspector integrations replace the provider without
-changing executable Markdown.
+Provider selection happens only through this Api. A host — an embedding
+application, or a command that runs documents — installs the provider it wants;
+automated tests install scripted middleware through `scriptElicitations()`,
+which consumes one response per live elicitation, fails when an elicitation has
+none, and fails at teardown when responses are left unused. A browser form, a
+terminal, and an editor integration are all the same shape of provider, and
+replacing one with another changes no executable Markdown.
 
 The elicitation path is also callable by a host directly — `elicit({ message,
 schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the
