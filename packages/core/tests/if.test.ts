@@ -588,7 +588,6 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
 
   interface ProbeRun {
     output: string;
-    /** Element names offered to the `Component.expand` extension hook. */
     /** Every path the document caused the Fs Api to stat or read. */
     reads: string[];
     /** Every command handed to the process runtime. */

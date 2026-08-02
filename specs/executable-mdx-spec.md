@@ -5049,8 +5049,10 @@ lets a command elicit with no document executing.
 
 `<Answers>` and `<Answer>` are reserved structural syntax (§5.3), not
 components: `<Answers>` reads its `<Answer>` children as elements before they
-expand, which is something only the language's own constructs do. A repository
-file named `Answers.md` therefore never stands in for one.
+expand, and a registered component only ever sees `content()` — rendered text,
+by which point a matcher's `value` expression and its own position are gone. A
+repository file named `Answers.md` therefore never stands in for one, and could
+not implement matcher semantics if it did.
 
 A component that elicits internally asks whoever the host's provider reaches.
 Sometimes the surrounding document already knows the answer — a workflow
@@ -5120,12 +5122,10 @@ elicitation passes to the next provider outward, which is an enclosing
 `<Answers>` if there is one and the host's provider otherwise. Regions install
 at `{ at: "min" }`, so the nearest answers first and the chain composes outward.
 
-**Both names are structural** (§5.3). A construct whose children are read as
-structure rather than rendered text cannot be an ordinary registered component,
-which only ever sees `content()` — so `<Answers>`/`<Answer>` are claimed through
-the expansion hook, as `<Test>` and `<WhenPrompt>` are, and a repository file
-named after either never stands in. An `<Answer>` outside an `<Answers>` is a
-positioned diagnostic, mirroring `<Else>` outside `<If>`.
+**A stray `<Answer>`** — one written outside the `<Answers>` that would have
+read it — is a positioned diagnostic, mirroring `<Else>` outside `<If>`. It
+names no component: being structural (§5.3) means the name resolves to nothing
+else, wherever it is written.
 
 **Configuration diagnostics** are positioned and raised under the ambient
 policy: a misplaced `<Answer>`, an `<Answers>` with no body (self-closing, or
@@ -6450,7 +6450,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF41 | Unselected import (execution) | A component in the unselected branch is never imported end to end |
 | IF42 | Partial replay | From a journal prefix without the root Close, `<If>` is reached live, selects from the restored binding, and reproduces the output |
 | IF43 | Projection | An `<If>` through `<Content />` resolves its condition from the caller's bindings |
-| IF44 | Expand hook | No element in the unselected branch is offered to `Component.expand` |
+| IF44 | Unselected expansion | A component in the unselected branch never expands, so its body reaches no output |
 | IF45 | Filesystem | No `stat` or read happens for the unselected branch's component |
 | IF46 | Process runtime | `exec` is never invoked for an unselected block |
 | IF47 | Durable events | The unselected branch writes no exec or eval event |

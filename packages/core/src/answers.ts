@@ -32,10 +32,10 @@
  * components: being reserved means a repository file named `Answers.md` never
  * stands in, and it could not implement matcher semantics if it did.
  *
- * Partitioning before expanding is what the structural dispatch buys. Matchers are collected
- * from the whole child list first, so where an `<Answer>` is written does not
- * decide what it can answer; and "an `<Answers>` with no body" is a structural
- * fact rather than a guess from empty rendered text.
+ * Partitioning before expanding is what the structural dispatch buys. Matchers
+ * are collected from the whole child list first, so where an `<Answer>` is
+ * written does not decide what it can answer; and "an `<Answers>` with no body"
+ * is a structural fact rather than a guess from empty rendered text.
  *
  * ## Selection
  *

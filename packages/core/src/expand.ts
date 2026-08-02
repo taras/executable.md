@@ -150,23 +150,7 @@ function* rejectRetain(): Operation<never> {
  * interpolation inputs, hide set, and block counter — bound for exactly the
  * length of the offer. A claiming handler reaches it through
  * `Component.expandSegments`; a nested claim replaces the binding for its own
- * offer and restores this one. Nothing else in expansion sees a frame, so a
- * code block or modifier running between elements finds none active.
- */
-
-/**
- * Run `body` with the frame the Api form of `expandSegments` needs.
- *
- * A structural construct that renders segments of its own reaches them through
- * that operation rather than through this module's function, so the frame has
- * to name where those segments belong.
- */
-/**
- * Offer an element to installed component support before built-in expansion.
- *
- * The frame it publishes is what `Component.expandSegments` binds to, so a
- * handler's recursion carries this element's interpolation inputs and cycle
- * detection; a nested claim replaces the binding for its own subtree.
+ * offer and restores this one.
  */
 function offerElement(
   element: ComponentElement,
@@ -180,6 +164,15 @@ function offerElement(
   );
 }
 
+/**
+ * Bind this expansion's recursion for the length of `body`.
+ *
+ * Two callers need it. An offer publishes it for a claiming handler, and a
+ * structural construct that renders segments of its own — `<Answers>` — reaches
+ * them through the Api form of `expandSegments` rather than this module's
+ * function. Nothing else in expansion binds one, so a code block or modifier
+ * running between elements finds none active.
+ */
 function* withExpansionFrame<T>(
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
