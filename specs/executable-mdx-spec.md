@@ -2131,7 +2131,8 @@ deterministic from the content, so it needs no separate journal entry.
 A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
-   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`. These are the language's own
+   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`,
+   `<Answers>`/`<Answer>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a diagnostic, not a
@@ -5048,55 +5049,88 @@ lets a command elicit with no document executing.
 
 A component that elicits internally asks whoever the host's provider reaches.
 Sometimes the surrounding document already knows the answer — a workflow
-exercising a third-party component non-interactively, a demo, a documented
-example, a region of a larger run that should not stop for a person:
+exercising somebody else's component non-interactively, a demo, a region of a
+run that should not stop for a person:
 
 ```md
-<Answers values={[{ decision: "approve" }]}>
+<Answers>
+<Answer template="Approve {?what}?" value={{ decision: "approve" }} />
+<Answer value={{ decision: "reject", note: "unreviewed" }}>
+Deploy {?service} to production?
+</Answer>
+
 <ReviewGate plan={plan} as="verdict" />
 </Answers>
 ```
 
-`<Answers>` is elicitation middleware written as a component. It installs a
-provider for the duration of its body and answers from an ordered list, and it
-adds no other mechanism: every elicitation inside it is an ordinary one, judged
-by core against the *asking* component's schema before it binds. A supplied
-value that does not fit fails exactly as a live provider's answer would.
-`<Answers>` validates nothing of its own beyond reading its list.
+`<Answers>` is elicitation middleware written as a construct. It installs a
+provider around its body's expansion and answers from its `<Answer>` matchers;
+every other child is the body, rendered transparently. The wrapper changes who
+answers, never what the body produces, and it adds nothing to what the
+Elicitation Api already does — each elicitation inside it is an ordinary one,
+judged by core against the *asking* component's schema before it binds, so a
+supplied value that does not fit fails exactly as a live provider's answer
+would. `<Answers>` validates nothing of its own beyond reading its matchers.
+
+**`<Answer>` matchers.** A matcher carries a template and a value:
 
 | Prop | Required | Value |
 |---|---|---|
-| `values` | yes | An ordered array of JSON answers, as an expression or as captured JSON text describing one |
-| `delegate` | no | Whether an unanswered elicitation passes outward. Default `false` |
+| `template` | no | A single-line template. Children carry a multiline one; supplying both is a configuration error |
+| `value` | yes | The answer, as an expression or captured JSON text |
 
-The list is read when the region is entered, so a malformed one is reported at
-the wrapper rather than surfacing inside a child as a provider failure. There is
-no `as`: the region renders its body and changes only who answers, never what
-the body produces.
+Templates match the **whole rendered message**: literal text constrains,
+`{?name}` matches any text and binds nothing, and `{binding}` interpolates an
+existing binding and requires it at that position. A matcher with no template
+matches any message. The engine is the one `<WhenPrompt>` uses, and `{?name}`
+is a wildcard only — capturing into the value is deferred until a use case asks
+for it.
 
-It installs at `{ at: "min" }`, so the nearest enclosing region answers first
-and nesting means what middleware nesting means.
+**Selection is two rules.** The first declared matching `<Answer>` answers, and
+a matcher is reusable — it answers every elicitation it matches for as long as
+the region lasts. The consequence is deliberate: declaration order is
+significant, and a broad template above a narrow one shadows it permanently. A
+matcher that never fires is not an error.
 
-**Running out.** By default an elicitation past the last value fails, with a
-diagnostic counting what was provided against what was consumed: a document that
-supplies answers is stating what will be asked, and being wrong about that is a
-mistake rather than a cue to find someone. `delegate={true}` says the other
-thing explicitly — the unanswered elicitation passes to the next provider
-outward, which is an enclosing `<Answers>` if there is one and the host's
-provider otherwise. With it, an enclosing region's values continue the sequence.
+**Unmatched elicitations.** `delegate` on `<Answers>` is a boolean, default
+`false`. By default an elicitation no matcher answers fails, with a diagnostic
+naming the message and every template tried — a document supplying answers is
+stating what will be asked, and being wrong about that is a mistake rather than
+a cue to find someone. `delegate={true}` says the other thing explicitly: the
+elicitation passes to the next provider outward, which is an enclosing
+`<Answers>` if there is one and the host's provider otherwise. Regions install
+at `{ at: "min" }`, so the nearest answers first and the chain composes outward.
 
-**Values left unused when the body ends are allowed.** This is deliberately
-laxer than `scriptElicitations()`, which fails on them so that a test which has
-quietly stopped eliciting stops passing. `<Answers>` is a document construct,
-and a branch that did not run is not an error. A suite that wants exact-queue
-semantics keeps using `scriptElicitations()`.
+**Both names are structural** (§5.3). A construct whose children are read as
+structure rather than rendered text cannot be an ordinary registered component,
+which only ever sees `content()` — so `<Answers>`/`<Answer>` are claimed through
+the expansion hook, as `<Test>` and `<WhenPrompt>` are, and a repository file
+named after either never stands in. An `<Answer>` outside an `<Answers>` is a
+positioned diagnostic, mirroring `<Else>` outside `<If>`.
 
-Replay consumes nothing: a restored answer never reaches a provider, so `values`
-needs only what this run will actually ask.
+**Configuration diagnostics** are positioned and raised under the ambient
+policy: a misplaced `<Answer>`, an `<Answers>` with no body (self-closing, or
+nothing but matchers — it could never answer anything), both template forms at
+once, a template that will not parse, a missing `value`, and a `value` that is
+not JSON. A region whose matchers are malformed does not expand its body: one
+that cannot be trusted to answer should not run something that will ask.
 
-`<Answers>` is unmarked, so a failure fails the document (§6.8.1), and it is an
-ordinary registered default — a repository `Answers.md` or `Answers.ts` is
-chosen ahead of it. `Answers.test.md` is the authoring contract in Markdown.
+Replay restores recorded answers through the ordinary durability path, so
+matchers see nothing on replay and a region needs only what this run will
+actually ask. `Answers.test.md` is the authoring contract in Markdown.
+
+##### The `{binding}` asymmetry
+
+The two template spellings are not identical for `{binding}`, in `<Answers>` and
+in `<WhenPrompt>` alike. Written as the `template` prop, the string is a literal:
+`{binding}` reaches the engine intact, and the engine resolves it — an unbound
+name is a configuration error naming the template. Written as children, the text
+is interpolated during expansion, so an in-scope binding is substituted before
+the engine sees it and an out-of-scope one survives to be reported by the engine.
+
+The matching constraint is the same either way; only which layer reports an
+absent binding differs. This is documented rather than normalized — the two
+paths agree on every question a document can ask about matching.
 
 
 ## 7. Entry point

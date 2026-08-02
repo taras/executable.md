@@ -1,19 +1,24 @@
 /**
- * `<Answers>` (spec §6.16.2).
+ * `<Answers>` and `<Answer>` (spec §6.16.2).
  *
  * `Answers.test.md` covers the authoring contract in Markdown. These cover what
  * a document cannot construct or observe about itself: a component that elicits
  * internally, an outer provider watching what was delegated to it, a journal
- * whose recorded answer disagrees with the region, and the failures —
- * `<Answers>` and `<Elicit>` are both unmarked, so they throw rather than
- * raising segments `<AssertThrows>` could catch.
+ * whose recorded answer disagrees with the matcher, and the configuration
+ * diagnostics.
+ *
+ * Two failure shapes appear here and they are not interchangeable. A
+ * configuration mistake is a raised `ErrorSegment`, settled under the ambient
+ * policy — at a document root that means it lands in the rendered output. An
+ * unmatched elicitation is a thrown provider failure, which fails the run. The
+ * helpers below keep both observable.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
@@ -49,8 +54,8 @@ interface Run {
  * Execute `source`, optionally behind an outer provider.
  *
  * `outer` is what makes delegation observable: without it, "the elicitation
- * passed outward" and "the elicitation was answered here" look the same from
- * the document's side.
+ * passed outward" and "the region answered it" look the same from the
+ * document's side.
  */
 function run(
   workspace: string,
@@ -129,7 +134,7 @@ function* writeGate(workspace: string): Operation<void> {
       `const gateSchema = JSON.parse(${JSON.stringify(SCHEMA)});`,
       "```",
       "",
-      '<Elicit schema={gateSchema} as="verdict">Review this and decide.</Elicit>',
+      '<Elicit schema={gateSchema} as="verdict">Approve the plan?</Elicit>',
       "",
       "gate saw: {verdict.decision}",
       "",
@@ -144,35 +149,47 @@ const SCHEMA_BLOCK = [
   "",
 ].join("\n");
 
-function elicits(as: string, body: string = "Approve?"): string {
-  return `<Elicit schema={s} as="${as}">${body}</Elicit>`;
+function elicits(as: string, message: string): string {
+  return `<Elicit schema={s} as="${as}">${message}</Elicit>`;
 }
 
-describe("Answers: supplying values", () => {
+/** The document's own diagnostics, as the ambient policy rendered them. */
+function diagnostics(result: Run): string {
+  return result.output;
+}
+
+describe("Answers: choosing by template", () => {
   it("answers a nested component's elicitation with no host provider installed", function* () {
     const workspace = yield* useWorkspace();
     yield* writeGate(workspace);
 
     const result = yield* run(
       workspace,
-      ['<Answers values={[{ decision: "approve" }]}>', "<ReviewGate />", "</Answers>", ""].join(
-        "\n",
-      ),
+      [
+        "<Answers>",
+        '<Answer template="Approve {?what}?" value={{ decision: "approve" }} />',
+        "",
+        "<ReviewGate />",
+        "</Answers>",
+        "",
+      ].join("\n"),
     );
 
     expect(result.failure).toBe(undefined);
     expect(result.output).toContain("gate saw: approve");
   });
 
-  it("reads values as captured JSON text", function* () {
+  it("matches anything when the matcher has no template", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
         [
-          `<Answers values='[{"decision":"from-text"}]'>`,
-          elicits("v"),
+          "<Answers>",
+          '<Answer value={{ decision: "catch-all" }} />',
+          "",
+          elicits("v", "Anything at all"),
           "",
           "Got: {v.decision}",
           "</Answers>",
@@ -180,20 +197,184 @@ describe("Answers: supplying values", () => {
         ].join("\n"),
     );
 
-    expect(result.failure).toBe(undefined);
-    expect(result.output).toContain("Got: from-text");
+    expect(result.output).toContain("Got: catch-all");
   });
 
-  it("consumes values in order", function* () {
+  it("reads a multiline template from children", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "one" }, { decision: "two" }]}>',
-          elicits("a"),
-          elicits("b"),
+          "<Answers>",
+          '<Answer value={{ decision: "deployed" }}>',
+          "Deploy {?service} to production?",
+          "</Answer>",
+          "",
+          elicits("v", "Deploy api to production?"),
+          "",
+          "Got: {v.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.output).toContain("Got: deployed");
+  });
+
+  /** `{?name}` constrains position but carries nothing into the answer. */
+  it("uses a wildcard hole to constrain without binding", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="Deploy {?service} to production?" value={{ decision: "yes" }} />',
+          "",
+          elicits("a", "Deploy api to production?"),
+          "",
+          "Got: {a.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.output).toContain("Got: yes");
+  });
+
+  it("does not match when the literal text around a hole differs", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="Deploy {?service} to production?" value={{ decision: "yes" }} />',
+          "",
+          elicits("a", "Deploy api to staging?"),
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.failure).toContain("no matcher for this elicitation");
+  });
+
+  /** A `{binding}` in the prop form reaches the engine intact and constrains. */
+  it("interpolates a binding in the template prop", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "```js eval",
+          'const service = "api";',
+          "```",
+          "",
+          "<Answers>",
+          '<Answer template="Deploy {service} to production?" value={{ decision: "bound" }} />',
+          "",
+          elicits("a", "Deploy api to production?"),
+          "",
+          "Got: {a.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.output).toContain("Got: bound");
+  });
+
+  it("does not match when the interpolated binding differs", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "```js eval",
+          'const service = "worker";',
+          "```",
+          "",
+          "<Answers>",
+          '<Answer template="Deploy {service} to production?" value={{ decision: "bound" }} />',
+          "",
+          elicits("a", "Deploy api to production?"),
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.failure).toContain("no matcher for this elicitation");
+  });
+
+  it("reads a value written as captured JSON text", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          `<Answer template="Approve?" value='{"decision":"from-text"}' />`,
+          "",
+          elicits("v", "Approve?"),
+          "",
+          "Got: {v.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.output).toContain("Got: from-text");
+  });
+});
+
+describe("Answers: selection", () => {
+  /**
+   * First declared wins, and the consequence is the point: a broad template
+   * above a narrow one shadows it permanently.
+   */
+  it("takes the first declared matching matcher", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="{?anything}" value={{ decision: "broad" }} />',
+          '<Answer template="Approve the plan?" value={{ decision: "narrow" }} />',
+          "",
+          elicits("v", "Approve the plan?"),
+          "",
+          "Got: {v.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.output).toContain("Got: broad");
+  });
+
+  it("lets a narrower matcher win when it is declared first", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="Approve the plan?" value={{ decision: "narrow" }} />',
+          '<Answer template="{?anything}" value={{ decision: "broad" }} />',
+          "",
+          elicits("a", "Approve the plan?"),
+          elicits("b", "Something else"),
           "",
           "Got: {a.decision} then {b.decision}",
           "</Answers>",
@@ -201,19 +382,46 @@ describe("Answers: supplying values", () => {
         ].join("\n"),
     );
 
-    expect(result.output).toContain("Got: one then two");
+    expect(result.output).toContain("Got: narrow then broad");
   });
 
-  /** Laxer than `scriptElicitations()` on purpose: this is a production construct. */
-  it("allows values the body never asked for", function* () {
+  /** A matcher is not consumed by answering: it answers every match it sees. */
+  it("reuses one matcher across several elicitations", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "used" }, { decision: "spare" }]}>',
-          elicits("v"),
+          "<Answers>",
+          '<Answer template="Step {?n}?" value={{ decision: "same" }} />',
+          "",
+          elicits("a", "Step one?"),
+          elicits("b", "Step two?"),
+          elicits("c", "Step three?"),
+          "",
+          "Got: {a.decision} {b.decision} {c.decision}",
+          "</Answers>",
+          "",
+        ].join("\n"),
+    );
+
+    expect(result.failure).toBe(undefined);
+    expect(result.output).toContain("Got: same same same");
+  });
+
+  it("does not mind a matcher that never fires", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "used" }} />',
+          '<Answer template="Never asked" value={{ decision: "unused" }} />',
+          "",
+          elicits("v", "Approve?"),
           "",
           "Got: {v.decision}",
           "</Answers>",
@@ -225,13 +433,20 @@ describe("Answers: supplying values", () => {
     expect(result.output).toContain("Got: used");
   });
 
-  it("still judges a value against the asking component's schema", function* () {
+  it("still judges a matched value against the asking component's schema", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
-        ["<Answers values={[{ wrong: true }]}>", elicits("v"), "</Answers>", ""].join("\n"),
+        [
+          "<Answers>",
+          '<Answer template="Approve?" value={{ wrong: true }} />',
+          "",
+          elicits("v", "Approve?"),
+          "</Answers>",
+          "",
+        ].join("\n"),
     );
 
     expect(result.failure).toContain("<Elicit />");
@@ -239,35 +454,40 @@ describe("Answers: supplying values", () => {
   });
 });
 
-describe("Answers: running out", () => {
-  it("fails with a counted diagnostic by default", function* () {
+describe("Answers: unmatched elicitations", () => {
+  it("names the message and every template tried", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "one" }]}>',
-          elicits("a"),
-          elicits("b"),
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "a" }} />',
+          '<Answer template="Reject?" value={{ decision: "b" }} />',
+          "",
+          elicits("v", "Something nobody wrote a matcher for"),
           "</Answers>",
           "",
         ].join("\n"),
     );
 
-    expect(result.failure).toContain("no value for elicitation 2");
-    expect(result.failure).toContain("1 provided, 1 consumed");
+    expect(result.failure).toContain("Something nobody wrote a matcher for");
+    expect(result.failure).toContain('"Approve?"');
+    expect(result.failure).toContain('"Reject?"');
   });
 
-  it("passes an unanswered elicitation outward when delegate is set", function* () {
+  it("passes an unmatched elicitation outward when delegate is set", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "scripted" }]} delegate={true}>',
-          elicits("a"),
+          "<Answers delegate={true}>",
+          '<Answer template="Approve?" value={{ decision: "scripted" }} />',
+          "",
+          elicits("a", "Approve?"),
           elicits("b", "The one a person answers"),
           "",
           "Got: {a.decision} then {b.decision}",
@@ -297,7 +517,15 @@ describe("Answers: running out", () => {
 
     const result = yield* run(
       workspace,
-      SCHEMA_BLOCK + ["<Answers values={[]}>", elicits("a"), "</Answers>", ""].join("\n"),
+      SCHEMA_BLOCK +
+        [
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "a" }} />',
+          "",
+          elicits("v", "Not this one"),
+          "</Answers>",
+          "",
+        ].join("\n"),
       // deno-lint-ignore require-yield
       {
         outer: function* () {
@@ -306,7 +534,7 @@ describe("Answers: running out", () => {
       },
     );
 
-    expect(result.failure).toContain("no value for elicitation 1");
+    expect(result.failure).toContain("no matcher for this elicitation");
     expect(result.delegated).toHaveLength(0);
   });
 });
@@ -319,9 +547,13 @@ describe("Answers: nesting", () => {
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "outer" }]}>',
-          '<Answers values={[{ decision: "inner" }]}>',
-          elicits("v"),
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "outer" }} />',
+          "",
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "inner" }} />',
+          "",
+          elicits("v", "Approve?"),
           "",
           "Got: {v.decision}",
           "</Answers>",
@@ -333,20 +565,23 @@ describe("Answers: nesting", () => {
     expect(result.output).toContain("Got: inner");
   });
 
-  it("continues into the enclosing region's values when the inner delegates", function* () {
+  it("reaches the enclosing region when the inner one delegates", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "outer-1" }, { decision: "outer-2" }]}>',
-          '<Answers values={[{ decision: "inner-1" }]} delegate={true}>',
-          elicits("a"),
-          elicits("b"),
-          elicits("c"),
+          "<Answers>",
+          '<Answer template="Outer question?" value={{ decision: "from-outer" }} />',
           "",
-          "Got: {a.decision}, {b.decision}, {c.decision}",
+          "<Answers delegate={true}>",
+          '<Answer template="Inner question?" value={{ decision: "from-inner" }} />',
+          "",
+          elicits("a", "Inner question?"),
+          elicits("b", "Outer question?"),
+          "",
+          "Got: {a.decision} then {b.decision}",
           "</Answers>",
           "</Answers>",
           "",
@@ -354,7 +589,7 @@ describe("Answers: nesting", () => {
     );
 
     expect(result.failure).toBe(undefined);
-    expect(result.output).toContain("Got: inner-1, outer-1, outer-2");
+    expect(result.output).toContain("Got: from-inner then from-outer");
   });
 
   it("stops at the inner region when it does not delegate", function* () {
@@ -364,19 +599,23 @@ describe("Answers: nesting", () => {
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "outer" }]}>',
-          "<Answers values={[]}>",
-          elicits("v"),
+          "<Answers>",
+          '<Answer template="{?anything}" value={{ decision: "outer" }} />',
+          "",
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "inner" }} />',
+          "",
+          elicits("v", "A question the inner region does not match"),
           "</Answers>",
           "</Answers>",
           "",
         ].join("\n"),
     );
 
-    expect(result.failure).toContain("no value for elicitation 1");
+    expect(result.failure).toContain("no matcher for this elicitation");
   });
 
-  /** The region ends with the body, so a later sibling is not answered by it. */
+  /** The region ends with its body, so a later sibling is not answered by it. */
   it("stops answering once its body is over", function* () {
     const workspace = yield* useWorkspace();
 
@@ -384,11 +623,13 @@ describe("Answers: nesting", () => {
       workspace,
       SCHEMA_BLOCK +
         [
-          '<Answers values={[{ decision: "inside" }, { decision: "unused" }]}>',
-          elicits("a"),
+          "<Answers>",
+          '<Answer template="{?anything}" value={{ decision: "inside" }} />',
+          "",
+          elicits("a", "Inside?"),
           "</Answers>",
           "",
-          elicits("b"),
+          elicits("b", "Outside?"),
           "",
         ].join("\n"),
     );
@@ -397,59 +638,146 @@ describe("Answers: nesting", () => {
   });
 });
 
-describe("Answers: what it refuses", () => {
-  it("reports a malformed values list before the body expands", function* () {
+describe("Answers: configuration diagnostics", () => {
+  it("refuses an <Answer> outside an <Answers>", function* () {
     const workspace = yield* useWorkspace();
-    const marker = join(workspace, "expanded.txt");
+
+    const result = yield* run(
+      workspace,
+      '<Answer template="Approve?" value={{ decision: "a" }} />\n',
+    );
+
+    expect(diagnostics(result)).toContain("<Answer> must be a direct child of <Answers>");
+    expect(diagnostics(result)).toContain("doc.md:1:1");
+  });
+
+  it("refuses an <Answers> with nothing to answer for", function* () {
+    const workspace = yield* useWorkspace();
+
+    const bodyless = yield* run(
+      workspace,
+      [
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "a" }} />',
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+    expect(diagnostics(bodyless)).toContain("has no body to answer for");
+
+    const selfClosing = yield* run(workspace, "<Answers />\n");
+    expect(diagnostics(selfClosing)).toContain("has no body to answer for");
+  });
+
+  it("refuses both template forms at once", function* () {
+    const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
       [
-        '<Answers values={{ not: "an array" }}>',
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "a" }}>Also this</Answer>',
         "",
-        "```js eval",
-        `Deno.writeTextFileSync(${JSON.stringify(marker)}, "expanded");`,
-        "```",
-        "",
+        "body",
         "</Answers>",
         "",
       ].join("\n"),
     );
 
-    expect(result.failure).toContain("values must be a JSON array");
-    expect(yield* exists(marker)).toBe(false);
+    expect(diagnostics(result)).toContain(
+      "accepts either a template prop or template children, not both",
+    );
   });
 
-  it("reports values text that is not JSON", function* () {
+  it("refuses a template that cannot be parsed", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(
       workspace,
-      ["<Answers values='not json'>", "body", "</Answers>", ""].join("\n"),
+      [
+        "<Answers>",
+        '<Answer template="{?a}{?b}" value={{ decision: "a" }} />',
+        "",
+        "body",
+        "</Answers>",
+        "",
+      ].join("\n"),
     );
 
-    expect(result.failure).toContain("values text is not JSON");
+    expect(diagnostics(result)).toContain("adjacent capture holes");
+  });
+
+  it("refuses a matcher with no value", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      ["<Answers>", '<Answer template="Approve?" />', "", "body", "</Answers>", ""].join("\n"),
+    );
+
+    expect(diagnostics(result)).toContain('requires a "value" prop');
+  });
+
+  it("refuses a value that is not JSON", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      [
+        "<Answers>",
+        `<Answer template="Approve?" value='not json' />`,
+        "",
+        "body",
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(diagnostics(result)).toContain("value text is not JSON");
+  });
+
+  /**
+   * A malformed matcher stops the region before its body expands: a region that
+   * cannot be trusted to answer should not run something that will ask.
+   */
+  it("does not expand the body when a matcher is malformed", function* () {
+    const workspace = yield* useWorkspace();
+
+    const result = yield* run(
+      workspace,
+      [
+        "<Answers>",
+        '<Answer template="{?a}{?b}" value={{ decision: "a" }} />',
+        "",
+        "a body nobody should see",
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(diagnostics(result)).not.toContain("a body nobody should see");
   });
 });
 
 describe("Answers: durability", () => {
   /**
-   * A replayed elicitation never reaches a provider, so a region does not have
-   * to keep describing a question that will not be asked again.
+   * A replayed elicitation never reaches a provider, so matchers see nothing.
    *
-   * Proven by making the recorded answer differ from what the region supplies.
-   * The document's source is journaled, so editing the file changes nothing on
-   * replay — the only way to tell "restored" from "answered again" is for the
-   * two to disagree, and for the recorded one to win.
+   * Proven by making the recorded answer disagree with what the matcher
+   * supplies. The document's source is journaled, so editing the file changes
+   * nothing on replay — the only way to tell "restored" from "matched again" is
+   * for the two to differ, and for the recorded one to win.
    */
-  it("restores the recorded answer rather than consuming a value", function* () {
+  it("restores the recorded answer rather than matching again", function* () {
     const workspace = yield* useWorkspace();
     const stream = new InMemoryStream();
     const source =
       SCHEMA_BLOCK +
       [
-        '<Answers values={[{ decision: "supplied" }]}>',
-        elicits("v"),
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "supplied" }} />',
+        "",
+        elicits("v", "Approve?"),
         "",
         "Got: {v.decision}",
         "</Answers>",
