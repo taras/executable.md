@@ -6,6 +6,6 @@
   "exports": "./mod.ts",
   "dependencies": {
     "@durable-streams/client": "^0.2.2",
-    "effection": "4.1.0-alpha.10"
+    "effection": "4.1.0"
   }
 }

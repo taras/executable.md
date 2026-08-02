@@ -23,7 +23,7 @@
     "@secretlint/secretlint-rule-preset-recommend": "13.0.4",
     "@secretlint/types": "13.0.4",
     "acorn": "^8.16.0",
-    "effection": "4.1.0-alpha.10",
+    "effection": "4.1.0",
     "gray-matter": "^4.0.3",
     "magic-string": "^0.30.21",
     "marked": "^17.0.4",
