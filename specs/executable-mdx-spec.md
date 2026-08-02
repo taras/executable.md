@@ -5035,11 +5035,15 @@ interaction and no silent skip.
 Provider selection happens only through this Api. `xmd run` composes the WebForm
 implementation as its current provider, so an `<Elicit>` under the CLI opens the
 same loopback form `<WebForm>` serves. An embedding application installs the
-provider it wants; automated tests install scripted middleware through
-`scriptElicitations()`, which consumes one response per live elicitation, fails
-when an elicitation has none, and fails at teardown when responses are left
-unused. A browser form, a terminal, and an editor integration are all the same
-shape of provider, and replacing one with another changes no executable Markdown.
+provider it wants. A document says what an answer is with an `<Answers>` region
+(§6.16.2), which is a provider like any other and needs no host; a test that
+must *observe* an elicitation — what message it carried, what schema — installs
+middleware on this Api directly, because a matcher answers a question rather
+than reporting it. Which *interaction* reaches a person — a browser form, a
+terminal, an editor integration — is the host's alone, and replacing one with
+another changes no executable Markdown. An `<Answers>` region is not one of
+those: it answers rather than asks, so a document that writes one has said what
+the answer is, not where the asking would have happened.
 
 `xmd test` deliberately installs no provider. A test document that elicits
 without saying what the answer is would otherwise open a browser and wait for

@@ -1,22 +1,19 @@
 # Elicit
 
 `<Elicit>` asks a person a question and binds their answer. It does not choose
-how they are asked — the host installs a provider through the Elicitation Api,
-and the document is the same either way.
+how they are reached: which interaction happens — a browser form, a terminal, an
+editor integration — is the host's, installed on the Elicitation Api, and the
+document is the same under any of them.
 
-Every test below installs an ordered queue of answers instead of a person. That
-is an eval block rather than a component on purpose: installing Context Api
-middleware is what an eval block is for here, and a testing-only prop or
-component would be a second way to configure something that already has one.
-
-The queue is exact. One answer is consumed per elicitation, running out is a
-failure, and answers left over fail the test when it ends — so a test that stops
-asking what it says it asks stops passing.
+Most of the tests below say what the answer is with an `<Answers>` region, which
+is the document's own vocabulary for it: a matcher names a question and supplies
+its answer, and the region is the provider for as long as its body lasts. What
+that demonstrates is `<Elicit>` under an ordinary provider, because that is all
+an `<Answers>` region is.
 
 <Test name="A structured schema binds the answer">
 
 ```ts persist eval
-yield* scriptElicitations([{ decision: "approve" }]);
 const decisionSchema = {
   type: "object",
   properties: { decision: { type: "string", enum: ["approve", "reject"] } },
@@ -25,7 +22,12 @@ const decisionSchema = {
 };
 ```
 
+<Answers>
+<Answer template="Approve the plan?" value={{ decision: "approve" }} />
+
 <Elicit schema={decisionSchema} as="review">Approve the plan?</Elicit>
+</Answers>
+
 <AssertEquals actual={review.decision} expected="approve" />
 </Test>
 
@@ -36,7 +38,6 @@ and get identical behavior.
 <Test name="A schema as captured JSON text binds the same way">
 
 ```ts persist eval
-yield* scriptElicitations([{ decision: "reject" }]);
 const decisionText = JSON.stringify({
   type: "object",
   properties: { decision: { type: "string", enum: ["approve", "reject"] } },
@@ -44,13 +45,24 @@ const decisionText = JSON.stringify({
 });
 ```
 
+<Answers>
+<Answer template="Approve the plan?" value={{ decision: "reject" }} />
+
 <Elicit schema={decisionText} as="review">Approve the plan?</Elicit>
+</Answers>
+
 <AssertEquals actual={review.decision} expected="reject" />
 </Test>
 
 The invocation content is the request. It is expanded first, so what the provider
 receives is what a reader of the document would see — including anything the
 document generated.
+
+Seeing the request is the one thing an `<Answers>` region cannot show, because a
+matcher answers a question rather than reporting it. So this test installs
+middleware on the Elicitation Api directly — the same seam a host installs a
+real provider on, and the way anything that needs to *observe* an elicitation
+reaches it.
 
 <Test name="The invocation content becomes the request">
 
@@ -76,24 +88,31 @@ came back. Nothing of the question reaches the surrounding document — the
 lower-level suite asserts the emitted text directly, which a document cannot
 observe about itself.
 
-Several elicitations consume the queue in order.
+Several elicitations in one region are answered by whichever matcher matches
+each, so the document says which answer belongs to which question rather than
+relying on the order they happen to be asked in.
 
-<Test name="Several elicitations consume their answers in order">
+<Test name="Each elicitation takes the matcher that matches it">
 
 ```ts persist eval
-yield* scriptElicitations([{ step: "first" }, { step: "second" }, { step: "third" }]);
 const stepSchema = { type: "object", properties: { step: { type: "string" } }, required: ["step"] };
 ```
+
+<Answers>
+<Answer template="Step one?" value={{ step: "first" }} />
+<Answer template="Step two?" value={{ step: "second" }} />
+<Answer template="Step three?" value={{ step: "third" }} />
 
 <Elicit schema={stepSchema} as="one">Step one?</Elicit>
 <Elicit schema={stepSchema} as="two">Step two?</Elicit>
 <Elicit schema={stepSchema} as="three">Step three?</Elicit>
+</Answers>
 
 <AssertEquals actual={[one.step, two.step, three.step]} expected={["first", "second", "third"]} />
 </Test>
 
-Two more properties of the queue are not written here. Running out of scripted
-answers, and leaving answers unused, both fail the whole test rather than
-producing a value — and `<Elicit>` is unmarked, so its failure is a thrown error
-rather than a raised segment that `<AssertThrows>` could capture. Those live in
-`elicit-script.test.ts`, where the failure itself can be observed.
+An elicitation no matcher answers fails the whole test rather than producing a
+value, and `<Elicit>` is unmarked, so that failure is a thrown error rather than
+a raised segment `<AssertThrows>` could capture. It is asserted in
+`answers-component.test.ts`, where the failure itself can be observed, together
+with the rest of the region's contract.

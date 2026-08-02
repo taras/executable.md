@@ -92,7 +92,6 @@ export {
   runPreparedElicitation,
 } from "./src/elicit.ts";
 export type { PreparedElicitation } from "./src/elicit.ts";
-export { scriptElicitations, ScriptedElicitationError } from "./src/elicit-script.ts";
 
 export { canonicalize, canonicalFingerprint } from "./src/canonical.ts";
 export { isJsonObject } from "./src/json.ts";
