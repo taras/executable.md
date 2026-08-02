@@ -2,7 +2,7 @@
  * Build the @executablemd/web browser client.
  *
  * Usage:
- *   deno task build:web
+ *   deno task build:web [--out <path>]
  *
  * Bundles `packages/web/client/main.tsx` with Deno's browser bundler and writes
  * the result, together with the themed stylesheet, into the generated module
@@ -26,6 +26,25 @@
  * Determinism: run under Deno 2.9.1 (CI pins it). Two clean runs produce
  * byte-identical output, which the test suite asserts.
  *
+ * A build reads the installed dependencies and writes nothing but its own
+ * scratch file and the module it was asked for. Installing them, and recording
+ * the one dependency fact the bundle needs, belongs to `deno task deps` — every
+ * check in the verification battery reads the same `node_modules` concurrently,
+ * so a build that installed or patched anything there would break whichever
+ * check happened to be reading (#279).
+ *
+ * That is enforced by the modes the phases run under, not by anything in this
+ * file: automatic node-module management creates `node_modules/.deno` before
+ * application code runs, so an assertion here would be too late. The task runs
+ * this script with `--node-modules-dir=none --cached-only --frozen`, and the
+ * bundler below with `--node-modules-dir=manual --no-remote --frozen` —
+ * `manual` being the mode documented as "use the existing local node_modules
+ * directory, do not modify it", which is what lets the bundler read the
+ * recorded `sideEffects` fact without a build ever writing there. Deno 2.9.1's
+ * `deno bundle` has no `--cached-only`; `--no-remote` and `manual` together are
+ * what keep it off the network, which the offline probe in the suite measures
+ * rather than assumes.
+ *
  * Bundling is Deno-only, but the shape of the generated module is not: it is
  * serialized by `scripts/lib/web-client-module.ts`, which every runtime's suite
  * exercises.
@@ -36,13 +55,9 @@
  * precompiled functions through `createPrecompiledValidator`. The only path
  * that still pulls the runtime validator in is `@rjsf/core`'s test-only
  * `getTestRegistry`, reached transitively through the shadcn theme's barrel
- * import. `@rjsf/validator-ajv8` has no import-time side effects, so declaring
- * it side-effect-free lets the bundler tree-shake that dead path out. The
- * package ships without the declaration, so the build patches the resolved
- * `node_modules` copy with the true fact for the duration of the bundle step
- * and restores its exact original bytes afterward, on every exit path —
- * including a halt that lands mid-write, which is why the patch goes through
- * `scripts/lib/manifest-patch.ts` rather than a bare `ensure()`.
+ * import. Tree-shaking it out needs one fact the package ships without, which
+ * `scripts/lib/side-effect-free.ts` records at setup; a build asserts it and
+ * refuses to run without it.
  */
 
 import { ensure, main, scoped, until } from "effection";
@@ -50,8 +65,10 @@ import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { encodeBase64 } from "@std/encoding/base64";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { patchUntilExit } from "./lib/manifest-patch.ts";
+import { assertSideEffectFree, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
 import { byteLength, generatedModule } from "./lib/web-client-module.ts";
 
 const repoRoot = new URL("../", import.meta.url);
@@ -59,9 +76,9 @@ const repoRoot = new URL("../", import.meta.url);
 const CLIENT_ENTRY = "packages/web/client/main.tsx";
 const THEME_CSS = "node_modules/@rjsf/shadcn/dist/default.css";
 const OVERRIDE_CSS = "packages/web/client/theme/mx-brutalist.css";
-const OUTPUT_MODULE = "packages/web/generated/client-bundle.ts";
-const SIDE_EFFECT_FREE_NAME = "@rjsf/validator-ajv8";
-const SIDE_EFFECT_FREE_VERSION = "6.7.1";
+
+/** Where a build writes when it is not told otherwise. Gitignored, never tracked. */
+export const OUTPUT_MODULE = "packages/web/generated/client-bundle.ts";
 
 const FONT_SCOPE = "@fontsource/";
 
@@ -92,50 +109,25 @@ const FONT_FACES: FontFace[] = [
   { package: "@fontsource/space-mono", family: "Space Mono", weight: 700 },
 ];
 
-/** The manifest a build patches. A suite hands `markSideEffectFree` a copy of it. */
-export const SIDE_EFFECT_FREE_MANIFEST = new URL(
-  "node_modules/@rjsf/validator-ajv8/package.json",
-  repoRoot,
-);
+/** The manifests carrying the fact a build reads — one per installed copy. */
+export const SIDE_EFFECT_FREE_MANIFESTS: URL[] = sideEffectFreeManifests(repoRoot);
 
 function* run(command: string, args: string[]): Operation<void> {
   yield* exec(command, { arguments: args, cwd: new URL(repoRoot).pathname }).expect();
 }
 
-/**
- * Declare `path`'s package side-effect-free for the rest of the current scope.
- *
- * `patchUntilExit` owns restoring the original bytes, including on the halt
- * path where the patching write may still be in flight.
- */
-export function* markSideEffectFree(path: URL): Operation<void> {
-  const original = yield* readTextFile(path);
-  const manifest = JSON.parse(original);
-  if (manifest.name !== SIDE_EFFECT_FREE_NAME || manifest.version !== SIDE_EFFECT_FREE_VERSION) {
-    throw new Error(
-      `${path.pathname} resolved to ${manifest.name}@${manifest.version}, expected ` +
-        `${SIDE_EFFECT_FREE_NAME}@${SIDE_EFFECT_FREE_VERSION}`,
-    );
-  }
-  if ("sideEffects" in manifest) {
-    throw new Error(
-      `${path.pathname} already declares "sideEffects": ${JSON.stringify(manifest.sideEffects)} — ` +
-        `refusing to overwrite existing package metadata`,
-    );
-  }
-  const patched = `${JSON.stringify({ ...manifest, sideEffects: false }, null, 2)}\n`;
-  yield* patchUntilExit(path, original, patched);
-}
-
-function* bundleClient(): Operation<string> {
+function* bundleClient(scratch?: string): Operation<string> {
   return yield* scoped(function* () {
-    const output = yield* until(Deno.makeTempFile({ suffix: ".js" }));
+    const output = yield* until(Deno.makeTempFile({ dir: scratch, suffix: ".js" }));
     yield* ensure(() => rm(output));
     yield* run(Deno.execPath(), [
       "bundle",
       "--platform=browser",
       "--minify",
       "--packages=bundle",
+      "--node-modules-dir=manual",
+      "--no-remote",
+      "--frozen",
       "--output",
       output,
       CLIENT_ENTRY,
@@ -145,9 +137,9 @@ function* bundleClient(): Operation<string> {
 }
 
 /**
- * Guard the bytes about to be inlined the way `markSideEffectFree` guards the
- * manifest it patches: a resolved package that is not the pinned one would be
- * embedded silently, and the stylesheet has no version to check afterwards.
+ * Guard the bytes about to be inlined the way the manifest check guards the
+ * bundle: a resolved package that is not the pinned one would be embedded
+ * silently, and the stylesheet has no version to check afterwards.
  */
 function* verifyFontPackage(name: string, version: string): Operation<void> {
   const manifest = JSON.parse(
@@ -200,26 +192,52 @@ export interface ClientBuildResult {
   module: string;
 }
 
-export function* buildWebClient(): Operation<ClientBuildResult> {
-  yield* run(Deno.execPath(), ["install", "--frozen"]);
-  return yield* scoped(function* () {
-    yield* markSideEffectFree(SIDE_EFFECT_FREE_MANIFEST);
-    const clientJs = yield* bundleClient();
-    const themeCss = [
-      yield* readTextFile(new URL(THEME_CSS, repoRoot)),
-      yield* fontFaces(),
-      yield* readTextFile(new URL(OVERRIDE_CSS, repoRoot)),
-    ].join("\n");
-    return { clientJs, themeCss, module: generatedModule(clientJs, themeCss) };
-  });
+export interface BuildOptions {
+  /**
+   * The directory the bundler's scratch file is created in; the system temp
+   * directory by default. A test owns a directory of its own so it can show
+   * that an interrupted build leaves nothing behind in it.
+   */
+  scratch?: string;
+}
+
+export function* buildWebClient(options: BuildOptions = {}): Operation<ClientBuildResult> {
+  yield* assertSideEffectFree(SIDE_EFFECT_FREE_MANIFESTS);
+  const clientJs = yield* bundleClient(options.scratch);
+  const themeCss = [
+    yield* readTextFile(new URL(THEME_CSS, repoRoot)),
+    yield* fontFaces(),
+    yield* readTextFile(new URL(OVERRIDE_CSS, repoRoot)),
+  ].join("\n");
+  return { clientJs, themeCss, module: generatedModule(clientJs, themeCss) };
+}
+
+/**
+ * Where this invocation writes: `--out <path>`, relative to the working
+ * directory, or the generated module the repository serves from.
+ *
+ * Every check in the battery reads the default path, so a test that needs the
+ * script to write asks for a path of its own instead of taking a turn at that
+ * one.
+ */
+export function outputModule(args: string[], root: URL): URL {
+  const flag = args.indexOf("--out");
+  if (flag === -1) {
+    return new URL(OUTPUT_MODULE, root);
+  }
+  const path = args[flag + 1];
+  if (!path) {
+    throw new Error("--out requires a path");
+  }
+  return pathToFileURL(resolve(path));
 }
 
 if (import.meta.main) {
-  await main(function* () {
+  await main(function* (args) {
+    const output = outputModule(args, repoRoot);
     const result = yield* buildWebClient();
-    const output = new URL(OUTPUT_MODULE, repoRoot);
     yield* ensureDir(new URL(".", output));
     yield* writeTextFile(output, result.module);
-    console.log(`generated ${OUTPUT_MODULE} (${byteLength(result.module)} bytes)`);
+    console.log(`generated ${output.pathname} (${byteLength(result.module)} bytes)`);
   });
 }

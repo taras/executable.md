@@ -50,6 +50,9 @@ jobs:
       # and dnt packages it from the source tree. Building unconditionally keeps
       # this job independent of which package it was asked for: `web` needs it for
       # itself, and any dependent needs it because dnt builds siblings too.
+      - name: Install dependencies
+        run: deno task deps
+
       - name: Build the browser bundle
         run: deno task build:web
 

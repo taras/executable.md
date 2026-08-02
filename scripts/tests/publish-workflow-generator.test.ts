@@ -114,6 +114,21 @@ describe("publish-packages.yml generation", () => {
     expect(build).toBeLessThan(publish);
   });
 
+  /**
+   * A build installs nothing (AGENTS.md), so a fresh checkout has neither the
+   * `node_modules` the bundler reads nor the cached graph it walks. Without a
+   * preparation step the job fails at the preflight — and a job that published
+   * the bundle-less package instead would not fail at all.
+   */
+  it("prepares dependencies before building the bundle", function* () {
+    const steps = commandLines(yield* generate([ALPHA]));
+    const deps = steps.findIndex((line) => line.includes("deno task deps"));
+    const build = steps.findIndex((line) => line.includes("deno task build:web"));
+
+    expect(deps).toBeGreaterThan(-1);
+    expect(deps).toBeLessThan(build);
+  });
+
   it("withholds a member that carries a JSR identity and declares private", function* () {
     const workflow = yield* generate([ALPHA, beta({ private: true })]);
 
