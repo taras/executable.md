@@ -188,7 +188,7 @@ export type ComponentExecution<T> = Operation<T>;
  * compatibility alias with the same behavior.
  */
 export interface FunctionComponent {
-  (props: Record<string, Json>): ComponentExecution<Json>;
+  (props: Record<string, Json>): ComponentExecution<unknown>;
 }
 
 /**
@@ -204,6 +204,12 @@ export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   props: PropsSchema;
+  /** Props the engine leaves unresolved for the component to evaluate itself. */
+  captures?: readonly string[];
+  /**
+   * Opt-in validation: this return is a validated JSON record, bound under
+   * `as` after checking. Without it a return binds by reference, unchecked.
+   */
   returns?: ReturnsSchema;
   fn: FunctionComponent;
 }

@@ -227,7 +227,16 @@ parameter names. The initial components are:
 
 Props map directly to the corresponding function parameters: `expr` for
 truthiness assertions, `actual` and `expected` for comparisons, and optional
-`msg` where supported.
+`msg` where supported. The operands are **captures**
+(executable-mdx-spec.md §6.5): the assertion evaluates them itself, so what it
+compares is the value the author wrote rather than a JSON projection of it —
+which is what lets `<AssertStrictEquals>` compare by reference,
+`<AssertExists>` tell `undefined` from absence, and `<AssertMatch>` take a real
+`RegExp`. `msg` is an ordinary validated string prop.
+
+`as` and `slot` belong to the engine, which consumes them before validation, so
+an assertion accepts them like any other component: `as` binds the assertion's
+diagnostic text.
 
 Equality assertions and `<AssertStringIncludes>` accept either an `expected`
 prop or rendered children as the expected string. The two forms are mutually
@@ -278,9 +287,10 @@ against it. The assertion passes when expanding the body raises an error whose
 message matches, and fails when the body raises nothing or raises a non-matching
 error. It accepts an optional literal `as` binding that captures the complete
 caught error segment — including its `cause` — into the environment for later
-assertions. Like the other assertions, it emits a pass diagnostic only in
-testing or verbose mode, and a failure aborts the document when it occurs outside
-a test (inside a `<Test>` it is contained and recorded).
+assertions. Unlike the other assertions it emits **no** pass diagnostic: the return channel
+carries the caught segment for `as` to bind, and no other channel preserves a
+durable rendered segment. A failure aborts the document when it occurs outside a
+test (inside a `<Test>` it is contained and recorded), unchanged.
 
 Additional assertion components use the same rules: they state their comparison
 here, they raise an `AssertionError` on failure, and they use the shared

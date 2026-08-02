@@ -101,6 +101,16 @@ export interface ComponentApi {
    * failure twice.
    */
   expandSegments(segments: Segment[]): Operation<Segment[]>;
+  /** Whether the invocation wrote this capture prop at all. */
+  hasCapture(name: string): Operation<boolean>;
+  /**
+   * Evaluate a capture prop now, against the caller's bindings (spec §6.5).
+   *
+   * Nothing is evaluated during prop resolution, so a capture the component
+   * never asks for never runs — and an expression that throws throws here, into
+   * the component that asked, rather than becoming an engine prop error.
+   */
+  capture(name: string): Operation<unknown>;
   codeBlock(): Operation<CodeBlockContext>;
   /** Whether the current block runs with persistent resource lifetime. */
   persistent: boolean;
@@ -213,6 +223,16 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
   *expand(): Operation<ComponentHandling | undefined> {
     return undefined;
   },
+  // deno-lint-ignore require-yield
+  *hasCapture(_name: string): Operation<boolean> {
+    return false;
+  },
+  // deno-lint-ignore require-yield
+  *capture(name: string): Operation<unknown> {
+    throw new Error(
+      `Component.capture("${name}") has no provider: not inside a function component invocation.`,
+    );
+  },
   *expandSegments(segments: Segment[]): Operation<Segment[]> {
     const frame = yield* ExpansionFrame.get();
     if (!frame) {
@@ -288,5 +308,7 @@ export const retain: Operations<ComponentApi>["retain"] = Component.operations.r
 export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
 export const invocation: Operations<ComponentApi>["invocation"] = Component.operations.invocation;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;
+export const hasCapture: Operations<ComponentApi>["hasCapture"] = Component.operations.hasCapture;
+export const capture: Operations<ComponentApi>["capture"] = Component.operations.capture;
 export const handleFailure: Operations<ComponentApi>["handleFailure"] =
   Component.operations.handleFailure;

@@ -66,6 +66,8 @@ export {
   retain,
   invocation,
   tryContent,
+  hasCapture,
+  capture,
   handleFailure,
 } from "./src/component-api.ts";
 

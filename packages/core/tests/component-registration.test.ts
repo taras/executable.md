@@ -715,4 +715,34 @@ describe("Tier CR — selection is journaled", () => {
     // …and the component that was found was never invoked.
     expect(resumed).not.toContain("RENDERED-BY-B");
   });
+
+  // §1: a capture is a prop the schema never sees, so the registration must
+  // reject every shape that would make that ambiguous or unusable.
+  it("CR-CAP: rejects captures a registration cannot honor", function* () {
+    const bad = [
+      // Also a schema property: a schema cannot describe a value it never sees.
+      {
+        props: { type: "object", properties: { actual: { type: "string" } } },
+        captures: ["actual"],
+      },
+      // The engine's own props.
+      { props: NO_PROPS, captures: ["as"] },
+      { props: NO_PROPS, captures: ["slot"] },
+      // Not a usable prop name.
+      { props: NO_PROPS, captures: ["actual", "actual"] },
+      { props: NO_PROPS, captures: [""] },
+    ];
+
+    for (const extra of bad) {
+      let thrown: unknown;
+      yield* scoped(function* () {
+        try {
+          yield* registerComponents([registration("Widget", "host", extra)]);
+        } catch (error) {
+          thrown = error;
+        }
+      });
+      expect(thrown).toBeInstanceOf(ComponentRegistrationError);
+    }
+  });
 });

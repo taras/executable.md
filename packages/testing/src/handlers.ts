@@ -25,13 +25,13 @@ import type { TestResult } from "./test-api.ts";
 import {
   AssertionDiagnostic,
   buildDiagnostic,
-  evaluateExpression,
-  expandAssertion,
   failVisiblyThenThrow,
   validationError,
 } from "./assertions.ts";
 import type { AssertionEntry } from "./assertions.ts";
 import { persistBoundaryOutcome, persistTestResult } from "./journal.ts";
+import { capture, content, ContentError, hasCapture } from "@executablemd/core";
+import type { Json, PropsSchema } from "@executablemd/core";
 // One class, not two: `<Test>`'s interceptor throws this and the catch below
 // checks it, so a second identical declaration would make `instanceof` miss.
 import { RaisedSegmentError } from "./test-component.ts";
@@ -59,158 +59,12 @@ class TeardownError extends Error {
 export interface TestHandlers {
   /** The per-test timeout the `<Test>` registration is built from. */
   timeoutMs: number;
-  expandAssertion(assertion: AssertionEntry, element: ComponentElement): Operation<Segment[]>;
-  expandAssertThrows(element: ComponentElement): Operation<Segment[]>;
 }
 
 export function createTestHandlers(options: { timeoutMs: number }): TestHandlers {
   const { timeoutMs } = options;
 
-  function* expandAssertThrows(element: ComponentElement): Operation<Segment[]> {
-    for (const propName of [...Object.keys(element.props), ...Object.keys(element.expressions)]) {
-      if (propName !== "message" && propName !== "as") {
-        return [
-          yield* raise(
-            validationError(
-              "AssertThrows",
-              `does not accept a "${propName}" prop (allowed: message, as).`,
-            ),
-          ),
-        ];
-      }
-    }
-    if (!("message" in element.props) && !("message" in element.expressions)) {
-      return [yield* raise(validationError("AssertThrows", 'requires a "message" prop.'))];
-    }
-    if ("as" in element.expressions) {
-      return [
-        yield* raise(
-          validationError(
-            "AssertThrows",
-            'the "as" prop must be a string literal, not an expression.',
-          ),
-        ),
-      ];
-    }
-
-    const currentEnv = yield* env;
-    const merged = {
-      ...(element.projectedEnv?.values ?? {}),
-      ...(currentEnv?.values ?? {}),
-    };
-
-    let matcher: string | RegExp;
-    if ("message" in element.expressions) {
-      let evaluated: unknown;
-      try {
-        evaluated = evaluateExpression(element.expressions["message"]!, merged);
-      } catch (error) {
-        return [
-          yield* raise(
-            validationError(
-              "AssertThrows",
-              `failed to evaluate the "message" expression: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            ),
-          ),
-        ];
-      }
-      if (typeof evaluated === "string" || evaluated instanceof RegExp) {
-        matcher = evaluated;
-      } else {
-        return [
-          yield* raise(
-            validationError(
-              "AssertThrows",
-              `the "message" expression must evaluate to a string or RegExp, got ${typeof evaluated}.`,
-            ),
-          ),
-        ];
-      }
-    } else {
-      const literal = element.props["message"];
-      if (typeof literal !== "string") {
-        return [
-          yield* raise(validationError("AssertThrows", 'the "message" prop must be a string.')),
-        ];
-      }
-      matcher = literal;
-    }
-
-    let binding: string | undefined;
-    if ("as" in element.props) {
-      if (!currentEnv) {
-        return [
-          yield* raise(
-            validationError("AssertThrows", 'binding with "as" requires an eval scope in context.'),
-          ),
-        ];
-      }
-      const parsed = validateBindingName(element.props["as"]);
-      if (!parsed.ok) {
-        return [
-          yield* raise(validationError("AssertThrows", `the "as" prop ${parsed.error.message}`)),
-        ];
-      }
-      if (parsed.value === undefined) {
-        return [
-          yield* raise(
-            validationError("AssertThrows", 'the "as" prop must be a non-empty string.'),
-          ),
-        ];
-      }
-      binding = parsed.value;
-    }
-
-    // Install a scope-local raise interceptor and expand the body. This hook is
-    // the nearest one, so it answers first and throws CapturedRaise both inside
-    // and outside a <Test>. RaisedSegmentError is still caught: it is what an
-    // enclosing <Test> throws, and reaches here if this hook is ever bypassed.
-    // Catching both makes capture behave identically either way. The first
-    // raised error stops expansion, so later children never execute.
-    let captured: ErrorSegment | undefined;
-    try {
-      yield* scoped(function* () {
-        yield* Component.around({
-          // deno-lint-ignore require-yield
-          *raise([segment]) {
-            throw new CapturedRaise(segment);
-          },
-        });
-        yield* expandSegments(element.children);
-      });
-    } catch (error) {
-      if (error instanceof CapturedRaise || error instanceof RaisedSegmentError) {
-        captured = error.segment;
-      } else {
-        throw error;
-      }
-    }
-
-    if (!captured) {
-      yield* failAssertThrows(matcher, undefined);
-    } else if (!matchesMessage(matcher, captured.message)) {
-      yield* failAssertThrows(matcher, captured.message);
-    }
-
-    if (binding !== undefined && currentEnv) {
-      currentEnv.values[binding] = captured;
-    }
-
-    const visible = (yield* testing) || (yield* verbose);
-    if (!visible) {
-      return [];
-    }
-    return [
-      {
-        type: "text",
-        content: buildDiagnostic("AssertThrows", "passed", describeMatcher(matcher), {}),
-      },
-    ];
-  }
-
-  return { timeoutMs, expandAssertion, expandAssertThrows };
+  return { timeoutMs };
 }
 
 function* failAssertThrows(matcher: string | RegExp, actual: string | undefined): Operation<never> {
@@ -299,4 +153,66 @@ function failureDiagnostic(result: TestResult, options: { detail: boolean }): Se
     lines.push(`> expected: ${error.expected}`);
   }
   return { type: "text", content: `\n${lines.join("\n")}\n` };
+}
+
+/** `<AssertThrows>` takes `message` as a capture; `as` is the engine's. */
+export const ASSERT_THROWS_PROPS: PropsSchema = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+};
+
+/**
+ * `<AssertThrows>` as a function component.
+ *
+ * `message` is a capture, so a `RegExp` reaches the matcher — through JSON props
+ * that branch is unreachable, because a round-trip turns one into `{}`. The
+ * caught `ErrorSegment` is the return value, and a return binds by reference, so
+ * `as` binds that very object rather than a description of it.
+ *
+ * It emits no pass diagnostic. The return channel carries the segment, and no
+ * other channel preserves a durable rendered segment: `raise()` is the error
+ * observation chain and would abort the document under a throwing policy, and
+ * `DocumentOutput` is ephemeral, so a run and a replay would disagree.
+ */
+export function* AssertThrows(_props: Record<string, Json>): Operation<unknown> {
+  if (!(yield* hasCapture("message"))) {
+    yield* raise(validationError("AssertThrows", 'requires a "message" prop.'));
+    return undefined;
+  }
+  const evaluated = yield* capture("message");
+  if (typeof evaluated !== "string" && !(evaluated instanceof RegExp)) {
+    yield* raise(validationError("AssertThrows", 'requires "message" to be a string or a RegExp.'));
+    return undefined;
+  }
+  const matcher: string | RegExp = evaluated;
+
+  let captured: ErrorSegment | undefined;
+  try {
+    yield* scoped(function* () {
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *raise([segment]) {
+          throw new CapturedRaise(segment);
+        },
+      });
+      yield* content();
+    });
+  } catch (error) {
+    if (error instanceof CapturedRaise || error instanceof RaisedSegmentError) {
+      captured = error.segment;
+    } else if (error instanceof ContentError) {
+      captured = error.errors[0];
+    } else {
+      throw error;
+    }
+  }
+
+  if (!captured) {
+    yield* failAssertThrows(matcher, undefined);
+  } else if (!matchesMessage(matcher, captured.message)) {
+    yield* failAssertThrows(matcher, captured.message);
+  }
+  // Bound by identity through the live return — the engine owns `as`.
+  return captured;
 }

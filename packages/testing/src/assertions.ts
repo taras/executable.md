@@ -31,11 +31,28 @@ import {
   fail,
 } from "./assert.ts";
 import type { Operation } from "effection";
-import { DocumentOutput, env, expandSegments, raise, renderSegments } from "@executablemd/core";
-import type { ComponentElement, ErrorSegment, Segment } from "@executablemd/core";
+import {
+  capture,
+  content,
+  DocumentOutput,
+  env,
+  expandSegments,
+  hasCapture,
+  hasContent,
+  raise,
+  renderSegments,
+} from "@executablemd/core";
+import type {
+  ComponentElement,
+  ErrorSegment,
+  FunctionComponent,
+  Json,
+  PropsSchema,
+  Segment,
+} from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
-type AssertionKind =
+export type AssertionKind =
   | "unary-truthy"
   | "unary-exists"
   | "binary-eq"
@@ -106,14 +123,6 @@ function requireRegExp(value: unknown): RegExp {
     return value;
   }
   fail("match assertions require a RegExp through the expected prop — use expected={/pattern/}");
-}
-
-const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
-
-export function evaluateExpression(expression: string, values: Record<string, unknown>): unknown {
-  const names = Object.keys(values).filter((name) => IDENTIFIER_RE.test(name));
-  const fn = new Function(...names, `return (${expression});`);
-  return fn(...names.map((name) => values[name]));
 }
 
 function safeFormat(value: unknown): string {
@@ -192,150 +201,6 @@ export function* failVisiblyThenThrow(
   throw new AssertionDiagnostic(failure, diagnostic, detail);
 }
 
-/**
- * Expand one assertion component: validate props, resolve raw values, run the
- * assertion operation, then build the diagnostic. Returns diagnostic text on
- * a visible pass; throws `AssertionDiagnostic` on failure.
- */
-export function* expandAssertion(
-  assertion: AssertionEntry,
-  element: ComponentElement,
-): Operation<Segment[]> {
-  const rules = KIND_PROPS[assertion.kind];
-  const supplied = [...Object.keys(element.props), ...Object.keys(element.expressions)];
-
-  for (const name of supplied) {
-    if (!rules.allowed.includes(name)) {
-      return [
-        yield* raise(
-          validationError(
-            assertion.name,
-            `does not accept a "${name}" prop (allowed: ${rules.allowed.join(", ")}).`,
-          ),
-        ),
-      ];
-    }
-  }
-
-  const hasChildren = !element.selfClosing && element.children.length > 0;
-  if (hasChildren && !assertion.allowsExpectedChildren) {
-    return [yield* raise(validationError(assertion.name, "does not accept expected children."))];
-  }
-  if (hasChildren && supplied.includes("expected")) {
-    return [
-      yield* raise(
-        validationError(
-          assertion.name,
-          'accepts either an "expected" prop or expected children, not both.',
-        ),
-      ),
-    ];
-  }
-
-  for (const name of rules.required) {
-    const suppliedByChildren = name === "expected" && hasChildren;
-    if (!supplied.includes(name) && !suppliedByChildren) {
-      return [yield* raise(validationError(assertion.name, `requires the "${name}" prop.`))];
-    }
-  }
-  if (assertion.kind === "binary-eq" || assertion.kind === "string-includes") {
-    if (!supplied.includes("expected") && !hasChildren) {
-      return [
-        yield* raise(
-          validationError(assertion.name, 'requires an "expected" prop or expected children.'),
-        ),
-      ];
-    }
-  }
-
-  // Resolve raw values: literal props as-is, expression props evaluated live
-  // against caller-projected bindings merged under the current environment
-  // (the same precedence core uses for projected children).
-  const currentEnv = yield* env;
-  const merged = {
-    ...(element.projectedEnv?.values ?? {}),
-    ...(currentEnv?.values ?? {}),
-  };
-
-  const resolved: Record<string, unknown> = {};
-  const resolutionOrder: Array<"expr" | "actual" | "expected" | "msg"> = [
-    "expr",
-    "actual",
-    "expected",
-    "msg",
-  ];
-  for (const name of resolutionOrder) {
-    if (name in element.expressions) {
-      try {
-        resolved[name] = evaluateExpression(element.expressions[name]!, merged);
-      } catch (error) {
-        return [
-          yield* raise(
-            validationError(
-              assertion.name,
-              `failed to evaluate the "${name}" expression: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            ),
-          ),
-        ];
-      }
-    } else if (name in element.props) {
-      resolved[name] = element.props[name];
-    }
-  }
-
-  // Assertions take msg as a string; a non-string is rejected by TYPE
-  // CHECK alone — formatting it here would run hostile toJSON/toString
-  // side effects before the assertion outcome is established.
-  if ("msg" in resolved && typeof resolved.msg !== "string") {
-    return [
-      yield* raise(validationError(assertion.name, 'requires "msg" to be a string when supplied.')),
-    ];
-  }
-
-  const values: ResolvedValues = {
-    expr: resolved.expr,
-    actual: resolved.actual,
-    expected: resolved.expected,
-    msg: typeof resolved.msg === "string" ? resolved.msg : undefined,
-  };
-
-  if (hasChildren) {
-    const expanded = yield* expandSegments(element.children);
-    values.expected = renderSegments(expanded).replace(/\s+$/, "");
-  }
-
-  // Run the assertion on the raw values — the outcome is fixed before any
-  // diagnostic formatting can observe (or mutate) them.
-  let failure: Error | undefined;
-  try {
-    assertion.run(values);
-  } catch (error) {
-    failure = error instanceof Error ? error : new Error(String(error));
-  }
-
-  const detail: { actual?: string; expected?: string } = {};
-  if (assertion.kind === "unary-truthy") {
-    detail.actual = safeFormat(values.expr);
-  } else {
-    detail.actual = safeFormat(values.actual);
-    if (assertion.kind !== "unary-exists") {
-      detail.expected = safeFormat(values.expected);
-    }
-  }
-
-  if (failure) {
-    yield* failVisiblyThenThrow(assertion.name, values.msg, detail, failure);
-  }
-
-  const visible = (yield* testing) || (yield* verbose);
-  if (!visible) {
-    return [];
-  }
-  return [{ type: "text", content: buildDiagnostic(assertion.name, "passed", values.msg, detail) }];
-}
-
 export function buildDiagnostic(
   name: string,
   outcome: "passed" | "failed",
@@ -358,4 +223,113 @@ export function buildDiagnostic(
     }
   }
   return `\n${lines.join("\n")}\n`;
+}
+
+/** The props an assertion of `kind` captures — its operands, never `msg`. */
+export function capturesFor(kind: AssertionKind): string[] {
+  return KIND_PROPS[kind].allowed.filter((name) => name !== "msg");
+}
+
+/** `msg` is the one prop a schema can describe: an ordinary JSON string. */
+export const ASSERTION_PROPS: PropsSchema = {
+  type: "object",
+  properties: { msg: { type: "string" } },
+  additionalProperties: false,
+};
+
+/**
+ * The function-component form of one assertion.
+ *
+ * Same table, same rules, same order of operations as the handler it replaces:
+ * validate what was written, take the operands raw, run the assertion on them,
+ * and only then format anything — so a hostile `toString` cannot reach a value
+ * before the outcome is fixed.
+ */
+export function assertionComponent(assertion: AssertionEntry): FunctionComponent {
+  const rules = KIND_PROPS[assertion.kind];
+  return function* (props: Record<string, Json>): Operation<Json> {
+    const written: string[] = [];
+    for (const name of rules.allowed) {
+      if (yield* hasCapture(name)) {
+        written.push(name);
+      }
+    }
+
+    const hasChildren = yield* hasContent();
+    if (hasChildren && !assertion.allowsExpectedChildren) {
+      yield* raise(validationError(assertion.name, "does not accept expected children."));
+      return "";
+    }
+    if (hasChildren && written.includes("expected")) {
+      yield* raise(
+        validationError(
+          assertion.name,
+          'accepts either an "expected" prop or expected children, not both.',
+        ),
+      );
+      return "";
+    }
+    for (const name of rules.required) {
+      const suppliedByChildren = name === "expected" && hasChildren;
+      if (!written.includes(name) && !suppliedByChildren) {
+        yield* raise(validationError(assertion.name, `requires the "${name}" prop.`));
+        return "";
+      }
+    }
+
+    // Operands, live. Evaluated here rather than during prop resolution, so an
+    // expression that throws is this assertion's failure to report — the
+    // assertion that owns the operand, not the invocation that contains it.
+    const values: ResolvedValues = { msg: undefined };
+    for (const name of written) {
+      let value: unknown;
+      try {
+        value = yield* capture(name);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        yield* raise(
+          validationError(assertion.name, `failed to evaluate the "${name}" expression: ${detail}`),
+        );
+        return "";
+      }
+      if (name === "expr") {
+        values.expr = value;
+      } else if (name === "actual") {
+        values.actual = value;
+      } else if (name === "expected") {
+        values.expected = value;
+      }
+    }
+    if (typeof props.msg === "string") {
+      values.msg = props.msg;
+    }
+
+    if (hasChildren) {
+      values.expected = (yield* content()).replace(/\s+$/, "");
+    }
+
+    let failure: Error | undefined;
+    try {
+      assertion.run(values);
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    const detail: { actual?: string; expected?: string } = {};
+    if (assertion.kind === "unary-truthy") {
+      detail.actual = safeFormat(values.expr);
+    } else {
+      detail.actual = safeFormat(values.actual);
+      if (assertion.kind !== "unary-exists") {
+        detail.expected = safeFormat(values.expected);
+      }
+    }
+
+    if (failure) {
+      yield* failVisiblyThenThrow(assertion.name, values.msg, detail, failure);
+    }
+
+    const visible = (yield* testing) || (yield* verbose);
+    return visible ? buildDiagnostic(assertion.name, "passed", values.msg, detail) : "";
+  };
 }

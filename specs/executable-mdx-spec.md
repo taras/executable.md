@@ -2162,6 +2162,30 @@ runs nothing and acquires nothing. Names and schemas are validated where they
 are installed, so a malformed registration is an error in the host rather than a
 diagnostic that appears the first time a document writes the name.
 
+**What a registration declares.** Beyond its name, origin, function and props
+schema, a registration may declare two things the schema cannot describe.
+
+`captures` names props the engine does not resolve. They are stripped before
+expression resolution and excluded from validation, and the component evaluates
+each itself, so what it receives is the value the author wrote rather than a
+JSON projection of it. A capture may not also be a schema property — a schema
+cannot describe a value it never sees — nor may it be `as` or `slot`, which the
+engine owns.
+
+**A return binds by reference.** `as` binds the value the component returned —
+the object itself, not a rendering of it — so a component can hand its caller
+something a schema could not describe. Such a binding is not durable: nothing is
+journaled for it, and a re-expansion recomputes it by running the component
+again.
+
+`returns` is the opt-in that says a particular return is instead a **validated
+JSON record**: the value is checked against the schema before it is bound, and a
+component declaring it must be invoked with `as`, since it renders nothing.
+
+Without `as` there is nowhere to bind, so only text can be observed: a component
+returning a string renders it, and a component returning anything else renders
+nothing. A non-string is not an error — it is a value with no destination.
+
 #### The components core supplies
 
 Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
@@ -2791,7 +2815,10 @@ component's `props` frontmatter is a validation error.
   validation.
 
 In both cases, the child component never sees the reserved prop in its
-`validatedProps`.
+`validatedProps`. A registration's captures are not reserved names — an author
+chooses them — but they are consumed the same way: stripped before validation
+and delivered through `capture()` rather than forwarded as props. And `as` binds
+the returned value itself by reference rather than its rendered text.
 
 #### 6.3.6 Interaction with `renderChildren()`
 
@@ -3080,6 +3107,17 @@ resolved values can be type-checked. Results must be JSON-serializable
 (validated via JSON round-trip). Evaluation errors are thrown, not
 rendered as ErrorSegments — consistent with PropValidationError.
 
+A **capture** is the exception. A registration may declare props the engine does
+not resolve at all: they are stripped before expression resolution and excluded
+from validation, so they meet neither the JSON round-trip nor the clone, and the
+component evaluates each itself with `capture()` — when, and if, it wants to.
+The value therefore arrives as the author wrote it, which is how an operand that
+JSON cannot describe (a `RegExp`, `undefined`, a particular object) reaches a
+component. Nothing is evaluated for a capture the component never asks for, and
+an expression that throws throws into that component rather than becoming an
+engine prop error. A capture is not durable: it is journaled neither as a prop
+nor as a value, and a replay recomputes it from the restored bindings.
+
 The `expressions` field is always present on `ComponentElement`
 (empty `{}` when no eval expressions exist). A prop name appears in
 either `props` or `expressions`, never both.
@@ -3124,8 +3162,9 @@ Expression props (`count={42}`, `data={{ key: "value" }}`) are parsed
 by the JSX boundary scanner's expression state tracking (brace depth
 counting). The scanner extracts the raw expression string; evaluation
 of the expression to a JSON value is handled during segment
-construction. Only JSON-serializable values are supported; function props are
-outside the component contract.
+construction. Only JSON-serializable values are supported, except for props a
+registration declares as captures (see above); function props are outside the
+component contract.
 
 #### Components with no props
 

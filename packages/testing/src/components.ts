@@ -1,10 +1,10 @@
 /**
  * Component registration (specs/testing-spec.md).
  *
- * `<Testing>` is registered as an ordinary non-reserved default, so a
- * repository component of that name replaces it. `<Test>`, `<AssertThrows>`
- * and the assertion components are claimed through the core `Component.expand`
- * hook by the expansion middleware installed here.
+ * `<Testing>`, `<Test>`, the value assertions and `<AssertThrows>` are all
+ * registered as ordinary non-reserved defaults, so a repository component of
+ * any of those names replaces it. The `Component.expand` install below claims
+ * nothing — it is kept until the legacy-removal slice retires the surface.
  *
  * Installing also decorates the core Execution Api so explicit `<Testing>`
  * boundaries affect the execution outcome even when root testing is inactive.
@@ -20,12 +20,16 @@
 import { Err } from "effection";
 import type { Operation } from "effection";
 import { Component, registerComponents, Execution } from "@executablemd/core";
-import type { ComponentFailure, DocumentExecution } from "@executablemd/core";
+import type {
+  ComponentFailure,
+  ComponentRegistration,
+  DocumentExecution,
+} from "@executablemd/core";
 import { boundary, record, Test, TestFailureError } from "./test-api.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
-import { ASSERTIONS } from "./assertions.ts";
-import { createTestHandlers } from "./handlers.ts";
+import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
+import { AssertThrows, ASSERT_THROWS_PROPS, createTestHandlers } from "./handlers.ts";
 import { Testing, TESTING_PROPS } from "./testing-component.ts";
 import {
   absorbTestFailure,
@@ -87,7 +91,7 @@ export function* installHandlers(
   });
   // Non-reserved defaults: a repository component of either name is chosen
   // ahead of these, as it would be ahead of any other package's.
-  yield* registerComponents([
+  const registrations: ComponentRegistration[] = [
     { name: "Testing", origin: "@executablemd/testing", fn: Testing, props: TESTING_PROPS },
     {
       name: "Test",
@@ -95,16 +99,30 @@ export function* installHandlers(
       fn: createTest(handlers.timeoutMs),
       props: TEST_PROPS,
     },
-  ]);
+    // The table stays data: it names the comparison and the props each kind
+    // takes, and the registration is built from it rather than beside it.
+    {
+      name: "AssertThrows",
+      origin: "@executablemd/testing",
+      fn: AssertThrows,
+      props: ASSERT_THROWS_PROPS,
+      captures: ["message"],
+    },
+    ...[...ASSERTIONS.values()].map((assertion) => ({
+      name: assertion.name,
+      origin: "@executablemd/testing",
+      fn: assertionComponent(assertion),
+      props: ASSERTION_PROPS,
+      captures: capturesFor(assertion.kind),
+    })),
+  ];
+  yield* registerComponents(registrations);
+  // Nothing claims an element here any more. The install is kept rather than
+  // deleted: retiring the legacy extension surface is the legacy-removal
+  // slice's job, and taking it out here would be cleanup this slice did not
+  // budget for.
   yield* Component.around({
     *expand([element], next) {
-      if (element.name === "AssertThrows") {
-        return { segments: yield* handlers.expandAssertThrows(element) };
-      }
-      const assertion = ASSERTIONS.get(element.name);
-      if (assertion) {
-        return { segments: yield* handlers.expandAssertion(assertion, element) };
-      }
       return yield* next(element);
     },
   });

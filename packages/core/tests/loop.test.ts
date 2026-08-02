@@ -15,7 +15,7 @@ import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { collectFailures } from "../src/component-failures.ts";
-import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
+import type { ComponentElement, FunctionComponent, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
 interface LoopRun {
@@ -32,7 +32,9 @@ interface LoopRun {
 const OBJECT_SCHEMA = { type: "object", properties: {} };
 
 /** Function components the harness serves instead of the filesystem. */
-type Stubs = Record<string, FunctionComponentDefinition["fn"]>;
+// Ordinary components: indexing the definition union would widen these to the
+// live shape too, and then collectFailures could not infer a concrete arm.
+type Stubs = Record<string, FunctionComponent>;
 
 function runLoop(
   source: string,
@@ -58,7 +60,6 @@ function runLoop(
           return {
             kind: "function",
             name,
-            path: `${name}.ts`,
             props: OBJECT_SCHEMA,
             // What these assert is how a rendered diagnostic interacts with a
             // loop and its policy, which needs the failure to become one.

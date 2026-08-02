@@ -21,6 +21,7 @@ import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
 import type {
   ComponentRegistry,
   FunctionComponent,
+  FunctionComponentDefinition,
   PropsSchema,
   RegistryEntry,
   ReturnsSchema,
@@ -46,15 +47,25 @@ export interface ComponentRegistration {
   name: string;
   /** Stable, human-readable source identity — reported by inspection. */
   origin: string;
-  fn: FunctionComponent;
   props: PropsSchema;
-  returns?: ReturnsSchema;
+  /**
+   * Props the engine does not resolve. The component evaluates each itself,
+   * when and if it wants to, so the value reaches it by reference — no JSON
+   * gate, no clone, no identity lost. For operands a schema cannot describe.
+   */
+  captures?: readonly string[];
   /**
    * Whether replacement would break a language or security invariant. A
    * reserved registration outranks repository-local source; an ordinary one is
    * a default a repository file overrides.
    */
   reserved?: boolean;
+  /**
+   * Opt-in validation: the return is a validated JSON record. Without it the
+   * return binds by reference under `as`, unchecked.
+   */
+  returns?: ReturnsSchema;
+  fn: FunctionComponent;
 }
 
 type Kind = "reserved" | "default";
@@ -131,6 +142,47 @@ function collision(name: string, kind: Kind, first: string, second: string): Err
  * descendant scope's layer merges over the layers it inherited, which is what
  * lets a nested registration shadow an outer one without touching it.
  */
+/**
+ * A capture is a prop the schema never sees, so it may not also be one the
+ * schema describes, and it may not be a name the engine already owns.
+ */
+function assertUsableCaptures(
+  name: string,
+  captures: readonly string[] | undefined,
+  props: PropsSchema,
+): void {
+  if (captures === undefined) {
+    return;
+  }
+  const declared = props.properties;
+  const described = typeof declared === "object" && declared !== null ? declared : {};
+  const seen = new Set<string>();
+  for (const capture of captures) {
+    if (typeof capture !== "string" || capture.length === 0) {
+      throw new ComponentRegistrationError(
+        `the registration for "${name}" declares a capture that is not a prop name`,
+      );
+    }
+    if (capture === "as" || capture === "slot") {
+      throw new ComponentRegistrationError(
+        `cannot capture "${capture}" on "${name}": the engine owns that prop`,
+      );
+    }
+    if (seen.has(capture)) {
+      throw new ComponentRegistrationError(
+        `the registration for "${name}" declares the capture "${capture}" twice`,
+      );
+    }
+    if (Object.hasOwn(described, capture)) {
+      throw new ComponentRegistrationError(
+        `"${capture}" on "${name}" is both a schema property and a capture: a ` +
+          "schema cannot describe a value it never sees",
+      );
+    }
+    seen.add(capture);
+  }
+}
+
 export function* registerComponents(
   registrations: readonly ComponentRegistration[],
 ): Operation<void> {
@@ -142,7 +194,7 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns } = registration;
+    const { name, origin, fn, props, returns, captures } = registration;
     assertUsableName(name);
     if (origin.length === 0) {
       throw new ComponentRegistrationError(
@@ -153,6 +205,7 @@ export function* registerComponents(
     if (returns !== undefined) {
       compileReturnsSchema(returns);
     }
+    assertUsableCaptures(name, registration.captures, props);
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];
@@ -160,12 +213,13 @@ export function* registerComponents(
       throw collision(name, kind, already, origin);
     }
 
-    const definition = {
-      kind: "function" as const,
+    const definition: FunctionComponentDefinition = {
+      kind: "function",
       name,
       props,
       fn,
       ...(returns ? { returns } : {}),
+      ...(captures && captures.length > 0 ? { captures } : {}),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });
