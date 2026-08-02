@@ -19,6 +19,12 @@ The order is load-bearing: `pnpm install` adds its store beside Deno's without
 pruning it, and the union resolves for Deno, for `tsc` and the Node suite, for
 Bun, for oxlint, and for the site. Run setup again after changing a dependency.
 
+**The lockfile is frozen repository-wide** (`lock.frozen` in the root
+`deno.json`), because a task's own resolution rewrites a stale lock before any
+flag on its command line applies — `deno task deps` used to exit 0 and leave the
+tracked lock rewritten. Adding or changing a dependency is therefore an explicit
+act: `deno install --frozen=false`, commit the lock, then `deno task setup`.
+
 **Builds install nothing.** `deno task build:web` and `deno task build` run
 under node-modules and cache modes that cannot create, relink, or fetch —
 automatic management writes `node_modules/.deno` before a process reaches its
@@ -28,9 +34,22 @@ on an unprepared worktree, naming `deno task setup`
 another command is resolving through, which is how the Node typecheck came to
 fail after a `deno task build` (#279).
 
-`deno task verify:clean` runs that whole claim end to end against a clone of
-`HEAD`: setup, build, a resolution probe against both stores, then `tsc`. CI
-runs the same chain in its `composability` job.
+Preparation is host-only. A release compiles five platforms, and
+`deno compile --target` resolves the npm packages of the platform it compiles
+*for*, so each release job prepares its own target first with
+`deno task deps:target <target>` — `deno install --entrypoint
+--node-modules-dir=none --frozen` under that target's OS and architecture, which
+adds to the Deno cache without touching `node_modules`. The mapping lives in
+`scripts/lib/release-targets.ts` and is held to `release.yml`'s matrix by test.
+
+`deno task verify:clean` runs the whole claim end to end: it clones `HEAD`,
+prepares the clone against a scratch `DENO_DIR` of its own, prepares the
+representative release target and proves the host tree and lock survived it,
+then runs every build phase offline — including a release compile for
+`x86_64-unknown-linux-gnu`, the same shape `release.yml` uses — fingerprinting
+the content and modes of `node_modules`, the cache's dependency roots, and
+`deno.lock` after each one. It verifies the commit, so commit before running it.
+CI runs the same harness in its `composability` job.
 
 ## Verification
 

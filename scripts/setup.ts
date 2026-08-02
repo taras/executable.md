@@ -25,16 +25,13 @@
 
 import { main } from "effection";
 import { exec } from "@effectionx/process";
-import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 
-import { buildWebClient, OUTPUT_MODULE } from "./build-web-client.ts";
 import { installDependencies, recordSideEffectFree } from "./deps.ts";
-import { byteLength } from "./lib/web-client-module.ts";
 
 const repoRoot = new URL("../", import.meta.url);
 
-await main(function* () {
+main(function* () {
   console.log("▸ install dependencies");
   yield* installDependencies();
 
@@ -45,12 +42,15 @@ await main(function* () {
   // fact recorded above — and that copy is the one the bundler resolves.
   yield* recordSideEffectFree();
 
+  // Through the task, not in process: `deno task` performs its own workspace
+  // sync before it runs anything, relinking `node_modules/.bin` from pnpm's
+  // shims to Deno's. Preparation is where that belongs, so the tree a later
+  // check reads is the tree the first task would have produced anyway.
   console.log("\n▸ build the browser bundle");
-  const result = yield* buildWebClient();
-  const output = new URL(OUTPUT_MODULE, repoRoot);
-  yield* ensureDir(new URL(".", output));
-  yield* writeTextFile(output, result.module);
-  console.log(`generated ${OUTPUT_MODULE} (${byteLength(result.module)} bytes)`);
+  yield* exec(Deno.execPath(), {
+    arguments: ["task", "build:web"],
+    cwd: fileURLToPath(repoRoot),
+  }).expect();
 
   console.log("\nready");
 });

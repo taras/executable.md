@@ -2,6 +2,9 @@
   "workspace": ["packages/*", "site"],
   "exclude": ["scripts/tests/fixtures"],
   "nodeModulesDir": "auto",
+  "lock": {
+    "frozen": true
+  },
   "imports": {
     "@types/node": "npm:@types/node@^24.5.2",
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
@@ -40,8 +43,9 @@
   "tasks": {
     "xmd": "deno run --allow-all packages/cli/src/deno.ts",
     "setup": "deno run --allow-all scripts/setup.ts",
-    "verify:clean": "deno run --allow-all scripts/verify-clean.ts",
+    "verify:clean": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/verify-clean.ts",
     "deps": "deno run --allow-all scripts/deps.ts",
+    "deps:target": "deno run --allow-all scripts/deps-target.ts",
     "build": "deno task build:web && deno compile --node-modules-dir=none --cached-only --frozen --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd packages/cli/src/compiled.ts",
     "build:web": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/build-web-client.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",

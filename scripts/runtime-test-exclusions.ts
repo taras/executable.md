@@ -43,6 +43,24 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/prepared-state.test.ts",
+    reason:
+      "fingerprints a prepared tree and a Deno cache through Deno.readDirSync/lstatSync and asks `deno info` where the caches are — Deno-only",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/release-targets.test.ts",
+    reason:
+      "reads the release workflow beside the mapping module and asserts Deno task/compile argv; the subject is Deno's own release tooling",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/frozen-entry.test.ts",
+    reason:
+      "runs `deno task` against a copy of the working tree with Deno.execPath(); the tasks under test are Deno's",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/publish-workflow-generator.test.ts",
     reason:
       "runs scripts/gen-publish-workflow.md through the xmd CLI with Deno.execPath(); the document is executed by Deno only",

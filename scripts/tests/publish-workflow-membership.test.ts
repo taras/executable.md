@@ -1,7 +1,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
-import { readTextFile } from "@effectionx/fs";
+import { readdir, readTextFile } from "@effectionx/fs";
 
 import { listWorkspacePaths } from "../lib/workspace.ts";
 
@@ -72,6 +72,40 @@ describe("release.yml binary compilation", () => {
     expect(build).toBeGreaterThan(-1);
     expect(compile).toBeGreaterThan(-1);
     expect(build).toBeLessThan(compile);
+  });
+
+  /**
+   * The compile that produces published binaries is invoked directly rather
+   * than through `deno task build`, so it carries its own isolation. Without
+   * it, a release could fetch a dependency the lock does not name and rewrite
+   * the lock while doing it — at tag time, from a tagged commit.
+   */
+  it("compiles under the isolation flags, wherever a workflow compiles", function* () {
+    const workflows = new URL("../../.github/workflows/", import.meta.url);
+    const compiles: string[] = [];
+
+    for (const entry of yield* readdir(workflows)) {
+      // Executable lines only: several of these files name `deno compile` in a
+      // comment, and a comment compiles nothing.
+      const commands = (yield* readTextFile(new URL(entry, workflows)))
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"))
+        .join("\n");
+      if (!commands.includes("deno compile")) {
+        continue;
+      }
+      // A folded shell command: read from `deno compile` to the entrypoint that
+      // ends it, so line breaks and continuations do not matter.
+      const invocation = commands.slice(commands.indexOf("deno compile"));
+      const flags = invocation.slice(0, invocation.indexOf("packages/cli/src/compiled.ts"));
+      for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen"]) {
+        if (!flags.includes(flag)) {
+          compiles.push(`${entry} compiles without ${flag}`);
+        }
+      }
+    }
+
+    expect(compiles).toEqual([]);
   });
 
   /**
