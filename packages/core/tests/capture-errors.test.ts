@@ -207,11 +207,14 @@ function useBroken(): Operation<void> {
  */
 function useStale(planted: StaleInputError): Operation<void> {
   return Component.around({
-    *expand([element], next) {
-      if (element.name === "Stale") {
-        throw planted;
+    // deno-lint-ignore require-yield
+    *importComponent([name], next) {
+      if (name !== "Stale") {
+        return yield* next(name);
       }
-      return yield* next(element);
+      // Thrown from resolution, as the claim did: what reaches the caller must
+      // be the planted failure itself, not a diagnostic built from it.
+      throw planted;
     },
   });
 }
@@ -223,22 +226,29 @@ function useStale(planted: StaleInputError): Operation<void> {
  */
 function useSpawner(log: Trace): Operation<void> {
   return Component.around({
-    *expand([element], next) {
-      if (element.name === "Spawner") {
-        const started = withResolvers<void>();
-        yield* spawn(function* () {
-          yield* ensure(() => {
-            log.torn.push("spawner");
-          });
-          started.resolve();
-          yield* suspend();
-        });
-        // Wait for it to reach its suspension: a task halted before its first
-        // step registers no teardown and would prove nothing.
-        yield* started.operation;
-        return { segments: [] };
+    *importComponent([name], next) {
+      if (name !== "Spawner") {
+        return yield* next(name);
       }
-      return yield* next(element);
+      return {
+        kind: "function" as const,
+        name: "Spawner",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          const started = withResolvers<void>();
+          yield* spawn(function* () {
+            yield* ensure(() => {
+              log.torn.push("spawner");
+            });
+            started.resolve();
+            yield* suspend();
+          });
+          // Wait for it to reach its suspension: a task halted before its first
+          // step registers no teardown and would prove nothing.
+          yield* started.operation;
+          return "";
+        },
+      };
     },
   });
 }

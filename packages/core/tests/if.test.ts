@@ -589,7 +589,6 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
   interface ProbeRun {
     output: string;
     /** Element names offered to the `Component.expand` extension hook. */
-    expanded: string[];
     /** Every path the document caused the Fs Api to stat or read. */
     reads: string[];
     /** Every command handed to the process runtime. */
@@ -605,7 +604,6 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
    */
   function runProbe(condition: boolean): Operation<ProbeRun> {
     return scoped(function* () {
-      const expanded: string[] = [];
       const reads: string[] = [];
       const commands: string[] = [];
       const stream = new InMemoryStream();
@@ -642,24 +640,21 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
           return { exitCode: 0, stdout: "", stderr: "" };
         },
       });
-      yield* Component.around({
-        *expand([element], next) {
-          expanded.push(element.name);
-          return yield* next(element);
-        },
-      });
-
       const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
-      return { output, expanded, reads, commands, events: stream.snapshot() };
+      return { output, reads, commands, events: stream.snapshot() };
     });
   }
 
-  it("IF44: no component element in the unselected branch is offered to expand", function* () {
+  // What the branch rule promises is that an unselected branch's component
+  // never runs. Its body is the observable: PROBE_BODY appears only when the
+  // branch was selected. An expansion log would say the same thing less
+  // directly, and only a claim could collect one.
+  it("IF44: no component in the unselected branch expands", function* () {
     const skipped = yield* runProbe(false);
-    expect(skipped.expanded).not.toContain("Probe");
+    expect(skipped.output).not.toContain("PROBE_BODY");
 
     const selected = yield* runProbe(true);
-    expect(selected.expanded).toContain("Probe");
+    expect(selected.output).toContain("PROBE_BODY");
   });
 
   it("IF45: no component file is looked up or read for the unselected branch", function* () {
