@@ -2522,10 +2522,14 @@ props, its expressions, its `as`, or its content.
 
 **There is no operation for claiming a name.** A component name means what §5.3
 says it means — a structural construct, a reserved registration, a repository
-file, or a registered default — and nothing installed at runtime can preempt
-that ordering. A host contributes components by registering them
-(`registerComponents`), which places them in the default tier, where a
-repository file of the same name overrides them.
+file, or a registered default — and nothing installed at runtime preempts that
+ordering. A host contributes components with `registerComponents`, and the
+registration itself says which tier they land in: an ordinary registration is a
+default, which a repository file of the same name overrides, while one marked
+`reserved` sits above the repository because replacing it would break a language
+or security invariant. Reserving is a property of the registration, declared
+where it is installed and visible to inspection — not something a name acquires
+by being handled first.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.

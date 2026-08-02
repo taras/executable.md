@@ -75,16 +75,16 @@ import type { ParsedTemplate } from "./template.ts";
 import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
 
 /**
- * The enclosing expansion's recursion, handed in by the loop that dispatched
- * the region.
+ * The enclosing expansion's recursion, handed in by the arm that dispatched the
+ * region.
  *
  * A region renders segments of its own — its body, and each matcher's template
  * children — and those have to expand with the interpolation inputs, hide set
- * and block counter of the expansion they were written in. This module cannot
- * reach `expandSegments` directly (that module imports this one), and it does
- * not hold that state anyway, so the caller supplies both as one closure.
+ * and block counter of the expansion they were written in. Only the dispatching
+ * arm holds that state, so it binds the recursion and passes it down; nothing
+ * here could reconstruct which expansion a region belongs to.
  */
-export type ExpandSegments = (segments: Segment[]) => Operation<Segment[]>;
+type ExpandSegments = (segments: Segment[]) => Operation<Segment[]>;
 
 const ANSWERS = "Answers";
 const ANSWER = "Answer";
