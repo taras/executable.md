@@ -11,10 +11,38 @@ replays recorded results, and observes completion, failure, or cancellation.
 Those capabilities remain internal execution machinery. The low-level journal
 is not the user-facing history of an implementation workflow.
 
-## What the workflow already writes
+## How a name resolves
 
-Name resolution has tiers, and where a name sits decides whether this workflow
-can rely on it and whether a repository file may replace it.
+Name resolution has tiers, and the first tier that answers wins:
+
+1. **structural syntax** — the language's own constructs;
+2. **a reserved registration** — a host protecting a language or security
+   invariant;
+3. **a repository-local file**;
+4. **a registered default**, including everything core supplies; and
+5. **nothing**, which is the unresolved diagnostic.
+
+Two consequences govern what this workflow may rely on. A **repository
+component overrides any ordinary package default**, core's own included — so
+`<Elicit>`, `<Parse>`, `<Glob>`, `<File>`, `<Agent>`, `<Session>`, `<Prompt>`,
+and every other registered default sits *below* a repository file of the same
+name, and a repository `Elicit.md` is chosen ahead of core's. Only genuine
+absence falls through to a default: a candidate that exists but cannot be read,
+imported, parsed, or compiled fails where it is loaded rather than being
+quietly replaced. **Structural names are reserved**, so a registration cannot
+claim one and a repository file never stands in for it.
+
+**Registration is scope-local.** `registerComponents()` makes names resolvable
+for the installing scope and its descendants. A child scope may register a name
+its parent already registered — that shadows, and the parent is unchanged.
+Siblings and concurrent executions never see one another's registrations, and
+leaving the installing scope removes them. Registering describes a component; it
+runs nothing and acquires nothing, and names and schemas are validated where
+they are installed rather than the first time a document writes the name. Two
+registrations for one name and kind at the same scope are a configuration error
+naming both origins; installation order is not a resolution mechanism.
+
+## What the workflow already writes
 
 **Structural syntax** is the language's own. A registration cannot claim one of
 these names and a repository file never stands in for it:
@@ -36,8 +64,9 @@ reserved names, so a repository component may override each one:
 
 5. `<Glob>` evaluates explicit include and exclude patterns relative to
    `Env.cwd`. It declares `returns`, so it renders nothing, must be invoked
-   with `as`, and binds one `string[]`: relative paths, `/`-separated on every
-   platform, deduplicated, and sorted lexically by code point. Directories and
+   with `as`, and binds one `string[]` validated against a clone of what it
+   produced rather than a by-reference binding: relative paths, `/`-separated
+   on every platform, deduplicated, and sorted lexically by code point. Directories and
    symbolic links are never results, which is what keeps a search inside
    `Env.cwd` without judging any destination. Finding nothing is an empty array
    rather than a failure.
@@ -81,7 +110,9 @@ reserved names, so a repository component may override each one:
 9. `<TempDir>` establishes a fresh contextual working directory for its content
    and removes it when the content finishes, fails, or is cancelled.
 
-**Registered agent components** are defaults on the same terms:
+**Registered agent components** are defaults on the same terms.
+`installAgentComponents()` registers them for the installing scope, and a
+repository `Prompt.md` or `Agent.ts` outranks them:
 
 10. `<Agent name>` and `<Session name>` pin an agent and a session onto nested
     prompts; `<Prompt>` sends one prompt and renders the reply, with `agent`,
@@ -93,7 +124,9 @@ reserved names, so a repository component may override each one:
     and session, terminal status, text, and structured failure.
 
 The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
-`UserCheckpoint` therefore uses shipped syntax throughout.
+`UserCheckpoint` therefore uses shipped syntax throughout. `Implementation` does
+not: its loop body invokes `<Commit>`, `<PullRequest>`, and `<Issue>`, which
+resolve to nothing, so that stage cannot expand.
 
 ## What the workflow still needs
 

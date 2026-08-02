@@ -200,12 +200,18 @@ This in-document parsing is separate from a component's own return value, and
 both are shipped. A component that declares no `returns` returns its rendered
 Markdown, and `as` binds that text; a component that declares `returns` renders
 nothing, holds one direct top-level `<Return>`, must be invoked with `as`, and
-binds one schema-validated JSON value. The two are mutually exclusive. A
-registered function component returns by reference by default — which is how
-`<Glob>` binds a `string[]` — and declaring `returns` is the opt-in that makes
-a return a validated JSON record instead. Every stage component in this
-workflow is a text component, because each stage's output is also material a
-user reads at a checkpoint.
+binds one schema-validated JSON value. The two are mutually exclusive.
+
+A registered function component that declares no `returns` binds by reference:
+`as` binds the object itself, and nothing is journaled for it. Declaring
+`returns` is the opt-in that makes a return a validated JSON record instead —
+the value crosses the JSON boundary, is validated against a clone, and only the
+normalized clone reaches the caller. `<Glob>` declares `returns`, so the
+`string[]` this workflow binds is that validated clone rather than a
+by-reference binding.
+
+Every stage component in this workflow is a text component, because each
+stage's output is also material a user reads at a checkpoint.
 
 ## Workflow-owned development assets
 
@@ -475,9 +481,9 @@ shipped behavior. They are recorded because the answers constrain what remains.
 
 1. **How does a component return a structured value later components consume
    without prose parsing?** A component declaring `returns` renders nothing,
-   holds one direct top-level `<Return>`, requires `as`, and binds one
-   schema-validated JSON value; a registered function component returns by
-   reference by default.
+   holds one direct top-level `<Return>`, requires `as`, and binds one JSON
+   value validated against a clone of what it produced. A registered function
+   component that declares no `returns` binds its return by reference instead.
 2. **Which repository reads and writes belong in `<File>`, and how are writes
    confined?** Self-closing reads and renders exact content; the content form
    atomically replaces the target and renders nothing. Confinement is lexical

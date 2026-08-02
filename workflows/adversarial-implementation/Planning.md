@@ -164,7 +164,7 @@ resolves factual disagreement, while the user resolves material choices.
 </Loop>
 
 <Output>
-  # Converged implementation plan
+  # Implementation plan
 
   {plan}
 
@@ -179,11 +179,20 @@ The loop is bounded and records why it stopped. `<Loop>` journals every
 iteration it enters and one terminal record whose outcome is `break` — the
 passing verdict above — `exhausted`, or `error`, and it refuses a replay whose
 stored outcome or iteration count disagrees with what this run reached.
-Reaching `max` completes the loop normally; that an exhausted planning loop has
-not converged is this document's policy to state, written as an ordinary `<If>`
-on `verdict.passed` after `</Loop>`. `<Loop>` opens no binding scope, so `plan`,
-`verdict`, and `planCheckpoint` hold their final values in the `<Output>`
-region below.
+`<Loop>` opens no binding scope, so `plan`, `verdict`, and `planCheckpoint`
+hold their final values in the `<Output>` region above.
+
+**Outstanding gap: exhaustion is unhandled.** Reaching `max` completes the loop
+normally — exhaustion is not a failure and produces no diagnostic — so whether
+an exhausted planning loop counts as converged is this document's policy to
+state, and this document does not yet state it. The body has no branch after
+`</Loop>`, so a plan that never passed review falls straight into the same
+`<Output>` as a plan that did. The output above therefore reports
+`verdict.passed` rather than titling itself converged, but reporting the flag is
+not deciding what should happen. What the workflow does when five rounds end
+without a passing verdict — return the failing plan, fail the stage, or return
+to the user — is an unresolved product decision, not something this
+synchronization slice chooses.
 
 The surrounding workflow will record every `plan`, `verdict`, and
 `planCheckpoint` version under its loop iteration. That artifact ledger does not

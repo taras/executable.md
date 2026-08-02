@@ -54,24 +54,32 @@ path, but they are derived views rather than canonical run state.
 
 A component has one return path, defined by the
 [executable MDX specification](../../specs/executable-mdx-spec.md). A Markdown
-component that declares no
-`returns` is a **text component**: its rendered Markdown is its return value,
-`<Output>` selects which region renders, and `as` binds that text. Every stage
-component in this workflow is one. A component that declares `returns` is a
-**value component**: it renders nothing, holds exactly one direct top-level
-`<Return value={…} />`, must be invoked with `as`, and binds one JSON value
-validated against its schema. The two are mutually exclusive — `<Output>` in a
-component that declares `returns` is a structural error.
+component that declares no `returns` is a **text component**: its rendered
+Markdown is its return value, `<Output>` selects which region renders, and `as`
+binds that text. Every stage component in this workflow is one. A component
+that declares `returns` is a **value component**: it renders nothing, holds
+exactly one direct top-level `<Return value={…} />`, must be invoked with `as`,
+and binds one JSON value validated against its schema. The two are mutually
+exclusive — `<Output>` in a component that declares `returns` is a structural
+error.
 
-A registered function component returns by reference by default. `as` binds the
-value the component returned rather than a rendering of it, which is how
-`<Glob>` hands this workflow a `string[]`; such a binding is not durable and a
-re-expansion recomputes it. Declaring `returns` is the opt-in that makes a
-particular return a validated JSON record instead, and a component declaring it
-must be invoked with `as` because it renders nothing. Without `as` there is
-nowhere to bind, so only text is observable: a component returning a string
-renders it, and a component returning anything else renders nothing — not an
-error, a value with no destination.
+A registered function component that declares no `returns` binds **by
+reference**: `as` binds the object the component returned rather than a
+rendering of it, which is how a component hands its caller something a schema
+could not describe. Such a binding is not durable — nothing is journaled for
+it, and a re-expansion recomputes it by running the component again.
+
+`returns` is the opt-in that makes a particular return a **validated JSON
+record** instead. The produced value crosses the JSON boundary before its
+schema, validation runs against a clone so defaults fill without mutating the
+producer's object, and only that normalized clone reaches the caller. `<Glob>`
+declares `returns`, so the `string[]` this workflow binds is that validated
+clone rather than a by-reference binding.
+
+A component declaring `returns` must be invoked with `as`, because it renders
+nothing. Without `as` there is nowhere to bind, so only text is observable: a
+component returning a string renders it, and a component returning anything
+else renders nothing — not an error, a value with no destination.
 
 The following names describe logical result contracts for the JSON these
 agents produce. They are not component return declarations, not entries in a
