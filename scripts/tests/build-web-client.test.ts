@@ -324,12 +324,11 @@ describe("side-effect-free", () => {
     expect(String(failure)).toContain("deno task setup");
   });
 
+  /** Nearest first, because that is the order Node's resolution reaches them in. */
   it("names both installed copies, nearest first", function* () {
-    expect(
-      SIDE_EFFECT_FREE_MANIFESTS.map((url) => url.pathname.split("/").slice(-5).join("/")),
-    ).toEqual([
-      "web/node_modules/@rjsf/validator-ajv8/package.json",
-      "issue-279/node_modules/@rjsf/validator-ajv8/package.json",
+    expect(SIDE_EFFECT_FREE_MANIFESTS.map((url) => url.href)).toEqual([
+      new URL("packages/web/node_modules/@rjsf/validator-ajv8/package.json", REPO_ROOT).href,
+      new URL("node_modules/@rjsf/validator-ajv8/package.json", REPO_ROOT).href,
     ]);
   });
 });
