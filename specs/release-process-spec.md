@@ -239,22 +239,26 @@ only what is missing. No dispatch path publishes outside a tag.
 `packages/web/generated/client-bundle.ts` — gitignored, never committed. The
 Deno test suite (`scripts/tests/build-web-client.test.ts`) bundles and
 inspects the real output, asserting determinism, absence of eval and
-external-asset paths under the fixed CSP policy, restoration of the patched
-dependency manifest on every exit path, and that `deno task build:web` writes
-the generated module to that path and nowhere in the index. That test restores
-whatever it found rather than removing the module: it is a real artifact other
-work reads, so a test that emptied the path would decide whether an unrelated
-build succeeded by running before or after it.
+external-asset paths under the fixed CSP policy, that a build leaves the
+installed dependency tree and its manifests exactly as it found them, and that
+the build script writes its module wherever `--out` names. The suite writes to
+scratch paths of its own rather than to the generated path: that path is read by
+every other check in the verification battery while the suite runs (AGENTS.md),
+and a test that took a turn at writing it would be a race rather than a check.
 
-Because the module is not committed, every job that builds, packages, publishes,
-or releases the workspace runs `deno task build:web` first:
+A build installs nothing: `deno task build:web` runs under node-modules and
+cache modes that cannot create, relink, or fetch, and refuses on an unprepared
+worktree (`scripts/preflight.ts`). Preparation is `deno task deps`, which owns
+`node_modules/`, the cached module graphs, and the `sideEffects` fact. So every
+job that builds, packages, publishes, or releases the workspace runs
+`deno task deps` and then `deno task build:web`:
 
 - **`ci.yml`'s `test-deno` job**, because the suite builds the CLI's npm artifact
   and dnt packages `@executablemd/web` along with it.
-- **`ci.yml`'s `test-node` job**, before `pnpm install` rather than after: the
-  Node typecheck resolves the module's literal dynamic import, and a Deno task
-  run after `pnpm install` rewrites `node_modules` into Deno's layout and fails
-  the typecheck on unrelated packages.
+- **`ci.yml`'s `test-node` job**, before `pnpm install` rather than after:
+  the Node typecheck resolves the module's literal dynamic import, and
+  `deno task deps` rewrites `node_modules` into Deno's layout, so pnpm's install
+  has to come last. The build between them changes nothing there.
 - **`ci.yml`'s `jsr` job**, so the dry run validates the artifact the release
   uploads rather than a bundle-less variant of it.
 - **`ci.yml`'s `smoke` job**, through the root `build` task, which chains the
@@ -285,13 +289,24 @@ refuses the package: it sits in the module graph and would not exist at runtime.
 the published package carries the bundle it needs while the repository still does
 not track it.
 
-Restoring that manifest is not something `ensure()` delivers on its own.
-`@effectionx/fs` writes through a promise adapted with `until()`, and halting
-stops observing that promise rather than the write behind it, so a restore can
-be overtaken by the patch it undoes. `scripts/lib/manifest-patch.ts` holds the
-in-flight write and waits for it before restoring; it is the one place the build
-calls `node:fs/promises` directly, because no `@effectionx/fs` operation hands
-its promise back.
+Tree-shaking the dead runtime-validator path out of the bundle needs
+`@rjsf/validator-ajv8` declared side-effect-free, which the package ships
+without. `deno task deps` records that fact, and a build asserts it and fails
+pointing at `deno task setup` when it is absent.
+
+It is recorded on *every* installed copy, because the tree is a union of two
+stores and which copy the bundler reads depends on how it resolves: Deno's
+automatic mode reaches the root store, while `--node-modules-dir=manual`
+resolves the way Node does and reaches pnpm's copy under
+`packages/web/node_modules` — the difference between a 606 KB tree-shaken
+bundle and a 734 KB one carrying `new Function`. `pnpm install` restores its own
+copy from its store, so `deno task setup` records the fact after it rather than
+before.
+
+`scripts/lib/staged-write.ts` writes through a staged file named for the
+invocation and renames it into place, so a concurrent preparation cannot delete
+another's staging, a cancelled one waits for its own in-flight write before
+removing it, and a reader sees either every old byte or every new one.
 
 Bundling is Deno-only; the shape of the generated module is not. Its serializer
 (`scripts/lib/web-client-module.ts`) touches no host, so

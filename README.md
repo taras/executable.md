@@ -224,15 +224,22 @@ Each invocation requires a new path. If the path already exists, `xmd` exits wit
 
 ## Development
 
-This is a Deno-first project. Run the tool from source and the checks with `deno`:
+This is a Deno-first project. Prepare a checkout once, then run the tool from
+source and the checks with `deno`:
 
 ```bash
+deno task setup                                  # install both dependency layouts, build the browser bundle
 deno task xmd run packages/core/examples/hello-world.md   # run a document from source
 deno task build                                  # compile the standalone xmd binary
 deno task lint                                   # oxlint + oxfmt
-deno check packages/core/mod.ts                   # typecheck
+deno task check                                  # typecheck
 deno task test                                   # run the test suite
 ```
+
+`deno task setup` is the only thing that installs. Builds and checks read what
+it prepared and write nothing back, so they compose instead of undoing one
+another — `deno task verify:clean` runs that claim end to end against a clean
+clone (AGENTS.md).
 
 ## Status
 

@@ -6,6 +6,7 @@ import { readTextFile } from "@effectionx/fs";
 import { listWorkspacePaths } from "../lib/workspace.ts";
 
 const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.meta.url);
+const PUBLISH_ONE_WORKFLOW = new URL("../../.github/workflows/publish-one.yml", import.meta.url);
 
 const SCOPE = "@executablemd/";
 const repoRoot = new URL("../../", import.meta.url);
@@ -71,6 +72,27 @@ describe("release.yml binary compilation", () => {
     expect(build).toBeGreaterThan(-1);
     expect(compile).toBeGreaterThan(-1);
     expect(build).toBeLessThan(compile);
+  });
+
+  /**
+   * A build installs nothing (AGENTS.md), so every workflow that builds on a
+   * fresh checkout prepares first. Left out, the release fails at the preflight
+   * rather than producing a bundle-less binary — but it fails at tag time,
+   * which is the wrong moment to find out.
+   */
+  it("prepares dependencies before building, in every workflow that builds", function* () {
+    for (const workflow of [RELEASE_WORKFLOW, PUBLISH_ONE_WORKFLOW]) {
+      const steps = (yield* readTextFile(workflow))
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"));
+      const deps = steps.findIndex((line) => line.includes("deno task deps"));
+      const build = steps.findIndex((line) => line.includes("deno task build:web"));
+
+      expect({ workflow: workflow.pathname, deps: deps > -1 && deps < build }).toEqual({
+        workflow: workflow.pathname,
+        deps: true,
+      });
+    }
   });
 });
 

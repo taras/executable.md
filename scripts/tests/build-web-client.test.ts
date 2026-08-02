@@ -1,50 +1,107 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createChannel, ensure, scoped, spawn, suspend, until } from "effection";
+import { ensure, scoped, sleep, spawn, until } from "effection";
 import type { Operation } from "effection";
-import { copyFile, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { lstat, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import fs from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   type ClientBuildResult,
-  SIDE_EFFECT_FREE_MANIFEST,
   buildWebClient,
-  markSideEffectFree,
+  OUTPUT_MODULE,
+  outputModule,
+  SIDE_EFFECT_FREE_MANIFESTS,
 } from "../build-web-client.ts";
-import { FileWrites } from "../lib/manifest-patch.ts";
-import type { WriteFile } from "../lib/manifest-patch.ts";
+import { assertSideEffectFree, normalizeSideEffects } from "../lib/side-effect-free.ts";
 import { byteLength } from "../lib/web-client-module.ts";
 import { loadGeneratedModule } from "./generated-module.ts";
 
 const REPO_ROOT = new URL("../../", import.meta.url);
-const GENERATED_MODULE = "packages/web/generated/client-bundle.ts";
+const GENERATED_MODULE = OUTPUT_MODULE;
+
+/** A directory of the calling operation's own, gone when that operation shuts down. */
+function* scratchDirectory(prefix: string): Operation<string> {
+  // @effectionx/fs has no mkdtemp.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  return base;
+}
 
 /**
- * A scratch copy of the manifest a build patches, removed when the calling
- * operation shuts down.
+ * A scratch copy of the manifest setup normalizes, as the package ships it.
  *
- * The restoration tests drive `markSideEffectFree` through failure and
- * cancellation, so they patch a copy: a test that ends without restoring would
- * otherwise leave the repository's own `node_modules` rewritten. The copy is the
- * real manifest's bytes, so the name and version guards see what a build sees.
+ * The normalization tests drive it through states the repository's own
+ * dependency tree must never be left in, so they work on a copy. It is the
+ * installed manifest's own bytes, so the name and version guards see what a
+ * build sees, minus the fact setup already recorded — which is the shape
+ * `normalizeSideEffects` is given on a fresh install.
  */
 function* manifestCopy(): Operation<URL> {
-  // @effectionx/fs has no mkdtemp.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "side-effect-free-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
-
+  const base = yield* scratchDirectory("side-effect-free-");
   const copy = new URL("package.json", pathToFileURL(`${base}/`));
-  yield* copyFile(SIDE_EFFECT_FREE_MANIFEST, copy);
+  const shipped = JSON.parse(yield* readTextFile(SIDE_EFFECT_FREE_MANIFESTS[1]!));
+  delete shipped.sideEffects;
+  yield* writeTextFile(copy, `${JSON.stringify(shipped, null, 2)}\n`);
   return copy;
+}
+
+function* linkTarget(entry: URL): Operation<string> {
+  // @effectionx/fs has no readlink.
+  const stats = yield* lstat(entry);
+  return stats.isSymbolicLink() ? yield* until(readlink(entry)) : "";
+}
+
+/**
+ * What every other check in the battery resolves through, in the shape it
+ * resolves through: the names under `node_modules/` and where each one points.
+ * A build that installed, pruned, or relinked anything moves this.
+ */
+function* dependencyLayout(): Operation<string[]> {
+  const root = new URL("node_modules/", REPO_ROOT);
+  const layout: string[] = [];
+  for (const scope of (yield* readdir(root)).sort()) {
+    if (scope.startsWith(".")) {
+      continue;
+    }
+    const entry = new URL(scope, root);
+    const target = yield* linkTarget(entry);
+    if (target) {
+      layout.push(`${scope} -> ${target}`);
+      continue;
+    }
+    for (const name of (yield* readdir(entry)).sort()) {
+      layout.push(`${scope}/${name} -> ${yield* linkTarget(new URL(`${scope}/${name}`, root))}`);
+    }
+  }
+  return layout;
+}
+
+/**
+ * Every installed copy: the bytes and the write. Identical bytes written again
+ * are still a rewrite, so the modification time is part of the state, and both
+ * copies are watched because either one is what a bundler may resolve.
+ */
+function* manifestState(): Operation<string> {
+  const state: string[] = [];
+  for (const manifest of SIDE_EFFECT_FREE_MANIFESTS) {
+    const stats = yield* lstat(manifest);
+    state.push(`${manifest.pathname} ${stats.mtimeMs} ${yield* readTextFile(manifest)}`);
+  }
+  return state.join("\n");
 }
 
 function* git(args: string[]): Operation<{ code?: number; stdout: string }> {
   return yield* exec("git", { arguments: args, cwd: fileURLToPath(REPO_ROOT) }).join();
+}
+
+/** The pinned Deno running this suite, so a task runs under the version CI runs. */
+function* deno(args: string[]): Operation<void> {
+  yield* exec(Deno.execPath(), { arguments: args, cwd: fileURLToPath(REPO_ROOT) }).expect();
 }
 
 /**
@@ -56,21 +113,66 @@ function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-interface Gate {
-  promise: Promise<void>;
-  open(): void;
-}
-
-/** A promise the test opens by hand, so a write can be started and left unsettled. */
-function gate(): Gate {
-  let open = (): void => {};
-  const promise = new Promise<void>((resolve) => {
-    open = () => resolve();
-  });
-  return { promise, open };
-}
-
 describe("build-web-client", () => {
+  /**
+   * The whole battery reads this tree while a build runs (#279). A build that
+   * installed, pruned, or relinked anything in it would take `@effectionx/*`
+   * out from under the Node suite, `tsx` out from under its runner, and fail
+   * checks that have nothing to do with the browser bundle.
+   *
+   * It runs first because it has to observe the tree `deno task setup` left,
+   * not one an earlier build already rewrote — a build that installs destroys
+   * this evidence once and then looks stable.
+   */
+  it("leaves the installed dependency tree exactly as it found it", function* () {
+    const before = yield* dependencyLayout();
+
+    yield* buildWebClient();
+
+    expect(yield* dependencyLayout()).toEqual(before);
+  });
+
+  /**
+   * The function above is only half the claim: `deno task build:web` is a
+   * preflight plus a `deno run`, and `deno task build` adds a `deno compile` —
+   * each its own process, each with its own node-modules mode. Automatic
+   * management creates `node_modules/.deno` before a process reaches its own
+   * code, so the flags on those tasks are the mechanism and this is what
+   * measures them.
+   *
+   * `deno task build` writes `dist/xmd`, which nothing in the battery reads.
+   */
+  it("leaves the tree as it found it through the tasks, not only the function", function* () {
+    const before = yield* dependencyLayout();
+
+    yield* deno(["task", "build:web", "--out", path.join(yield* scratchDirectory("out-"), "b.ts")]);
+    expect(yield* dependencyLayout()).toEqual(before);
+
+    yield* deno(["task", "build"]);
+    expect(yield* dependencyLayout()).toEqual(before);
+  });
+
+  /**
+   * The reported failure, in one line: after a build, the packages only pnpm
+   * installs still resolve from Node. A build that reinstalled would take
+   * `tsx` — the Node suite's own runner — out of the tree.
+   */
+  it("leaves both dependency stores resolvable from Node", function* () {
+    yield* deno(["task", "build:web", "--out", path.join(yield* scratchDirectory("out-"), "b.ts")]);
+
+    const probe = yield* exec("node", {
+      arguments: ["scripts/probe-resolution.mjs"],
+      cwd: fileURLToPath(REPO_ROOT),
+    }).join();
+
+    expect({ code: probe.code, output: probe.stdout }).toEqual({
+      code: 0,
+      output: probe.stdout,
+    });
+    expect(probe.stdout).toContain("pnpm:");
+    expect(probe.stdout).toContain("deno:");
+  });
+
   it("regenerates byte-identical output", function* () {
     const first = yield* buildWebClient();
     const second = yield* buildWebClient();
@@ -78,125 +180,157 @@ describe("build-web-client", () => {
     expect(second).toEqual(first);
   });
 
-  it("restores the patched manifest to its exact original bytes", function* () {
-    const before = yield* readTextFile(SIDE_EFFECT_FREE_MANIFEST);
+  /**
+   * Reading the manifest afterwards would not see a build that rewrote it and
+   * put it back. `tsc`, Bun, and the Node suite resolve through this file for
+   * the whole length of a build, so the assertion has to hold *during* one —
+   * and it is about the writing, not only the bytes: a build that rewrote the
+   * same bytes still truncates a file the others are reading, so the
+   * modification time is part of what is observed.
+   */
+  it("never rewrites the manifest other checks resolve through", function* () {
+    const original = yield* manifestState();
+    const observed = new Set<string>();
 
-    yield* buildWebClient();
-
-    const after = yield* readTextFile(SIDE_EFFECT_FREE_MANIFEST);
-    expect(after).toEqual(before);
-    expect(after.includes("sideEffects")).toBe(false);
-  });
-});
-
-describe("markSideEffectFree", () => {
-  it("restores the original bytes when the patched scope completes", function* () {
-    const manifest = yield* manifestCopy();
-    const before = yield* readTextFile(manifest);
-    let patched = "";
-
-    yield* scoped(function* () {
-      yield* markSideEffectFree(manifest);
-      patched = yield* readTextFile(manifest);
+    const build = yield* spawn(() => buildWebClient());
+    const watch = yield* spawn(function* () {
+      while (true) {
+        observed.add(yield* manifestState());
+        yield* sleep(5);
+      }
     });
+    yield* build;
+    yield* watch.halt();
 
-    expect(JSON.parse(patched).sideEffects).toBe(false);
-    expect(patched).not.toEqual(before);
-    expect(yield* readTextFile(manifest)).toEqual(before);
+    expect([...observed]).toEqual([original]);
   });
 
-  it("restores the original bytes when work after the patch throws", function* () {
-    const manifest = yield* manifestCopy();
-    const before = yield* readTextFile(manifest);
-    let patched = "";
+  it("leaves nothing behind when a build is halted mid-bundle", function* () {
+    const scratch = yield* scratchDirectory("build-web-client-halt-");
+    const layout = yield* dependencyLayout();
+
+    const build = yield* spawn(() => buildWebClient({ scratch }));
+    yield* sleep(50);
+    yield* build.halt();
+
+    expect(yield* readdir(scratch)).toEqual([]);
+    expect(yield* dependencyLayout()).toEqual(layout);
+  });
+
+  it("leaves nothing behind when a build fails", function* () {
+    const scratch = yield* scratchDirectory("build-web-client-fail-");
     let failure: unknown;
 
     try {
       yield* scoped(function* () {
-        yield* markSideEffectFree(manifest);
-        patched = yield* readTextFile(manifest);
-        throw new Error("bundling failed");
+        yield* spawn(function* () {
+          yield* buildWebClient({ scratch });
+        });
+        yield* sleep(50);
+        throw new Error("the check that started the build failed");
       });
     } catch (error) {
       failure = error;
     }
 
-    expect(failure).toEqual(new Error("bundling failed"));
-    expect(JSON.parse(patched).sideEffects).toBe(false);
-    expect(yield* readTextFile(manifest)).toEqual(before);
+    expect(failure).toEqual(new Error("the check that started the build failed"));
+    expect(yield* readdir(scratch)).toEqual([]);
+  });
+});
+
+describe("side-effect-free", () => {
+  it("records the fact and reports that it wrote", function* () {
+    const manifest = yield* manifestCopy();
+
+    expect(yield* normalizeSideEffects(manifest)).toBe(true);
+
+    expect(JSON.parse(yield* readTextFile(manifest)).sideEffects).toBe(false);
+    yield* assertSideEffectFree([manifest]);
   });
 
-  it("restores the original bytes when the owning operation is halted", function* () {
+  it("writes nothing the second time", function* () {
     const manifest = yield* manifestCopy();
-    const before = yield* readTextFile(manifest);
-    const patches = createChannel<string, never>();
-    const installed = yield* patches;
+    yield* normalizeSideEffects(manifest);
+    const recorded = yield* readTextFile(manifest);
 
-    const task = yield* spawn(function* () {
-      yield* scoped(function* () {
-        yield* markSideEffectFree(manifest);
-        yield* patches.send(yield* readTextFile(manifest));
-        yield* suspend();
-      });
-    });
+    expect(yield* normalizeSideEffects(manifest)).toBe(false);
 
-    const patched = yield* installed.next();
-    expect(JSON.parse(patched.value).sideEffects).toBe(false);
-    expect(patched.value).not.toEqual(before);
+    expect(yield* readTextFile(manifest)).toEqual(recorded);
+  });
 
-    yield* task.halt();
+  it("refuses to overwrite a declaration the package already carries", function* () {
+    const manifest = yield* manifestCopy();
+    const shipped = JSON.parse(yield* readTextFile(manifest));
+    yield* writeTextFile(manifest, JSON.stringify({ ...shipped, sideEffects: ["./setup.js"] }));
 
-    expect(yield* readTextFile(manifest)).toEqual(before);
+    let failure: unknown;
+    try {
+      yield* normalizeSideEffects(manifest);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(String(failure)).toContain("already declares");
+  });
+
+  it("refuses a manifest that is not the pinned package", function* () {
+    const manifest = yield* manifestCopy();
+    const shipped = JSON.parse(yield* readTextFile(manifest));
+    yield* writeTextFile(manifest, JSON.stringify({ ...shipped, version: "6.7.0" }));
+
+    let failure: unknown;
+    try {
+      yield* normalizeSideEffects(manifest);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(String(failure)).toContain("expected @rjsf/validator-ajv8@6.7.1");
+  });
+
+  it("sends a build with nothing installed to setup", function* () {
+    const base = yield* scratchDirectory("side-effect-free-missing-");
+    const missing = new URL("package.json", pathToFileURL(`${base}/`));
+
+    let failure: unknown;
+    try {
+      yield* assertSideEffectFree([missing]);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(String(failure)).toContain("deno task setup");
   });
 
   /**
-   * Halting stops Effection observing the patching write; it does not stop the
-   * write. Cleanup must therefore wait for that write to settle before
-   * restoring, or the patch lands after the restore and stays on disk. The
-   * substituted writer performs the real write — it only holds it open long
-   * enough for the halt to arrive first.
+   * The union tree carries two copies, and `--node-modules-dir=manual` resolves
+   * the one in `packages/web/node_modules` — pnpm's — while `auto` resolves
+   * Deno's. A build that checked only one would pass while bundling the
+   * runtime validator and its `new Function` from the other.
    */
-  it("restores the original bytes when halted before the patching write settles", function* () {
-    const manifest = yield* manifestCopy();
-    const before = yield* readTextFile(manifest);
+  it("refuses when any installed copy is missing the fact", function* () {
+    const recorded = yield* manifestCopy();
+    yield* normalizeSideEffects(recorded);
+    const shipped = yield* manifestCopy();
 
-    const order: string[] = [];
-    const patchStarted = gate();
-    const patchHeld = gate();
+    let failure: unknown;
+    try {
+      yield* assertSideEffectFree([recorded, shipped]);
+    } catch (error) {
+      failure = error;
+    }
 
-    const writes: WriteFile = (path, contents) => {
-      const label = contents === before ? "restore" : "patch";
-      order.push(`${label}:start`);
-      const held = label === "patch" ? patchHeld.promise : Promise.resolve();
-      if (label === "patch") {
-        patchStarted.open();
-      }
-      return held
-        .then(() => writeFile(path, contents))
-        .then(() => {
-          order.push(`${label}:settle`);
-        });
-    };
+    expect(String(failure)).toContain(shipped.pathname);
+    expect(String(failure)).toContain("deno task setup");
+  });
 
-    yield* FileWrites.with(writes, function* () {
-      const task = yield* spawn(function* () {
-        yield* scoped(function* () {
-          yield* markSideEffectFree(manifest);
-          yield* suspend();
-        });
-      });
-
-      yield* until(patchStarted.promise);
-      expect(order).toEqual(["patch:start"]);
-      expect(yield* readTextFile(manifest)).toEqual(before);
-
-      const halting = yield* spawn(() => task.halt());
-      patchHeld.open();
-      yield* halting;
-    });
-
-    expect(order).toEqual(["patch:start", "patch:settle", "restore:start", "restore:settle"]);
-    expect(yield* readTextFile(manifest)).toEqual(before);
+  it("names both installed copies, nearest first", function* () {
+    expect(
+      SIDE_EFFECT_FREE_MANIFESTS.map((url) => url.pathname.split("/").slice(-5).join("/")),
+    ).toEqual([
+      "web/node_modules/@rjsf/validator-ajv8/package.json",
+      "issue-279/node_modules/@rjsf/validator-ajv8/package.json",
+    ]);
   });
 });
 
@@ -294,28 +428,30 @@ describe("client assets", () => {
     expect(module.themeCssBytes).toBe(byteLength(result.themeCss));
   });
 
-  it("writes that exact module to the generated path and nowhere in the index", function* () {
-    const generated = new URL(GENERATED_MODULE, REPO_ROOT);
-
-    // The tree is left as it was found rather than emptied. The generated module
-    // is a real build artifact other work depends on — `build-npm.ts` packages it
-    // when a dependent is built — so a test that removed it would decide whether
-    // an unrelated test passed by running before or after it.
-    const before = (yield* exists(generated)) ? yield* readTextFile(generated) : undefined;
-    yield* ensure(function* () {
-      if (before === undefined) {
-        yield* rm(generated, { force: true });
-      } else {
-        yield* writeTextFile(generated, before);
-      }
-    });
+  /**
+   * The script writes where it is told, and what it writes is the module this
+   * suite inspected. It is told somewhere of its own: the default path is the
+   * one `deno check`, `deno test`, `check:jsr`, and `tsc` all read, and a test
+   * that took a turn at writing it would be the shared-state race this design
+   * removes (#279).
+   *
+   * The script, not `deno task build:web`: the task installs first, which is
+   * setup's work and exactly what no check may do while the others are running.
+   */
+  it("writes that exact module where it is told", function* () {
+    const scratch = yield* scratchDirectory("build-web-client-out-");
+    const output = path.join(scratch, "client-bundle.ts");
 
     yield* exec(Deno.execPath(), {
-      arguments: ["task", "build:web"],
+      arguments: ["run", "--allow-all", "scripts/build-web-client.ts", "--out", output],
       cwd: fileURLToPath(REPO_ROOT),
     }).expect();
 
-    expect(yield* readTextFile(generated)).toEqual(result.module);
+    expect(yield* readTextFile(pathToFileURL(output))).toEqual(result.module);
+  });
+
+  it("defaults to a generated path that is ignored and untracked", function* () {
+    expect(outputModule([], REPO_ROOT)).toEqual(new URL(GENERATED_MODULE, REPO_ROOT));
     expect((yield* git(["check-ignore", GENERATED_MODULE])).code).toBe(0);
     expect((yield* git(["ls-files", "--", GENERATED_MODULE])).stdout).toBe("");
   });

@@ -73,6 +73,9 @@ jobs:
       # `deno compile` embeds the generated browser bundle by following the
       # literal dynamic import, and compiles without complaint when the file is
       # absent — producing a binary that cannot serve a form (spec §8).
+      - name: Install dependencies
+        run: deno task deps
+
       - name: Build the browser bundle
         run: deno task build:web
 

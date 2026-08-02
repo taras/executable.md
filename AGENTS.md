@@ -1,5 +1,37 @@
 # Executable Markdown Agents
 
+## Setup
+
+One command prepares a worktree, and nothing else installs:
+
+```bash
+deno task setup
+```
+
+There are two dependency layouts, not one: `node_modules/` and Deno's global
+cache. `deno task deps` owns both — `deno install --frozen`, the cached module
+graphs a build and a compile walk, and the one `sideEffects` fact the browser
+bundle needs — and `deno task setup` runs it, then `pnpm install`, then records
+that fact again (pnpm restores its own copy of that manifest from its store),
+then builds the bundle.
+
+The order is load-bearing: `pnpm install` adds its store beside Deno's without
+pruning it, and the union resolves for Deno, for `tsc` and the Node suite, for
+Bun, for oxlint, and for the site. Run setup again after changing a dependency.
+
+**Builds install nothing.** `deno task build:web` and `deno task build` run
+under node-modules and cache modes that cannot create, relink, or fetch —
+automatic management writes `node_modules/.deno` before a process reaches its
+own code, so a runtime check would be too late — and they refuse to run at all
+on an unprepared worktree, naming `deno task setup`
+(`scripts/preflight.ts`). A check or a build that reinstalls prunes the links
+another command is resolving through, which is how the Node typecheck came to
+fail after a `deno task build` (#279).
+
+`deno task verify:clean` runs that whole claim end to end against a clone of
+`HEAD`: setup, build, a resolution probe against both stores, then `tsc`. CI
+runs the same chain in its `composability` job.
+
 ## Verification
 
 After making any changes to source files (`src/`) or test files (`tests/`),

@@ -44,6 +44,10 @@ jobs:
       # The npm build packages every workspace dependency of the CLI, and
       # `@executablemd/web` carries a generated browser bundle that is not
       # committed. Without this the CLI's npm artifact cannot be built at all.
+      # Preparing is its own step: a build installs nothing (AGENTS.md).
+      - name: Install dependencies
+        run: deno task deps
+
       - name: Build the browser bundle
         run: deno task build:web
 
@@ -60,6 +64,9 @@ jobs:
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.1
+
+      - name: Install dependencies
+        run: deno task deps
 
       # With the generated bundle absent the negated `publish.exclude` glob
       # matches nothing and the dry run quietly checks a package the release
@@ -78,6 +85,9 @@ jobs:
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.1
+
+      - name: Install dependencies
+        run: deno task deps
 
       - name: Build the xmd binary
         run: deno task build
@@ -169,6 +179,38 @@ jobs:
             --component-dir smoke-test/agent/components \
             --raw
 
+  # The chain `deno task verify:clean` runs locally, on a checkout that is clean
+  # by construction. It is the regression for #279's ownership claim: a build
+  # that installs anything prunes pnpm's links and the resolution probe fails.
+  # It duplicates work other jobs do — that is the cost of asserting the whole
+  # chain end to end rather than each link separately.
+  composability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      - name: Prepare both dependency layouts
+        run: deno task setup
+
+      - name: Build, which must install nothing
+        run: deno task build
+
+      - name: Both stores still resolve
+        run: node scripts/probe-resolution.mjs
+
+      - name: Typecheck through the layout the build left behind
+        run: pnpm exec tsc --project tsconfig.node.json --noEmit
+
   site:
     runs-on: ubuntu-latest
     steps:
@@ -214,6 +256,9 @@ jobs:
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.1
+
+      - name: Install dependencies
+        run: deno task deps
 
       - name: Build the browser bundle
         run: deno task build:web

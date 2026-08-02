@@ -147,6 +147,10 @@ npm stays per-package in `publish-one.yml`, and this job runs in the same
         with:
           deno-version: v2.9.1
 
+      # A build installs nothing, so a fresh checkout prepares first (spec §8).
+      - name: Install dependencies
+        run: deno task deps
+
       # `@executablemd/web` ships a browser bundle that is generated, not
       # committed, and a negated `publish.exclude` glob is what puts it in the
       # package. On a fresh checkout the glob matches nothing and `deno publish`
