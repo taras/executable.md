@@ -4,7 +4,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
-import { Component, raise } from "../src/component-api.ts";
+import { Component } from "../src/component-api.ts";
+import { collectFailures } from "../src/component-failures.ts";
 import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
@@ -18,7 +19,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { Sample } from "../src/sample-api.ts";
 import { readTextFile } from "@effectionx/fs";
-import type { ComponentElement, Segment } from "../src/types.ts";
+import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
 interface IfRun {
@@ -697,12 +698,31 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
  * passes through `Component.raise` exactly once, where it is created — so an
  * error inside a selected branch settles once, exactly as the same error would
  * inline, and an error `<If>` creates itself settles once too.
+ *
+ * `<Broken />` is a component that fails, supplied through the import
+ * middleware because these drive `expandSegments` directly. It fails rather
+ * than returning anything: the ErrorSegment counted below is the diagnostic the
+ * engine reports for a failed invocation, so what `<If>` must not double is a
+ * real observation and not text a component chose to render.
  */
 describe("Tier IF — error observation", () => {
   interface RaiseProbe {
     observed: string[];
     output: string;
   }
+
+  const BROKEN: FunctionComponentDefinition = {
+    kind: "function",
+    name: "Broken",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    // deno-lint-ignore require-yield
+    fn: collectFailures(function* () {
+      throw new Error("broken thing");
+    }),
+  };
+
+  /** What the engine's diagnostic for a failed `<Broken />` reads. */
+  const BROKE = "Function component Broken error: broken thing";
 
   function runRaiseProbe(source: string): Operation<RaiseProbe> {
     return scoped(function* () {
@@ -713,21 +733,19 @@ describe("Tier IF — error observation", () => {
           return yield* next(error);
         },
       });
-      yield* Component.around({
-        *expand([element], next) {
-          if (element.name === "Broken") {
-            // The handler owns the observation of the error it creates (§6.9);
-            // the engine settles what comes back without reporting it again.
-            return {
-              segments: [
-                yield* raise({ type: "error", message: "broken thing", source: "Broken" }),
-              ],
-            };
-          }
-          return yield* next(element);
+      yield* Component.around(
+        {
+          env: () => ({ values: {} }),
+          // deno-lint-ignore require-yield
+          *importComponent([name], _next) {
+            if (name !== "Broken") {
+              throw new Error(`Component not found: ${name}`);
+            }
+            return BROKEN;
+          },
         },
-      });
-      yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
+        { at: "min" },
+      );
       const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
       return { observed, output: renderSegments(segments) };
     });
@@ -735,13 +753,13 @@ describe("Tier IF — error observation", () => {
 
   it("IF49: an inline error is observed once", function* () {
     const probe = yield* runRaiseProbe("<Broken />");
-    expect(probe.observed).toEqual(["broken thing"]);
+    expect(probe.observed).toEqual([BROKE]);
   });
 
   it("IF50: the same error inside a selected branch is observed once", function* () {
     const probe = yield* runRaiseProbe("<If condition={true}><Broken /></If>");
-    expect(probe.observed).toEqual(["broken thing"]);
-    expect(probe.output).toContain("broken thing");
+    expect(probe.observed).toEqual([BROKE]);
+    expect(probe.output).toContain(BROKE);
   });
 
   it("IF51: an error in an unselected branch is observed zero times", function* () {
