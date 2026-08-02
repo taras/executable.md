@@ -28,11 +28,13 @@ import type { EvalScope } from "@effectionx/scope-eval";
 import {
   Agent,
   Component,
-  expandSegments,
   installPromptFailurePolicy,
+  invocation,
   raise,
+  registerComponents,
+  tryContent,
 } from "@executablemd/core";
-import type { ComponentElement, ErrorSegment, Segment, Session } from "@executablemd/core";
+import type { ErrorSegment, Json, PropsSchema, Segment, Session } from "@executablemd/core";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { command, cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
@@ -71,7 +73,10 @@ interface TestAgentSession {
   boundary(): Operation<BoundaryState>;
 }
 
-const TestAgentCtx = createContext<TestAgentSession | undefined>("testAgent.session", undefined);
+const TestAgentContext = createContext<TestAgentSession | undefined>(
+  "testAgent.session",
+  undefined,
+);
 
 function configError(source: string, message: string): ErrorSegment {
   return { type: "error", message: `<${source}> ${message}`, source };
@@ -115,24 +120,25 @@ function resolvePinned(
 }
 
 export function* installTestAgentComponents(): Operation<void> {
-  function* expandTestAgent(element: ComponentElement): Operation<Segment[]> {
+  function* TestAgent(props: Record<string, Json>): Operation<unknown> {
     if (!(yield* Test.operations.sessionActive)) {
-      return [
-        yield* raise(
-          configError(
-            "TestAgent",
-            "is valid only in an active testing session created by xmd test or useTesting().",
-          ),
+      // Raised for the observation chain, returned as text for the document:
+      // one of each, which is what returning the segment used to do.
+      const reported = yield* raise(
+        configError(
+          "TestAgent",
+          "is valid only in an active testing session created by xmd test or useTesting().",
         ),
-      ];
+      );
+      return reported.message;
     }
-    const agentProp = element.props.agent;
-    if (agentProp !== undefined && typeof agentProp !== "string") {
-      return [yield* raise(configError("TestAgent", 'the "agent" prop must be a string literal.'))];
-    }
-    const defaultAgent = typeof agentProp === "string" ? agentProp : "test";
+    const defaultAgent = typeof props.agent === "string" ? props.agent : "test";
 
-    return yield* scoped(function* () {
+    // NOT wrapped in scoped(): content projected by tryContent() anchors to the
+    // invocation, not to a child frame, so anything installed inside a scoped()
+    // here would be invisible to the body. The invocation is already the bound
+    // this region needs — it is dismantled with the component.
+    {
       const controller = yield* useTestAgentController();
       const declarations = new Map<string, ScenarioDeclaration>();
       const boundaries = new Map<EvalScope | "test-agent-scope", BoundaryState>();
@@ -269,7 +275,7 @@ export function* installTestAgentComponents(): Operation<void> {
       }
 
       const session: TestAgentSession = { defaultAgent, controller, declarations, boundary };
-      yield* TestAgentCtx.set(session);
+      yield* TestAgentContext.set(session);
 
       // A prompt that fails inside a `<Test>` fails that test rather than
       // rendering its diagnostic and letting the rest of the test run against
@@ -321,36 +327,34 @@ export function* installTestAgentComponents(): Operation<void> {
         { at: "min" },
       );
 
-      const segments = yield* expandSegments(element.children);
-      return segments;
-    });
+      // The <Testing> completion shape, not content(): a body may legally hold
+      // a settled diagnostic beside healthy scenarios, and content() would
+      // replace this invocation's output with those segments. `text` keeps them
+      // inline exactly as the segments this replaced did. A body that genuinely
+      // stopped is different — that failure travels on untouched.
+      const projected = yield* tryContent();
+      if (projected.failure !== undefined) {
+        throw projected.failure;
+      }
+      return projected.text;
+    }
   }
 
-  function* expandScenario(element: ComponentElement): Operation<Segment[]> {
-    const session = yield* TestAgentCtx.expect();
+  function* Scenario(props: Record<string, Json>): Operation<unknown> {
+    const session = yield* TestAgentContext.get();
     if (session === undefined) {
-      return [yield* raise(configError("TestAgent.Scenario", "is valid only inside <TestAgent>."))];
+      const reported = yield* raise(
+        configError("TestAgent.Scenario", "is valid only inside <TestAgent>."),
+      );
+      return reported.message;
     }
-    const { agent, session: sessionProp, src } = element.props;
+    const { agent, session: sessionProp, src } = props;
     if (typeof src !== "string" || src.length === 0) {
-      return [yield* raise(configError("TestAgent.Scenario", 'requires a "src" prop.'))];
-    }
-    if (agent !== undefined && typeof agent !== "string") {
-      return [
-        yield* raise(
-          configError("TestAgent.Scenario", 'the "agent" prop must be a string literal.'),
-        ),
-      ];
-    }
-    if (sessionProp !== undefined && typeof sessionProp !== "string") {
-      return [
-        yield* raise(
-          configError("TestAgent.Scenario", 'the "session" prop must be a string literal.'),
-        ),
-      ];
+      const reported = yield* raise(configError("TestAgent.Scenario", 'requires a "src" prop.'));
+      return reported.message;
     }
 
-    const declaredIn = element.position?.path;
+    const declaredIn = (yield* invocation()).position?.path;
     const baseDir = declaredIn ? dirname(declaredIn) : ".";
     const srcPath = isAbsolute(src) ? src : resolve(baseDir, src);
     const source = yield* readTextFile(srcPath);
@@ -360,7 +364,7 @@ export function* installTestAgentComponents(): Operation<void> {
     const existing = session.declarations.get(key);
     if (existing) {
       existing.duplicate = true;
-      return [];
+      return "";
     }
     session.declarations.set(key, {
       agent: agentName,
@@ -369,18 +373,47 @@ export function* installTestAgentComponents(): Operation<void> {
       document: { path: basename(srcPath), source },
       duplicate: false,
     });
-    return [];
+    return "";
   }
 
+  // Non-reserved defaults: a repository component of either name is chosen
+  // ahead of these. The dotted name addresses a subdirectory, so the override
+  // for the second is components/TestAgent/Scenario.md.
+  yield* registerComponents([
+    {
+      name: "TestAgent",
+      origin: "@executablemd/test-agent",
+      fn: TestAgent,
+      props: TEST_AGENT_PROPS,
+    },
+    {
+      name: "TestAgent.Scenario",
+      origin: "@executablemd/test-agent",
+      fn: Scenario,
+      props: SCENARIO_PROPS,
+    },
+  ]);
+  // Claims nothing now. Kept until the legacy-removal slice retires the surface.
   yield* Component.around({
     *expand([element], next) {
-      if (element.name === "TestAgent") {
-        return { segments: yield* expandTestAgent(element) };
-      }
-      if (element.name === "TestAgent.Scenario") {
-        return { segments: yield* expandScenario(element) };
-      }
       return yield* next(element);
     },
   });
 }
+
+const TEST_AGENT_PROPS: PropsSchema = {
+  type: "object",
+  properties: { agent: { type: "string" } },
+  additionalProperties: false,
+};
+
+const SCENARIO_PROPS: PropsSchema = {
+  type: "object",
+  properties: {
+    src: { type: "string" },
+    agent: { type: "string" },
+    session: { type: "string" },
+  },
+  required: ["src"],
+  additionalProperties: false,
+};

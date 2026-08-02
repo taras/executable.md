@@ -44,10 +44,19 @@ controller that serves behavior documents to agent subprocesses:
 </TestAgent>
 ```
 
+Installing the package registers `<TestAgent>` and `<TestAgent.Scenario>` as
+ordinary **non-reserved defaults** (executable-mdx-spec.md §5.3): a repository
+component of either name is chosen ahead of the registered one, exactly as it
+would be ahead of any other package's default. The dotted name addresses a
+subdirectory, so a repository `<TestAgent.Scenario>` lives at
+`components/TestAgent/Scenario.md`. Their props are validated by schema, so a
+prop neither component declares is rejected before it runs.
+
 `<TestAgent>` is valid only in an active testing session created by `xmd test`
 or `useTesting()`. Using it outside a testing session is a configuration error.
-The controller starts lazily when the component expands and stops with its
-scope.
+The controller starts lazily when the component expands and stops with the
+invocation — which is also what bounds the provider and the scenario state it
+installs for its body.
 
 The default agent name is `test`. An `agent` prop changes that default:
 

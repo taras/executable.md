@@ -34,6 +34,12 @@ interface Run {
 
 interface RunOptions {
   session?: boolean;
+  /**
+   * Search these for repository components, relative to the fixture directory.
+   * The default dirs resolve against the process cwd, not the temp project, so
+   * a fixture component is invisible without this.
+   */
+  componentDirs?: string[];
   /** Mutable contextual cwd served to the document. */
   cwdRef?: { value: string; flipTo: string };
 }
@@ -83,6 +89,9 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
       const execution = yield* execute({
         path: path.join(dir, "doc.md"),
         stream: new InMemoryStream(),
+        ...(options?.componentDirs
+          ? { componentDirs: options.componentDirs.map((d) => path.join(dir, d)) }
+          : {}),
       });
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
@@ -441,5 +450,97 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
     // Neither agent's scenario advanced: no turn ran on either.
     expect(run.output).not.toContain("owner-reply");
     expect(run.output).not.toContain("other-reply");
+  });
+
+  // The regression the scoped() removal fixes: content projected by
+  // tryContent() anchors to the invocation, so anything <TestAgent> installs
+  // inside a child frame is invisible to its own body. Wrapping the region in
+  // scoped() again turns every scenario into "valid only inside <TestAgent>"
+  // and every prompt into "Agent.agent() has no provider".
+  it("TV13: a scenario in the body sees the session <TestAgent> installed", function* () {
+    const run = yield* runDoc({
+      "agents/hi.md": HI,
+      "doc.md": [
+        "<TestAgent>",
+        '<TestAgent.Scenario src="./agents/hi.md" />',
+        '<Test name="reaches it"><Prompt text="hi" /></Test>',
+        "</TestAgent>",
+        "",
+      ].join("\n"),
+    });
+
+    expect(run.output).not.toContain("is valid only inside <TestAgent>");
+    expect(run.output).not.toContain("has no provider");
+    expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
+  });
+
+  // TC1's analog: a settled diagnostic beside healthy scenarios renders inline
+  // and the rest of the body still runs. content() would replace the whole
+  // invocation's output with that diagnostic instead. The empty-string src also
+  // pins that the component's own check still owns that wording — the schema
+  // accepts "" as a string, so only the fn can catch it.
+  it("TV14: a scenario diagnostic renders inline beside a healthy one", function* () {
+    const run = yield* runDoc({
+      "agents/hi.md": HI,
+      "doc.md": [
+        "<TestAgent>",
+        '<TestAgent.Scenario src="" />',
+        '<TestAgent.Scenario src="./agents/hi.md" />',
+        "BODY TEXT",
+        '<Test name="still runs"><Prompt text="hi" /></Test>',
+        "</TestAgent>",
+        "",
+      ].join("\n"),
+    });
+
+    expect(run.output).toContain('requires a "src" prop');
+    expect(run.output).toContain("BODY TEXT");
+    expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
+  });
+
+  // A registration is a default, so a repository component of either name wins.
+  // Each fixture declares a props schema: a markdown component without one
+  // accepts no props and is rejected before it can answer.
+  it("TV15: a repository component overrides either registered name", function* () {
+    const withProps = (body: string) =>
+      [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    agent: { type: string }",
+        "    src: { type: string }",
+        "    session: { type: string }",
+        "---",
+        "",
+        body,
+        "",
+      ].join("\n");
+
+    const agentRun = yield* runDoc(
+      {
+        "doc.md": "<TestAgent>\nbody\n</TestAgent>\n",
+        "components/TestAgent.md": withProps("LOCAL TEST AGENT"),
+      },
+      { componentDirs: ["components", "."] },
+    );
+    expect(agentRun.output).toContain("LOCAL TEST AGENT");
+
+    // The dotted name addresses a subdirectory, so the override lives at
+    // components/TestAgent/Scenario.md.
+    const scenarioRun = yield* runDoc(
+      {
+        "agents/hi.md": HI,
+        "doc.md": [
+          "<TestAgent>",
+          '<TestAgent.Scenario src="./agents/hi.md" />',
+          "</TestAgent>",
+          "",
+        ].join("\n"),
+        "components/TestAgent/Scenario.md": withProps("LOCAL SCENARIO"),
+      },
+      { componentDirs: ["components", "."] },
+    );
+    expect(scenarioRun.output).toContain("LOCAL SCENARIO");
   });
 });
