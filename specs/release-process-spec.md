@@ -207,30 +207,50 @@ tokens minted outside the gated environment.
 
 ## 6. Adding a new package
 
-npm exposes trusted-publisher settings only on a package that already exists,
-and the workflows carry no npm token, so bootstrap a new package by hand once:
+The workflows carry no npm token, so a new package is bootstrapped by hand
+once:
 
 1. Create its directory under `packages/` with a `deno.json` (name under
    `@executablemd`) and a `package.json` declaring its dependencies
    (`workspace:*` for internal siblings). The root `deno.json` covers it through
    the `packages/*` workspace glob, so membership needs no edit. Run
    `deno task gen:publish-workflow` and commit the regenerated orchestrator.
-2. Publish its first version by hand as a logged-in `@executablemd` scope
-   owner:
+2. Run `scripts/bootstrap-npm-package.md`, which reserves the name and
+   configures trusted publishing in one pass:
    ```sh
-   deno run -A scripts/build-npm.ts <package-dir> <version>
-   ( cd <package-dir>/npm && npm publish --access public )
+   deno task xmd run scripts/bootstrap-npm-package.md --props-package packages/<member>
    ```
-   This covers a package with no `workspace:*` dependencies. A package that
-   declares them cannot build its first artifact until those sibling versions
-   are on npm, because the build resolves siblings from the registry. That
-   bootstrap is tracked in #152 rather than specified here.
-3. Configure its trusted publisher with the table in §4.
-4. Create the package on jsr.io under the `@executablemd` scope and link it to
+   It previews first — npm version guard, manifest guards, registry state, and
+   `npm pack --dry-run` — then asks for a one-time code and publishes an empty
+   `0.0.0-bootstrap.0` artifact under the `bootstrap` dist-tag before applying
+   the §4 trusted-publisher configuration. It never publishes `latest`. A
+   failed preview asks for no code and writes nothing; re-running an
+   already-bootstrapped package skips the publish and re-applies the trust
+   configuration. Run it **without** `--journal` or `--verbose`: the code is
+   interpolated into the publish command, which the durable entry records.
+3. Create the package on jsr.io under the `@executablemd` scope and link it to
    this repository, **before** the first tagged release that includes it.
    `deno publish` fails for a package that does not exist on JSR, and the JSR
    job publishes the workspace as a unit — so one uncreated package fails the
    release for every package.
+
+**What the reservation is for.** It is not a precondition of trusted
+publishing: npm 11.17's `npm trust github` was accepted for
+`@executablemd/web` on 2026-08-02 while the registry still returned E404 for
+that name. What it does do is hold the name under the `@executablemd` scope and
+put a registry record in place ahead of the first tagged release, so the release
+publishes a version rather than a package.
+
+What pre-existence trust is **not yet known** to do is govern that first
+publish. Acceptance was observed; enforcement against a real first publish has
+not been. Until a bootstrap has been carried through to a tagged release, treat
+the reservation as load-bearing.
+
+The reservation itself is unaffected by `workspace:*` dependencies — the
+artifact it publishes is empty and declares none, so it needs no sibling on the
+registry first. Building a package's **real** first artifact still resolves
+siblings from the registry, and that remains #152 rather than something this
+step covers.
 
 ## 7. Recovery
 
