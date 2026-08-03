@@ -716,8 +716,10 @@ describe("component-declared output", () => {
 
     // The ambient policy decided this execution fails, so what surfaces is the
     // documentation failure and not a diagnostic.
-    expect(caught).toBeInstanceOf(DocumentationError);
-    expect((caught as DocumentationError).message).toContain("Command failed (exit 1)");
+    if (!(caught instanceof DocumentationError)) {
+      throw new Error(`expected DocumentationError, received ${String(caught)}`);
+    }
+    expect(caught.message).toContain("Command failed (exit 1)");
     // The later sibling never ran.
     expect(ran).toEqual(["preview"]);
     // And nothing came back as a successful document result.
