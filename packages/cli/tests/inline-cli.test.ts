@@ -30,6 +30,8 @@ const PROPS_DOC = [
   "Hello {props.name}",
 ].join("\n");
 
+// The expression form rather than an `eval` block, matching value-root.test.ts:
+// an eval block needs the host's compiler, which is not the subject here.
 const VALUE_DOC = [
   "---",
   "returns:",
@@ -38,11 +40,7 @@ const VALUE_DOC = [
   "",
   "rendered body",
   "",
-  "```ts eval",
-  "const verdict = { ok: true };",
-  "```",
-  "",
-  "<Return value={verdict} />",
+  "<Return value={{ ok: true }} />",
 ].join("\n");
 
 /** A directory holding the given files, removed when the test ends. */
@@ -55,9 +53,8 @@ function* useWorkspace(files: Record<string, string>): Operation<string> {
   return root;
 }
 
-function* entries(root: string): Operation<string[]> {
-  const names = yield* until(readdir(root));
-  return names.toSorted();
+function* entries(root: string): Operation<Set<string>> {
+  return new Set(yield* until(readdir(root)));
 }
 
 describe(
@@ -177,7 +174,7 @@ describe(
     });
 
     it("IE14: an inline value root prints only its JSON result", function* () {
-      const { stdout, stderr } = yield* runCli(["-e", VALUE_DOC]).expect();
+      const { stdout } = yield* runCli(["-e", VALUE_DOC]).expect();
       expect(stdout.trim()).toBe('{"ok":true}');
       expect(stdout).not.toContain("rendered body");
 

@@ -32,7 +32,6 @@ import { join } from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { inspectDocument } from "../src/inspect.ts";
-import { useDataUriCompiler } from "../src/data-uri-compiler.ts";
 import { INLINE_SOURCE_PATH, inlineSource } from "../src/root-source.ts";
 import type { InlineRootDocument, RootDocumentSource } from "../src/root-source.ts";
 import { asText } from "./helpers.ts";
@@ -275,7 +274,6 @@ describe("Tier IR — inline root documents", () => {
   });
 
   it("IR8: an inline value root returns its declared value", function* () {
-    yield* useDataUriCompiler();
     yield* useNoFs();
     const stream = new InMemoryStream();
 
@@ -288,11 +286,7 @@ describe("Tier IR — inline root documents", () => {
             "  ok: { type: boolean }",
             "---",
             "",
-            "```ts eval",
-            "const verdict = { ok: true };",
-            "```",
-            "",
-            "<Return value={verdict} />",
+            "<Return value={{ ok: true }} />",
           ].join("\n"),
         ),
         stream,
