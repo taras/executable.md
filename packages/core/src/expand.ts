@@ -51,7 +51,9 @@ import {
   DocumentationError,
   durabilityFailure,
   fatalCause,
+  RunDiagnostics,
   settle,
+  useDiagnostics,
   usePolicy,
 } from "./errors.ts";
 import { capturesErrors, useFailures } from "./component-failures.ts";
@@ -502,6 +504,16 @@ export function* expandSegments(
    */
   owner?: Segment[],
 ): Operation<Segment[]> {
+  // An execution opens the registries its diagnostics are recorded in. Expansion
+  // driven directly — a test, a tool describing a document — has no execution
+  // around it, so the outermost call opens them for exactly its own lifetime.
+  if ((yield* RunDiagnostics.get()) === undefined) {
+    return yield* scoped(function* () {
+      yield* useDiagnostics();
+      return yield* expandSegments(segments, parentMeta, parentProps, hideSet, counter, owner);
+    });
+  }
+
   const result: Segment[] = owner ?? [];
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
@@ -2008,9 +2020,9 @@ class ThrownValue extends Error {
  * this diagnostic exists without its account. The observation itself is still the
  * single `raise` of the segment.
  */
-function raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
-  attributeCause(segment, from);
-  return raise(segment);
+function* raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
+  yield* attributeCause(segment, from);
+  return yield* raise(segment);
 }
 
 /**

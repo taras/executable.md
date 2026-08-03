@@ -405,7 +405,7 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
     expect(String(result.error)).toContain("the component's own failure");
   });
 
-  // OFF6c — the determined-outcome path, where the failure is a diagnostic the
+  // OFF6b — the determined-outcome path, where the failure is a diagnostic the
   // region settled: its type survives to the completion as well as its message.
   it("OFF6b: reports a settled diagnostic as the documentation failure it is", function* () {
     const result = yield* run({
@@ -422,7 +422,7 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
     expect(documentation.segment.source).toContain("FAIL");
   });
 
-  // OFF6b — a body failure and a teardown failure arrive together, and both
+  // OFF6c — a body failure and a teardown failure arrive together, and both
   // members survive to the completion.
   it("OFF6c: reports the aggregate a body and its teardown produced together", function* () {
     const fromBody = new Error("body failed");
@@ -775,7 +775,7 @@ describe("Tier OFF — the recorded failure is exactly these fields", () => {
     expect(Object.hasOwn(Object(failure), "errors")).toBe(false);
   });
 
-  it('reconstructs the cause "undefined" as a cause rather than as absence', function* () {
+  it('OFF15e: reconstructs the cause "undefined" as a cause rather than as absence', function* () {
     // A failure may carry an own cause whose value is `undefined` — a component
     // can throw exactly that — and the record says so with the text rather than
     // by leaving the field out. The two must not collapse into each other.

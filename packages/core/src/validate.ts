@@ -79,18 +79,13 @@ export class ReturnValidationError extends SchemaValidationError {
   }
 }
 
-// Props and returns enforce different root contracts, so each keeps its own
-// cache. A shared one would let a schema first compiled as a return hand
-// `compilePropsSchema` a validator that never met the object-root contract.
-const compiledCache = new WeakMap<PropsSchema, ValidateFunction>();
-const compiledReturnsCache = new WeakMap<ReturnsSchema, ValidateFunction>();
+// Compilation is memoized by Ajv itself, keyed by the schema object, so the
+// same schema costs one compile however often it is asked for. Nothing here
+// keeps a table of its own: a cache beside Ajv's would also have to decide
+// whose contract a cached validator was compiled under, and the contract checks
+// below run on every call precisely so that question cannot arise.
 
 export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
-  const cached = compiledCache.get(schema);
-  if (cached) {
-    return cached;
-  }
-
   enforceRootContract(schema);
   // Ajv does not reject an async schema — it compiles an async validator that
   // returns a promise. Reject it before and after compiling so validation
@@ -112,7 +107,6 @@ export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
     throw new PropsSchemaError("asynchronous props schemas are not supported");
   }
 
-  compiledCache.set(schema, validate);
   return validate;
 }
 
@@ -122,11 +116,6 @@ export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
  * rejection that keeps validation synchronous within the Effection path.
  */
 export function compileReturnsSchema(schema: ReturnsSchema): ValidateFunction {
-  const cached = compiledReturnsCache.get(schema);
-  if (cached) {
-    return cached;
-  }
-
   if (schema["$async"] === true) {
     throw new ReturnSchemaError("asynchronous return schemas ($async: true) are not supported");
   }
@@ -144,7 +133,6 @@ export function compileReturnsSchema(schema: ReturnsSchema): ValidateFunction {
     throw new ReturnSchemaError("asynchronous return schemas are not supported");
   }
 
-  compiledReturnsCache.set(schema, validate);
   return validate;
 }
 

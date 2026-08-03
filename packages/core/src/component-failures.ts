@@ -28,9 +28,14 @@ import type { Operation } from "effection";
  * nothing.
  *
  * Not enumerable, so a component that is copied, wrapped, or inspected does not
- * carry the decision along by accident.
+ * carry the decision along by accident, and module-private rather than
+ * `Symbol.for`, so nothing outside this module can forge the brand.
+ *
+ * This is the one mark that is not run state: `captureErrors(fn)` runs while a
+ * component module is evaluated, outside any operation, and what it records is
+ * what an author declared about a definition.
  */
-const CAPTURES = Symbol.for("executablemd.core.capturesErrors");
+const CAPTURES = Symbol("executablemd.core.capturesErrors");
 
 /**
  * Continue after this component fails, reporting the failure as a diagnostic.
@@ -66,12 +71,18 @@ export function capturesErrors(component: FunctionComponent): boolean {
  * original failure is attributed as the diagnostic's cause, so what the
  * component actually did remains reachable from the outside.
  */
+function* markUnderOwnPolicy(boundary: object | undefined, segment: ErrorSegment): Operation<void> {
+  if ((yield* AmbientPolicyFrame.get()) === boundary) {
+    yield* markCaptured(segment);
+  }
+}
+
 export function* useFailures(): Operation<void> {
   // The decision this boundary was opened under. A diagnostic raised under a
   // policy something nested chose for itself — a component's own `<Output>`
   // region — is not one this document asked to carry on past, and marking it
   // would resume work that region's author gated behind the failure.
-  const boundary = (yield* AmbientPolicyFrame.get()) ?? {};
+  const boundary = yield* AmbientPolicyFrame.get();
   yield* Component.around({
     *handleFailure([failure], _next): Operation<ErrorSegment> {
       const segment: ErrorSegment = {
@@ -79,7 +90,13 @@ export function* useFailures(): Operation<void> {
         message: `Function component ${failure.name} error: ${failure.error.message}`,
         source: failure.name,
       };
-      attributeCause(segment, failure.error);
+      yield* attributeCause(segment, failure.error);
+      // Marked here as well as in the `raise` middleware below: a diagnostic
+      // this boundary built is one the document asked to carry on past, and a
+      // provider's own call does not re-enter the middleware it is part of.
+      // Under the same rule either way — a decision something nested made for
+      // itself is not this boundary's to reverse.
+      yield* markUnderOwnPolicy(boundary, segment);
       return yield* raise(segment);
     },
     // Every diagnostic raised beneath the boundary is one the document asked to
@@ -88,9 +105,7 @@ export function* useFailures(): Operation<void> {
     // Marking here rather than in `handleFailure` keeps that a property of the
     // region, and delegating leaves the observation chain a single pass.
     *raise([segment], next): Operation<ErrorSegment> {
-      if ((yield* AmbientPolicyFrame.get()) === boundary) {
-        markCaptured(segment);
-      }
+      yield* markUnderOwnPolicy(boundary, segment);
       return yield* next(segment);
     },
   });

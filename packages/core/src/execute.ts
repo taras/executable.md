@@ -23,6 +23,8 @@ import { exec, readTextFile, cwd } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
+import { createContext } from "effection";
+import type { Context } from "effection";
 import type {
   ComponentDefinition,
   ComponentRegistry,
@@ -47,7 +49,13 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import type { BlockCounter } from "./expand.ts";
-import { documentationFailure, durabilityFailure, DocumentationError } from "./errors.ts";
+import {
+  documentationError,
+  DocumentationError,
+  documentationFailure,
+  durabilityFailure,
+  useDiagnostics,
+} from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
@@ -305,26 +313,30 @@ type DocumentFailure = {
 };
 
 /**
- * The original error a failed outcome carries, on the outcome itself.
+ * Where one execution leaves the failure it caught, for its own completion.
  *
- * A live run resolves the failure it actually caught — same object, same type,
- * same `cause`, same aggregate members — because `durableRun` hands back the
- * very object the workflow returned. A replayed run is given the journal's
- * account of that object instead, which carries no such property, so the
- * described fields are all there is. The absence is the signal; nothing asks
- * whether it is replaying.
+ * The handoff is short and entirely inside a run: the workflow's catch fills
+ * this, and the completion takes it. A live run therefore reports the failure it
+ * actually caught — same object, same type, same `cause`, same aggregate
+ * members — while a replayed run never enters the workflow, leaves the slot
+ * empty, and reports the account the journal kept. The empty slot is the signal;
+ * nothing asks whether it is replaying.
  *
- * Non-enumerable, so the outcome still serializes as exactly the JSON §10
- * describes.
+ * The slot belongs to the run's scope, so it is gone when the run is.
  */
-const LIVE_FAILURE = Symbol.for("executablemd.core.liveFailure");
+interface LiveFailureSlot {
+  failure?: unknown;
+}
 
-function rememberLiveFailure(outcome: DocumentResult, error: unknown): void {
-  Object.defineProperty(outcome, LIVE_FAILURE, {
-    value: error,
-    enumerable: false,
-    configurable: true,
-  });
+const LiveFailure: Context<LiveFailureSlot | undefined> = createContext<
+  LiveFailureSlot | undefined
+>("execution.liveFailure", undefined);
+
+function* rememberLiveFailure(error: unknown): Operation<void> {
+  const slot = yield* LiveFailure.get();
+  if (slot) {
+    slot.failure = error;
+  }
 }
 
 function describeFailure(caught: unknown, documentation: DocumentationError): DocumentFailure {
@@ -377,13 +389,10 @@ function failureError(failure: DocumentFailure, live: unknown): unknown {
   return withName(replayed, failure.name);
 }
 
-/** The live failure a returned outcome carries, taken on the way out. */
-function takeLiveFailure(returned: unknown): unknown {
-  if (typeof returned !== "object" || returned === null) {
-    return undefined;
-  }
-  const live = Reflect.get(returned, LIVE_FAILURE);
-  Reflect.deleteProperty(returned, LIVE_FAILURE);
+/** The live failure this run recorded, taken so it answers exactly once. */
+function* takeLiveFailure(slot: LiveFailureSlot): Operation<unknown> {
+  const live = slot.failure;
+  slot.failure = undefined;
   return live;
 }
 
@@ -489,9 +498,8 @@ function* runValueRoot(
   yield* scoped(function* () {
     yield* Component.around(
       {
-        // deno-lint-ignore require-yield
         *raise([error], _next) {
-          throw new DocumentationError(error);
+          throw yield* documentationError(error);
         },
       },
       { at: "min" },
@@ -663,7 +671,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
       output: rendered,
       error: describeFailure(error, documentation),
     };
-    rememberLiveFailure(outcome, error);
+    yield* ephemeral(rememberLiveFailure(error));
     return outcome;
   }
 }
@@ -774,6 +782,13 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         *stderr() {},
       });
 
+      // The registries one execution keeps about its own diagnostics, and the
+      // slot its completion reads its failure from. Both are created here and
+      // reclaimed with this task, so nothing a run decided outlives it.
+      yield* useDiagnostics();
+      const liveFailure: LiveFailureSlot = {};
+      yield* LiveFailure.set(liveFailure);
+
       // Create per-document eval scope (spec §3.1).
       // Created in the same scope as durableRun so that DurableCtx
       // (set by durableRun) is visible to eval code that calls
@@ -806,12 +821,8 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       );
 
       const returned = yield* durableRun(() => Execution.operations.document(props), { stream });
-      // Taken from what the workflow returned, before parsing: on a live run
-      // this is the same object the workflow built, and it is the only place
-      // the original error still exists. Taken rather than read, so the handoff
-      // belongs to the run that made it — a caller replaying the very same
-      // object gets the journal's account, like any other replay.
-      const live = takeLiveFailure(returned);
+      // Taken rather than read, so the handoff belongs to the run that made it.
+      const live = yield* takeLiveFailure(liveFailure);
       const result = parseDocumentResult(returned);
 
       // Preserve output for any completion path that did not emit through the

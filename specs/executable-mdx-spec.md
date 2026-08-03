@@ -6626,6 +6626,7 @@ Identifiers match `packages/core/tests/output-fail-fast.test.ts`.
 | OFF15a | Absent fields | A failure with no own cause and no members records neither key |
 | OFF15b | Absent cause reconstructed | A record with no `cause` reconstructs an error with no own `cause` |
 | OFF15c | Reconstruction fields | A replayed error carries the recorded `name` and `message`, and is not an `AggregateError` |
+| OFF15e | Cause `"undefined"` reconstructed | A record whose `cause` is the text `"undefined"` reconstructs an error with an own `cause` of that text — absence and an undefined value stay distinct |
 | OFF15d | Aggregate reconstruction | A record carrying members reconstructs an `AggregateError` with those names and messages |
 | OFF16a-e | Visible producers preserve | The selected `<If>` branch, `<Loop>` iterations, `<Each>` without `as`, projected `<Content />`, and an answered `<Answers>` body each keep what they rendered before failing, and run nothing after |
 | OFF17a-e | Visible producers do not double | Each of the same five renders exactly once when it succeeds |

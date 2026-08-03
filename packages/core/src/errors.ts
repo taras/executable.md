@@ -34,9 +34,9 @@ export const AmbientErrorPolicy: Context<ErrorPolicy> = createContext<ErrorPolic
  * nested chose for itself — which is the difference between a region a document
  * asked to carry on past and a region whose own author asked it to stop.
  */
-export const AmbientPolicyFrame: Context<object> = createContext<object>(
+export const AmbientPolicyFrame: Context<object | undefined> = createContext<object | undefined>(
   "component.errorPolicyFrame",
-  {},
+  undefined,
 );
 
 /**
@@ -53,38 +53,54 @@ export function* usePolicy(policy: ErrorPolicy): Operation<void> {
  * projection expanding the caller's own text. The frame travels with the value,
  * so the content is still governed by the decision the author wrote it under.
  */
-export function* carryPolicy(policy: ErrorPolicy, frame: object): Operation<void> {
+export function* carryPolicy(policy: ErrorPolicy, frame: object | undefined): Operation<void> {
   yield* AmbientErrorPolicy.set(policy);
   yield* AmbientPolicyFrame.set(frame);
 }
 
 /**
- * Whether an explicit capture boundary handled this diagnostic.
+ * What one execution learned about its own diagnostics.
  *
- * The answer lives on the segment, under a symbol: the object a boundary
- * handled is the same object the document renders and an observer already saw,
- * so the decision travels with it wherever it goes and disappears with it. A
- * table beside the segments would answer for every run the process performs,
- * and copying the segment to record the decision would break both the identity
- * and the single observation.
- *
- * Not enumerable, so it stays out of rendering, serialization, and every
- * structural comparison that walks a segment's own keys.
+ * Both tables belong to the run that filled them: they are created when a run
+ * installs them and reclaimed when its scope ends, so nothing an execution
+ * decided is still answering questions for the next one. Keyed by segment
+ * identity — the object a boundary handled is the same object the document
+ * renders and an observer already saw, and copying it to record a decision
+ * would break both the identity and the single observation.
  */
-const CAPTURED = Symbol.for("executablemd.core.capturedDiagnostic");
+export interface Diagnostics {
+  /** Diagnostics an explicit capture boundary handled (§6.9). */
+  captured: WeakSet<ErrorSegment>;
+  /** What expansion translated into a segment, for the failure's `cause`. */
+  causes: WeakMap<ErrorSegment, unknown>;
+}
+
+export const RunDiagnostics: Context<Diagnostics | undefined> = createContext<
+  Diagnostics | undefined
+>("component.diagnostics", undefined);
+
+/**
+ * Open the registries for one execution. Installed where the run begins, so
+ * everything it records lives exactly as long as the run does.
+ */
+export function* useDiagnostics(): Operation<Diagnostics> {
+  const diagnostics: Diagnostics = { captured: new WeakSet(), causes: new WeakMap() };
+  yield* RunDiagnostics.set(diagnostics);
+  return diagnostics;
+}
 
 /**
  * Record that an explicit capture boundary handled this diagnostic.
- * `useFailures()` calls it for every segment raised beneath the boundary — the
+ * `useFailures()` calls it for every segment raised under its own policy — the
  * ones it builds from a component failure, and the structural ones the region
  * raises on its own.
  */
-export function markCaptured(segment: ErrorSegment): void {
-  Object.defineProperty(segment, CAPTURED, { value: true, enumerable: false });
+export function* markCaptured(segment: ErrorSegment): Operation<void> {
+  (yield* RunDiagnostics.get())?.captured.add(segment);
 }
 
-export function isCaptured(segment: ErrorSegment): boolean {
-  return CAPTURED in segment;
+export function* isCaptured(segment: ErrorSegment): Operation<boolean> {
+  return (yield* RunDiagnostics.get())?.captured.has(segment) ?? false;
 }
 
 /**
@@ -107,10 +123,29 @@ export function isCaptured(segment: ErrorSegment): boolean {
  */
 export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
   const policy = yield* AmbientErrorPolicy.get();
-  if (policy === "throw" || (policy === "output" && !isCaptured(segment))) {
-    throw new DocumentationError(segment);
+  if (policy === "throw" || (policy === "output" && !(yield* isCaptured(segment)))) {
+    throw yield* documentationError(segment);
   }
   return segment;
+}
+
+/**
+ * Build the failure a settled segment travels as, with the account of how
+ * expansion got there already attached.
+ *
+ * The cause is read here rather than in the constructor: it lives in the run's
+ * registry, which only an operation can reach, and every `DocumentationError`
+ * must carry it before any observer — including middleware that catches what
+ * `raise` throws — can look at it.
+ */
+export function* documentationError(segment: ErrorSegment): Operation<DocumentationError> {
+  const causes = (yield* RunDiagnostics.get())?.causes;
+  // Membership, not value: a component can throw `undefined`, and that is still
+  // the exact value this failure was translated from. Only a segment with no
+  // attribution has no own cause at all.
+  return causes?.has(segment)
+    ? new DocumentationError(segment, { cause: causes.get(segment) })
+    : new DocumentationError(segment);
 }
 
 /**
@@ -125,15 +160,13 @@ export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
  * built for the segment therefore has its `cause` in place before any observer —
  * including middleware that catches what `raise` throws — can look at it.
  */
-const segmentCauses = new WeakMap<ErrorSegment, unknown>();
-
 /**
  * Internal: record what expansion translated into this segment, before raising
  * it. Not part of the package surface — an author reports a failure by throwing
  * it, and the engine decides what a diagnostic is made from.
  */
-export function attributeCause(segment: ErrorSegment, from: unknown): void {
-  segmentCauses.set(segment, from);
+export function* attributeCause(segment: ErrorSegment, from: unknown): Operation<void> {
+  (yield* RunDiagnostics.get())?.causes.set(segment, from);
 }
 
 /**
@@ -148,15 +181,12 @@ export function attributeCause(segment: ErrorSegment, from: unknown): void {
 export class DocumentationError extends Error {
   readonly segment: ErrorSegment;
 
-  constructor(segment: ErrorSegment) {
+  constructor(segment: ErrorSegment, attributed?: { cause: unknown }) {
     super(segment.message);
     this.name = "DocumentationError";
     this.segment = segment;
-    // Membership, not value: a component can throw `undefined`, and that is
-    // still the exact value this failure was translated from — the own `cause`
-    // property records it. Only a segment with no attribution has none.
-    if (segmentCauses.has(segment)) {
-      this.cause = segmentCauses.get(segment);
+    if (attributed) {
+      this.cause = attributed.cause;
     }
   }
 }
