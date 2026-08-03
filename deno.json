@@ -51,6 +51,8 @@
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
     "test": "deno test --allow-all --frozen",
+    "test:affected": "deno run --allow-all scripts/affected-tests.ts",
+    "weights:measure": "deno run --allow-all scripts/measure-weights.ts",
     "check": "deno check --frozen",
     "check:jsr": "deno publish --dry-run --allow-dirty",
     "review": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.jsonl",

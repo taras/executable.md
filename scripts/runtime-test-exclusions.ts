@@ -55,6 +55,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/affected-selection.test.ts",
+    reason:
+      "drives the affected-test selector, which asks `deno test --no-run` what a change affects through Deno.execPath(); the selection under test is Deno's own",
+    issue: "https://github.com/taras/executable.md/issues/280",
+  },
+  {
     path: "scripts/tests/frozen-entry.test.ts",
     reason:
       "runs `deno task` against a copy of the working tree with Deno.execPath(); the tasks under test are Deno's",
