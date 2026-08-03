@@ -2144,7 +2144,7 @@ deterministic from the content, so it needs no separate journal entry.
 A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
-   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`,
+   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CaptureErrors>`,
    `<Answers>`/`<Answer>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
    repository file named after one never stands in for it. A structural name
@@ -3988,19 +3988,19 @@ that leaves the boundary accounts for the body and its teardown together. An
 becomes an `Error` carrying the original value as its `cause`. Later siblings do
 not run.
 
-Continuing instead is an explicit, scope-local choice. `collectFailures(fn)`
+Continuing instead is an explicit, scope-local choice. `captureErrors(fn)`
 says it about one component, keyed by the exact function object — a repository
 component that shares a registered component's name is a different function and
-inherits nothing. `<CollectFailures>` says it about a region of a document:
+inherits nothing. `<CaptureErrors>` says it about a region of a document:
 
 ```md
-<CollectFailures>
+<CaptureErrors>
   <MayFail />
   <StillRuns />
-</CollectFailures>
+</CaptureErrors>
 ```
 
-`<CollectFailures>` accepts no props: it names a region and nothing else, so any
+`<CaptureErrors>` accepts no props: it names a region and nothing else, so any
 prop — `as` and `slot` included, written as a literal or as an expression — is a
 syntax error reported against the element. An element written that way performs
 no action at all: its body does not expand, and a prop expression is never

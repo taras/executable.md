@@ -5,7 +5,7 @@ import type { Operation } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import { useContent } from "../src/content-context.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -131,7 +131,7 @@ function recovering(
     props: OPEN_SCHEMA,
     // Collects: these assert what a recovered — or unrecovered — failure looks
     // like once it is a diagnostic the capture can see.
-    fn: collectFailures(function* () {
+    fn: captureErrors(function* () {
       try {
         const rendered = yield* content();
         if (options.boom) {
@@ -169,7 +169,7 @@ function forging(name: string, log: Trace, fabricated: ErrorSegment): FunctionCo
     props: OPEN_SCHEMA,
     // Collects, because what this asserts is how a fabricated content failure
     // is treated once it becomes a diagnostic.
-    fn: collectFailures(function* () {
+    fn: captureErrors(function* () {
       yield* recordEntry(log.effects, name);
       throw new ContentError([fabricated]);
     }),
@@ -203,7 +203,7 @@ function brokenComponent(): FunctionComponentDefinition {
     name: "Broken",
     props: OPEN_SCHEMA,
     // deno-lint-ignore require-yield
-    fn: collectFailures(function* () {
+    fn: captureErrors(function* () {
       seq += 1;
       throw new Error(`broken ${seq}`);
     }),

@@ -3,13 +3,14 @@
  *
  * A component that fails fails the operation it is part of, like any other
  * Effection work. Carrying on instead is a decision somebody makes: either the
- * component says so about itself with `collectFailures()`, or a document says so
- * about a region with `<CollectFailures>`. Both install the same middleware, so
- * "the nearest collection boundary handles it" is one rule rather than two.
+ * component says so about itself with `captureErrors()`, or a document says so
+ * about a region with `<CaptureErrors>`. Both install the same middleware, so
+ * "the nearest capture boundary handles it" is one rule rather than two.
  *
- * Collection turns a failure into a diagnostic. It does not decide what happens
- * to that diagnostic — the caller's ambient policy still settles it, so under
- * documentation a collected failure still stops the document.
+ * Capture turns a failure into a diagnostic and marks that diagnostic as one a
+ * document asked for. It does not decide what happens to it — the caller's
+ * ambient policy still settles it, so a captured failure renders inside an
+ * `<Output>` region and still stops the document under documentation.
  */
 
 import { Component, raise } from "./component-api.ts";
@@ -23,7 +24,7 @@ import type { Operation } from "effection";
  * Identity rather than name: a repository component that happens to share a
  * registered component's name is a different function and inherits nothing.
  */
-const collecting = new WeakSet<FunctionComponent>();
+const capturing = new WeakSet<FunctionComponent>();
 
 /**
  * Continue after this component fails, reporting the failure as a diagnostic.
@@ -32,7 +33,7 @@ const collecting = new WeakSet<FunctionComponent>();
  * so its identity and type survive:
  *
  * ```ts
- * export default collectFailures(function* (props) {
+ * export default captureErrors(function* (props) {
  *   // body, requested content, retained work and teardown are all inside
  * });
  * ```
@@ -41,13 +42,13 @@ const collecting = new WeakSet<FunctionComponent>();
  * invocation is being dismantled is collected too, and content the component
  * projects is inside it.
  */
-export function collectFailures<T extends FunctionComponent>(component: T): T {
-  collecting.add(component);
+export function captureErrors<T extends FunctionComponent>(component: T): T {
+  capturing.add(component);
   return component;
 }
 
-export function collectsFailures(component: FunctionComponent): boolean {
-  return collecting.has(component);
+export function capturesErrors(component: FunctionComponent): boolean {
+  return capturing.has(component);
 }
 
 /**
@@ -59,7 +60,7 @@ export function collectsFailures(component: FunctionComponent): boolean {
  * original failure is attributed as the diagnostic's cause, so what the
  * component actually did remains reachable from the outside.
  */
-export function useFailureCollection(): Operation<void> {
+export function useFailures(): Operation<void> {
   return Component.around({
     *handleFailure([failure], _next): Operation<ErrorSegment> {
       const segment: ErrorSegment = {

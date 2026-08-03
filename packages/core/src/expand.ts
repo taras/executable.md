@@ -51,7 +51,7 @@ import {
   fatalCause,
   settle,
 } from "./errors.ts";
-import { collectsFailures, useFailureCollection } from "./component-failures.ts";
+import { capturesErrors, useFailures } from "./component-failures.ts";
 import type { ErrorPolicy } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -571,11 +571,11 @@ export function* expandSegments(
           break;
         }
 
-        if (segment.name === "CollectFailures") {
-          // No raise() here, like the branches above: expandCollectFailures
+        if (segment.name === "CaptureErrors") {
+          // No raise() here, like the branches above: expandCaptureErrors
           // reports the errors it creates, and the body settled its own (§6.9).
           result.push(
-            ...(yield* expandCollectFailures(segment, parentMeta, parentProps, hideSet, counter)),
+            ...(yield* expandCaptureErrors(segment, parentMeta, parentProps, hideSet, counter)),
           );
           break;
         }
@@ -1474,13 +1474,13 @@ function* expandBreak(
   return reported;
 }
 
-function collectFailuresError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "CollectFailures" };
+function captureErrorsError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "CaptureErrors" };
 }
 
 /**
  * Continue past ordinary component failures in this region (spec §6.8.1
- * `<CollectFailures>`).
+ * `<CaptureErrors>`).
  *
  * The body expands as structured segments rather than a rendered string: this
  * is a region of the caller's document, expanded in the caller's own frame,
@@ -1492,7 +1492,7 @@ function collectFailuresError(segment: ComponentElement, message: string): Error
  * expanded and a prop expression is never evaluated, because the mistake is the
  * prop being written at all rather than anything its value turns out to be.
  */
-function* expandCollectFailures(
+function* expandCaptureErrors(
   segment: ComponentElement,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
@@ -1503,13 +1503,13 @@ function* expandCollectFailures(
   if (names.length > 0) {
     return [
       yield* raise(
-        collectFailuresError(segment, `<CollectFailures> accepts no props. Got: "${names[0]}".`),
+        captureErrorsError(segment, `<CaptureErrors> accepts no props. Got: "${names[0]}".`),
       ),
     ];
   }
 
   return yield* scoped(function* () {
-    yield* useFailureCollection();
+    yield* useFailures();
     return yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter);
   });
 }
@@ -2243,9 +2243,9 @@ function* expandFunctionComponent(
   // projected content inside it, since their scopes descend from this one.
   // Scoped, so a component that collects its own failures does not quietly
   // decide the same for its siblings.
-  if (collectsFailures(definition.fn)) {
+  if (capturesErrors(definition.fn)) {
     return yield* scoped(function* () {
-      yield* useFailureCollection();
+      yield* useFailures();
       return yield* invoke();
     });
   }

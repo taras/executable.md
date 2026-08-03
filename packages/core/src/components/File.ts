@@ -61,7 +61,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { randomUUID } from "node:crypto";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { collectFailures } from "../component-failures.ts";
+import { captureErrors } from "../component-failures.ts";
 import {
   cwd,
   ensureDir,
@@ -121,7 +121,7 @@ function* guard<T>(requested: string, verb: string, operation: Operation<T>): Op
   }
 }
 
-export default collectFailures(function* (props: Record<string, Json>): Operation<string> {
+export default captureErrors(function* (props: Record<string, Json>): Operation<string> {
   const requested = String(props.path);
   const admitted = yield* admissible(requested);
 

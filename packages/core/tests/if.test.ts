@@ -5,7 +5,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
@@ -716,7 +716,7 @@ describe("Tier IF — error observation", () => {
     name: "Broken",
     props: { type: "object", properties: {}, additionalProperties: false },
     // deno-lint-ignore require-yield
-    fn: collectFailures(function* () {
+    fn: captureErrors(function* () {
       throw new Error("broken thing");
     }),
   };

@@ -10,7 +10,7 @@
 
 import { ensure, resource } from "effection";
 import type { Operation } from "effection";
-import { collectFailures } from "../component-failures.ts";
+import { captureErrors } from "../component-failures.ts";
 import { rm } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { ReplayGuard, StaleInputError } from "@executablemd/durable-streams";
@@ -89,7 +89,7 @@ function refuseReplayInside(directory: string): Operation<void> {
   });
 }
 
-export default collectFailures(function* (): Operation<string> {
+export default captureErrors(function* (): Operation<string> {
   if (yield* hasContent()) {
     const directory = yield* useTemporaryDirectory();
     yield* API.Env.around(

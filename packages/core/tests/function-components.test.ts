@@ -404,15 +404,15 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  // The explicit choice: `collectFailures` says this component reports rather
+  // The explicit choice: `captureErrors` says this component reports rather
   // than stops, so the failure becomes one diagnostic and the document goes on.
-  it("FC5b: a component marked with collectFailures reports and continues", function* () {
+  it("FC5b: a component marked with captureErrors reports and continues", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
         "components/Broken.ts": [
-          'import { collectFailures } from "@executablemd/core";',
-          "export default collectFailures(function*() {",
+          'import { captureErrors } from "@executablemd/core";',
+          "export default captureErrors(function*() {",
           '  throw new Error("component error");',
           "});",
         ].join("\n"),

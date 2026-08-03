@@ -2,8 +2,8 @@
  * Tier CF — what a function component's failure means (spec §6.8.1).
  *
  * A component that fails fails the operation it is part of. Carrying on is a
- * decision: `collectFailures()` for a component that says so about itself,
- * `<CollectFailures>` for a document that says so about a region. These
+ * decision: `captureErrors()` for a component that says so about itself,
+ * `<CaptureErrors>` for a document that says so about a region. These
  * distinguish a *failed* operation from a completed one that happens to contain
  * a diagnostic — reading the output alone cannot tell those apart — so each case
  * asserts the outcome, what was observed, and the identity of the failure that
@@ -20,7 +20,7 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
 import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
@@ -58,7 +58,7 @@ function throwing(name: string, failure: unknown): FunctionComponentDefinition {
 function collecting(name: string, failure: unknown): FunctionComponentDefinition {
   return component(
     name,
-    collectFailures(
+    captureErrors(
       // deno-lint-ignore require-yield
       function* (): Operation<Json> {
         throw failure;
@@ -319,7 +319,7 @@ describe("Tier CF — failing is the default", () => {
   });
 });
 
-describe("Tier CF — collectFailures(fn)", () => {
+describe("Tier CF — captureErrors(fn)", () => {
   it("CF5: a marked component reports once and lets later work run", function* () {
     const boom = new Error("boom");
     const result = yield* run("<Boom />\n\nAFTER\n", { Boom: collecting("Boom", boom) });
@@ -346,7 +346,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     const timeline: string[] = [];
     const marked = component(
       "T",
-      collectFailures(function* (): Operation<Json> {
+      captureErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           timeline.push("cleanup");
         });
@@ -380,7 +380,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     const nested = new Error("nested");
     const outer = component(
       "Outer",
-      collectFailures(function* (): Operation<Json> {
+      captureErrors(function* (): Operation<Json> {
         return yield* content();
       }),
     );
@@ -433,7 +433,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     const cleanup = new Error("cleanup");
     const marked = component(
       "T",
-      collectFailures(function* (): Operation<Json> {
+      captureErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           throw cleanup;
         });
@@ -462,7 +462,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     const marked = () =>
       component(
         "T",
-        collectFailures(function* (): Operation<Json> {
+        captureErrors(function* (): Operation<Json> {
           yield* ensure(function* () {
             throw teardown;
           });
@@ -509,7 +509,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     let seen: ComponentFailure | undefined;
     const marked = component(
       "T",
-      collectFailures(function* (): Operation<Json> {
+      captureErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           throw cleanup;
         });
@@ -548,7 +548,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     const acquired = withResolvers<void>();
     const marked = component(
       "Hang",
-      collectFailures(function* (): Operation<Json> {
+      captureErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           timeline.push("released");
         });
@@ -585,10 +585,10 @@ describe("Tier CF — collectFailures(fn)", () => {
   });
 });
 
-describe("Tier CF — <CollectFailures>", () => {
+describe("Tier CF — <CaptureErrors>", () => {
   it("CF8: it handles a child's failure and continues to the next child", function* () {
     const result = yield* run(
-      "<CollectFailures>\n<Boom />\n\nSTILL RUNS\n</CollectFailures>\n\nAFTER\n",
+      "<CaptureErrors>\n<Boom />\n\nSTILL RUNS\n</CaptureErrors>\n\nAFTER\n",
       { Boom: throwing("Boom", new Error("boom")) },
     );
 
@@ -600,7 +600,7 @@ describe("Tier CF — <CollectFailures>", () => {
 
   it("CF9: it reaches a failure nested inside another component", function* () {
     const nested = new Error("nested");
-    const source = "<CollectFailures>\n<Outer>\n<Boom />\n</Outer>\n</CollectFailures>\n\nAFTER\n";
+    const source = "<CaptureErrors>\n<Outer>\n<Boom />\n</Outer>\n</CaptureErrors>\n\nAFTER\n";
     const definitions = { Outer: projecting("Outer"), Boom: throwing("Boom", nested) };
 
     const result = yield* run(source, definitions);
@@ -616,8 +616,8 @@ describe("Tier CF — <CollectFailures>", () => {
   it("CF9b: the nearest of two nested boundaries handles it, and only it", function* () {
     const boom = new Error("boom");
     const result = yield* run(
-      "<CollectFailures>\n<CollectFailures>\n<Boom />\n</CollectFailures>\n\nINNER DONE\n" +
-        "</CollectFailures>\n\nAFTER\n",
+      "<CaptureErrors>\n<CaptureErrors>\n<Boom />\n</CaptureErrors>\n\nINNER DONE\n" +
+        "</CaptureErrors>\n\nAFTER\n",
       { Boom: throwing("Boom", boom) },
     );
 
@@ -635,7 +635,7 @@ describe("Tier CF — <CollectFailures>", () => {
   it("CF9c: a marked component inside the element is handled once, by itself", function* () {
     const boom = new Error("boom");
     const result = yield* run(
-      "<CollectFailures>\n<Boom />\n\nSTILL RUNS\n</CollectFailures>\n\nAFTER\n",
+      "<CaptureErrors>\n<Boom />\n\nSTILL RUNS\n</CaptureErrors>\n\nAFTER\n",
       { Boom: collecting("Boom", boom) },
     );
 
@@ -650,7 +650,7 @@ describe("Tier CF — <CollectFailures>", () => {
 
   it("CF10: it does not collect a durability failure", function* () {
     const stale = new StaleInputError("the journal no longer describes this run");
-    const result = yield* run("<CollectFailures>\n<Boom />\n</CollectFailures>\n", {
+    const result = yield* run("<CaptureErrors>\n<Boom />\n</CaptureErrors>\n", {
       Boom: throwing("Boom", stale),
     });
 
@@ -660,7 +660,7 @@ describe("Tier CF — <CollectFailures>", () => {
   it("CF11: under a throwing policy it reports once and still stops", function* () {
     const boom = new Error("boom");
     const result = yield* run(
-      "<CollectFailures>\n<Boom />\n</CollectFailures>\n\nAFTER\n",
+      "<CaptureErrors>\n<Boom />\n</CaptureErrors>\n\nAFTER\n",
       { Boom: throwing("Boom", boom) },
       { policy: "throw" },
     );
@@ -673,7 +673,7 @@ describe("Tier CF — <CollectFailures>", () => {
   });
 });
 
-describe("Tier CF — <CollectFailures> accepts no props", () => {
+describe("Tier CF — <CaptureErrors> accepts no props", () => {
   /** A component that records having run, so a skipped body is observable. */
   function sentinel(ran: string[]): FunctionComponentDefinition {
     // deno-lint-ignore require-yield
@@ -686,13 +686,13 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
   it("CF12: a literal prop is a syntax error and the body does not run", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      '<CollectFailures unexpected="value">\n<Sentinel />\n</CollectFailures>\n',
+      '<CaptureErrors unexpected="value">\n<Sentinel />\n</CaptureErrors>\n',
       { Sentinel: sentinel(ran) },
     );
 
     expect(result.outcome.ok).toBe(true);
     expect(result.observed).toHaveLength(1);
-    expect(result.observed[0].source).toBe("CollectFailures");
+    expect(result.observed[0].source).toBe("CaptureErrors");
     expect(result.observed[0].message).toContain("accepts no props");
     expect(result.observed[0].message).toContain("unexpected");
     // No body effect runs after invalid syntax, and nothing of it is rendered.
@@ -703,14 +703,14 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
   it("CF13: an expression prop is rejected without ever being evaluated", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      "<CollectFailures when={missing.property}>\n<Sentinel />\n</CollectFailures>\n",
+      "<CaptureErrors when={missing.property}>\n<Sentinel />\n</CaptureErrors>\n",
       { Sentinel: sentinel(ran) },
     );
 
     // The mistake is the prop being written at all, so the diagnostic names
     // that rather than whatever evaluating it would have gone wrong with.
     expect(result.observed).toHaveLength(1);
-    expect(result.observed[0].source).toBe("CollectFailures");
+    expect(result.observed[0].source).toBe("CaptureErrors");
     expect(result.observed[0].message).toContain("accepts no props");
     expect(result.observed[0].message).toContain("when");
     expect(result.observed[0].message).not.toContain("missing");
@@ -719,21 +719,15 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
 
   it("CF14: `as` and `slot` are props here, not fields of their own", function* () {
     const ran: string[] = [];
-    const bound = yield* run(
-      '<CollectFailures as="captured">\n<Sentinel />\n</CollectFailures>\n',
-      {
-        Sentinel: sentinel(ran),
-      },
-    );
+    const bound = yield* run('<CaptureErrors as="captured">\n<Sentinel />\n</CaptureErrors>\n', {
+      Sentinel: sentinel(ran),
+    });
     expect(bound.observed).toHaveLength(1);
     expect(bound.observed[0].message).toContain('Got: "as"');
 
-    const slotted = yield* run(
-      '<CollectFailures slot="body">\n<Sentinel />\n</CollectFailures>\n',
-      {
-        Sentinel: sentinel(ran),
-      },
-    );
+    const slotted = yield* run('<CaptureErrors slot="body">\n<Sentinel />\n</CaptureErrors>\n', {
+      Sentinel: sentinel(ran),
+    });
     expect(slotted.observed).toHaveLength(1);
     expect(slotted.observed[0].message).toContain('Got: "slot"');
 
@@ -743,7 +737,7 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
   it("CF15: the diagnostic is positioned, and reported exactly once", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      'intro\n\n<CollectFailures bad="1" worse="2">\n<Sentinel />\n</CollectFailures>\n',
+      'intro\n\n<CaptureErrors bad="1" worse="2">\n<Sentinel />\n</CaptureErrors>\n',
       { Sentinel: sentinel(ran) },
       { path: "doc.md" },
     );
@@ -758,7 +752,7 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
   it("CF16: a valid no-props element still collects and expands its body", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      "<CollectFailures>\n<Sentinel />\n\n<Boom />\n\nSTILL RUNS\n</CollectFailures>\n\nAFTER\n",
+      "<CaptureErrors>\n<Sentinel />\n\n<Boom />\n\nSTILL RUNS\n</CaptureErrors>\n\nAFTER\n",
       { Sentinel: sentinel(ran), Boom: throwing("Boom", new Error("boom")) },
     );
 
@@ -826,10 +820,10 @@ describe("Tier CF — what a collection boundary is never offered", () => {
 
   it("CF19: an uncaught content failure restores its segments without a second report", function* () {
     const boom = new Error("boom");
-    const result = yield* run(
-      "<CollectFailures>\n<Outer>\n<Boom />\n</Outer>\n</CollectFailures>\n",
-      { Outer: projecting("Outer"), Boom: throwing("Boom", boom) },
-    );
+    const result = yield* run("<CaptureErrors>\n<Outer>\n<Boom />\n</Outer>\n</CaptureErrors>\n", {
+      Outer: projecting("Outer"),
+      Boom: throwing("Boom", boom),
+    });
 
     // One observation, for the child's failure — the boundary converted it, so
     // the content the outer component asked for came back holding a diagnostic.

@@ -26,7 +26,7 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
 import { Component } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
@@ -148,7 +148,7 @@ const BROKEN: FunctionComponentDefinition = {
   name: "Broken",
   props: { type: "object", properties: {}, additionalProperties: false },
   // deno-lint-ignore require-yield
-  fn: collectFailures(function* () {
+  fn: captureErrors(function* () {
     throw new Error("broken");
   }),
 };

@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
@@ -89,7 +89,7 @@ const BROKEN: FunctionComponentDefinition = {
   name: "Broken",
   props: { type: "object", properties: {}, additionalProperties: false },
   // deno-lint-ignore require-yield
-  fn: collectFailures(function* () {
+  fn: captureErrors(function* () {
     throw new Error("broken thing");
   }),
 };

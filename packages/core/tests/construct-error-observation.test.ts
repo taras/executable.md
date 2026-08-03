@@ -4,7 +4,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -82,7 +82,7 @@ function throwingComponent(name: string, failure: unknown): FunctionComponentDef
     name,
     props: OPEN_SCHEMA,
     // deno-lint-ignore require-yield
-    fn: collectFailures(function* () {
+    fn: captureErrors(function* () {
       throw failure;
     }),
   };
@@ -127,7 +127,7 @@ const BROKEN: FunctionComponentDefinition = {
   name: "Broken",
   props: OPEN_SCHEMA,
   // deno-lint-ignore require-yield
-  fn: collectFailures(function* (props: Record<string, Json>) {
+  fn: captureErrors(function* (props: Record<string, Json>) {
     const prop = props.message;
     throw new Error(typeof prop === "string" ? prop : "broken thing");
   }),

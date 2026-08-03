@@ -141,7 +141,7 @@ export type { ComponentRegistration } from "./src/components/registration.ts";
 export { DEFAULT_COMPONENT_DIRS, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
 export { RESERVED_STRUCTURAL } from "./src/structural.ts";
-export { collectFailures } from "./src/component-failures.ts";
+export { captureErrors } from "./src/component-failures.ts";
 export { parseMarkdownDefinition } from "./src/definition.ts";
 export { compileDataUri, useDataUriCompiler } from "./src/data-uri-compiler.ts";
 export { compileTempFile, useTempFileCompiler } from "./src/temp-file-compiler.ts";

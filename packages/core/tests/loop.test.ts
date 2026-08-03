@@ -15,7 +15,7 @@ import type { DurableEvent, Json, Result } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { captureErrors } from "../src/component-failures.ts";
 import type { ComponentElement, FunctionComponent, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
@@ -34,7 +34,7 @@ const OBJECT_SCHEMA = { type: "object", properties: {} };
 
 /** Function components the harness serves instead of the filesystem. */
 // Ordinary components: indexing the definition union would widen these to the
-// live shape too, and then collectFailures could not infer a concrete arm.
+// live shape too, and then captureErrors could not infer a concrete arm.
 type Stubs = Record<string, FunctionComponent>;
 
 function runLoop(
@@ -64,7 +64,7 @@ function runLoop(
             props: OBJECT_SCHEMA,
             // What these assert is how a rendered diagnostic interacts with a
             // loop and its policy, which needs the failure to become one.
-            fn: collectFailures(fn),
+            fn: captureErrors(fn),
           };
         },
         // deno-lint-ignore require-yield
@@ -1357,7 +1357,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
             path: "Mixed.ts",
             props: OBJECT_SCHEMA,
             // deno-lint-ignore require-yield
-            fn: collectFailures(function* () {
+            fn: captureErrors(function* () {
               throw new AggregateError(
                 [
                   new DocumentationError({
