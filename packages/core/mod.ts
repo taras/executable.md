@@ -119,7 +119,14 @@ export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
 
 export { execute, Execution } from "./src/execute.ts";
-export type { ExecuteOptions, ExecutionApi, DocumentExecution } from "./src/execute.ts";
+export type {
+  ExecuteOptions,
+  ExecuteSettings,
+  ExecutionApi,
+  DocumentExecution,
+} from "./src/execute.ts";
+export { INLINE_SOURCE_PATH, inlineSource, rootSourcePath } from "./src/root-source.ts";
+export type { InlineRootDocument, RootDocumentSource } from "./src/root-source.ts";
 export { inspectComponent, inspectDocument } from "./src/inspect.ts";
 export type {
   ComponentInfo,
