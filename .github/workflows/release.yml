@@ -79,10 +79,20 @@ jobs:
       - name: Build the browser bundle
         run: deno task build:web
 
+      # The compile below is `--cached-only`, and `deno compile --target`
+      # resolves the npm packages of the platform it compiles *for* — which host
+      # preparation never cached. Each job therefore caches its own target's
+      # graph first; the mapping lives in `scripts/lib/release-targets.ts` and is
+      # held to this matrix by test.
+      - name: Prepare the ${{ matrix.target }} dependency graph
+        run: deno task deps:target ${{ matrix.target }}
+
       - name: Compile ${{ matrix.target }}
         run: |
           deno compile \
             --node-modules-dir=none \
+            --cached-only \
+            --frozen \
             --exclude-unused-npm \
             --allow-all \
             --include packages/code-review-agent \

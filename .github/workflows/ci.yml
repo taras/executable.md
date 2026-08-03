@@ -202,11 +202,11 @@ jobs:
             --component-dir smoke-test/agent/components \
             --raw
 
-  # The chain `deno task verify:clean` runs locally, on a checkout that is clean
-  # by construction. It is the regression for #279's ownership claim: a build
-  # that installs anything prunes pnpm's links and the resolution probe fails.
-  # It duplicates work other jobs do — that is the cost of asserting the whole
-  # chain end to end rather than each link separately.
+  # The same chain `deno task verify:clean` runs locally. It is the regression
+  # for #279's ownership claim: a build that installs anything moves the
+  # prepared-state fingerprint, prunes pnpm's links, and fails the resolution
+  # probe. It duplicates work other jobs do — that is the cost of asserting the
+  # whole chain end to end rather than each link separately.
   composability:
     runs-on: ubuntu-latest
     steps:
@@ -222,17 +222,15 @@ jobs:
         with:
           deno-version: v2.9.1
 
-      - name: Prepare both dependency layouts
-        run: deno task setup
+      # Caches the harness's own graph, so it can run --cached-only below.
+      - name: Prepare this checkout
+        run: deno task deps
 
-      - name: Build, which must install nothing
-        run: deno task build
-
-      - name: Both stores still resolve
-        run: node scripts/probe-resolution.mjs
-
-      - name: Typecheck through the layout the build left behind
-        run: pnpm exec tsc --project tsconfig.node.json --noEmit
+      # Clones itself, prepares that clone against a scratch DENO_DIR, then
+      # fingerprints node_modules, the cache's dependency content, and the lock
+      # around every build phase — each run offline.
+      - name: The chain holds from a clean checkout
+        run: deno task verify:clean
 
   site:
     runs-on: ubuntu-latest

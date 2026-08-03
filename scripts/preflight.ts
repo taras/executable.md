@@ -14,18 +14,15 @@
  * An assertion inside the build is therefore unreachable exactly when it is
  * needed. This file runs instead, and it can, because it imports nothing but a
  * relative source file: no npm, no JSR, no https, nothing a cold cache lacks.
+ * Effection is a dependency like any other, so this file works with the host
+ * directly and stays synchronous throughout — `outputSync` runs the build with
+ * inherited stdio and hands back its status without a promise.
  *
- * It checks what preparation records, not what a build happens to need, so the
- * diagnostic is the same whichever half is missing. When the record is current
- * it spawns the real command with the inherited stdio and exits with its
- * status, adding nothing to the output.
- *
- * Effection is a dependency, so this one file cannot use it (AGENTS.md code
- * rule 1) and reads synchronously, with a single top-level `await` for the
- * child's exit status.
+ * It checks what preparation recorded, not what a build happens to need, so the
+ * diagnostic is the same whichever half is missing.
  */
 
-import { isCurrent, digest, PREPARED_INPUTS, PREPARED_MARKER } from "./lib/prepared.ts";
+import { PREPARED_INPUTS, PREPARED_MARKER, recordedCopy } from "./lib/prepared.ts";
 
 const repoRoot = new URL("../", import.meta.url);
 
@@ -39,30 +36,19 @@ function read(path: string): string | undefined {
   }
 }
 
-function prepared(): string | undefined {
-  const marker = read(PREPARED_MARKER);
-  if (marker === undefined) {
-    return `${PREPARED_MARKER} is missing`;
-  }
-
-  const encoder = new TextEncoder();
-  const inputs: string[] = [];
-  for (const path of PREPARED_INPUTS) {
-    const contents = read(path);
-    if (contents === undefined) {
-      return `${path} is missing`;
+function unprepared(): string | undefined {
+  for (const input of PREPARED_INPUTS) {
+    const recorded = read(recordedCopy(input));
+    if (recorded === undefined) {
+      return `${PREPARED_MARKER} has no record of ${input}`;
     }
-    inputs.push(digest(encoder.encode(contents)));
-  }
-
-  let recorded: unknown;
-  try {
-    recorded = JSON.parse(marker);
-  } catch {
-    return `${PREPARED_MARKER} is not readable`;
-  }
-  if (!isCurrent(recorded, inputs)) {
-    return `${PREPARED_INPUTS.join(" or ")} changed since dependencies were installed`;
+    const current = read(input);
+    if (current === undefined) {
+      return `${input} is missing`;
+    }
+    if (current !== recorded) {
+      return `${input} changed since dependencies were installed`;
+    }
   }
   return undefined;
 }
@@ -73,9 +59,9 @@ if (!script) {
   Deno.exit(1);
 }
 
-const unprepared = prepared();
-if (unprepared) {
-  console.error(`${unprepared} — run \`${SETUP}\``);
+const missing = unprepared();
+if (missing) {
+  console.error(`${missing} — run \`${SETUP}\``);
   Deno.exit(1);
 }
 
@@ -93,6 +79,6 @@ const build = new Deno.Command(Deno.execPath(), {
   stdin: "inherit",
   stdout: "inherit",
   stderr: "inherit",
-}).spawn();
+}).outputSync();
 
-Deno.exit((await build.status).code);
+Deno.exit(build.code);

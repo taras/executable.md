@@ -257,10 +257,45 @@ and a test that took a turn at writing it would be a race rather than a check.
 
 A build installs nothing: `deno task build:web` runs under node-modules and
 cache modes that cannot create, relink, or fetch, and refuses on an unprepared
-worktree (`scripts/preflight.ts`). Preparation is `deno task deps`, which owns
-`node_modules/`, the cached module graphs, and the `sideEffects` fact. So every
-job that builds, packages, publishes, or releases the workspace runs
-`deno task deps` and then `deno task build:web`:
+worktree (`scripts/preflight.ts`). `release.yml` compiles the binaries with
+`deno compile` directly rather than through `deno task build`, so that
+invocation carries the same `--node-modules-dir=none --cached-only --frozen`;
+`scripts/tests/publish-workflow-membership.test.ts` asserts it for every
+workflow that compiles.
+
+Preparation comes in two kinds, and only one of them is anybody's routine.
+**Host preparation** — `deno task deps`, and `deno task setup` around it — caches
+what the machine it runs on needs, and is what a developer and every ordinary CI
+job runs. **Target preparation** — `deno task deps:target <target>` — caches the
+*selected target's* dependency graph, whether or not that target happens to match
+the runner's own platform, and exists solely for a release job and for
+`verify:clean`'s representative target. A local setup never performs it, so it
+never downloads five platforms' packages.
+
+`--cached-only` holds across the matrix because each job prepares its own
+target. `deno compile --target` resolves the npm packages of the platform it
+compiles *for*, which host preparation never cached — measured, a
+`x86_64-unknown-linux-gnu` compile on a host-prepared tree fails on
+`@msgpackr-extract/msgpackr-extract-linux-x64`. So every matrix job runs
+`deno task deps:target ${{ matrix.target }}` between the bundle build and the
+compile. That step is `deno install --entrypoint --node-modules-dir=none
+--frozen` with the target's OS and architecture: it populates the job's Deno
+cache and neither replaces nor relinks `node_modules`. The target-to-platform
+mapping is contractual and lives in `scripts/lib/release-targets.ts`;
+`scripts/tests/release-targets.test.ts` holds it to the workflow matrix by exact
+set equality, checks the preparation argv per target, requires preparation to
+precede compilation inside the build job, and requires the compile to keep
+`--target`, `--cached-only`, and `--frozen`.
+
+`deno task verify:clean` exercises that same sequence against a prepared clone,
+offline, for the representative `x86_64-unknown-linux-gnu` — proving the compile
+fetches nothing and changes neither dependency layout nor the lock, and that
+target preparation itself leaves the host tree and lock untouched.
+
+Host preparation is `deno task deps`, which owns `node_modules/`, the cached
+module graphs, and the `sideEffects` fact. Every job that builds, packages,
+publishes, or releases the workspace runs it and then `deno task build:web`; a
+release job adds target preparation on top, for the target it is compiling:
 
 - **`ci.yml`'s `test-deno` job**, because the suite builds the CLI's npm artifact
   and dnt packages `@executablemd/web` along with it.

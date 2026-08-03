@@ -13,8 +13,9 @@
  *    compile walk, so their module graphs are cached and every later phase can
  *    run `--cached-only`.
  * 3. The `sideEffects` fact the bundle needs (`lib/side-effect-free.ts`).
- * 4. The marker `lib/prepared.ts` describes, so a build can tell a prepared
- *    tree from an unprepared one without resolving a single dependency.
+ * 4. The record `lib/prepared.ts` describes — a copy of each input — so a build
+ *    can tell a prepared tree from an unprepared one without resolving a single
+ *    dependency.
  *
  * It is deliberately not part of any check, and no build runs it. The
  * verification battery runs its checks concurrently against one tree, and
@@ -26,22 +27,24 @@
 import { main } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { copyFile, ensureDir, rm } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 
-import { digest, PREPARED_INPUTS, PREPARED_MARKER } from "./lib/prepared.ts";
+import { PREPARED_INPUTS, PREPARED_MARKER, recordedCopy } from "./lib/prepared.ts";
 import { normalizeEvery, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
 
 const repoRoot = new URL("../", import.meta.url);
 
 /**
- * The graphs a build and a compile walk. Caching them here is what lets every
- * build phase refuse to fetch.
+ * The graphs a build, a compile, and the clean-checkout harness walk. Caching
+ * them here is what lets every one of them run `--cached-only` — none of them
+ * is an installer.
  */
 const ENTRYPOINTS = [
   "scripts/build-web-client.ts",
   "packages/web/client/main.tsx",
   "packages/cli/src/compiled.ts",
+  "scripts/verify-clean.ts",
 ];
 
 function* deno(args: string[]): Operation<void> {
@@ -76,15 +79,15 @@ export function* installDependencies(): Operation<void> {
 
   yield* recordSideEffectFree();
 
-  const encoder = new TextEncoder();
-  const inputs: string[] = [];
-  for (const path of PREPARED_INPUTS) {
-    inputs.push(digest(encoder.encode(yield* readTextFile(new URL(path, repoRoot)))));
+  // `rm` first: an earlier preparation left a file where this directory goes.
+  yield* rm(new URL(PREPARED_MARKER, repoRoot), { recursive: true, force: true });
+  yield* ensureDir(new URL(PREPARED_MARKER, repoRoot));
+  for (const input of PREPARED_INPUTS) {
+    yield* copyFile(new URL(input, repoRoot), new URL(recordedCopy(input), repoRoot));
   }
-  yield* writeTextFile(new URL(PREPARED_MARKER, repoRoot), `${JSON.stringify({ inputs })}\n`);
   console.log(`recorded ${PREPARED_MARKER}`);
 }
 
 if (import.meta.main) {
-  await main(installDependencies);
+  main(installDependencies);
 }

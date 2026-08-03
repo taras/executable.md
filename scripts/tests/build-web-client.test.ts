@@ -428,21 +428,21 @@ describe("client assets", () => {
   });
 
   /**
-   * The script writes where it is told, and what it writes is the module this
-   * suite inspected. It is told somewhere of its own: the default path is the
-   * one `deno check`, `deno test`, `check:jsr`, and `tsc` all read, and a test
-   * that took a turn at writing it would be the shared-state race this design
-   * removes (#279).
+   * The task, not the script behind it: `deno task build:web` is a preflight
+   * plus a `deno run` carrying the modes that make a build unable to install,
+   * and spawning the script bare would exercise a path production never takes.
    *
-   * The script, not `deno task build:web`: the task installs first, which is
-   * setup's work and exactly what no check may do while the others are running.
+   * It is told to write somewhere of its own — the default path is the one
+   * `deno check`, `deno test`, `check:jsr`, and `tsc` all read, and a test that
+   * took a turn at writing it would be the shared-state race this design
+   * removes (#279).
    */
-  it("writes that exact module where it is told", function* () {
+  it("writes that exact module where the task is told to", function* () {
     const scratch = yield* scratchDirectory("build-web-client-out-");
     const output = path.join(scratch, "client-bundle.ts");
 
     yield* exec(Deno.execPath(), {
-      arguments: ["run", "--allow-all", "scripts/build-web-client.ts", "--out", output],
+      arguments: ["task", "build:web", "--out", output],
       cwd: fileURLToPath(REPO_ROOT),
     }).expect();
 
