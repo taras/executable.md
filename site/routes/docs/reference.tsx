@@ -11,9 +11,17 @@ export default define.page(function Reference() {
 
       <h2>CLI</h2>
       <CodeBlock>
-        {"xmd run <document.md> [options]\nxmd <document.md> [options]   # run is the default command"}
+        {"xmd run <document.md> [options]\nxmd <document.md> [options]   # run is the default command\nxmd -e '<markdown>' [options]  # an inline document, no file needed"}
       </CodeBlock>
       <ul>
+        <li>
+          <code>--eval</code>, <code>-e</code>{" "}
+          — execute the given markdown as the root document instead of a path.
+          Exactly one of the two is required. Quote it so the shell passes one
+          argument; diagnostics report the source as{" "}
+          <code>&lt;eval&gt;</code>, and relative paths resolve from the current
+          directory.
+        </li>
         <li>
           <code>--journal</code>, <code>-j</code>{" "}
           — write a diagnostic JSONL trace of the run to a new file. The path

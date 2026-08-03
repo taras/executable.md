@@ -107,6 +107,29 @@ jobs:
       - name: Smoke test the built-ins with no search path
         run: ./dist/xmd test packages/core/src --raw
 
+      # An inline root document exercises the compiled module graph the same way
+      # a file does, and only the binary proves the graph survived `deno compile`.
+      - name: Smoke test an inline document
+        run: |
+          set -eu
+          test "$(./dist/xmd -e '# Hello' --raw)" = "# Hello"
+
+          # Components resolve from the current directory, not from the root's
+          # identity, so a search path still finds them.
+          ./dist/xmd -e '<Badge />' --component-dir smoke-test --raw | grep -q '✓ verified'
+
+          # So does an ordinary relative filesystem read.
+          ./dist/xmd -e '<File path="smoke-test/Badge.md" />' --raw | grep -q 'verified'
+
+          # A stray <Else> is a positioned diagnostic the root collects, so this
+          # renders it and exits 0. The identity is what is being checked.
+          ./dist/xmd -e '<Else>orphan</Else>' --raw | grep -q '(<eval>:1:1)'
+
+          # Nothing is written to run a document that was never a file.
+          before=$(ls -A)
+          ./dist/xmd -e '# Hello' --raw > /dev/null
+          test "$(ls -A)" = "$before"
+
       # The guide documents this command and its output; running it keeps the
       # value-root contract executable rather than described.
       - name: Smoke test a value root's JSON result
