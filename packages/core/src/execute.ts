@@ -247,10 +247,14 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
     };
   })();
 
+// `silent` suppresses output; it does not convert failure into success (#307).
+// The outcome it hands back is the inner chain's, so a silenced command that
+// failed is still a failure — carrying the exit code and the stderr that say
+// so, with only the channel the author asked to hide removed.
 const silentFactory: ModifierFactory = (_params) => (_args, next) =>
   (function* () {
-    yield* next(); // inner chain runs — exec journals its result
-    return { output: "", exitCode: 0, stderr: "" };
+    const result = yield* next(); // inner chain runs — exec journals its result
+    return { ...result, output: "" };
   })();
 
 /**

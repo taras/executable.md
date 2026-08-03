@@ -39,6 +39,20 @@ function* useStubExec(): Operation<void> {
   });
 }
 
+/**
+ * An exec stub that fails *after* printing — the case a `silent` chain would
+ * otherwise hide entirely, since it suppresses exactly the channel that carries
+ * the explanation.
+ */
+function* useFailingStdoutExec(): Operation<void> {
+  yield* API.Process.around({
+    // deno-lint-ignore require-yield
+    *exec(_args, _next) {
+      return { exitCode: 3, stdout: "secret\n", stderr: "why" };
+    },
+  });
+}
+
 describe("Tier B — durable import", () => {
   // B1: durableImportComponent golden run — journal shape
   it("B1: import golden run — journal has import_component with path and content", function* () {
@@ -318,6 +332,29 @@ describe("Tier D — code execution and modifiers", () => {
     expect(result.includes("ERROR") || result.includes("failed")).toBeTruthy();
   });
 
+  // D3b: the same rule for a command that printed before it failed (#307), run
+  // as a real subprocess so the exit code travels the whole way through
+  // `execFactory` rather than a stub's return value.
+  it("D3b: non-zero exit with stdout → output, then the diagnostic", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["```bash exec", "echo partial; exit 1", "```"].join("\n"),
+    });
+
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
+
+    expect(result).toContain("partial");
+    expect(result).toContain("Command failed (exit 1)");
+    expect(result.indexOf("partial")).toBeLessThan(result.indexOf("Command failed"));
+  });
+
   // D4: multi-line command — full script passed to -c
   it("D4: multi-line command — full script in journal", function* () {
     const multiLineScript = "echo line1\necho line2";
@@ -441,6 +478,77 @@ describe("Tier D — code execution and modifiers", () => {
     );
 
     expect(secondResult).toBe(firstResult);
+    expect(secondResult).not.toContain("secret");
+  });
+
+  // D6b/D7b: `silent` suppresses output; it does not convert failure into
+  // success (#307). The command's exit code and stderr are the chain's, so a
+  // silenced failure is still a failure — with nothing of what it printed.
+  it("D6b: failing silent exec — output suppressed, failure still reported", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
+    });
+    yield* useFailingStdoutExec();
+
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
+
+    expect(result).not.toContain("secret");
+    expect(result).toContain("Command failed (exit 3): why");
+  });
+
+  it("D6c: a failing silent exec in documentation aborts before the next block", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": [
+        "```bash silent exec",
+        "echo secret",
+        "```",
+        "",
+        "```bash exec",
+        "echo later",
+        "```",
+        "",
+        "<Output>ok</Output>",
+      ].join("\n"),
+    });
+    yield* useFailingStdoutExec();
+
+    const execution = yield* execute({ path: "README.md", stream });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+    const result = yield* execution;
+
+    expect(result.ok).toBe(false);
+    expect(chunks.join("")).not.toContain("ok");
+    // The later block never ran — only the silenced one reached the journal.
+    const execs = stream
+      .snapshot()
+      .filter((e) => e.type === "yield" && e.description["type"] === "exec");
+    expect(execs.length).toBe(1);
+  });
+
+  it("D7b: replay preserves a silent failure rather than replaying success", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
+    });
+    yield* useFailingStdoutExec();
+
+    const firstResult = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    const secondResult = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+
+    expect(secondResult).toBe(firstResult);
+    expect(secondResult).toContain("Command failed (exit 3): why");
     expect(secondResult).not.toContain("secret");
   });
 

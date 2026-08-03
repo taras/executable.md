@@ -598,13 +598,15 @@ terminated when that invocation completes.
 #### Built-in wrapping handlers
 
 **`silent`** — calls `next()` (the inner chain runs, effects are
-journaled), then returns empty output:
+journaled), then suppresses the output while preserving the command's
+outcome. The exit code and stderr are the inner chain's, so a silenced
+command that failed is still a failure:
 
 ```typescript
 const silentFactory: ModifierFactory = (_params) =>
   (_args, next) => function* () {
-    yield* next();   // inner chain runs — exec journals its result
-    return { output: "", exitCode: 0, stderr: "" };
+    const result = yield* next();   // inner chain runs — exec journals its result
+    return { ...result, output: "" };
   }();
 ```
 
@@ -673,7 +675,8 @@ composed = combine([silent, timeout, exec])
 
 Calling `composed([], terminal)` runs silent → timeout → exec. The
 exec handler journals the command result. The timeout handler cancels
-the block if it overruns. The silent handler discards the output.
+the block if it overruns. The silent handler discards the output and
+keeps the outcome.
 
 #### Overriding per-scope
 
@@ -843,9 +846,19 @@ Multi-line code blocks are passed as a single string to the `-c` flag.
 **`exec` alone** — `exec` runs the command via `durableExec`
 (one journal entry). stdout becomes the output.
 
+Whether a block failed is a separate question from what it printed, and
+the exit code alone answers it. A non-zero exit produces an
+`ErrorSegment` — settled by the ambient policy, so a comment under a
+collecting policy and a fail-fast throw in documentation (§6.9) —
+whatever the command wrote. Output the command produced is kept as its
+`execOutput` segment and precedes that diagnostic, because a command
+that prints before it fails is usually explaining itself.
+
 **`silent exec`** — `exec` runs the command and journals the
-result as usual. `silent` calls `next()` (so exec runs), then
-returns empty output. No extra journal entry from `silent`.
+result as usual. `silent` calls `next()` (so exec runs), then returns
+the same outcome with empty output. No extra journal entry from
+`silent`. A non-zero exit is still a failure: `silent` hides what the
+command printed, not whether it worked.
 
 **`silent timeout[30s] exec`** — `exec` journals the command result.
 `timeout` cancels the block if it overruns. `silent` discards the
@@ -5839,6 +5852,7 @@ visible warning blocks, collect into a separate error report).
 | C22 | **Optional with no default, not passed** | Prop not in validated props, `{props.key}` → empty string |
 | C23 | Component `as` capture | `<Comp as="x" />` stores rendered output in `env.values.x`, invocation emits no segments |
 | C24 | `<Capture>` inline capture | `<Capture as="x">text</Capture>` stores `"text"` in `env.values.x`, emits no segments |
+| C24b | Capture over a failing block | A block that exits non-zero after printing leaves the binding unset in `<Capture as>` and in component `as=`; the errors are returned and what the block printed is not captured |
 | C25 | `<Capture>` trailing-whitespace trim | Captured output `"hello\n"` stored as `"hello"` |
 | C26 | Reserved prop `as` in props | Declaring `as` in component `props` fails frontmatter validation |
 | C27 | Invalid capture names | `as=""`, `as="123bad"`, or `as={expr}` produce validation errors |
@@ -5869,14 +5883,17 @@ visible warning blocks, collect into a separate error report).
 |---|------|--------|
 | D1 | `bash exec` golden run | `execHandler` runs, stdout in output, journal has exec entry |
 | D2 | Exec repeated run | Command executes again and current stdout is used |
-| D3 | Non-zero exit code | ErrorSegment in output |
+| D3 | Non-zero exit code | ErrorSegment in output. The exit code alone decides — what the command printed does not enter into it |
+| D3b | **Non-zero exit with stdout** | `execOutput` segment, then the ErrorSegment it explains; a throw under a documentation policy, which stops the next sibling from running |
 | D4 | Multi-line command | Full script passed to `-c` |
 | D5 | `python exec` | `python -c` invocation |
-| D6 | `bash silent exec` | Chain: silent wraps exec. Exec journals. Silent returns empty output |
+| D6 | `bash silent exec` | Chain: silent wraps exec. Exec journals. Silent returns empty output and the inner outcome |
+| D6b | **Failing `silent exec`** | Suppresses the stdout, preserves the exit code and stderr: the normal failure is reported. In documentation it aborts before the next block |
 | D7 | `silent exec` repeated run | Command executes again and output remains empty |
+| D7b | **Failing `silent exec` replay** | Replay reproduces the same failure from the journaled exec result rather than replaying success |
 | D8 | `bash sample exec` golden run | Chain: sample wraps exec. Two journal entries (exec + sample) |
 | D9 | `bash sample exec` repeated run | Command and LLM are called again |
-| D10 | `bash silent sample exec` | All three handlers compose. Both journal entries written, output empty |
+| D10 | `bash silent sample exec` | All three handlers compose. Both journal entries written, output empty, the innermost outcome preserved |
 | D11 | `sample` without Sample Api middleware | Clear error from core Api about missing middleware |
 | D12 | `sample=brief` passes params to handler | SampleContext.params is "brief" |
 | D13 | Sample Api middleware routes by component | Different model used for different componentName |
@@ -5899,7 +5916,7 @@ visible warning blocks, collect into a separate error report).
 | E5 | New component added | Next run resolves and executes the new component |
 | E6 | Validated props flow through expansion | Declared props visible in component via `{props.key}`, defaults applied |
 | E7 | Undeclared prop in full document | PropValidationError with component name and prop name |
-| E8 | `silent exec` in full document | Command runs, result journaled, output omitted |
+| E8 | `silent exec` in full document | Command runs, result journaled, output omitted, outcome preserved |
 | E9 | `sample exec` in full document | Command + LLM both journaled, LLM response in output |
 | E10 | Unclosed bold across component boundary | `**text\n<Comp />\nmore` → healed bold in first segment, component expanded, `more` unaffected |
 | E11 | `<Output>` component vs. root consistency | An imported component and a root document apply `<Output>` identically; documentation is suppressed in both |
@@ -6416,6 +6433,7 @@ visible warning blocks, collect into a separate error report).
 | EA5 | Body eval reads the item | Eval block in the body sees the current item |
 | EA6 | Segment preservation | Uncaptured loop keeps `ErrorSegment`/`execOutput` (not stringified) |
 | EA7 | `as` captures the loop | Full rendered loop stored in binding; no inline output |
+| EA7b | `as` over a failing body | A body block that failed after printing leaves the binding unset and returns the errors; what it printed is not captured |
 | EA8 | Prop contract | Missing/non-array `in`, missing `let`, `let={expr}`, `as={expr}`, reserved-word/unknown props rejected; `as` without env rejected |
 | EA9 | Projection | `<Each>` through `<Content />` resolves `in`, the item, and other caller bindings |
 
