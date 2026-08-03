@@ -14,7 +14,7 @@
  */
 
 import { Component, raise } from "./component-api.ts";
-import { attributeCause, markCaptured } from "./errors.ts";
+import { AmbientPolicyFrame, attributeCause, markCaptured } from "./errors.ts";
 import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.ts";
 import type { Operation } from "effection";
 
@@ -54,7 +54,7 @@ export function captureErrors<T extends FunctionComponent>(component: T): T {
 }
 
 export function capturesErrors(component: FunctionComponent): boolean {
-  return CAPTURES in component;
+  return Object.hasOwn(component, CAPTURES);
 }
 
 /**
@@ -66,8 +66,13 @@ export function capturesErrors(component: FunctionComponent): boolean {
  * original failure is attributed as the diagnostic's cause, so what the
  * component actually did remains reachable from the outside.
  */
-export function useFailures(): Operation<void> {
-  return Component.around({
+export function* useFailures(): Operation<void> {
+  // The decision this boundary was opened under. A diagnostic raised under a
+  // policy something nested chose for itself — a component's own `<Output>`
+  // region — is not one this document asked to carry on past, and marking it
+  // would resume work that region's author gated behind the failure.
+  const boundary = (yield* AmbientPolicyFrame.get()) ?? {};
+  yield* Component.around({
     *handleFailure([failure], _next): Operation<ErrorSegment> {
       const segment: ErrorSegment = {
         type: "error",
@@ -83,7 +88,9 @@ export function useFailures(): Operation<void> {
     // Marking here rather than in `handleFailure` keeps that a property of the
     // region, and delegating leaves the observation chain a single pass.
     *raise([segment], next): Operation<ErrorSegment> {
-      markCaptured(segment);
+      if ((yield* AmbientPolicyFrame.get()) === boundary) {
+        markCaptured(segment);
+      }
       return yield* next(segment);
     },
   });

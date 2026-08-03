@@ -25,6 +25,40 @@ export const AmbientErrorPolicy: Context<ErrorPolicy> = createContext<ErrorPolic
 );
 
 /**
+ * Which policy decision a diagnostic is being raised under.
+ *
+ * The value alone cannot say that: two frames can both be `output` and still be
+ * different decisions, made by different authors about different regions. The
+ * frame is a fresh object per decision, so a capture boundary can tell a
+ * diagnostic raised under *its* policy from one raised under a policy something
+ * nested chose for itself — which is the difference between a region a document
+ * asked to carry on past and a region whose own author asked it to stop.
+ */
+export const AmbientPolicyFrame: Context<object> = createContext<object>(
+  "component.errorPolicyFrame",
+  {},
+);
+
+/**
+ * Choose a settlement policy for the work that follows: a new decision, and
+ * therefore a new frame.
+ */
+export function* usePolicy(policy: ErrorPolicy): Operation<void> {
+  yield* AmbientErrorPolicy.set(policy);
+  yield* AmbientPolicyFrame.set({});
+}
+
+/**
+ * Carry a decision already made into a task that runs on its behalf — a
+ * projection expanding the caller's own text. The frame travels with the value,
+ * so the content is still governed by the decision the author wrote it under.
+ */
+export function* carryPolicy(policy: ErrorPolicy, frame: object): Operation<void> {
+  yield* AmbientErrorPolicy.set(policy);
+  yield* AmbientPolicyFrame.set(frame);
+}
+
+/**
  * Whether an explicit capture boundary handled this diagnostic.
  *
  * The answer lives on the segment, under a symbol: the object a boundary

@@ -4145,9 +4145,19 @@ A documentation chunk and an `<Output>` region select the policy by value rather
 than by installing reporting middleware, so an error crossing from a component's
 own policy into its caller's is settled again without being reported twice.
 
+**A capture is a decision about the work written inside it.** A boundary marks
+the diagnostics raised *under its own policy* — not the ones raised under a
+policy something nested chose for itself. A component's `<Output>` region is such
+a choice: it stops at its failure however it was invoked, and a caller that wraps
+the invocation in `<CaptureErrors>` — or in any component that captures its own
+failures, which every built-in does — does not resume the work that region's
+author gated behind the failure. What reaches the boundary is the invocation's
+failure, which it handles on its own terms. A failure a region already settled
+stays outside that recovery, as every already-settled documentation failure does.
+
 **A capture is remembered on the segment, by identity.** `<CaptureErrors>` and
-`captureErrors(fn)` mark every `ErrorSegment` raised beneath them as one the
-document asked to carry on past — the same object an observer already saw, never
+`captureErrors(fn)` mark every `ErrorSegment` raised under their own policy as one
+the document asked to carry on past — the same object an observer already saw, never
 a copy — and settlement under `output` consults that mark. This is what lets a
 captured diagnostic cross an invocation boundary into a fail-fast caller and
 still render there, while an uncaptured one from the same region fails the
@@ -5774,9 +5784,23 @@ a failure outside `durableRun` produces no close at all.
 | Field | Type | Meaning |
 |---|---|---|
 | `name`, `message` | `string` | of the original caught failure, wrapper included |
-| `segment` | `{ message, source }` | the `ErrorSegment` the failure was decided on |
-| `cause` | `string \| null` | the rendered cause; `null` when there was none, and `"undefined"` when there was one whose value was `undefined` |
-| `errors` | `{ name, message }[] \| null` | shallow `AggregateError` members, in order |
+| `segment.message` | `string` | the `ErrorSegment` the failure was decided on |
+| `segment.source` | `string`, absent | what the segment attributed itself to |
+| `cause` | `string`, absent | the rendered cause |
+| `errors` | `{ name, message }[]`, absent | shallow `AggregateError` members, in order |
+
+A field is **absent** when the failure had nothing to say there, and present when
+it did — no `null` stands in for absence, because absence is itself information.
+The distinction is load-bearing for `cause`: an absent key says the failure had
+no own cause, while `"undefined"` says it had one whose value was `undefined`,
+which a component can throw. Ownership is decided with `Object.hasOwn`, so a
+cause reached through the prototype chain is not recorded as this failure's.
+
+A recorded failure that does not match this shape — a `source` or `cause` that is
+not text, an `errors` that is not a list, a member without its message — is
+refused when the journal is read rather than coerced into something readable.
+Reporting a failure that quietly disagrees with the one recorded is worse than
+refusing to report.
 
 Object identity, stacks, and the cause graph do not cross. A live run therefore
 reports the failure it actually caught — the same object, with its type, `cause`
@@ -6587,10 +6611,24 @@ Identifiers match `packages/core/tests/output-fail-fast.test.ts`.
 | OFF5d | `captureErrors(fn)` in a region | The component's own diagnostic renders once and a following sibling runs |
 | OFF5e | Captured failure in documentation | Still fail-fast: the marking is ignored where nothing renders |
 | OFF5f | Root with no `<Output>` | Collecting behavior is unchanged: the diagnostic renders and later blocks run |
-| OFF6 | Live completion | `Err` carries the failure the engine caught |
+| OFF6 | Live completion identity | `Err` carries the failure the engine caught — the same object, reachable through the cause chain |
+| OFF6b | Live completion type | A settled diagnostic arrives as a `DocumentationError` carrying its segment |
+| OFF6c | Live aggregation | A body failure and a teardown failure both survive to the completion |
 | OFF7 | Replay | The same partial output and failure, with no command running a second time |
 | OFF8 | Journal shape | The root closes `ok` around a value whose `status` is `err` |
-| OFF9 | `as` capture is not output | A failing `as=` invocation's rendered prefix does not reach the document |
+| OFF9a-e | Atomic producers | A failing `<Capture as>`, `<Each as>`, string projection, documentation body, and `as=` invocation each keep their rendered prefix out of the document |
+| OFF10 | Capture around a nested region | A `<CaptureErrors>` around an invocation does not resume the callee's own region: the block after its failure never runs |
+| OFF11 | Capturing built-in around a nested region | The same, where the boundary is `<File>` rather than an explicit request |
+| OFF12 | Capture of its own decision | A diagnostic raised under the boundary's own policy is still captured, and the region continues |
+| OFF13 | Streamed partial output | After an earlier segment streamed, the failing region's output still reaches the chunk stream, not only the close value |
+| OFF14a-g | Malformed recorded failure | A non-string `name`, a missing `message`, a non-string `segment.source`, a segment without `message`, a non-string `cause`, a non-list `errors`, and a member without `message` are each refused on replay |
+| OFF14h | Intact recorded failure | The same journal, unedited, replays to the recorded failure |
+| OFF15a | Absent fields | A failure with no own cause and no members records neither key |
+| OFF15b | Absent cause reconstructed | A record with no `cause` reconstructs an error with no own `cause` |
+| OFF15c | Reconstruction fields | A replayed error carries the recorded `name` and `message`, and is not an `AggregateError` |
+| OFF15d | Aggregate reconstruction | A record carrying members reconstructs an `AggregateError` with those names and messages |
+| OFF16a-e | Visible producers preserve | The selected `<If>` branch, `<Loop>` iterations, `<Each>` without `as`, projected `<Content />`, and an answered `<Answers>` body each keep what they rendered before failing, and run nothing after |
+| OFF17a-e | Visible producers do not double | Each of the same five renders exactly once when it succeeds |
 
 ### Tier OBS — error observation
 

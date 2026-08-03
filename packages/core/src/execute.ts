@@ -305,16 +305,27 @@ type DocumentFailure = {
 };
 
 /**
- * The original error a failed outcome was derived from, by identity.
+ * The original error a failed outcome carries, on the outcome itself.
  *
  * A live run resolves the failure it actually caught — same object, same type,
  * same `cause`, same aggregate members — because `durableRun` hands back the
  * very object the workflow returned. A replayed run is given the journal's
- * reconstruction of that object instead, so the lookup misses and the described
- * fields are all there is. The miss is the signal; nothing asks whether it is
- * replaying.
+ * account of that object instead, which carries no such property, so the
+ * described fields are all there is. The absence is the signal; nothing asks
+ * whether it is replaying.
+ *
+ * Non-enumerable, so the outcome still serializes as exactly the JSON §10
+ * describes.
  */
-const liveFailures = new WeakMap<object, unknown>();
+const LIVE_FAILURE = Symbol.for("executablemd.core.liveFailure");
+
+function rememberLiveFailure(outcome: DocumentResult, error: unknown): void {
+  Object.defineProperty(outcome, LIVE_FAILURE, {
+    value: error,
+    enumerable: false,
+    configurable: true,
+  });
+}
 
 function describeFailure(caught: unknown, documentation: DocumentationError): DocumentFailure {
   const wrapper = caught instanceof Error ? caught : new Error(String(caught));
@@ -366,13 +377,13 @@ function failureError(failure: DocumentFailure, live: unknown): unknown {
   return withName(replayed, failure.name);
 }
 
-/** The live failure a returned outcome carries, consumed on the way out. */
+/** The live failure a returned outcome carries, taken on the way out. */
 function takeLiveFailure(returned: unknown): unknown {
   if (typeof returned !== "object" || returned === null) {
     return undefined;
   }
-  const live = liveFailures.get(returned);
-  liveFailures.delete(returned);
+  const live = Reflect.get(returned, LIVE_FAILURE);
+  Reflect.deleteProperty(returned, LIVE_FAILURE);
   return live;
 }
 
@@ -402,7 +413,11 @@ function parseDocumentResult(value: unknown): DocumentResult {
   if (status === "err") {
     return { status: "err", output, error: parseFailure(candidate["error"]) };
   }
-  throw new Error(`A document result is "ok" or "err", not ${JSON.stringify(status)}.`);
+  throw new Error(
+    `A document result records its outcome as "ok" or "err", and this one records ` +
+      `${JSON.stringify(status)}. A journal written before the outcome contract ` +
+      `(#309) has no status at all and cannot be replayed by this version.`,
+  );
 }
 
 function parseFailure(value: unknown): DocumentFailure {
@@ -623,6 +638,15 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
   } catch (error) {
     // A durability failure is not something the document did, so it never
     // becomes the document's own outcome (§6.11).
+    // What the failing segment handed over but never reached the emission step.
+    // Emitted here, whatever the failure turns out to be: a consumer reading
+    // chunks is who the preservation is for, and the completion path only emits
+    // for a run that streamed nothing at all — which stops being true as soon as
+    // an earlier segment went out.
+    const tail = produced.slice(emittedThrough).map(renderSegment).join("");
+    if (tail) {
+      yield* ephemeral(DocumentOutput.operations.output(tail));
+    }
     if (durabilityFailure(error) !== undefined) {
       throw error;
     }
@@ -631,18 +655,15 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
       throw error;
     }
     // Everything the document rendered: the buffered selection, or what the
-    // streaming loop emitted plus whatever the failing segment had already
-    // handed over but not reached the emission step yet.
+    // streaming loop emitted together with that tail.
     const rendered =
-      selected.length > 0
-        ? selected.map(renderSegment).join("")
-        : streamed.join("") + produced.slice(emittedThrough).map(renderSegment).join("");
+      selected.length > 0 ? selected.map(renderSegment).join("") : streamed.join("") + tail;
     const outcome: DocumentResult = {
       status: "err",
       output: rendered,
       error: describeFailure(error, documentation),
     };
-    liveFailures.set(outcome, error);
+    rememberLiveFailure(outcome, error);
     return outcome;
   }
 }

@@ -179,7 +179,7 @@ const CAPTURING: FunctionComponentDefinition = {
 
 describe("Tier OFF — a failing <Output> keeps what it rendered", () => {
   // OFF1
-  it("emits the partial selection, fails, and runs no later sibling", function* () {
+  it("OFF1: emits the partial selection, fails, and runs no later sibling", function* () {
     const result = yield* run({
       "doc.md": [
         "<Output>",
@@ -207,7 +207,7 @@ describe("Tier OFF — a failing <Output> keeps what it rendered", () => {
   });
 
   // OFF2 — the same three assertions through a real invocation.
-  it("keeps a component <Output> region's partial selection and fails the document", function* () {
+  it("OFF2: keeps a component <Output> region's partial selection and fails the document", function* () {
     const result = yield* run({
       "components/Stage.md": [
         "<Output>",
@@ -232,7 +232,7 @@ describe("Tier OFF — a failing <Output> keeps what it rendered", () => {
 
   // OFF3 — the integration pin with #307/#310: a command that printed before it
   // failed is a failure, its stdout stays visible, and nothing after it runs.
-  it("keeps the stdout of a non-zero command and stops the document there", function* () {
+  it("OFF3: keeps the stdout of a non-zero command and stops the document there", function* () {
     const result = yield* run({
       "doc.md": [
         "<Output>",
@@ -255,7 +255,7 @@ describe("Tier OFF — a failing <Output> keeps what it rendered", () => {
   });
 
   // OFF4
-  it("preserves an earlier region and runs neither the documentation nor the region after it", function* () {
+  it("OFF4: preserves an earlier region and runs neither the documentation nor the region after it", function* () {
     const result = yield* run({
       "doc.md": [
         "<Output>",
@@ -307,7 +307,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
   ].join("\n");
 
   // OFF5a
-  it("renders the diagnostic once and lets the region continue", function* () {
+  it("OFF5a: renders the diagnostic once and lets the region continue", function* () {
     const expanded = yield* expandUnder(
       "output",
       "<CaptureErrors>\n<Broken />\n</CaptureErrors>\n\nMARKER",
@@ -320,7 +320,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
   });
 
   // OFF5b — the discriminating mutation of the same fixture.
-  it("fails and suppresses the marker without the capture boundary", function* () {
+  it("OFF5b: fails and suppresses the marker without the capture boundary", function* () {
     let threw = false;
     try {
       yield* expandUnder("output", "<Broken />\n\nMARKER", { Broken: BROKEN });
@@ -331,7 +331,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
   });
 
   // OFF5c — through a document, so the region and the root agree.
-  it("completes a document whose region captured its failure", function* () {
+  it("OFF5c: completes a document whose region captured its failure", function* () {
     const result = yield* run({
       "components/Stage.md": CAPTURED_DOC,
       "doc.md": "<Stage />",
@@ -342,7 +342,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
   });
 
   // OFF5d — captureErrors(fn) is the same boundary.
-  it("lets a captureErrors(fn) component continue inside a region", function* () {
+  it("OFF5d: lets a captureErrors(fn) component continue inside a region", function* () {
     const expanded = yield* expandUnder("output", "<Capturing />\n\nMARKER", {
       Capturing: CAPTURING,
     });
@@ -354,7 +354,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
 
   // OFF5e — documentation is hidden, so a captured diagnostic has nothing to
   // render into and the execution still ends.
-  it("keeps documentation fail-fast even for a captured failure", function* () {
+  it("OFF5e: keeps documentation fail-fast even for a captured failure", function* () {
     let threw = false;
     try {
       yield* expandUnder("throw", "<CaptureErrors>\n<Broken />\n</CaptureErrors>\n\nMARKER", {
@@ -367,7 +367,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
   });
 
   // OFF5f — a root without <Output> keeps collecting.
-  it("leaves a root without <Output> collecting", function* () {
+  it("OFF5f: leaves a root without <Output> collecting", function* () {
     const result = yield* run({
       "doc.md": ["```bash exec", "FAIL", "```", "", "```bash exec", "echo LATER", "```"].join("\n"),
     });
@@ -380,7 +380,7 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
 
 describe("Tier OFF — the failed document is a determined outcome", () => {
   // OFF6 — the live completion carries the error the engine actually caught.
-  it("reports the original failure object on a live run", function* () {
+  it("OFF6: reports the original failure object on a live run", function* () {
     const thrown = new Error("the component's own failure");
     const failing: FunctionComponentDefinition = {
       kind: "function",
@@ -407,7 +407,7 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
 
   // OFF6c — the determined-outcome path, where the failure is a diagnostic the
   // region settled: its type survives to the completion as well as its message.
-  it("reports a settled diagnostic as the documentation failure it is", function* () {
+  it("OFF6b: reports a settled diagnostic as the documentation failure it is", function* () {
     const result = yield* run({
       "doc.md": "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>",
     });
@@ -424,7 +424,7 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
 
   // OFF6b — a body failure and a teardown failure arrive together, and both
   // members survive to the completion.
-  it("reports the aggregate a body and its teardown produced together", function* () {
+  it("OFF6c: reports the aggregate a body and its teardown produced together", function* () {
     const fromBody = new Error("body failed");
     const fromTeardown = new Error("teardown failed");
     const failing: FunctionComponentDefinition = {
@@ -451,7 +451,7 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
 
   // OFF7 — the journal records the outcome, so a replay reproduces both halves
   // without re-entering the workflow.
-  it("replays the same partial output and failure, running nothing again", function* () {
+  it("OFF7: replays the same partial output and failure, running nothing again", function* () {
     const files = {
       "doc.md": [
         "<Output>",
@@ -484,7 +484,7 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
 
   // OFF8 — the root close is `ok` around a failed document; only durability and
   // infrastructure failures close `err`.
-  it("closes the journal ok around the failed outcome", function* () {
+  it("OFF8: closes the journal ok around the failed outcome", function* () {
     const result = yield* run({
       "doc.md": "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>",
     });
@@ -503,28 +503,33 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
  * into the region and hands its segments back reddens here.
  */
 describe("Tier OFF — every visible producer keeps its prefix", () => {
-  const CASES: { name: string; failing: string; succeeding: string }[] = [
+  const CASES: { key: string; name: string; failing: string; succeeding: string }[] = [
     {
+      key: "a",
       name: "the selected <If> branch",
       failing: "<If condition={true}>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</If>\n\nMARKER",
       succeeding: "<If condition={true}>\n\nPREFIX\n\n</If>",
     },
     {
+      key: "b",
       name: "<Loop> iterations",
       failing: "<Loop max={2}>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Loop>\n\nMARKER",
       succeeding: "<Loop max={1}>\n\nPREFIX\n\n</Loop>",
     },
     {
+      key: "c",
       name: "<Each> without as",
       failing: '<Each in={[1]} let="n">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Each>\n\nMARKER',
       succeeding: '<Each in={[1]} let="n">\n\nPREFIX\n\n</Each>',
     },
     {
+      key: "d",
       name: "projected <Content />",
       failing: "<Wrapper>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Wrapper>\n\nMARKER",
       succeeding: "<Wrapper>\n\nPREFIX\n\n</Wrapper>",
     },
     {
+      key: "e",
       name: "an answered <Answers> body",
       failing:
         "<Answers>\n<Answer value={{ ok: true }} />\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Answers>\n\nMARKER",
@@ -535,7 +540,7 @@ describe("Tier OFF — every visible producer keeps its prefix", () => {
   const WRAPPER = "<Content />";
 
   for (const subject of CASES) {
-    it(`keeps what ${subject.name} rendered before failing`, function* () {
+    it(`OFF16 ${subject.key}: keeps what ${subject.name} rendered before failing`, function* () {
       const result = yield* run({
         "components/Wrapper.md": WRAPPER,
         "doc.md": `<Output>\n\n${subject.failing}\n\n</Output>`,
@@ -548,7 +553,7 @@ describe("Tier OFF — every visible producer keeps its prefix", () => {
       expect(result.output).not.toContain("<!-- ERROR");
     });
 
-    it(`renders ${subject.name} exactly once when it succeeds`, function* () {
+    it(`OFF17 ${subject.key}: renders ${subject.name} exactly once when it succeeds`, function* () {
       const result = yield* run({
         "components/Wrapper.md": WRAPPER,
         "doc.md": `<Output>\n\n${subject.succeeding}\n\n</Output>`,
@@ -565,7 +570,7 @@ describe("Tier OFF — an atomic producer never merges its prefix", () => {
     "\n",
   );
 
-  it("keeps a <Capture as> prefix out of the document", function* () {
+  it("OFF9a: keeps a <Capture as> prefix out of the document", function* () {
     const result = yield* run({
       "doc.md":
         '<Output>\n\n<Capture as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Capture>\n\n</Output>',
@@ -575,7 +580,7 @@ describe("Tier OFF — an atomic producer never merges its prefix", () => {
     expect(result.output).not.toContain("PREFIX");
   });
 
-  it("keeps an <Each as> prefix out of the document", function* () {
+  it("OFF9b: keeps an <Each as> prefix out of the document", function* () {
     const result = yield* run({
       "doc.md":
         '<Output>\n\n<Each in={[1]} let="n" as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Each>\n\n</Output>',
@@ -585,7 +590,7 @@ describe("Tier OFF — an atomic producer never merges its prefix", () => {
     expect(result.output).not.toContain("PREFIX");
   });
 
-  it("keeps a string projection's prefix out of the document", function* () {
+  it("OFF9c: keeps a string projection's prefix out of the document", function* () {
     const result = yield* run({
       "components/Renderer.md": [
         "```ts eval",
@@ -601,7 +606,7 @@ describe("Tier OFF — an atomic producer never merges its prefix", () => {
     expect(result.output).not.toContain("PREFIX");
   });
 
-  it("keeps documentation out of the document", function* () {
+  it("OFF9d: keeps documentation out of the document", function* () {
     const result = yield* run({
       "components/Stage.md": [
         "PREFIX",
@@ -619,7 +624,7 @@ describe("Tier OFF — an atomic producer never merges its prefix", () => {
     expect(result.output).not.toContain("PREFIX");
   });
 
-  it("keeps a failing as= invocation's prefix out of the document", function* () {
+  it("OFF9e: keeps a failing as= invocation's prefix out of the document", function* () {
     const result = yield* run({
       "components/Stage.md": STAGE,
       "doc.md": '<Output>\n\n<Stage as="held" />\n\n</Output>',
@@ -671,30 +676,38 @@ describe("Tier OFF — a malformed recorded failure is refused", () => {
     return run({ "doc.md": DOC }, new InMemoryStream(events));
   }
 
-  const CASES: { name: string; edit: (failure: unknown) => void }[] = [
-    { name: "a name that is not text", edit: (failure) => setField(failure, "name", 7) },
-    { name: "a missing message", edit: (failure) => dropField(failure, "message") },
+  const CASES: { key: string; name: string; edit: (failure: unknown) => void }[] = [
+    { key: "a", name: "a name that is not text", edit: (failure) => setField(failure, "name", 7) },
+    { key: "b", name: "a missing message", edit: (failure) => dropField(failure, "message") },
     {
+      key: "c",
       name: "a segment source that is not text",
       edit: (failure) => setField(field(failure, "segment"), "source", 7),
     },
     {
+      key: "d",
       name: "a segment with no message",
       edit: (failure) => dropField(field(failure, "segment"), "message"),
     },
-    { name: "a cause that is not text", edit: (failure) => setField(failure, "cause", { of: 1 }) },
     {
+      key: "e",
+      name: "a cause that is not text",
+      edit: (failure) => setField(failure, "cause", { of: 1 }),
+    },
+    {
+      key: "f",
       name: "aggregate members that are not a list",
       edit: (failure) => setField(failure, "errors", "two"),
     },
     {
+      key: "g",
       name: "an aggregate member with no message",
       edit: (failure) => setField(failure, "errors", [{ name: "Error" }]),
     },
   ];
 
   for (const subject of CASES) {
-    it(`refuses ${subject.name}`, function* () {
+    it(`OFF14 ${subject.key}: refuses ${subject.name}`, function* () {
       const events = yield* corrupted(subject.edit);
       const result = yield* replayed(events);
 
@@ -705,7 +718,7 @@ describe("Tier OFF — a malformed recorded failure is refused", () => {
     });
   }
 
-  it("replays an intact recorded failure", function* () {
+  it("OFF14h: replays an intact recorded failure", function* () {
     const events = yield* corrupted(() => {});
     const result = yield* replayed(events);
 
@@ -746,7 +759,7 @@ describe("Tier OFF — the recorded failure is exactly these fields", () => {
     });
   }
 
-  it("records no cause and no members for a failure that had neither", function* () {
+  it("OFF15a: records no cause and no members for a failure that had neither", function* () {
     const events = yield* recorded(() => {});
     const close = events.find((event) => event.type === "close");
     const failure = Reflect.get(
@@ -777,7 +790,7 @@ describe("Tier OFF — the recorded failure is exactly these fields", () => {
     expect(result.error.cause).toBe("undefined");
   });
 
-  it("reconstructs no cause at all when the record carries none", function* () {
+  it("OFF15b: reconstructs no cause at all when the record carries none", function* () {
     const events = yield* recorded(() => {});
     const result = yield* run({ "doc.md": FAILING_DOC }, new InMemoryStream(events));
 
@@ -788,7 +801,7 @@ describe("Tier OFF — the recorded failure is exactly these fields", () => {
     expect(Object.hasOwn(result.error, "cause")).toBe(false);
   });
 
-  it("reconstructs an Error from the recorded fields on replay", function* () {
+  it("OFF15c: reconstructs an Error from the recorded fields on replay", function* () {
     const stream = new InMemoryStream();
     const first = yield* run(
       { "doc.md": "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>" },
@@ -813,7 +826,7 @@ describe("Tier OFF — the recorded failure is exactly these fields", () => {
     expect(second.error).not.toBeInstanceOf(AggregateError);
   });
 
-  it("reconstructs an AggregateError when the record carries members", function* () {
+  it("OFF15d: reconstructs an AggregateError when the record carries members", function* () {
     const events = yield* recorded((failure) =>
       Reflect.set(Object(failure), "errors", [
         { name: "Error", message: "body failed" },
@@ -831,5 +844,98 @@ describe("Tier OFF — the recorded failure is exactly these fields", () => {
       "teardown failed",
     ]);
     expect(result.error.errors.map((member: Error) => member.name)).toEqual(["Error", "TypeError"]);
+  });
+});
+
+/**
+ * A capture boundary is a decision about the work the document wrote inside it,
+ * not about decisions its callees made for themselves. A component's own
+ * `<Output>` region stops at its failure however it was invoked — otherwise a
+ * caller resumes work that region's author gated behind it, invisibly, and every
+ * built-in that captures its own failures (`<File>`, `<Parse>`, `<SafeParse>`,
+ * `<Glob>`, `<TempDir>`) would do it just by wrapping the invocation.
+ */
+describe("Tier OFF — a capture does not resume a callee's own region", () => {
+  const STAGE = [
+    "<Output>",
+    "",
+    "```bash exec",
+    "echo BEFORE",
+    "```",
+    "",
+    "```bash exec",
+    "FAIL",
+    "```",
+    "",
+    "```bash exec",
+    "echo LATER",
+    "```",
+    "",
+    "</Output>",
+  ].join("\n");
+
+  // OFF10
+  it("OFF10: stops a nested region wrapped in <CaptureErrors>", function* () {
+    const result = yield* run({
+      "components/Stage.md": STAGE,
+      "doc.md": "<CaptureErrors>\n<Stage />\n</CaptureErrors>",
+    });
+
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+    // The region's decision reaches the caller as well: a failure a document
+    // already settled is outside the recovery a capture boundary offers, so the
+    // execution ends rather than resuming past somebody else's stop.
+    expect(result.ok).toBe(false);
+  });
+
+  // OFF11 — the same, where the boundary is a built-in that captures its own
+  // failures rather than an explicit request from the author.
+  it("OFF11: stops a nested region wrapped in a capturing built-in", function* () {
+    const result = yield* run({
+      "components/Stage.md": STAGE,
+      "doc.md": '<File path="out.txt">\n<Stage />\n</File>',
+    });
+
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+
+  // OFF12 — a diagnostic raised under the boundary's own policy is still the
+  // document's to carry on past.
+  it("OFF12: still captures what is raised under its own decision", function* () {
+    const result = yield* run({
+      "components/Stage.md": "```bash exec\nFAIL\n```\n",
+      "doc.md": "<Output>\n\n<CaptureErrors>\n<Stage />\n</CaptureErrors>\n\nMARKER\n\n</Output>",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("MARKER");
+  });
+});
+
+describe("Tier OFF — the partial output reaches the stream, not only the close", () => {
+  // OFF13 — a consumer reading chunks is the case the preservation exists for.
+  it("OFF13: streams the failing region's output after an earlier segment streamed", function* () {
+    const result = yield* run({
+      "components/Stage.md": [
+        "<Output>",
+        "",
+        "```bash exec",
+        "echo BEFORE",
+        "```",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "</Output>",
+      ].join("\n"),
+      "doc.md": "intro paragraph\n\n<Stage />",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.chunks.join("")).toContain("intro paragraph");
+    // The chunk stream, not just the close value: a CLI writing stdout as it
+    // arrives must see what the region produced before it failed.
+    expect(result.chunks.join("")).toContain("BEFORE");
   });
 });

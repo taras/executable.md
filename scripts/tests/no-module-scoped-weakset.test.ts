@@ -13,10 +13,11 @@ function reported(fixture: string): Operation<number[]> {
 describe("local/no-module-scoped-weakset", () => {
   /**
    * In fixture order: a plain declaration, an exported one, an assignment made
-   * after the declaration, and one held inside a module-scoped object.
+   * after the declaration, one held inside a module-scoped object, and a static
+   * class field — a class body is not a lifetime of its own.
    */
   it("reports every table whose lifetime is the module", function* () {
-    expect(yield* reported("module-weakset.ts")).toEqual([8, 10, 13, 15]);
+    expect(yield* reported("module-weakset.ts")).toEqual([8, 10, 13, 15, 18]);
   });
 
   it("accepts a table created inside a function or a generator, a WeakMap, and a mark on the object", function* () {

@@ -14,6 +14,10 @@ assignedLater = new WeakSet<object>();
 
 const pair = { members: new WeakSet<object>() };
 
+export class Registry {
+  static everything = new WeakSet<object>();
+}
+
 export function remember(value: object): void {
   marked.add(value);
   exported.add(value);

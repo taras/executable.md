@@ -44,12 +44,15 @@ import {
 } from "./component-api.ts";
 import {
   AmbientErrorPolicy,
+  AmbientPolicyFrame,
   attributeCause,
+  carryPolicy,
   ContentError,
   DocumentationError,
   durabilityFailure,
   fatalCause,
   settle,
+  usePolicy,
 } from "./errors.ts";
 import { capturesErrors, useFailures } from "./component-failures.ts";
 import type { ErrorPolicy } from "./errors.ts";
@@ -242,6 +245,8 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   function* runInContentScope(options: {
     segments: Segment[];
     policy: ErrorPolicy;
+    /** The decision the caller's text was written under, carried, not remade. */
+    frame: object;
     env: EvalEnv | undefined;
     meta: Record<string, unknown>;
     props: Record<string, Json>;
@@ -270,7 +275,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const rendered: Segment[] = options.owner ?? [];
       const task = contentScope.scope.run(function* () {
         try {
-          yield* AmbientErrorPolicy.set(options.policy);
+          yield* carryPolicy(options.policy, options.frame);
           if (options.segments.length === 0) {
             outcome.resolve({ segments: [] });
             return;
@@ -325,6 +330,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   ): Operation<{ segments: Segment[]; failure?: unknown }> {
     const segments = select(request);
     const policy = request.policy ?? (yield* AmbientErrorPolicy.get()) ?? "collect";
+    // An author-chosen policy is a decision of its own; an inherited one is the
+    // caller's, carried into the task that expands the caller's text.
+    const frame = request.policy === undefined ? ((yield* AmbientPolicyFrame.get()) ?? {}) : {};
     const contentScope = yield* state.invocation.useContentScope();
     // The enclosing handle answers <Content /> written inside projected
     // content: it belongs to the caller's invocation, not to this one.
@@ -346,7 +354,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const errors: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
-          yield* AmbientErrorPolicy.set(policy);
+          yield* carryPolicy(policy, frame);
           if (!slotErrorsEmitted && slots.errors.length > 0) {
             slotErrorsEmitted = true;
             for (const slotError of slots.errors) {
@@ -404,9 +412,11 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // The policy has to travel with them: the content task does not inherit
       // the documentation or <Output> frame this `<Content />` sits in.
       const policy = (yield* AmbientErrorPolicy.get()) ?? "collect";
+      const frame = (yield* AmbientPolicyFrame.get()) ?? {};
       return yield* runInContentScope({
         segments: element.children,
         policy,
+        frame,
         env: undefined,
         meta,
         props,
@@ -3053,13 +3063,13 @@ export function* expandBody(
       yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
     } else if (chunk.output) {
       yield* scoped(function* () {
-        yield* AmbientErrorPolicy.set("output");
+        yield* usePolicy("output");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
       });
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
-        yield* AmbientErrorPolicy.set("throw");
+        yield* usePolicy("throw");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
     }
@@ -3084,7 +3094,7 @@ function runDocumentation(
   counter: BlockCounter,
 ): Operation<Segment[]> {
   return scoped(function* () {
-    yield* AmbientErrorPolicy.set("throw");
+    yield* usePolicy("throw");
     return yield* expandSegments(segments, meta, props, hideSet, counter);
   });
 }

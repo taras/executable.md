@@ -18,13 +18,9 @@
  * created and discarded with the work it describes, so this reports only the
  * module-scoped ones, including exported and lazily-assigned declarations.
  */
-const LIFETIME = new Set([
-  "FunctionDeclaration",
-  "FunctionExpression",
-  "ArrowFunctionExpression",
-  "ClassBody",
-  "StaticBlock",
-]);
+// A class body is not a lifetime: a class declared at module scope holds its
+// fields for the life of the module, which is exactly the shape this reports.
+const LIFETIME = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
 
 function isWeakSetConstruction(node) {
   return (
