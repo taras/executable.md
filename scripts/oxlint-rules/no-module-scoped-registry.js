@@ -33,10 +33,28 @@
  * module's. And a table handed straight to a call — a context's empty default —
  * is one the module keeps no handle on, so nothing here can accumulate into it.
  *
- * The one shape that is not run state is metadata an author declares about a
- * definition at module evaluation, outside any operation — `captureErrors(fn)`
- * marking a component function. That belongs on the definition, and a
- * module-private `Symbol()` is how it is written.
+ * Two shapes in this repository are not run state, and both are open rulings
+ * rather than settled exemptions — each is written down here so the decision is
+ * visible instead of implied:
+ *
+ * 1. Metadata an author declares about a definition at module evaluation,
+ *    outside any operation — `captureErrors(fn)` marking a component function.
+ *    It rides on the function under a module-private `Symbol()` today. The
+ *    alternative is to carry capture-ness on the per-run `ComponentDefinition`
+ *    the import pipeline builds, which would put it in a run's scope like
+ *    everything else.
+ * 2. The Ajv instance in `src/validate.ts`. Ajv memoizes every compile in a
+ *    table keyed by the schema object it was handed, and a run brings fresh
+ *    schema objects, so a process-lifetime compiler accumulates one entry per
+ *    schema per run. `src/components/parse-schema.ts` moved its compiler into
+ *    the run for exactly that reason; `validate.ts` has not, because
+ *    `compilePropsSchema` is reached through `validateProps` and
+ *    `parseMarkdownDefinition`, both synchronous and both public, and making
+ *    them operations is a public-API change that belongs in its own PR.
+ *
+ * This rule reports neither — it looks at `Map`/`Set`/`WeakMap`/`WeakSet`
+ * constructions, and an Ajv instance is not one — so both stay decisions
+ * somebody makes rather than something the linter quietly settled.
  */
 // A class body is not a lifetime: a class declared at module scope holds its
 // fields for the life of the module, which is exactly the shape this reports.

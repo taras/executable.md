@@ -57,6 +57,7 @@ import {
   useDiagnostics,
 } from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
+import { useParseCompiler } from "./components/parse-schema.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
 import {
@@ -786,6 +787,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       // slot its completion reads its failure from. Both are created here and
       // reclaimed with this task, so nothing a run decided outlives it.
       yield* useDiagnostics();
+      yield* useParseCompiler();
       const liveFailure: LiveFailureSlot = {};
       yield* LiveFailure.set(liveFailure);
 

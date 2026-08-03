@@ -71,7 +71,7 @@ export const props = {
 export const returns = { $schema: "http://json-schema.org/draft-07/schema#" };
 
 export default function* Elicit(props: Record<string, Json>): Operation<Json> {
-  const prepared = prepareElicitation(props.schema);
+  const prepared = yield* prepareElicitation(props.schema);
 
   const message = yield* content();
 

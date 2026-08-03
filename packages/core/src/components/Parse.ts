@@ -44,7 +44,7 @@ export const props = {
 export const returns = { $schema: "http://json-schema.org/draft-07/schema#" };
 
 export default captureErrors(function* (props: Record<string, Json>): Operation<Json> {
-  const validate = compileParseSchema("Parse", props.schema);
+  const validate = yield* compileParseSchema("Parse", props.schema);
 
   const text = yield* content();
 

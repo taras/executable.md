@@ -71,12 +71,6 @@ export function capturesErrors(component: FunctionComponent): boolean {
  * original failure is attributed as the diagnostic's cause, so what the
  * component actually did remains reachable from the outside.
  */
-function* markUnderOwnPolicy(boundary: object | undefined, segment: ErrorSegment): Operation<void> {
-  if ((yield* AmbientPolicyFrame.get()) === boundary) {
-    yield* markCaptured(segment);
-  }
-}
-
 export function* useFailures(): Operation<void> {
   // The decision this boundary was opened under. A diagnostic raised under a
   // policy something nested chose for itself — a component's own `<Output>`
@@ -91,12 +85,6 @@ export function* useFailures(): Operation<void> {
         source: failure.name,
       };
       yield* attributeCause(segment, failure.error);
-      // Marked here as well as in the `raise` middleware below: a diagnostic
-      // this boundary built is one the document asked to carry on past, and a
-      // provider's own call does not re-enter the middleware it is part of.
-      // Under the same rule either way — a decision something nested made for
-      // itself is not this boundary's to reverse.
-      yield* markUnderOwnPolicy(boundary, segment);
       return yield* raise(segment);
     },
     // Every diagnostic raised beneath the boundary is one the document asked to
@@ -105,7 +93,9 @@ export function* useFailures(): Operation<void> {
     // Marking here rather than in `handleFailure` keeps that a property of the
     // region, and delegating leaves the observation chain a single pass.
     *raise([segment], next): Operation<ErrorSegment> {
-      yield* markUnderOwnPolicy(boundary, segment);
+      if ((yield* AmbientPolicyFrame.get()) === boundary) {
+        yield* markCaptured(segment);
+      }
       return yield* next(segment);
     },
   });
