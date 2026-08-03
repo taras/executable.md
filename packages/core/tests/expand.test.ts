@@ -9,14 +9,23 @@ import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
+import { DocumentationError } from "../src/errors.ts";
 import type {
   Segment,
   ComponentDefinition,
+  CodeBlockContext,
   EvalEnv,
   FunctionComponentDefinition,
   Json,
   CodeBlockResult,
 } from "../src/types.ts";
+
+/**
+ * What the `applyModifiers` stub answers a block with: one result for every
+ * block, or a function that answers each block from its own content — which is
+ * how a test observes whether a later block ran at all.
+ */
+type CodeResultStub = CodeBlockResult | ((block: CodeBlockContext) => CodeBlockResult);
 
 function makeComponent(
   name: string,
@@ -39,7 +48,7 @@ function makeComponent(
 /** Install test component + modifier providers on the current scope. */
 function useTestComponents(
   components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
-  codeResult?: CodeBlockResult,
+  codeResult?: CodeResultStub,
 ): Operation<void> {
   return Component.around(
     {
@@ -52,7 +61,10 @@ function useTestComponents(
         return comp;
       },
       // deno-lint-ignore require-yield
-      *applyModifiers(_args, _next) {
+      *applyModifiers([_modifiers, block], _next) {
+        if (typeof codeResult === "function") {
+          return codeResult(block);
+        }
         return (
           codeResult ?? {
             output: "mock output\n",
@@ -105,7 +117,7 @@ function expand(
   opts: {
     meta?: Record<string, unknown>;
     props?: Record<string, Json>;
-    codeResult?: CodeBlockResult;
+    codeResult?: CodeResultStub;
   } = {},
 ): Operation<string> {
   return scoped(function* () {
@@ -116,10 +128,27 @@ function expand(
   });
 }
 
+/**
+ * The same expansion, stopping at the segments rather than their rendering, so
+ * a test can assert the shape and the order the engine produced rather than the
+ * string it flattens to.
+ */
+function expandToSegments(
+  segments: Segment[],
+  components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
+  codeResult?: CodeResultStub,
+): Operation<Segment[]> {
+  return scoped(function* () {
+    yield* useTestComponents(components, codeResult);
+    yield* useTestEnv({ values: {} });
+    return yield* expandSegments(segments, {}, {}, new Set());
+  });
+}
+
 function expandWithEnv(
   segments: Segment[],
   components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
-  codeResult?: CodeBlockResult,
+  codeResult?: CodeResultStub,
 ): Operation<{ output: string; env: Record<string, unknown> }> {
   return scoped(function* () {
     const testEnv: EvalEnv = { values: {} };
@@ -322,6 +351,36 @@ describe("expansion", () => {
     expect(output).toContain("not found");
   });
 
+  // A non-zero exit is a failure whatever the command printed (#307). What it
+  // printed is usually the explanation, so it is kept — the output segment
+  // first, then the diagnostic, once.
+  it("code block with non-zero exit and stdout → output, then one diagnostic", function* () {
+    const segments = scanSegments("```bash exec\nfoo\n```\n");
+    const output = yield* expand(
+      segments,
+      {},
+      {
+        codeResult: { output: "partial\n", exitCode: 1, stderr: "boom" },
+      },
+    );
+    expect(output).toBe("partial\n<!-- ERROR: Command failed (exit 1): boom -->");
+  });
+
+  it("keeps the output segment ahead of the diagnostic it explains", function* () {
+    const expanded = yield* expandToSegments(
+      scanSegments("```bash exec\nfoo\n```\n"),
+      {},
+      {
+        output: "partial\n",
+        exitCode: 1,
+        stderr: "boom",
+      },
+    );
+    expect(expanded.map((segment) => segment.type)).toEqual(["execOutput", "error"]);
+    const [execOutput] = expanded;
+    expect(execOutput.type === "execOutput" && execOutput.result.exitCode).toBe(1);
+  });
+
   // Silent code block → no output
   it("silent code block produces no output", function* () {
     const segments = scanSegments("```bash silent exec\necho hello\n```\n");
@@ -350,6 +409,41 @@ describe("expansion", () => {
     const { output, env } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["x"]).toBe("hello");
+  });
+
+  // A capture never swallows an error, and a block that printed before it
+  // failed is still a failure (#307) — so what it printed must not reach the
+  // binding as though it were a value. This pins the existing contract against
+  // the new segment shape; #309 owns failed-capture output visibility.
+  it("Capture leaves the binding unset when a block failed after printing", function* () {
+    const segments = scanSegments('<Capture as="x">\n```bash exec\nfoo\n```\n</Capture>');
+    const { output, env } = yield* expandWithEnv(
+      segments,
+      {},
+      {
+        output: "partial\n",
+        exitCode: 1,
+        stderr: "boom",
+      },
+    );
+    expect(env["x"]).toBeUndefined();
+    expect(output).toBe("<!-- ERROR: Command failed (exit 1): boom -->");
+  });
+
+  it("component as= leaves the binding unset when a block failed after printing", function* () {
+    const comp = makeComponent("Preview", "```bash exec\nfoo\n```\n");
+    const segments = scanSegments('<Preview as="saved" />');
+    const { output, env } = yield* expandWithEnv(
+      segments,
+      { Preview: comp },
+      {
+        output: "partial\n",
+        exitCode: 1,
+        stderr: "boom",
+      },
+    );
+    expect(env["saved"]).toBeUndefined();
+    expect(output).toBe("<!-- ERROR: Command failed (exit 1): boom -->");
   });
 
   it("Capture rejects expression as prop", function* () {
@@ -590,6 +684,44 @@ describe("component-declared output", () => {
       threw = true;
     }
     expect(threw).toBe(true);
+  });
+
+  // The same fail-fast, for a command that printed before it failed (#307).
+  // What the printing costs is the whole point: without it, a failed preview
+  // reaches the step after it.
+  it("throws on a failing exec block that printed in documentation", function* () {
+    const comp = makeComponent(
+      "Fail",
+      "```bash exec\npreview\n```\n\n```bash exec\nlater\n```\n\n<Output>ok</Output>\n",
+    );
+    const ran: string[] = [];
+    let output: string | undefined;
+    let caught: unknown;
+    try {
+      output = yield* expand(
+        scanSegments("<Fail />"),
+        { Fail: comp },
+        {
+          codeResult: (block) => {
+            ran.push(block.content.trim());
+            return block.content.includes("preview")
+              ? { output: "partial\n", exitCode: 1, stderr: "boom" }
+              : { output: "later ran\n", exitCode: 0, stderr: "" };
+          },
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    // The ambient policy decided this execution fails, so what surfaces is the
+    // documentation failure and not a diagnostic.
+    expect(caught).toBeInstanceOf(DocumentationError);
+    expect((caught as DocumentationError).message).toContain("Command failed (exit 1)");
+    // The later sibling never ran.
+    expect(ran).toEqual(["preview"]);
+    // And nothing came back as a successful document result.
+    expect(output).toBeUndefined();
   });
 
   it("continues when a modifier handles the failure in documentation", function* () {

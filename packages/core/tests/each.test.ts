@@ -117,6 +117,28 @@ describe("Tier Each — native iteration directive", () => {
     expect(run.segments.filter((s) => s.type === "execOutput")).toHaveLength(2);
   });
 
+  // A block that printed before it failed is still a failure (#307), and a
+  // capture never swallows one — so the loop's printed output must not reach
+  // the binding as though the iteration had succeeded.
+  it("E8b: as leaves the binding unset when a body block failed after printing", function* () {
+    const source = [
+      '<Each in={[1, 2]} let="n" as="captured">',
+      "",
+      "```bash exec",
+      "echo hi",
+      "```",
+      "",
+      "</Each>",
+    ].join("\n");
+    const run = yield* runEach(source, {
+      codeResult: { output: "partial\n", exitCode: 1, stderr: "boom" },
+    });
+    expect(run.env?.captured).toBeUndefined();
+    expect(errorMessages(run.segments)).toHaveLength(2);
+    expect(errorMessages(run.segments)[0]).toContain("Command failed (exit 1): boom");
+    expect(run.segments.every((segment) => segment.type === "error")).toBe(true);
+  });
+
   it("E9: missing in is rejected", function* () {
     const run = yield* runEach('<Each let="row">x</Each>');
     expect(errorMessages(run.segments)[0]).toContain('requires an "in" prop');

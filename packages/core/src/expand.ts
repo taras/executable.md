@@ -672,15 +672,12 @@ export function* expandSegments(
         try {
           const codeResult = yield* applyModifiers(segment.modifiers, context);
 
-          if (codeResult.exitCode !== 0 && codeResult.output === "") {
-            result.push(
-              yield* raise({
-                type: "error",
-                message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
-                source: segment.content,
-              }),
-            );
-          } else if (codeResult.output !== "") {
+          // What the command printed and whether it failed are two separate
+          // questions, and the exit code alone answers the second one (#307).
+          // The output comes first, because a command that prints before it
+          // fails is usually explaining itself, and the diagnostic that follows
+          // is what the ambient policy then settles.
+          if (codeResult.output !== "") {
             result.push({
               type: "execOutput",
               command: segment.content,
@@ -691,7 +688,17 @@ export function* expandSegments(
               },
             });
           }
-          // If output is empty and exit code is 0, nothing added (e.g., silent)
+
+          if (codeResult.exitCode !== 0) {
+            result.push(
+              yield* raise({
+                type: "error",
+                message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
+                source: segment.content,
+              }),
+            );
+          }
+          // A successful block that printed nothing adds nothing (e.g., silent)
         } catch (error) {
           const fatal = fatalCause(error);
           if (fatal !== undefined) {
