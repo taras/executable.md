@@ -150,12 +150,14 @@ xmd run --help
 ```
 
 When a document is present, help also describes the properties declared by
-that document:
+that document. An inline document declares properties the same way, and reports
+them under its `<eval>` identity:
 
 ```console
 xmd run hello.md --help
 xmd run --help hello.md
 xmd hello.md --help
+xmd -e '<markdown>' --help
 ```
 
 The document section identifies its origin and every available binding:
@@ -193,6 +195,13 @@ Document-derived options follow the document path:
 xmd run hello.md --props-name Ada
 ```
 
+An inline document supplies the same schema, so its options may be written
+wherever they read best:
+
+```console
+xmd -e '<markdown>' --props-name Ada
+```
+
 They are not recognized before the path because the document supplies their
 schema:
 
@@ -228,12 +237,15 @@ non-zero status before document effects or output.
 
 ## Programmatic API
 
-`inspectDocument({ path })` loads the root Markdown definition and returns its
-props schema without executing the document:
+`inspectDocument(root)` loads the root Markdown definition and returns its
+props schema without executing the document. The root is a path or supplied
+text:
 
 ```typescript
 const description = yield* inspectDocument({ path: "hello.md" });
 const schema = description.props;
+
+const inline = yield* inspectDocument(inlineSource("---\nprops:\n  name: { type: string }\n---\n"));
 ```
 
 Inspection resolves relative paths against the contextual working directory.
@@ -255,19 +267,23 @@ const execution = yield* execute({
 
 Its relevant options are:
 
-- `path` — path to the root Markdown document, resolved from the contextual
-  working directory.
+- the root document source — `path`, resolved from the contextual working
+  directory, or `inlineSource(text)`, which carries supplied text under the
+  `<eval>` identity.
 - `stream` — durable stream that journals the run.
 - `props?` — JSON values supplied to the root document; defaults to `{}`.
 - `componentDirs?` — component search directories.
 - `modifiers?` — custom modifier factories.
 
 `path` is the only document-path field; there is no compatibility alias.
+Supplied text is the one alternative to it, and is a different field rather
+than another spelling of the same one.
 
 ## Command Scope
 
-Root document props belong to `xmd run`. `xmd test` does not accept
-`--props`, `--props-*`, `XMD_PROPS`, or `XMD_PROPS_*`.
+Root document props belong to `xmd run`, and so does the inline root document.
+`xmd test` accepts neither `--props`, `--props-*`, `XMD_PROPS`, `XMD_PROPS_*`,
+nor `--eval`/`-e`.
 
 ## Essential Acceptance Tests
 

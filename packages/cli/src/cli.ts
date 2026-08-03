@@ -41,13 +41,16 @@ import {
   AgentProviders,
   Config,
   execute,
+  inlineSource,
   inspectDocument,
   installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
+  rootSourcePath,
   useNormalizedOutput,
   useTerminalOutput,
 } from "@executablemd/core";
+import type { RootDocumentSource } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
@@ -68,12 +71,22 @@ import {
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
+import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
+import type { EvalFlags } from "./eval-source.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
 const runConfig = object({
   path: {
     description: "markdown document to execute",
-    ...field(z.string(), cli.argument()),
+    ...field(z.string().optional(), cli.argument()),
+  },
+  // Declared so `xmd run --help` lists it with every other option. The value is
+  // lifted out of argv by readEvalFlags before parsing — see eval-source.ts —
+  // so this field is never the source of the document.
+  eval: {
+    description: "inline markdown document to execute, in place of a path",
+    aliases: ["-e"],
+    ...field(z.string().optional()),
   },
   componentDir: {
     description: "component search directory",
@@ -309,7 +322,7 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
 }
 
 interface DocumentConfig {
-  path: string;
+  root: RootDocumentSource;
   componentDir: string[];
   verbose: boolean;
   journal: string | undefined;
@@ -331,7 +344,7 @@ interface DocumentMode {
  * echo, and a value root's JSON line are the document's own output and stay.
  */
 function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
-  const { path: rootPath, componentDir, verbose, journal, raw } = config;
+  const { root, componentDir, verbose, journal, raw } = config;
 
   // Every CLI invocation starts from an empty stream. --journal writes
   // current-run diagnostics only; existing traces are never loaded.
@@ -410,10 +423,10 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
 
   // `xmd test` reports on stdout, so the JSON result contract is `xmd run`'s
   // alone. Reading the mode costs no document effects.
-  const valueRoot = !mode.testing && (yield* readsValue(rootPath));
+  const valueRoot = !mode.testing && (yield* readsValue(root));
 
   const execution = yield* execute({
-    path: rootPath,
+    ...root,
     stream,
     props: mode.props,
     componentDirs: componentDir,
@@ -489,7 +502,7 @@ function reportFailure(error: Error, prefix?: string): void {
   console.error(`${label}${error.message}`);
 }
 
-interface TestConfig extends Omit<DocumentConfig, "path"> {
+interface TestConfig extends Omit<DocumentConfig, "root"> {
   /**
    * Optional because `field` types a schema by what it accepts, and
    * `z.string().default(".")` accepts nothing as well as a string. The
@@ -534,7 +547,7 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
       yield* exit(1);
       return;
     }
-    const result = yield* runScopedDocument({ ...config, path }, { testing: true });
+    const result = yield* runScopedDocument({ ...config, root: { path } }, { testing: true });
     if (!result.ok) {
       reportFailure(result.error);
       yield* exit(1);
@@ -565,7 +578,7 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
     const result = yield* runScopedDocument(
       {
         ...config,
-        path: document.path,
+        root: { path: document.path },
         componentDir: componentSearchPath(document, target.root, config.componentDir),
       },
       { testing: true },
@@ -586,9 +599,9 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
  * A document that cannot be inspected — missing, malformed, or unreadable —
  * reports text, so execution produces the diagnostic rather than inspection.
  */
-function* readsValue(rootPath: string): Operation<boolean> {
+function* readsValue(root: RootDocumentSource): Operation<boolean> {
   try {
-    const description = yield* inspectDocument({ path: rootPath });
+    const description = yield* inspectDocument(root);
     return description.returnMode === "value";
   } catch {
     return false;
@@ -676,7 +689,7 @@ function readPatternFlags(args: string[]): PatternFlags {
 interface PropsPhase {
   /** argv with document-derived tokens removed. */
   args: string[];
-  documentPath?: string;
+  root?: RootDocumentSource;
   bindings: Binding[];
   extraction?: Extraction;
   propsSchema?: unknown;
@@ -685,12 +698,13 @@ interface PropsPhase {
 }
 
 /**
- * Locate the document, read what it declares, and lift its generated
+ * Locate the root document, read what it declares, and lift its generated
  * options out of argv. A provisional parse finds the path: it stops at
  * the first token it does not define, which is exactly where
- * document-derived options begin.
+ * document-derived options begin. The inline document was already lifted out
+ * of argv, so it needs no parse at all.
  */
-function* preparePropsPhase(args: string[]): Operation<PropsPhase> {
+function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<PropsPhase> {
   const provisional = xmd.parse({ args });
   // `program` short-circuits on `--version` and leaves no configuration
   // behind, so there is nothing to inspect.
@@ -698,8 +712,34 @@ function* preparePropsPhase(args: string[]): Operation<PropsPhase> {
   const command = selected && !selected.help ? selected.name : undefined;
   const documentPath =
     selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
+  const [supplied] = evalFlags.values;
 
-  if (typeof documentPath !== "string") {
+  if (supplied !== undefined && command !== undefined && command !== "run") {
+    return {
+      args,
+      bindings: [],
+      error: `unrecognized option for xmd ${command}: ${EVAL_OPTION} — inline documents are exclusive to xmd run`,
+    };
+  }
+
+  if (supplied !== undefined && typeof documentPath === "string") {
+    return {
+      args,
+      bindings: [],
+      error:
+        `${documentPath} and ${EVAL_OPTION} both supply a root document — a run takes exactly one, ` +
+        `either \`xmd run ${documentPath}\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+    };
+  }
+
+  const root: RootDocumentSource | undefined =
+    supplied !== undefined
+      ? inlineSource(supplied)
+      : typeof documentPath === "string"
+        ? { path: documentPath }
+        : undefined;
+
+  if (!root) {
     const stray = findPropsFlag(args);
     if (stray && command && command !== "run") {
       return {
@@ -719,19 +759,19 @@ function* preparePropsPhase(args: string[]): Operation<PropsPhase> {
   }
 
   try {
-    const document = yield* inspectDocument({ path: documentPath });
+    const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
     const extraction = extractPropsArgs(args, bindings);
     return {
       args: extraction.rest,
-      documentPath,
+      root,
       bindings,
       extraction,
       propsSchema: document.props,
       declared: declaredProperties(document.props),
     };
   } catch (error) {
-    return { args, bindings: [], documentPath, error: describeError(error) };
+    return { args, bindings: [], root, error: describeError(error) };
   }
 }
 
@@ -743,9 +783,20 @@ const COMMAND_NAMES = ["run", "test", "test-agent"];
  * during the props phase is reinstated there rather than falling back to
  * program help.
  */
+/**
+ * Where the root document comes from, and how to write it. Neither fits an
+ * option description, and the help renderer has no epilogue, so it is composed
+ * here beside the document-property section.
+ */
+const RUN_SOURCE_HELP = [
+  `Exactly one root document is required: a path, or one ${EVAL_OPTION} value.`,
+  "Quote the document so the shell passes it as a single argument:",
+  `  xmd ${EVAL_ALIAS} '# Hello'`,
+].join("\n");
+
 function renderHelp(phase: PropsPhase): string {
   const [first] = phase.args;
-  const command = COMMAND_NAMES.includes(first) ? first : phase.documentPath ? "run" : undefined;
+  const command = COMMAND_NAMES.includes(first) ? first : phase.root ? "run" : undefined;
 
   if (!command) {
     return xmd.help({ args: phase.args });
@@ -753,13 +804,14 @@ function renderHelp(phase: PropsPhase): string {
 
   const help = xmd.parse({ args: [command, "--help"] });
   const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
+  const withSource = command === "run" ? `${base}\n\n${RUN_SOURCE_HELP}` : base;
 
   // A document declaring only structured properties generates no
   // individual binding, but it still accepts the aggregate ones.
-  if (!phase.documentPath || !phase.declared?.length) {
-    return base;
+  if (!phase.root || !phase.declared?.length) {
+    return withSource;
   }
-  return `${base}\n\n${formatProperties(phase.documentPath, phase.bindings)}`;
+  return `${withSource}\n\n${formatProperties(rootSourcePath(phase.root), phase.bindings)}`;
 }
 
 function* resolveRunProps(
@@ -806,8 +858,18 @@ function* resolveRunProps(
  * APIs is #156.
  */
 export function* runXmd(args: string[]): Operation<void> {
-  const helpRequest = takeHelpFlag(args);
-  const propsPhase = yield* preparePropsPhase(helpRequest.args);
+  // First, so that no later scanner — help, properties, agent flags — can
+  // mistake the inline document's own text for an option.
+  const evalFlags = readEvalFlags(args);
+  const grammarError = evalGrammarError(evalFlags);
+  if (grammarError) {
+    console.error(grammarError);
+    yield* exit(1);
+    return;
+  }
+
+  const helpRequest = takeHelpFlag(evalFlags.rest);
+  const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
 
   if (propsPhase.error) {
     console.error(propsPhase.error);
@@ -846,24 +908,38 @@ export function* runXmd(args: string[]): Operation<void> {
   switch (command.name) {
     case "run": {
       const config = command.config;
+      // Reported here rather than in the props phase: `xmd run --help` and
+      // `xmd --help` describe the command without one, and they are handled
+      // above.
+      if (!propsPhase.root) {
+        console.error(
+          `xmd run requires a document path or an inline document — ` +
+            `\`xmd run <document.md>\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+        );
+        yield* exit(1);
+        break;
+      }
       const props = yield* resolveRunProps(propsPhase);
       if (props.error) {
         console.error(props.error);
         yield* exit(1);
         break;
       }
-      const result = yield* runScopedDocument(config, {
-        testing: false,
-        props: props.value,
-        agent: {
-          agentProvider: config.agentProvider,
-          defaultAgent: config.defaultAgent,
-          timeout: findFlagText(args, "--timeout"),
-          approveAll: config.approveAll,
-          approveReads: config.approveReads,
-          denyAll: config.denyAll,
+      const result = yield* runScopedDocument(
+        { ...config, root: propsPhase.root },
+        {
+          testing: false,
+          props: props.value,
+          agent: {
+            agentProvider: config.agentProvider,
+            defaultAgent: config.defaultAgent,
+            timeout: findFlagText(evalFlags.rest, "--timeout"),
+            approveAll: config.approveAll,
+            approveReads: config.approveReads,
+            denyAll: config.denyAll,
+          },
         },
-      });
+      );
       if (!result.ok) {
         reportFailure(result.error);
         yield* exit(1);
@@ -871,7 +947,7 @@ export function* runXmd(args: string[]): Operation<void> {
       break;
     }
     case "test": {
-      const agentFlag = findAgentOnlyFlag(args);
+      const agentFlag = findAgentOnlyFlag(evalFlags.rest);
       if (agentFlag) {
         console.error(
           `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to xmd run`,
@@ -879,7 +955,7 @@ export function* runXmd(args: string[]): Operation<void> {
         yield* exit(1);
         break;
       }
-      const propsFlag = findPropsFlag(args);
+      const propsFlag = findPropsFlag(evalFlags.rest);
       if (propsFlag) {
         console.error(
           `unrecognized option for xmd test: ${propsFlag} — document properties are exclusive to xmd run`,
@@ -887,7 +963,7 @@ export function* runXmd(args: string[]): Operation<void> {
         yield* exit(1);
         break;
       }
-      yield* test(command.config, args);
+      yield* test(command.config, evalFlags.rest);
       break;
     }
     case "test-agent":

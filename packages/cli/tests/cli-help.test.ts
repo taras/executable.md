@@ -21,8 +21,12 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
 
   it("CH2: xmd run --help prints run help instead of a missing-argument error", function* () {
     const { stdout, stderr } = yield* runCli(["run", "--help"]).expect();
-    expect(stdout).toContain("Usage: xmd run [OPTIONS] <path>");
+    // The path is optional because `--eval` is the other way to supply a root
+    // document; which of the two a run needs is stated below the options.
+    expect(stdout).toContain("Usage: xmd run [OPTIONS] [path]");
     expect(stdout).toContain("markdown document to execute");
+    expect(stdout).toContain("-e, --eval");
+    expect(stdout).toContain("Exactly one root document is required");
     expect(stdout).toContain("--component-dir");
     expect(stderr).not.toContain("Invalid input");
   });
@@ -41,6 +45,8 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
   it("CH5: a missing document still fails, so help detection does not mask errors", function* () {
     const { code, stderr } = yield* runCli(["run"]).join();
     expect(code).toBe(1);
-    expect(stderr).toContain("path");
+    // Once `path` became optional the parser stopped raising, so the diagnostic
+    // is the CLI's own and names both ways to supply a root document.
+    expect(stderr).toContain("requires a document path or an inline document");
   });
 });

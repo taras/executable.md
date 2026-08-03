@@ -2,7 +2,7 @@ import type { Operation } from "effection";
 import { readTextFile } from "@executablemd/runtime";
 
 /** The stable identity an inline root document reports. */
-export const INLINE_SOURCE_PATH: "<eval>" = "<eval>";
+export const INLINE_SOURCE_PATH = "<eval>";
 
 /**
  * A root document supplied as text. The identity is part of the value, so text
