@@ -73,8 +73,11 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(String(failure)).toContain("Missing");
   });
 
-  // O29: the same projection inside <Output> collects, and the region emits.
-  it("O29: Markdown <Content /> inside <Output> collects a projected error", function* () {
+  // O29: the same projection inside <Output>, where the region is fail-fast
+  // (#309). The policy travels with the projection, so the content task ends the
+  // execution rather than rendering a comment, and the region's later text never
+  // reaches the document.
+  it("O29: a Markdown <Content /> inside <Output> fails on a projected error", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "components/Wrap.md": ["<Output>", "<Content />", "", "done", "</Output>"].join("\n"),
@@ -82,12 +85,15 @@ describe("Tier O — Eval scope hierarchy", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+    let failure: unknown;
+    try {
+      yield* collect(yield* execute({ path: "doc.md", stream }));
+    } catch (error) {
+      failure = error;
+    }
 
-    expect(output).toContain("ERROR");
-    expect(output).toContain("done");
-    // Reported once on the way out, not again when it crosses back.
-    expect(String(output).split("Cannot resolve component: Missing").length - 1).toBe(1);
+    expect(failure).toBeInstanceOf(DocumentationError);
+    expect(String(failure)).toContain("Missing");
   });
 
   // O30: value-component documentation carries the same policy, so a claimed
@@ -207,12 +213,18 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  // O24: the same block inside an <Output> region collects instead, so the
+  // O24: the same block inside a captured region of an <Output>, where the
   // projected error renders as a comment and the region still emits.
-  it("O24: a persistent projection inside <Output> settles under the collecting policy", function* () {
+  it("O24: a captured persistent projection inside <Output> renders the diagnostic", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "components/Wrap.md": ["<Output>", ...PROJECTING_BLOCK, "</Output>"].join("\n"),
+      "components/Wrap.md": [
+        "<Output>",
+        "<CaptureErrors>",
+        ...PROJECTING_BLOCK,
+        "</CaptureErrors>",
+        "</Output>",
+      ].join("\n"),
       "doc.md": "<Wrap>\n<Missing />\n</Wrap>",
     });
     yield* useEchoExec();
@@ -228,7 +240,13 @@ describe("Tier O — Eval scope hierarchy", () => {
   it("O31: a captured markdown projection refuses the binding on a projected error", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "components/Wrap.md": ["<Output>", ...PROJECTING_BLOCK, "</Output>"].join("\n"),
+      "components/Wrap.md": [
+        "<Output>",
+        "<CaptureErrors>",
+        ...PROJECTING_BLOCK,
+        "</CaptureErrors>",
+        "</Output>",
+      ].join("\n"),
       "doc.md": '<Wrap as="cap">\n<Missing />\n</Wrap>\n\nvalue:{cap}:end',
     });
     yield* useEchoExec();

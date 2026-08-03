@@ -941,9 +941,12 @@ describe("Tier LOOP — execution records", () => {
     expect(outcomeRecords(run.events)).toEqual([
       { name: "loop:0", status: "ok", iterations: 1, outcome: "error" },
     ]);
-    // The execution's own terminal record agrees.
+    // The execution's own terminal record agrees. A document that decided it
+    // failed is a determined outcome (#309), so the close is `ok` and the
+    // failure it carries is inside the recorded value.
     const close = run.events.find((event) => event.type === "close");
-    expect(close?.result.status).toBe("err");
+    expect(close?.result.status).toBe("ok");
+    expect(JSON.stringify(close?.result)).toContain('"status":"err"');
   });
 
   it("LOOP45: a collecting policy is not a loop failure", function* () {
@@ -1009,7 +1012,9 @@ describe("Tier LOOP — execution records", () => {
     expect(outcomeRecords(completed.events)[0]?.outcome).toBe("exhausted");
     expect(closeResults(completed.events)).toEqual(["ok"]);
     expect(outcomeRecords(failed.events)[0]?.outcome).toBe("error");
-    expect(closeResults(failed.events)).toEqual(["err"]);
+    // A determined document failure closes `ok` around the failed outcome; only
+    // a durability or infrastructure failure closes `err` (#309).
+    expect(closeResults(failed.events)).toEqual(["ok"]);
     expect(closeResults(events)).toEqual([]);
   });
 

@@ -652,12 +652,29 @@ describe("component-declared output", () => {
     expect(output).toContain("ok");
   });
 
-  it("keeps errors inside an <Output> region as comments", function* () {
+  it("fails an <Output> region on an ordinary error", function* () {
     const comp = makeComponent("Err", "<Output>\n<Bogus />\n</Output>");
-    const ctx = { Err: comp };
-    const output = yield* expand(scanSegments("<Err />"), ctx);
+    let caught: unknown;
+    try {
+      yield* expand(scanSegments("<Err />"), { Err: comp });
+    } catch (error) {
+      caught = error;
+    }
+    if (!(caught instanceof DocumentationError)) {
+      throw new Error(`expected DocumentationError, received ${String(caught)}`);
+    }
+    expect(caught.message).toContain("Failed to import component Bogus");
+  });
+
+  it("keeps a captured error inside an <Output> region as a comment", function* () {
+    const comp = makeComponent(
+      "Err",
+      "<Output>\n<CaptureErrors>\n<Broken />\n</CaptureErrors>\n\nAFTER\n</Output>",
+    );
+    const output = yield* expand(scanSegments("<Err />"), { Err: comp, Broken: BROKEN });
     expect(output).toContain("<!-- ERROR");
-    expect(output).toContain("Failed to import component Bogus");
+    expect(output).toContain("broken thing");
+    expect(output).toContain("AFTER");
   });
 
   it("keeps errors as comments when no <Output> is declared", function* () {
@@ -785,13 +802,31 @@ describe("component-declared output", () => {
     expect(threw).toBe(true);
   });
 
-  it("renders a child's Output error as a comment when consumed inside parent Output", function* () {
-    const child = makeComponent("Child", "<Output>\n<Bogus />\n</Output>");
+  // A captured diagnostic keeps crossing the consumer boundary as one rendered
+  // comment: the caller's region is fail-fast, and what it settles is a failure
+  // the callee's document already decided to carry on past.
+  it("renders a child's captured Output error as a comment inside parent Output", function* () {
+    const child = makeComponent(
+      "Child",
+      "<Output>\n<CaptureErrors>\n<Broken />\n</CaptureErrors>\n</Output>",
+    );
     const parent = makeComponent("P", "<Output>\n<Child />\n</Output>");
-    const ctx = { Child: child, P: parent };
+    const ctx = { Child: child, P: parent, Broken: BROKEN };
     const output = yield* expand(scanSegments("<P />"), ctx);
     expect(output).toContain("<!-- ERROR");
-    expect(output).toContain("Failed to import component Bogus");
+    expect(output.match(/broken thing/g) ?? []).toHaveLength(1);
+  });
+
+  it("fails the caller when a child's uncaptured Output error crosses the boundary", function* () {
+    const child = makeComponent("Child", "<Output>\n<Bogus />\n</Output>");
+    const parent = makeComponent("P", "<Output>\n<Child />\n</Output>");
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P />"), { Child: child, P: parent });
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
   });
 
   it("throws before storing an as= binding that captured a child's Output error", function* () {
@@ -820,8 +855,11 @@ describe("component-declared output", () => {
     expect(threw).toBe(true);
   });
 
-  it("renders a function component's content error once inside parent Output", function* () {
-    const child = makeComponent("Child", "<Output>\n<Echo>\n<Bogus />\n</Echo>\n</Output>");
+  it("renders a function component's captured content error once inside parent Output", function* () {
+    const child = makeComponent(
+      "Child",
+      "<Output>\n<CaptureErrors>\n<Echo>\n<Bogus />\n</Echo>\n</CaptureErrors>\n</Output>",
+    );
     const parent = makeComponent("P2", "<Output>\n<Child />\n</Output>");
     const ctx = { Child: child, Echo: echoComponent, P2: parent };
     const output = yield* expand(scanSegments("<P2 />"), ctx);

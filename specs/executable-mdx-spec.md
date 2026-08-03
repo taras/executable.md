@@ -4006,10 +4006,14 @@ syntax error reported against the element. An element written that way performs
 no action at all: its body does not expand, and a prop expression is never
 evaluated.
 
-Both install the same middleware, so the nearest collection boundary is the one
+Both install the same middleware, so the nearest capture boundary is the one
 that handles a failure from the invocation tree beneath it, exactly once. The
 boundary sits outside the whole invocation, which is what lets it see a failure
-that happens while the invocation is being dismantled.
+that happens while the invocation is being dismantled. It also marks every
+diagnostic raised beneath it — the ones it builds from a component failure and
+the structural ones the region reports on its own — as explicitly captured,
+which is what an `<Output>` region consults when it decides whether to carry on
+(§6.9).
 
 Collection turns a failure into one diagnostic whose `cause` is the complete
 original failure. It does not decide what that diagnostic means: the caller's
@@ -4098,26 +4102,57 @@ after a region still runs. The required sequencing:
 - Documentation and output regions execute in document order.
 - The first error produced while executing documentation stops that body's
   execution immediately and propagates to the caller.
-- An error produced while rendering an output region — or anywhere in a body
-  that declares no `<Output>` — retains normal `ErrorSegment` rendering (an
-  `<!-- ERROR -->` comment).
-- A root containing `<Output>` emits its selected output only after the whole
-  body completes successfully; a documentation failure yields no partial
-  output, and an empty selection emits nothing.
+- An error produced while rendering an output region stops the execution too.
+  The output the region produced before it is preserved and emitted; no later
+  sibling, region, documentation block, elicitation, or other effect begins.
+- An error an explicit `<CaptureErrors>` boundary handled renders as an
+  `<!-- ERROR -->` comment inside an output region, and the region continues.
+- An error anywhere in a body that declares no `<Output>` retains normal
+  `ErrorSegment` rendering (an `<!-- ERROR -->` comment) and execution
+  continues.
+- A root containing `<Output>` emits its selected output once: after the whole
+  body completes successfully, or — when the body fails — the part the regions
+  produced before the failure, emitted before the execution reports it. An empty
+  selection emits nothing.
 
-An error a nested component renders inside its own output region is a normal
-comment when that component renders normally; but when that component is
-executed as a parent's documentation, the parent's documentation fail-fast
-applies and the error propagates rather than being hidden.
+Four situations are therefore distinct, and §6.9's settlement policies name them
+directly:
+
+| Where | Ordinary diagnostic | Captured diagnostic |
+|---|---|---|
+| A root or body with no `<Output>` | renders, execution continues | renders |
+| An `<Output>` region | ends the execution, keeping what was rendered first | renders, region continues |
+| Documentation | ends the execution, hidden | ends the execution, hidden |
+
+An error a nested component renders inside its own output region behaves the
+same way at its consumer: a captured one is a comment when that component
+renders normally, an uncaptured one fails the caller, and when the component is
+executed as a parent's documentation the parent's fail-fast applies to both.
 
 **Reporting and settling are separate.** `Component.raise` is where an error is
 reported: its middleware chain observes each `ErrorSegment` once, where the
 segment is created, which is what lets instrumentation and `<Test>` count
 failures. Its default implementation then *settles* the segment under the
-ambient policy — collected for rendering, or thrown as a documentation failure.
+ambient policy — one of three:
+
+| Policy | Where it is installed | Ordinary diagnostic | Captured diagnostic |
+|---|---|---|---|
+| `collect` | the default; roots and bodies with no `<Output>` | returned for rendering | returned |
+| `output` | every `<Output>` region, in a root and in a component alike | thrown as a documentation failure | returned for rendering |
+| `throw` | documentation, and value roots | thrown | thrown |
+
 A documentation chunk and an `<Output>` region select the policy by value rather
 than by installing reporting middleware, so an error crossing from a component's
 own policy into its caller's is settled again without being reported twice.
+
+**A capture is remembered on the segment, by identity.** `<CaptureErrors>` and
+`captureErrors(fn)` mark every `ErrorSegment` raised beneath them as one the
+document asked to carry on past — the same object an observer already saw, never
+a copy — and settlement under `output` consults that mark. This is what lets a
+captured diagnostic cross an invocation boundary into a fail-fast caller and
+still render there, while an uncaptured one from the same region fails the
+caller. Documentation ignores the mark: it is hidden, so there is nothing for a
+captured diagnostic to render into.
 
 **Whoever creates an `ErrorSegment` reports it.** `Component.raise` is called at
 the point the failure is decided, and a diagnostic that reaches the document
@@ -4161,9 +4196,11 @@ throwing parent frame belongs to that same set, and throws rather than appending
 
 A root document obeys exactly the same rules as an imported component (§5.4).
 Because selecting output requires the whole body, a root that declares
-`<Output>` is buffered — executed to completion, then emitted once on success —
-while a root without `<Output>` keeps per-segment streaming. Buffering defers
-only when output is emitted, not what executes, so replay is deterministic.
+`<Output>` is buffered — executed to completion, then emitted once — while a
+root without `<Output>` keeps per-segment streaming. Buffering defers only when
+output is emitted, not what executes, so replay is deterministic. A failing body
+emits what its regions produced before the failure, and emits it before the
+execution reports that failure.
 
 ### 6.10 Component return values: `returns` and `<Return>`
 
@@ -5708,8 +5745,44 @@ With the default directory resolver:
 [4] yield  root  { type: "eval", name: "eval:root:0", language: "js" }
     result: { status: "ok", value: { value: { port: 4321 } } }
 
-[5] close  root  result: { status: "ok", value: "...rendered output..." }
+[5] close  root  result: { status: "ok", value: { status: "ok", output: "...", value: "..." } }
 ```
+
+### 10.2.1 The root close records a document outcome
+
+The root coroutine's `Close` carries what the document decided, not merely
+whether the process reached the end:
+
+| Outcome | Close | Value |
+|---|---|---|
+| The document succeeded | `ok` | `{ status: "ok", output, value }` |
+| The document failed on its own terms | `ok` | `{ status: "err", output, error }` |
+| A durability failure (§6.11) | `err` | the serialized failure |
+| A failure escaping the workflow while `durableRun` is active | `err` | the serialized failure |
+| A failure before entering or after returning from `durableRun` | no close is written | — |
+
+An ordinary document failure is a *determined* outcome: the run is over, what it
+rendered first is part of the record, and closing `ok` around it is what lets a
+replay restore both without re-executing anything. A durability failure is the
+opposite — it says the journal no longer describes this run, so recording it as
+the run's own result would write onto a journal already known to be wrong.
+`err` closes are therefore not reserved for infrastructure failures in general:
+a failure outside `durableRun` produces no close at all.
+
+`error` holds only what JSON can carry, and that is the complete replay contract:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name`, `message` | `string` | of the original caught failure, wrapper included |
+| `segment` | `{ message, source }` | the `ErrorSegment` the failure was decided on |
+| `cause` | `string \| null` | the rendered cause; `null` when there was none, and `"undefined"` when there was one whose value was `undefined` |
+| `errors` | `{ name, message }[] \| null` | shallow `AggregateError` members, in order |
+
+Object identity, stacks, and the cause graph do not cross. A live run therefore
+reports the failure it actually caught — the same object, with its type, `cause`
+and aggregate members intact — while a replayed run reports the reconstruction
+these fields describe: an `AggregateError` when `errors` is present, and an
+`Error` otherwise.
 
 ### 10.3 Sequential coroutine IDs
 
@@ -5871,7 +5944,7 @@ visible warning blocks, collect into a separate error report).
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
 | C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate diagnostic and runs no body side effects |
 | C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's policy |
-| C43 | Documentation fail-fast | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; errors inside `<Output>` or with no `<Output>` remain comments |
+| C43 | Documentation fail-fast | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; errors with no `<Output>` remain comments, and inside `<Output>` only a `<CaptureErrors>`-handled one does |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
 | C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
 | C46 | **Nested default filled** | A row omitting `line` (declared `{ type: number, default: 0 }`) resolves with `line` set to `0` |
@@ -5920,7 +5993,7 @@ visible warning blocks, collect into a separate error report).
 | E9 | `sample exec` in full document | Command + LLM both journaled, LLM response in output |
 | E10 | Unclosed bold across component boundary | `**text\n<Comp />\nmore` → healed bold in first segment, component expanded, `more` unaffected |
 | E11 | `<Output>` component vs. root consistency | An imported component and a root document apply `<Output>` identically; documentation is suppressed in both |
-| E12 | Root `<Output>` buffering | A root with `<Output>` emits once after success; a later documentation failure yields no partial output; an empty selection emits no event; replay reproduces the result |
+| E12 | Root `<Output>` buffering | A root with `<Output>` emits once after success; a later documentation failure emits the part produced before it and then fails; an empty selection emits no event; replay reproduces the result |
 | E13 | `<If>` inside `<Output>` (smoke) | `smoke-test/OutputDemo.md` renders the conditionally-selected region (its `condition` binding computed by preceding documentation eval) while its documentation prose does not appear |
 
 ### Tier F — Markdown healing (remend)
@@ -6498,6 +6571,27 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
 
+### Tier OFF — `<Output>` fail-fast
+
+Identifiers match `packages/core/tests/output-fail-fast.test.ts`.
+
+| # | Test | Verify |
+|---|------|--------|
+| OFF1 | Root region failure | The output produced before the failure is emitted, completion is `Err`, and the block after the failure never runs |
+| OFF2 | Component region failure | The same three, through a real invocation, with the caller's later block never starting |
+| OFF3 | Non-zero exec with stdout | The stdout stays visible, the execution fails, and the next block never runs — the integration pin with #307 |
+| OFF4 | Multiple regions | An earlier region's output survives; the documentation between the regions and the later region never run |
+| OFF5a | `<CaptureErrors>` in a region | One diagnostic renders and the marker after it renders too |
+| OFF5b | Same fixture, no boundary | The region fails and the marker does not render |
+| OFF5c | Captured region through a document | A component whose region captured its failure completes, and the marker renders |
+| OFF5d | `captureErrors(fn)` in a region | The component's own diagnostic renders once and a following sibling runs |
+| OFF5e | Captured failure in documentation | Still fail-fast: the marking is ignored where nothing renders |
+| OFF5f | Root with no `<Output>` | Collecting behavior is unchanged: the diagnostic renders and later blocks run |
+| OFF6 | Live completion | `Err` carries the failure the engine caught |
+| OFF7 | Replay | The same partial output and failure, with no command running a second time |
+| OFF8 | Journal shape | The root closes `ok` around a value whose `status` is `err` |
+| OFF9 | `as` capture is not output | A failing `as=` invocation's rendered prefix does not reach the document |
+
 ### Tier OBS — error observation
 
 The one-observation contract of §6.9, measured with counting `Component.raise`
@@ -6810,7 +6904,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
 | 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
 | 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |
-| 68 | Per-root-segment emission for roots without `<Output>`; full buffering for roots that declare it | Streaming UX for the common case — root segments are sequential and independent, and component-internal expansion is recursive and buffered. A root declaring top-level `<Output>` (§6.9) buffers completely and emits the selected regions only after successful expansion, so a later documentation failure yields no partial output; an empty selection emits nothing |
+| 68 | Per-root-segment emission for roots without `<Output>`; full buffering for roots that declare it | Streaming UX for the common case — root segments are sequential and independent, and component-internal expansion is recursive and buffered. A root declaring top-level `<Output>` (§6.9) buffers completely and emits the selected regions once — after successful expansion, or the part produced before a failure, ahead of the failure being reported; an empty selection emits nothing |
 | 69 | `blockId` counter threaded through expansion context | Per-segment expansion resets `result.length`; mutable counter preserves unique diagnostic IDs; counter guarded by expansion scope cancellation |
 | 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |

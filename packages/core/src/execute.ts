@@ -31,8 +31,9 @@ import type {
   JsonObject,
   PropsSchema,
   ReturnsSchema,
+  Segment,
 } from "./types.ts";
-import { parseJsonObject } from "./json.ts";
+import { parseJson, parseJsonObject } from "./json.ts";
 import { compilePropsSchema, compileReturnsSchema, validateProps } from "./validate.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
@@ -46,7 +47,7 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import type { BlockCounter } from "./expand.ts";
-import { DocumentationError } from "./errors.ts";
+import { documentationFailure, durabilityFailure, DocumentationError } from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
@@ -263,9 +264,164 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
  * rendered text for a text root, the validated JSON for a value root. The pair
  * is journaled together so replay restores both; only `value` is public.
  */
-interface DocumentResult extends JsonObject {
+type DocumentResult = DocumentSuccess | DocumentFailureResult;
+
+type DocumentSuccess = {
+  status: "ok";
   output: string;
   value: Json;
+};
+
+/**
+ * A document that decided it failed. This is an outcome, not an accident: the
+ * run is over, what it rendered first is part of the record, and the journal
+ * closes `ok` around it so a replay restores both without re-executing
+ * anything. A durability failure is the opposite case and never arrives here
+ * (§6.11) — it says the journal no longer describes this run, so recording it
+ * as the run's own result would write onto a journal already known to be wrong.
+ */
+type DocumentFailureResult = {
+  status: "err";
+  output: string;
+  error: DocumentFailure;
+};
+
+/**
+ * What crosses the journal about a failure. Everything here is JSON: object
+ * identity, stacks, and the cause graph stay behind, which is why the live path
+ * resolves the original error instead of this description (`liveFailures`).
+ *
+ * Absence is `null` rather than a missing key, because absence is information:
+ * `cause: null` says the failure had none, while `cause: "undefined"` says it
+ * had one whose value was `undefined` — a component may throw exactly that, and
+ * a replayed run should still be able to tell the two apart.
+ */
+type DocumentFailure = {
+  name: string;
+  message: string;
+  segment: { message: string; source: string | null };
+  cause: string | null;
+  errors: { name: string; message: string }[] | null;
+};
+
+/**
+ * The original error a failed outcome was derived from, by identity.
+ *
+ * A live run resolves the failure it actually caught — same object, same type,
+ * same `cause`, same aggregate members — because `durableRun` hands back the
+ * very object the workflow returned. A replayed run is given the journal's
+ * reconstruction of that object instead, so the lookup misses and the described
+ * fields are all there is. The miss is the signal; nothing asks whether it is
+ * replaying.
+ */
+const liveFailures = new WeakMap<object, unknown>();
+
+function describeFailure(caught: unknown, documentation: DocumentationError): DocumentFailure {
+  const wrapper = caught instanceof Error ? caught : new Error(String(caught));
+  return {
+    name: wrapper.name,
+    message: wrapper.message,
+    segment: {
+      message: documentation.segment.message,
+      source: documentation.segment.source ?? null,
+    },
+    cause: "cause" in wrapper ? describeCause(wrapper.cause) : null,
+    errors:
+      wrapper instanceof AggregateError
+        ? wrapper.errors.map((member: unknown) => ({
+            name: member instanceof Error ? member.name : "Error",
+            message: member instanceof Error ? member.message : String(member),
+          }))
+        : null,
+  };
+}
+
+function describeCause(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * The error a completion reports for a failed document: the original one on a
+ * live run, and otherwise the documented reconstruction of it.
+ */
+function failureError(failure: DocumentFailure, live: unknown): unknown {
+  if (live !== undefined) {
+    return live;
+  }
+  const members = failure.errors;
+  const replayed = members
+    ? new AggregateError(
+        members.map((member) => withName(new Error(member.message), member.name)),
+        failure.message,
+      )
+    : new Error(failure.message);
+  if (failure.cause !== null) {
+    replayed.cause = failure.cause;
+  }
+  return withName(replayed, failure.name);
+}
+
+function withName(error: Error, name: string): Error {
+  error.name = name;
+  return error;
+}
+
+/**
+ * Narrow what the journal or the workflow handed back, field by field.
+ *
+ * The result is parsed rather than trusted: a journal is data, and a replayed
+ * run must fail on a shape it cannot read instead of carrying it further. The
+ * live failure is looked up from the value `durableRun` returned, before this
+ * runs, so parsing is free to build its own object.
+ */
+function parseDocumentResult(value: unknown): DocumentResult {
+  const candidate = parseJsonObject(value);
+  const output = candidate["output"];
+  if (typeof output !== "string") {
+    throw new Error("A document result must carry its rendered output as a string.");
+  }
+  const status = candidate["status"];
+  if (status === "ok") {
+    return { status: "ok", output, value: parseJson(candidate["value"]) };
+  }
+  if (status === "err") {
+    return { status: "err", output, error: parseFailure(candidate["error"]) };
+  }
+  throw new Error(`A document result is "ok" or "err", not ${JSON.stringify(status)}.`);
+}
+
+function parseFailure(value: unknown): DocumentFailure {
+  const candidate = parseJsonObject(value);
+  const name = candidate["name"];
+  const message = candidate["message"];
+  if (typeof name !== "string" || typeof message !== "string") {
+    throw new Error("A failure description carries a name and a message.");
+  }
+  const segment = parseJsonObject(candidate["segment"]);
+  const segmentMessage = segment["message"];
+  if (typeof segmentMessage !== "string") {
+    throw new Error("A failure description carries the message of the segment that failed.");
+  }
+  const source = segment["source"];
+  const cause = candidate["cause"];
+  const errors = candidate["errors"];
+  return {
+    name,
+    message,
+    segment: { message: segmentMessage, source: typeof source === "string" ? source : null },
+    cause: typeof cause === "string" ? cause : null,
+    errors: Array.isArray(errors) ? errors.map(parseFailureMember) : null,
+  };
+}
+
+function parseFailureMember(value: Json): { name: string; message: string } {
+  const member = parseJsonObject(value);
+  const name = member["name"];
+  const message = member["message"];
+  if (typeof name !== "string" || typeof message !== "string") {
+    throw new Error("An aggregate member carries a name and a message.");
+  }
+  return { name, message };
 }
 
 /**
@@ -279,8 +435,8 @@ function* runValueRoot(
   returns: ReturnsSchema,
   validatedProps: Record<string, Json>,
   counter: BlockCounter,
+  chunks: string[],
 ): Operation<DocumentResult> {
-  const chunks: string[] = [];
   let produced: { value: Json } | undefined;
 
   yield* scoped(function* () {
@@ -319,7 +475,7 @@ function* runValueRoot(
   if (!produced) {
     throw new Error("The root document declares `returns` but produced no <Return> value.");
   }
-  return { output: chunks.join(""), value: produced.value };
+  return { status: "ok", output: chunks.join(""), value: produced.value };
 }
 
 function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
@@ -342,6 +498,14 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
   // per-segment expansion calls (see spec §6.1).
   const counter = createBlockCounter();
 
+  // What the document rendered before it stopped, held outside the expansion
+  // scope so a failure still leaves it here (§6.9). The buffered root fills
+  // `selected`; every streaming root has already emitted `streamed`.
+  const selected: Segment[] = [];
+  const streamed: string[] = [];
+  const produced: Segment[] = [];
+  let emittedThrough = 0;
+
   // The root binding environment is installed as scope-local middleware
   // around the entire loop so all segments share it. Resources spawned by
   // `persist` blocks are retained in the eval scope until expansion
@@ -359,19 +523,20 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
       }
       const text = renderSegment(structureError);
       yield* ephemeral(DocumentOutput.operations.output(text));
-      return { output: text, value: text };
+      streamed.push(text);
+      return { status: "ok", output: text, value: text };
     }
 
     if (root.returns !== undefined) {
-      return yield* runValueRoot(root, root.returns, validatedProps, counter);
+      return yield* runValueRoot(root, root.returns, validatedProps, counter, streamed);
     }
 
     // A root declaring top-level <Output> buffers completely (spec §5.4):
-    // execute the whole body, then emit the selected regions only after
-    // successful completion. A documentation failure throws before any emit,
-    // so no partial output is produced.
+    // execute the whole body, then emit the selected regions once. The owner is
+    // allocated here rather than inside the expansion so that a failure partway
+    // still leaves this frame holding what the regions rendered before it.
     if (bodyHasOutput(root.bodySegments)) {
-      const expanded = yield* expandBody(
+      yield* expandBody(
         root.bodySegments,
         [],
         root.meta,
@@ -379,45 +544,75 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         new Set(),
         counter,
         undefined,
+        undefined,
+        selected,
       );
-      const text = expanded.map(renderSegment).join("");
+      const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
       if (text) {
         yield* ephemeral(DocumentOutput.operations.output(text));
       }
-      return { output: text, value: text };
+      return { status: "ok", output: text, value: text };
     }
 
     // Per-root-segment emission loop for roots without <Output> (spec §5.4).
-    const chunks: string[] = [];
-
+    // The loop owns the segments so that a component whose own region fails
+    // partway has still handed over what it rendered — the root emits that
+    // before the failure is reported, the same way a buffered root does.
     for (const segment of root.bodySegments) {
-      const expanded = yield* expandSegments(
-        [segment],
-        root.meta,
-        validatedProps,
-        new Set(),
-        counter,
-      );
+      yield* expandSegments([segment], root.meta, validatedProps, new Set(), counter, produced);
 
-      for (const resolved of expanded) {
-        const text = renderSegment(resolved);
+      while (emittedThrough < produced.length) {
+        const resolved = produced[emittedThrough];
+        emittedThrough += 1;
+        const text = resolved === undefined ? "" : renderSegment(resolved);
         if (text) {
           // Emit through the Document Output Api (spec §9).
           // ephemeral() bridges from Workflow (durable) to Operation
           // (non-durable) — output emission is a derived side effect,
           // not journaled.
           yield* ephemeral(DocumentOutput.operations.output(text));
-          chunks.push(text);
+          streamed.push(text);
         }
       }
     }
 
-    const text = chunks.join("");
-    return { output: text, value: text };
+    const text = streamed.join("");
+    return { status: "ok", output: text, value: text };
   });
 
-  return yield* ephemeral(scopedExpansion);
+  // The catch is outside the `yield*`, not inside the scope: the expansion's
+  // teardown — the invocation being dismantled, retained work, and whatever
+  // aggregate the platform builds from a body failure and a teardown failure
+  // together — finishes as this returns. Describing the failure any earlier
+  // would describe an error whose account of itself is not complete yet.
+  try {
+    return yield* ephemeral(scopedExpansion);
+  } catch (error) {
+    // A durability failure is not something the document did, so it never
+    // becomes the document's own outcome (§6.11).
+    if (durabilityFailure(error) !== undefined) {
+      throw error;
+    }
+    const documentation = documentationFailure(error);
+    if (documentation === undefined) {
+      throw error;
+    }
+    // Everything the document rendered: the buffered selection, or what the
+    // streaming loop emitted plus whatever the failing segment had already
+    // handed over but not reached the emission step yet.
+    const rendered =
+      selected.length > 0
+        ? selected.map(renderSegment).join("")
+        : streamed.join("") + produced.slice(emittedThrough).map(renderSegment).join("");
+    const outcome: DocumentResult = {
+      status: "err",
+      output: rendered,
+      error: describeFailure(error, documentation),
+    };
+    liveFailures.set(outcome, error);
+    return outcome;
+  }
 }
 
 /**
@@ -557,20 +752,30 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      const { output, value } = yield* durableRun(() => Execution.operations.document(props), {
-        stream,
-      });
+      const returned = yield* durableRun(() => Execution.operations.document(props), { stream });
+      // Looked up from what the workflow returned, before parsing: on a live
+      // run this is the same object the workflow built, and it is the only
+      // place the original error still exists.
+      const live =
+        typeof returned === "object" && returned !== null ? liveFailures.get(returned) : undefined;
+      const result = parseDocumentResult(returned);
 
-      // Preserve output for any synchronous completion path that did not emit
-      // through the streaming API — a replayed run restores its body text from
-      // the journal instead of re-executing, and callback consumers only ever
-      // see chunks, never the close value.
-      if (!emitted && output) {
-        yield* DocumentOutput.operations.output(output);
+      // Preserve output for any completion path that did not emit through the
+      // streaming API — a replayed run restores its body text from the journal
+      // instead of re-executing, and callback consumers only ever see chunks,
+      // never the close value. A failed document takes the same path, so what
+      // it rendered first reaches consumers before its failure does.
+      if (!emitted && result.output) {
+        yield* DocumentOutput.operations.output(result.output);
       }
 
-      yield* channel.close(output);
-      resolve(Ok(value));
+      yield* channel.close(result.output);
+      if (result.status === "err") {
+        const failure = failureError(result.error, live);
+        resolve(Err(failure instanceof Error ? failure : new Error(String(failure))));
+        return;
+      }
+      resolve(Ok(result.value));
     } catch (error) {
       // Close with everything already emitted — diagnostics produced before
       // an abort stay visible to consumers of the close value.

@@ -14,7 +14,7 @@
  */
 
 import { Component, raise } from "./component-api.ts";
-import { attributeCause } from "./errors.ts";
+import { attributeCause, markCaptured } from "./errors.ts";
 import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.ts";
 import type { Operation } from "effection";
 
@@ -70,6 +70,15 @@ export function useFailures(): Operation<void> {
       };
       attributeCause(segment, failure.error);
       return yield* raise(segment);
+    },
+    // Every diagnostic raised beneath the boundary is one the document asked to
+    // carry on past, not only the ones translated from a component failure: a
+    // region that captures errors captures the ones its own syntax reports too.
+    // Marking here rather than in `handleFailure` keeps that a property of the
+    // region, and delegating leaves the observation chain a single pass.
+    *raise([segment], next): Operation<ErrorSegment> {
+      markCaptured(segment);
+      return yield* next(segment);
     },
   });
 }

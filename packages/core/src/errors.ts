@@ -17,7 +17,7 @@ import type { ErrorSegment } from "./types.ts";
  * error crossing from a component's own policy to its caller's does not emit a
  * second observation.
  */
-export type ErrorPolicy = "collect" | "throw";
+export type ErrorPolicy = "collect" | "output" | "throw";
 
 export const AmbientErrorPolicy: Context<ErrorPolicy> = createContext<ErrorPolicy>(
   "component.errorPolicy",
@@ -25,13 +25,49 @@ export const AmbientErrorPolicy: Context<ErrorPolicy> = createContext<ErrorPolic
 );
 
 /**
+ * Diagnostics a document asked to carry on past, remembered by identity.
+ *
+ * Membership rather than a field on the segment: the object a capture boundary
+ * handled is the same object the document renders and an observer already saw,
+ * and copying it to record the decision would break both.
+ */
+const capturedSegments = new WeakSet<ErrorSegment>();
+
+/**
+ * Record that an explicit capture boundary handled this diagnostic.
+ * `useFailures()` calls it for every segment raised beneath the boundary — the
+ * ones it builds from a component failure, and the structural ones the region
+ * raises on its own.
+ */
+export function markCaptured(segment: ErrorSegment): void {
+  capturedSegments.add(segment);
+}
+
+export function isCaptured(segment: ErrorSegment): boolean {
+  return capturedSegments.has(segment);
+}
+
+/**
  * Settle a segment under the ambient policy: the default `Component.raise`
  * implementation calls this, and so does a consumer applying its own policy to
  * an error that already crossed a nested one.
+ *
+ * The three policies differ over a failure the document did not ask to continue
+ * past:
+ *
+ * - `collect` renders every diagnostic and carries on — a root or a body with
+ *   no `<Output>`.
+ * - `output` is fail-fast: an ordinary diagnostic ends the execution, while one
+ *   an explicit `<CaptureErrors>` boundary handled renders and later content
+ *   still runs. A region that shows an operator what a stage produced must not
+ *   also let a failed stage reach the step after it.
+ * - `throw` ends the execution whatever the diagnostic is. Documentation is
+ *   hidden, so a captured diagnostic has nothing to render into and an author
+ *   has nothing to read instead.
  */
 export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
   const policy = yield* AmbientErrorPolicy.get();
-  if (policy === "throw") {
+  if (policy === "throw" || (policy === "output" && !isCaptured(segment))) {
     throw new DocumentationError(segment);
   }
   return segment;
@@ -170,7 +206,17 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  * `isRecoveredContent` for why the asymmetry is the point.
  */
 export function fatalCause(error: unknown): FatalFailure | undefined {
-  return durabilityFailure(error) ?? firstCause(error, asDocumentationError, isRecoveredContent);
+  return durabilityFailure(error) ?? documentationFailure(error);
+}
+
+/**
+ * The documentation failure this one carries, if any — the same search
+ * `fatalCause` runs, asked on its own by the execution boundary, which reports
+ * a document's failure as the document's own outcome and lets anything else
+ * escape as an infrastructure failure.
+ */
+export function documentationFailure(error: unknown): DocumentationError | undefined {
+  return firstCause(error, asDocumentationError, isRecoveredContent);
 }
 
 /**

@@ -467,14 +467,18 @@ export function* expandSegments(
   hideSet: Set<string>,
   counter: BlockCounter = createBlockCounter(),
   /**
-   * Where to accumulate, when the caller wants what was rendered even if this
-   * does not finish. Expansion appends as it goes, so a caller holding the same
-   * array still has everything produced before a failure — which is how a
-   * `<Test>` keeps its output when its body stops partway.
+   * The output owner: the accumulator of the region whose text renders into the
+   * document. Expansion appends as it goes, so a caller holding the same array
+   * still has everything produced before a failure — which is how a failing
+   * `<Output>` region keeps what it rendered first.
+   *
+   * A call site that produces a binding, a value, or a string passes nothing:
+   * its buffer is private and is never merged into an owner, so a failure
+   * cannot promote content the document was not going to render.
    */
-  collect?: Segment[],
+  owner?: Segment[],
 ): Operation<Segment[]> {
-  const result: Segment[] = collect ?? [];
+  const result: Segment[] = owner ?? [];
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
   const loop = yield* ActiveLoop.get();
@@ -574,9 +578,9 @@ export function* expandSegments(
         if (segment.name === "CaptureErrors") {
           // No raise() here, like the branches above: expandCaptureErrors
           // reports the errors it creates, and the body settled its own (§6.9).
-          result.push(
-            ...(yield* expandCaptureErrors(segment, parentMeta, parentProps, hideSet, counter)),
-          );
+          // It renders into this expansion's output, so it is handed the owner
+          // and writes there rather than handing segments back to be appended.
+          yield* expandCaptureErrors(segment, parentMeta, parentProps, hideSet, counter, result);
           break;
         }
 
@@ -616,6 +620,7 @@ export function* expandSegments(
           break;
         }
 
+        const invocationStart = result.length;
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -628,11 +633,25 @@ export function* expandSegments(
           segment.position,
           parentMeta,
           parentProps,
+          result,
         );
         // Consumer boundary: the callee reported these where they were created,
-        // under whatever policy its body ran — an `<Output>` region collects,
-        // documentation throws. Settling them here applies this caller's policy
-        // without reporting them a second time (spec §6.9).
+        // under whatever policy its body ran — an `<Output>` region is fail-fast
+        // unless an explicit capture handled the failure, documentation throws.
+        // Settling here applies this caller's policy without reporting anything
+        // a second time (spec §6.9).
+        //
+        // A rendering invocation wrote its body straight into this owner, so
+        // settling happens in place over what it added: the diagnostic is taken
+        // out first, so a policy that ends the execution does not leave it in
+        // the output the document rendered before failing.
+        for (let index = invocationStart; index < result.length; index++) {
+          const written = result[index];
+          if (written?.type === "error") {
+            result.splice(index, 1);
+            result.splice(index, 0, yield* settle(written));
+          }
+        }
         for (const expandedSegment of expanded) {
           if (expandedSegment.type === "error") {
             result.push(yield* settle(expandedSegment));
@@ -1498,19 +1517,29 @@ function* expandCaptureErrors(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<Segment[]> {
+  /** The region this renders into: it writes there rather than returning. */
+  owner: Segment[],
+): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
-    return [
+    owner.push(
       yield* raise(
         captureErrorsError(segment, `<CaptureErrors> accepts no props. Got: "${names[0]}".`),
       ),
-    ];
+    );
+    return;
   }
 
-  return yield* scoped(function* () {
+  yield* scoped(function* () {
     yield* useFailures();
-    return yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter);
+    return yield* expandSegments(
+      segment.children,
+      parentMeta,
+      parentProps,
+      hideSet,
+      counter,
+      owner,
+    );
   });
 }
 
@@ -1527,6 +1556,13 @@ function* expandComponent(
   /** The invoking frame's meta and props, for content this element projects. */
   callerMeta: Record<string, unknown> = {},
   callerProps: Record<string, Json> = {},
+  /**
+   * The caller's output owner, when this invocation renders into it. An
+   * invocation captured with `as` produces a binding rather than output and
+   * passes none, so what its body rendered before failing stays out of the
+   * document (§6.9).
+   */
+  owner?: Segment[],
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -1813,6 +1849,7 @@ function* expandComponent(
     return [];
   }
 
+  const bodyOwner = asBinding === undefined ? owner : undefined;
   const expanded = yield* withInvocation(function* (invocation) {
     yield* installInvocation(invocation);
     return yield* expandBody(
@@ -1824,6 +1861,7 @@ function* expandComponent(
       counter,
       callerEvalEnv ?? undefined,
       claimProjection,
+      bodyOwner,
     );
   });
 
@@ -1855,7 +1893,9 @@ function* expandComponent(
     return [];
   }
 
-  return expanded;
+  // A rendering invocation already wrote into the caller's owner, so there is
+  // nothing left to hand back — its consumer settles what is now in place.
+  return bodyOwner === undefined ? expanded : [];
 }
 
 // Without `returns`, a function component's rendering is its return value, so
@@ -2643,6 +2683,13 @@ interface BodyChunk {
   /** true = a rendered `<Output>` region; false = documentation (executed, not rendered). */
   output: boolean;
   segments: Segment[];
+  /**
+   * A diagnostic about the region declaration itself rather than about work
+   * inside one. The region never opened, so its fail-fast policy has nothing to
+   * say about this: the enclosing frame settles it, which is how a mistyped
+   * `<Output>` stays a comment in a document that collects.
+   */
+  declaration?: boolean;
 }
 
 function isTopLevelOutput(segment: Segment): boolean {
@@ -2905,7 +2952,7 @@ function buildBody(
     if (segment.type === "component" && segment.name === "Output") {
       const propsError = validateOutputProps(segment);
       if (propsError) {
-        chunks.push({ output: true, segments: [propsError] });
+        chunks.push({ output: true, segments: [propsError], declaration: true });
         continue;
       }
       const outputSegments = substituteSegmentList(
@@ -2932,9 +2979,10 @@ function buildBody(
  * Expand a definition body (spec §6.9). Without a top-level `<Output>`, the
  * whole body renders (backward compatible). With `<Output>`, only the declared
  * regions render; documentation executes for its side effects under a throwing
- * raise policy (fail-fast) and its rendered result is discarded; output
- * regions set a collecting policy of their own, so their errors render as
- * comments; the caller settles them again on the way out.
+ * raise policy (fail-fast) and its rendered result is discarded; output regions
+ * set a fail-fast policy of their own, under which an ordinary diagnostic ends
+ * the execution and one an explicit `<CaptureErrors>` boundary handled renders
+ * as a comment; the caller settles what survives on the way out.
  * Regions and documentation run in document order, so output can depend on
  * bindings computed by preceding documentation.
  */
@@ -2947,22 +2995,29 @@ export function* expandBody(
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn = passthroughClaim,
+  /**
+   * The owner this body renders into. A body that renders shares its caller's,
+   * so a region that fails partway has already handed over what it produced;
+   * an invocation captured with `as` passes none and keeps its own.
+   */
+  owner?: Segment[],
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, meta, props, callerEnv, claim);
-    return yield* expandSegments(substituted, meta, props, hideSet, counter);
+    return yield* expandSegments(substituted, meta, props, hideSet, counter, owner);
   }
 
   const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim);
-  const output: Segment[] = [];
+  const output: Segment[] = owner ?? [];
 
   for (const chunk of chunks) {
-    if (chunk.output) {
-      const expanded = yield* scoped(function* () {
-        yield* AmbientErrorPolicy.set("collect");
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
+    if (chunk.declaration) {
+      yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
+    } else if (chunk.output) {
+      yield* scoped(function* () {
+        yield* AmbientErrorPolicy.set("output");
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
       });
-      output.push(...expanded);
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
