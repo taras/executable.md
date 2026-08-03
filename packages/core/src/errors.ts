@@ -25,13 +25,19 @@ export const AmbientErrorPolicy: Context<ErrorPolicy> = createContext<ErrorPolic
 );
 
 /**
- * Diagnostics a document asked to carry on past, remembered by identity.
+ * Whether an explicit capture boundary handled this diagnostic.
  *
- * Membership rather than a field on the segment: the object a capture boundary
+ * The answer lives on the segment, under a symbol: the object a boundary
  * handled is the same object the document renders and an observer already saw,
- * and copying it to record the decision would break both.
+ * so the decision travels with it wherever it goes and disappears with it. A
+ * table beside the segments would answer for every run the process performs,
+ * and copying the segment to record the decision would break both the identity
+ * and the single observation.
+ *
+ * Not enumerable, so it stays out of rendering, serialization, and every
+ * structural comparison that walks a segment's own keys.
  */
-const capturedSegments = new WeakSet<ErrorSegment>();
+const CAPTURED = Symbol.for("executablemd.core.capturedDiagnostic");
 
 /**
  * Record that an explicit capture boundary handled this diagnostic.
@@ -40,11 +46,11 @@ const capturedSegments = new WeakSet<ErrorSegment>();
  * raises on its own.
  */
 export function markCaptured(segment: ErrorSegment): void {
-  capturedSegments.add(segment);
+  Object.defineProperty(segment, CAPTURED, { value: true, enumerable: false });
 }
 
 export function isCaptured(segment: ErrorSegment): boolean {
-  return capturedSegments.has(segment);
+  return CAPTURED in segment;
 }
 
 /**

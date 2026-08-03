@@ -160,13 +160,15 @@ function expandChildrenScoped(
   props: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** Where this expansion accumulates — its caller's region, or a private buffer. */
+  owner: Segment[],
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* provideEnv({ values: { ...(callerEnv?.values ?? {}), ...(override ?? {}) } });
     if (scope) {
       yield* provideEvalScope(scope);
     }
-    return yield* expandSegments(segments, meta, props, hideSet, counter);
+    return yield* expandSegments(segments, meta, props, hideSet, counter, owner);
   });
 }
 
@@ -247,6 +249,13 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
     errors: Segment[];
+    /**
+     * The caller's region, when this projection renders into one. Structural
+     * `<Content />` passes it, so a failure partway leaves the projected prefix
+     * with the document. A string projection passes none: it produces a value,
+     * and a value is not output until it is complete.
+     */
+    owner?: Segment[];
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       const contentScope = yield* state.invocation.useContentScope();
@@ -256,8 +265,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // replacing the documentation failure the caller is meant to see.
       const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
       // Shared with the expansion below, so a failure still leaves behind what it
-      // rendered before stopping.
-      const rendered: Segment[] = [];
+      // rendered before stopping. When the caller owns a region, that array is
+      // the region itself and the prefix is already where the document needs it.
+      const rendered: Segment[] = options.owner ?? [];
       const task = contentScope.scope.run(function* () {
         try {
           yield* AmbientErrorPolicy.set(options.policy);
@@ -289,7 +299,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       if (result.failure !== undefined) {
         throw result.failure;
       }
-      return [...options.errors, ...result.segments];
+      // A projection that wrote into the caller's region has nothing left to
+      // hand back; one that kept its own returns what it rendered.
+      return options.owner === undefined ? [...options.errors, ...result.segments] : options.errors;
     });
   }
 
@@ -385,6 +397,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       meta: Record<string, unknown>,
       props: Record<string, Json>,
       hideSet: Set<string>,
+      owner: Segment[],
     ): Operation<Segment[]> {
       // Slots were resolved during substitution, so the environment, meta,
       // props and hide set are the body's own — only the resource scope moves.
@@ -401,6 +414,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         inner: state.enclosing,
         loop: state.callerLoop,
         errors: [],
+        owner,
       });
     },
     project: runProjection,
@@ -512,7 +526,13 @@ export function* expandSegments(
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
             result.push(
-              ...(yield* projection.expandClaimed(segment, parentMeta, parentProps, hideSet)),
+              ...(yield* projection.expandClaimed(
+                segment,
+                parentMeta,
+                parentProps,
+                hideSet,
+                result,
+              )),
             );
             break;
           }
@@ -548,14 +568,16 @@ export function* expandSegments(
         if (segment.name === "Each") {
           // Same as <Capture>: expandEach reports its own errors and hands the
           // body's back untouched (§6.9).
-          result.push(...(yield* expandEach(segment, parentMeta, parentProps, hideSet, counter)));
+          result.push(
+            ...(yield* expandEach(segment, parentMeta, parentProps, hideSet, counter, result)),
+          );
           break;
         }
 
         if (segment.name === "If") {
           // No raise() here, like the branches above: expandIf reports the
           // errors it creates, and the selected branch settled its own (§6.9).
-          result.push(...(yield* expandIf(segment, parentMeta, parentProps, hideSet, counter)));
+          yield* expandIf(segment, parentMeta, parentProps, hideSet, counter, result);
           break;
         }
 
@@ -571,7 +593,7 @@ export function* expandSegments(
         if (segment.name === "Loop") {
           // No raise() here, for the same reason as <If>: expandLoop reports
           // the errors it creates, and the body settled its own (§6.9).
-          result.push(...(yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter)));
+          yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter, result);
           break;
         }
 
@@ -591,8 +613,11 @@ export function* expandSegments(
           // matcher's template children — so it is handed this expansion's
           // recursion to render them with.
           result.push(
-            ...(yield* expandAnswers(segment, (inner) =>
-              expandSegments(inner, parentMeta, parentProps, hideSet, counter),
+            ...(yield* expandAnswers(
+              segment,
+              (inner, into) =>
+                expandSegments(inner, parentMeta, parentProps, hideSet, counter, into),
+              result,
             )),
           );
           break;
@@ -881,6 +906,8 @@ function* expandEach(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** The region a rendering loop writes into; a captured one keeps its own. */
+  owner: Segment[],
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -949,9 +976,12 @@ function* expandEach(
   const parentEvalScope = yield* evalScope;
 
   const enclosingLoop = yield* ActiveLoop.get();
-  const out: Segment[] = [];
+  // A rendering loop writes into the caller's region as it goes, so a failure
+  // partway leaves the items it already produced behind. A captured one builds
+  // a value instead: its buffer is private and never becomes document output.
+  const out: Segment[] = asBinding === undefined ? owner : [];
   for (const item of items) {
-    const expanded = yield* expandChildrenScoped(
+    yield* expandChildrenScoped(
       segment.children,
       callerEnv ?? undefined,
       { [name]: item },
@@ -960,8 +990,8 @@ function* expandEach(
       parentProps,
       hideSet,
       counter,
+      out,
     );
-    out.push(...expanded);
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
     if (enclosingLoop?.broken) {
@@ -970,7 +1000,7 @@ function* expandEach(
   }
 
   if (asBinding === undefined) {
-    return out;
+    return [];
   }
 
   // A capture never swallows an error. The body reported these where they were
@@ -1199,25 +1229,27 @@ function* expandIf(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<Segment[]> {
+  /** The region this renders into: the selected branch writes there directly. */
+  owner: Segment[],
+): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
   );
   if (unknownProp !== undefined) {
-    return [
+    owner.push(
       yield* raise(
         ifError(segment, `<If> only accepts a "condition" prop. Got: "${unknownProp}".`),
       ),
-    ];
+    );
+    return;
   }
 
   const structure = ifStructure(segment);
   if (structure.violations.length > 0) {
-    const reported: Segment[] = [];
     for (const violation of structure.violations) {
-      reported.push(yield* raise(violation));
+      owner.push(yield* raise(violation));
     }
-    return reported;
+    return;
   }
 
   let condition: Json;
@@ -1233,16 +1265,18 @@ function* expandIf(
       );
       condition = resolved.condition;
     } catch (error) {
-      return [
+      owner.push(
         yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
-      ];
+      );
+      return;
     }
   } else {
-    return [yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).'))];
+    owner.push(yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).')));
+    return;
   }
 
   if (typeof condition !== "boolean") {
-    return [
+    owner.push(
       yield* raise(
         ifError(
           segment,
@@ -1250,15 +1284,17 @@ function* expandIf(
             "<If> does not coerce truthy or falsy values.",
         ),
       ),
-    ];
+    );
+    return;
   }
 
-  return yield* expandSegments(
+  yield* expandSegments(
     condition ? structure.whenTrue : structure.whenFalse,
     parentMeta,
     parentProps,
     hideSet,
     counter,
+    owner,
   );
 }
 
@@ -1354,31 +1390,39 @@ function* expandLoop(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<Segment[]> {
+  /** The region this renders into: each iteration writes there as it runs. */
+  owner: Segment[],
+): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
   );
   if (unknownProp !== undefined) {
-    return [
+    owner.push(
       yield* raise(
         loopError(segment, `<Loop> only accepts "max" and "name" props. Got: "${unknownProp}".`),
       ),
-    ];
+    );
+    return;
   }
 
   if ("name" in segment.expressions) {
-    return [yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.'))];
+    owner.push(
+      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.')),
+    );
+    return;
   }
   const name = segment.props.name;
   if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
-    return [
+    owner.push(
       yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
-    ];
+    );
+    return;
   }
 
   const bound = yield* loopBound(segment);
   if (!bound.ok) {
-    return [yield* raise(loopError(segment, bound.error.message))];
+    owner.push(yield* raise(loopError(segment, bound.error.message)));
+    return;
   }
 
   // Taken from the shared block counter, so every `<Loop>` an execution enters
@@ -1387,7 +1431,6 @@ function* expandLoop(
   const identity: LoopIdentity = { id: counter.next(), ...(name === undefined ? {} : { name }) };
 
   const frame: LoopFrame = { broken: false };
-  const out: Segment[] = [];
   let started = 0;
 
   try {
@@ -1396,9 +1439,7 @@ function* expandLoop(
       for (let iteration = 0; iteration < bound.value; iteration++) {
         yield* recordIteration(identity, iteration);
         started = iteration + 1;
-        out.push(
-          ...(yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter)),
-        );
+        yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter, owner);
         if (frame.broken) {
           break;
         }
@@ -1438,7 +1479,6 @@ function* expandLoop(
 
   const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
   yield* recordOutcome(identity, { iterations: started, outcome });
-  return out;
 }
 
 function breakElementViolations(segment: ComponentElement): string[] {
@@ -1893,8 +1933,6 @@ function* expandComponent(
     return [];
   }
 
-  // A rendering invocation already wrote into the caller's owner, so there is
-  // nothing left to hand back — its consumer settles what is now in place.
   return bodyOwner === undefined ? expanded : [];
 }
 

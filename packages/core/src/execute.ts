@@ -291,17 +291,17 @@ type DocumentFailureResult = {
  * identity, stacks, and the cause graph stay behind, which is why the live path
  * resolves the original error instead of this description (`liveFailures`).
  *
- * Absence is `null` rather than a missing key, because absence is information:
- * `cause: null` says the failure had none, while `cause: "undefined"` says it
- * had one whose value was `undefined` — a component may throw exactly that, and
- * a replayed run should still be able to tell the two apart.
+ * A field is absent when the failure had nothing to say there, and present when
+ * it did. The distinction is load-bearing for `cause`: an absent key says the
+ * failure had no own cause, while `"undefined"` says it had one whose value was
+ * `undefined` — a component may throw exactly that.
  */
 type DocumentFailure = {
   name: string;
   message: string;
-  segment: { message: string; source: string | null };
-  cause: string | null;
-  errors: { name: string; message: string }[] | null;
+  segment: { message: string; source?: string };
+  cause?: string;
+  errors?: { name: string; message: string }[];
 };
 
 /**
@@ -323,16 +323,21 @@ function describeFailure(caught: unknown, documentation: DocumentationError): Do
     message: wrapper.message,
     segment: {
       message: documentation.segment.message,
-      source: documentation.segment.source ?? null,
+      ...(documentation.segment.source === undefined
+        ? {}
+        : { source: documentation.segment.source }),
     },
-    cause: "cause" in wrapper ? describeCause(wrapper.cause) : null,
-    errors:
-      wrapper instanceof AggregateError
-        ? wrapper.errors.map((member: unknown) => ({
+    // An own property, not an inherited one: every Error inherits `cause` from
+    // nowhere useful, and what this records is what this failure was given.
+    ...(Object.hasOwn(wrapper, "cause") ? { cause: describeCause(wrapper.cause) } : {}),
+    ...(wrapper instanceof AggregateError
+      ? {
+          errors: wrapper.errors.map((member: unknown) => ({
             name: member instanceof Error ? member.name : "Error",
             message: member instanceof Error ? member.message : String(member),
-          }))
-        : null,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -355,10 +360,20 @@ function failureError(failure: DocumentFailure, live: unknown): unknown {
         failure.message,
       )
     : new Error(failure.message);
-  if (failure.cause !== null) {
+  if (failure.cause !== undefined) {
     replayed.cause = failure.cause;
   }
   return withName(replayed, failure.name);
+}
+
+/** The live failure a returned outcome carries, consumed on the way out. */
+function takeLiveFailure(returned: unknown): unknown {
+  if (typeof returned !== "object" || returned === null) {
+    return undefined;
+  }
+  const live = liveFailures.get(returned);
+  liveFailures.delete(returned);
+  return live;
 }
 
 function withName(error: Error, name: string): Error {
@@ -402,16 +417,33 @@ function parseFailure(value: unknown): DocumentFailure {
   if (typeof segmentMessage !== "string") {
     throw new Error("A failure description carries the message of the segment that failed.");
   }
-  const source = segment["source"];
-  const cause = candidate["cause"];
+  // An optional field is absent or well-formed. Anything else is a journal this
+  // run cannot read, and coercing it to "absent" would report a failure that
+  // quietly disagrees with the one recorded.
+  const source = optionalString(segment, "source", "The source of a failed segment");
+  const cause = optionalString(candidate, "cause", "The cause of a failure");
   const errors = candidate["errors"];
+  if (errors !== undefined && !Array.isArray(errors)) {
+    throw new Error("The aggregate members of a failure are a list.");
+  }
   return {
     name,
     message,
-    segment: { message: segmentMessage, source: typeof source === "string" ? source : null },
-    cause: typeof cause === "string" ? cause : null,
-    errors: Array.isArray(errors) ? errors.map(parseFailureMember) : null,
+    segment: { message: segmentMessage, ...(source === undefined ? {} : { source }) },
+    ...(cause === undefined ? {} : { cause }),
+    ...(errors === undefined ? {} : { errors: errors.map(parseFailureMember) }),
   };
+}
+
+function optionalString(holder: JsonObject, key: string, subject: string): string | undefined {
+  const value = holder[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${subject} is text when it is recorded at all.`);
+  }
+  return value;
 }
 
 function parseFailureMember(value: Json): { name: string; message: string } {
@@ -753,11 +785,12 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       );
 
       const returned = yield* durableRun(() => Execution.operations.document(props), { stream });
-      // Looked up from what the workflow returned, before parsing: on a live
-      // run this is the same object the workflow built, and it is the only
-      // place the original error still exists.
-      const live =
-        typeof returned === "object" && returned !== null ? liveFailures.get(returned) : undefined;
+      // Taken from what the workflow returned, before parsing: on a live run
+      // this is the same object the workflow built, and it is the only place
+      // the original error still exists. Taken rather than read, so the handoff
+      // belongs to the run that made it — a caller replaying the very same
+      // object gets the journal's account, like any other replay.
+      const live = takeLiveFailure(returned);
       const result = parseDocumentResult(returned);
 
       // Preserve output for any completion path that did not emit through the

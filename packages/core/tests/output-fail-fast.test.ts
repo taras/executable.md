@@ -14,7 +14,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -25,10 +25,11 @@ import { execute } from "../src/execute.ts";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { captureErrors } from "../src/component-failures.ts";
-import { AmbientErrorPolicy } from "../src/errors.ts";
+import { registerComponents } from "../src/components/registration.ts";
+import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import type { FunctionComponentDefinition, Segment } from "../src/types.ts";
+import type { FunctionComponent, FunctionComponentDefinition, Segment } from "../src/types.ts";
 
 interface Run {
   /** Chunks in the order consumers received them. */
@@ -84,6 +85,46 @@ function run(files: Record<string, string>, stream = new InMemoryStream()): Oper
       stream,
     };
   });
+}
+
+/**
+ * The same run, with function components registered rather than read from disk.
+ * `execute()` installs its own terminal `importComponent`, so a registration is
+ * how a test puts its own component in a document's reach.
+ */
+function runRegistered(
+  files: Record<string, string>,
+  components: Record<string, FunctionComponentDefinition>,
+  stream = new InMemoryStream(),
+): Operation<Run> {
+  return scoped(function* () {
+    yield* registerComponents(
+      Object.entries(components).map(([name, definition]) => ({
+        name,
+        origin: "output-fail-fast.test",
+        props: definition.props,
+        fn: definition.fn,
+      })),
+    );
+    return yield* run(files, stream);
+  });
+}
+
+/** Every error an aggregate carries, at any depth, plus the aggregate itself. */
+function aggregateMembers(error: unknown): unknown[] {
+  const found: unknown[] = [];
+  const pending: unknown[] = [error];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    found.push(next);
+    if (next instanceof AggregateError) {
+      pending.push(...next.errors);
+    }
+    if (next instanceof Error && next.cause !== undefined) {
+      pending.push(next.cause);
+    }
+  }
+  return found;
 }
 
 /** Expansion under a chosen policy, for the boundaries a document cannot reach. */
@@ -340,13 +381,72 @@ describe("Tier OFF — <CaptureErrors> is how a region continues", () => {
 describe("Tier OFF — the failed document is a determined outcome", () => {
   // OFF6 — the live completion carries the error the engine actually caught.
   it("reports the original failure object on a live run", function* () {
+    const thrown = new Error("the component's own failure");
+    const failing: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Failing",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      fn: function* () {
+        throw thrown;
+      },
+    };
+    const result = yield* runRegistered(
+      { "doc.md": "<Output>\n\n<Failing />\n\n</Output>" },
+      { Failing: failing },
+    );
+
+    expect(result.ok).toBe(false);
+    // The object itself, not a description of it. Identity is the whole claim:
+    // a reconstruction built from the journal cannot contain the very error the
+    // component threw.
+    const carried = aggregateMembers(result.error);
+    expect(carried).toContain(thrown);
+    expect(String(result.error)).toContain("the component's own failure");
+  });
+
+  // OFF6c — the determined-outcome path, where the failure is a diagnostic the
+  // region settled: its type survives to the completion as well as its message.
+  it("reports a settled diagnostic as the documentation failure it is", function* () {
     const result = yield* run({
       "doc.md": "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>",
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBeInstanceOf(Error);
-    expect(String(result.error)).toContain("Command failed");
+    const carried = aggregateMembers(result.error);
+    const documentation = carried.find((member) => member instanceof DocumentationError);
+    if (!(documentation instanceof DocumentationError)) {
+      throw new Error(`expected a DocumentationError, received ${String(result.error)}`);
+    }
+    expect(documentation.segment.message).toContain("Command failed");
+    expect(documentation.segment.source).toContain("FAIL");
+  });
+
+  // OFF6b — a body failure and a teardown failure arrive together, and both
+  // members survive to the completion.
+  it("reports the aggregate a body and its teardown produced together", function* () {
+    const fromBody = new Error("body failed");
+    const fromTeardown = new Error("teardown failed");
+    const failing: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Failing",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      fn: function* () {
+        yield* ensure(function* () {
+          throw fromTeardown;
+        });
+        throw fromBody;
+      },
+    };
+    const result = yield* runRegistered(
+      { "doc.md": "<Output>\n\n<Failing />\n\n</Output>" },
+      { Failing: failing },
+    );
+
+    expect(result.ok).toBe(false);
+    const members = aggregateMembers(result.error);
+    expect(members).toContain(fromBody);
+    expect(members).toContain(fromTeardown);
   });
 
   // OFF7 — the journal records the outcome, so a replay reproduces both halves
@@ -395,28 +495,341 @@ describe("Tier OFF — the failed document is a determined outcome", () => {
   });
 });
 
-describe("Tier OFF — a capture is not output", () => {
-  // OFF9 — an `as` invocation produces a binding, so what its body rendered
-  // before failing is not promoted into the document.
-  it("keeps a failing as= invocation's prefix out of the document", function* () {
+/**
+ * One case per visible producer. Each fixture renders a prefix, fails inside
+ * the construct, and has a marker after it: the prefix survives, the diagnostic
+ * that ended the run does not appear in what was rendered, and the marker never
+ * runs. The success half asserts an exact count, so a producer that both writes
+ * into the region and hands its segments back reddens here.
+ */
+describe("Tier OFF — every visible producer keeps its prefix", () => {
+  const CASES: { name: string; failing: string; succeeding: string }[] = [
+    {
+      name: "the selected <If> branch",
+      failing: "<If condition={true}>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</If>\n\nMARKER",
+      succeeding: "<If condition={true}>\n\nPREFIX\n\n</If>",
+    },
+    {
+      name: "<Loop> iterations",
+      failing: "<Loop max={2}>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Loop>\n\nMARKER",
+      succeeding: "<Loop max={1}>\n\nPREFIX\n\n</Loop>",
+    },
+    {
+      name: "<Each> without as",
+      failing: '<Each in={[1]} let="n">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Each>\n\nMARKER',
+      succeeding: '<Each in={[1]} let="n">\n\nPREFIX\n\n</Each>',
+    },
+    {
+      name: "projected <Content />",
+      failing: "<Wrapper>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Wrapper>\n\nMARKER",
+      succeeding: "<Wrapper>\n\nPREFIX\n\n</Wrapper>",
+    },
+    {
+      name: "an answered <Answers> body",
+      failing:
+        "<Answers>\n<Answer value={{ ok: true }} />\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Answers>\n\nMARKER",
+      succeeding: "<Answers>\n<Answer value={{ ok: true }} />\n\nPREFIX\n\n</Answers>",
+    },
+  ];
+
+  const WRAPPER = "<Content />";
+
+  for (const subject of CASES) {
+    it(`keeps what ${subject.name} rendered before failing`, function* () {
+      const result = yield* run({
+        "components/Wrapper.md": WRAPPER,
+        "doc.md": `<Output>\n\n${subject.failing}\n\n</Output>`,
+      });
+
+      expect(result.output).toContain("PREFIX");
+      expect(result.ok).toBe(false);
+      expect(result.output).not.toContain("MARKER");
+      // The diagnostic that ended the run is the failure, not the output.
+      expect(result.output).not.toContain("<!-- ERROR");
+    });
+
+    it(`renders ${subject.name} exactly once when it succeeds`, function* () {
+      const result = yield* run({
+        "components/Wrapper.md": WRAPPER,
+        "doc.md": `<Output>\n\n${subject.succeeding}\n\n</Output>`,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.output.match(/PREFIX/g) ?? []).toHaveLength(1);
+    });
+  }
+});
+
+describe("Tier OFF — an atomic producer never merges its prefix", () => {
+  const STAGE = ["<Output>", "", "PREFIX", "", "```bash exec", "FAIL", "```", "", "</Output>"].join(
+    "\n",
+  );
+
+  it("keeps a <Capture as> prefix out of the document", function* () {
+    const result = yield* run({
+      "doc.md":
+        '<Output>\n\n<Capture as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Capture>\n\n</Output>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).not.toContain("PREFIX");
+  });
+
+  it("keeps an <Each as> prefix out of the document", function* () {
+    const result = yield* run({
+      "doc.md":
+        '<Output>\n\n<Each in={[1]} let="n" as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Each>\n\n</Output>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).not.toContain("PREFIX");
+  });
+
+  it("keeps a string projection's prefix out of the document", function* () {
+    const result = yield* run({
+      "components/Renderer.md": [
+        "```ts eval",
+        "const projected = yield* renderChildren();",
+        "output(projected);",
+        "```",
+      ].join("\n"),
+      "doc.md":
+        "<Output>\n\n<Renderer>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Renderer>\n\n</Output>",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).not.toContain("PREFIX");
+  });
+
+  it("keeps documentation out of the document", function* () {
     const result = yield* run({
       "components/Stage.md": [
-        "<Output>",
-        "",
-        "```bash exec",
-        "echo PREFIX",
-        "```",
+        "PREFIX",
         "",
         "```bash exec",
         "FAIL",
         "```",
         "",
-        "</Output>",
+        "<Output>ok</Output>",
       ].join("\n"),
-      "doc.md": '<Output>\n\n<Stage as="captured" />\n\n</Output>',
+      "doc.md": "<Output>\n\n<Stage />\n\n</Output>",
     });
 
     expect(result.ok).toBe(false);
     expect(result.output).not.toContain("PREFIX");
+  });
+
+  it("keeps a failing as= invocation's prefix out of the document", function* () {
+    const result = yield* run({
+      "components/Stage.md": STAGE,
+      "doc.md": '<Output>\n\n<Stage as="held" />\n\n</Output>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).not.toContain("PREFIX");
+  });
+});
+
+/**
+ * The journal is data, so a shape this run cannot read is refused rather than
+ * coerced into one it can. Each case corrupts exactly one field of a recorded
+ * failure and replays it: reporting a failure that quietly disagrees with the
+ * one recorded would be worse than refusing to report at all.
+ */
+describe("Tier OFF — a malformed recorded failure is refused", () => {
+  const DOC = "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>";
+
+  /** Read and write a field without copying the object that holds it. */
+  function field(holder: unknown, key: string): unknown {
+    return Reflect.get(Object(holder), key);
+  }
+
+  function setField(holder: unknown, key: string, value: unknown): void {
+    Reflect.set(Object(holder), key, value);
+  }
+
+  function dropField(holder: unknown, key: string): void {
+    Reflect.deleteProperty(Object(holder), key);
+  }
+
+  /** The journal of a failed run, with its recorded failure rewritten. */
+  function corrupted(edit: (failure: unknown) => void): Operation<DurableEvent[]> {
+    return scoped(function* () {
+      const stream = new InMemoryStream();
+      yield* run({ "doc.md": DOC }, stream);
+      const events = stream.snapshot();
+      const close = events.find((event) => event.type === "close");
+      if (close === undefined || close.result.status !== "ok") {
+        throw new Error("the failed run recorded no ok close to corrupt");
+      }
+      edit(field(close.result.value, "error"));
+      return events;
+    });
+  }
+
+  function replayed(events: DurableEvent[]): Operation<Run> {
+    return run({ "doc.md": DOC }, new InMemoryStream(events));
+  }
+
+  const CASES: { name: string; edit: (failure: unknown) => void }[] = [
+    { name: "a name that is not text", edit: (failure) => setField(failure, "name", 7) },
+    { name: "a missing message", edit: (failure) => dropField(failure, "message") },
+    {
+      name: "a segment source that is not text",
+      edit: (failure) => setField(field(failure, "segment"), "source", 7),
+    },
+    {
+      name: "a segment with no message",
+      edit: (failure) => dropField(field(failure, "segment"), "message"),
+    },
+    { name: "a cause that is not text", edit: (failure) => setField(failure, "cause", { of: 1 }) },
+    {
+      name: "aggregate members that are not a list",
+      edit: (failure) => setField(failure, "errors", "two"),
+    },
+    {
+      name: "an aggregate member with no message",
+      edit: (failure) => setField(failure, "errors", [{ name: "Error" }]),
+    },
+  ];
+
+  for (const subject of CASES) {
+    it(`refuses ${subject.name}`, function* () {
+      const events = yield* corrupted(subject.edit);
+      const result = yield* replayed(events);
+
+      expect(result.ok).toBe(false);
+      // Refused while reading the journal, not reported as the document's own
+      // failure: the recorded diagnostic never reaches the completion.
+      expect(String(result.error)).not.toContain("Command failed");
+    });
+  }
+
+  it("replays an intact recorded failure", function* () {
+    const events = yield* corrupted(() => {});
+    const result = yield* replayed(events);
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain("Command failed");
+  });
+});
+
+/**
+ * What crosses the journal, and what does not. Object identity stays behind, so
+ * a replayed run reports a reconstruction — these pin exactly which fields that
+ * reconstruction is built from, and the presence rules that make an absent
+ * cause different from a cause whose value was `undefined`.
+ */
+describe("Tier OFF — the recorded failure is exactly these fields", () => {
+  function recordedFailure(events: DurableEvent[]): unknown {
+    const close = events.find((event) => event.type === "close");
+    if (close === undefined || close.result.status !== "ok") {
+      throw new Error("the failed run recorded no ok close");
+    }
+    return Reflect.get(Object(close.result.value), "error");
+  }
+
+  const FAILING_DOC = "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>";
+
+  /** A failed run's journal, with one field of its recorded failure rewritten. */
+  function recorded(edit: (failure: unknown) => void): Operation<DurableEvent[]> {
+    return scoped(function* () {
+      const stream = new InMemoryStream();
+      const result = yield* run({ "doc.md": FAILING_DOC }, stream);
+      const events = result.events;
+      const close = events.find((event) => event.type === "close");
+      if (close === undefined || close.result.status !== "ok") {
+        throw new Error("the failed run recorded no ok close");
+      }
+      edit(Reflect.get(Object(close.result.value), "error"));
+      return events;
+    });
+  }
+
+  it("records no cause and no members for a failure that had neither", function* () {
+    const events = yield* recorded(() => {});
+    const close = events.find((event) => event.type === "close");
+    const failure = Reflect.get(
+      Object(close?.result.status === "ok" ? close.result.value : {}),
+      "error",
+    );
+
+    expect(Object.hasOwn(Object(failure), "name")).toBe(true);
+    expect(Object.hasOwn(Object(failure), "message")).toBe(true);
+    expect(Object.hasOwn(Object(failure), "segment")).toBe(true);
+    // Absent, not a null standing in for absence.
+    expect(Object.hasOwn(Object(failure), "cause")).toBe(false);
+    expect(Object.hasOwn(Object(failure), "errors")).toBe(false);
+  });
+
+  it('reconstructs the cause "undefined" as a cause rather than as absence', function* () {
+    // A failure may carry an own cause whose value is `undefined` — a component
+    // can throw exactly that — and the record says so with the text rather than
+    // by leaving the field out. The two must not collapse into each other.
+    const events = yield* recorded((failure) => Reflect.set(Object(failure), "cause", "undefined"));
+    const result = yield* run({ "doc.md": FAILING_DOC }, new InMemoryStream(events));
+
+    expect(result.error).toBeInstanceOf(Error);
+    if (!(result.error instanceof Error)) {
+      throw new Error(`expected an Error, received ${String(result.error)}`);
+    }
+    expect(Object.hasOwn(result.error, "cause")).toBe(true);
+    expect(result.error.cause).toBe("undefined");
+  });
+
+  it("reconstructs no cause at all when the record carries none", function* () {
+    const events = yield* recorded(() => {});
+    const result = yield* run({ "doc.md": FAILING_DOC }, new InMemoryStream(events));
+
+    expect(result.error).toBeInstanceOf(Error);
+    if (!(result.error instanceof Error)) {
+      throw new Error(`expected an Error, received ${String(result.error)}`);
+    }
+    expect(Object.hasOwn(result.error, "cause")).toBe(false);
+  });
+
+  it("reconstructs an Error from the recorded fields on replay", function* () {
+    const stream = new InMemoryStream();
+    const first = yield* run(
+      { "doc.md": "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>" },
+      stream,
+    );
+    const second = yield* run(
+      { "doc.md": "<Output>\n\n```bash exec\nFAIL\n```\n\n</Output>" },
+      stream,
+    );
+
+    expect(second.ok).toBe(false);
+    // Not the same object — identity does not cross the journal, and no test
+    // may claim it does. What crosses is the recorded name and message.
+    expect(second.error).not.toBe(first.error);
+    expect(second.error).toBeInstanceOf(Error);
+    if (!(second.error instanceof Error)) {
+      throw new Error(`expected an Error, received ${String(second.error)}`);
+    }
+    const recorded = recordedFailure(second.events);
+    expect(second.error.name).toBe(Reflect.get(Object(recorded), "name"));
+    expect(second.error.message).toBe(Reflect.get(Object(recorded), "message"));
+    expect(second.error).not.toBeInstanceOf(AggregateError);
+  });
+
+  it("reconstructs an AggregateError when the record carries members", function* () {
+    const events = yield* recorded((failure) =>
+      Reflect.set(Object(failure), "errors", [
+        { name: "Error", message: "body failed" },
+        { name: "TypeError", message: "teardown failed" },
+      ]),
+    );
+    const result = yield* run({ "doc.md": FAILING_DOC }, new InMemoryStream(events));
+
+    expect(result.error).toBeInstanceOf(AggregateError);
+    if (!(result.error instanceof AggregateError)) {
+      throw new Error(`expected an AggregateError, received ${String(result.error)}`);
+    }
+    expect(result.error.errors.map((member: Error) => member.message)).toEqual([
+      "body failed",
+      "teardown failed",
+    ]);
+    expect(result.error.errors.map((member: Error) => member.name)).toEqual(["Error", "TypeError"]);
   });
 });

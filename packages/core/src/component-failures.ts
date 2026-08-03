@@ -19,12 +19,18 @@ import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.
 import type { Operation } from "effection";
 
 /**
- * Components that continue after failing, remembered by function identity.
+ * The brand a component wears to say it continues after failing.
  *
- * Identity rather than name: a repository component that happens to share a
- * registered component's name is a different function and inherits nothing.
+ * It sits on the function object itself, so the answer is the component's own
+ * property rather than an entry in a table that outlives every run. Identity is
+ * what carries it: a repository component that happens to share a registered
+ * component's name is a different function object, wears no brand, and inherits
+ * nothing.
+ *
+ * Not enumerable, so a component that is copied, wrapped, or inspected does not
+ * carry the decision along by accident.
  */
-const capturing = new WeakSet<FunctionComponent>();
+const CAPTURES = Symbol.for("executablemd.core.capturesErrors");
 
 /**
  * Continue after this component fails, reporting the failure as a diagnostic.
@@ -43,12 +49,12 @@ const capturing = new WeakSet<FunctionComponent>();
  * projects is inside it.
  */
 export function captureErrors<T extends FunctionComponent>(component: T): T {
-  capturing.add(component);
+  Object.defineProperty(component, CAPTURES, { value: true, enumerable: false });
   return component;
 }
 
 export function capturesErrors(component: FunctionComponent): boolean {
-  return capturing.has(component);
+  return CAPTURES in component;
 }
 
 /**
