@@ -93,6 +93,13 @@ No registry configuration is needed — every `@executablemd` package resolves f
 xmd run packages/core/examples/hello-world.md
 ```
 
+Run a document without writing one, for a quick experiment:
+
+```bash
+xmd -e '# Hello'
+xmd -e '<File path="README.md" />'
+```
+
 Write a diagnostic trace for one run:
 
 ```bash
@@ -101,6 +108,7 @@ xmd run packages/core/examples/hello-world.md --journal .xmd/events.jsonl
 
 Useful flags:
 
+- `--eval`, `-e` - execute the given markdown as the root document instead of a path. Exactly one of the two is required; diagnostics report the source as `<eval>` and relative paths resolve from the current directory.
 - `--journal`, `-j` - write current-run journal entries to a new JSONL file for debugging. The path must not exist and is never replayed.
 - `--verbose`, `-V` - print durable journal entries to stderr while running.
 - `--component-dir` - add component search directories. Defaults to `components` and `.`.

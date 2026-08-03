@@ -5154,7 +5154,9 @@ paths agree on every question a document can ask about matching.
 `execute(options)` executes a markdown document as a durable
 workflow and returns a `DocumentExecution` handle. Options:
 
-- `path` — path to the root markdown document
+- the root document source — either `path`, the path to the root markdown
+  document, or an inline document built with `inlineSource(text)`, which carries
+  the supplied text together with its `<eval>` identity
 - `stream` — the durable stream that journals the run
 - `props?` — JSON values supplied to the root document (default: `{}`)
 - `componentDirs?` — component search directories (default:
@@ -5170,9 +5172,30 @@ with the root component import. The gate cannot rewrite an event, and a
 rejection stops that one event — the run may still journal the failure it
 causes. See the durable-streams README for the full contract.
 
-`inspectDocument({ path })` loads and validates the root definition and returns
+#### The root document source
+
+A root document is named by a path or supplied as text. The two forms are one
+value, `RootDocumentSource`, so inspection and execution accept the same thing
+and cannot describe and run a document under different identities.
+
+```typescript
+const fromFile = { path: "hello.md" };
+const inline = inlineSource("# Hello");
+```
+
+Supplied text reports the stable identity `<eval>`: `inlineSource` attaches it,
+so the text and its identity cannot be separated, and diagnostics and source
+positions carry it — `(<eval>:5:1)` — exactly as a path would. Everything else is
+unchanged. Component directories, `<File>`, `<Glob>` and every other relative
+operation resolve from the contextual working directory, never from the root's
+identity, and no temporary file is created: the text is captured inside the
+durable root import, so the journal holds it and a replay restores it without
+reading anything.
+
+`inspectDocument(root)` loads and validates the root definition and returns
 what it declares — without executing the document or creating a journal:
 
+- `path` — the path the document was read from, or `<eval>` for supplied text.
 - `props` — the declared props schema. Root input sources and validation are
   defined in [Root Document Props](./root-document-props-spec.md).
 - `returns` — the effective return schema: `{ type: "string" }` for a document

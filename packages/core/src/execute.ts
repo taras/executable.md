@@ -68,13 +68,12 @@ import {
   unresolvedMessage,
 } from "./components/select.ts";
 import type { EvalEnv } from "./types.ts";
+import { readRootSource, rootSourcePath } from "./root-source.ts";
+import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 
-export interface ExecuteOptions {
-  /** Path to the root markdown document (workspace-relative). */
-  path: string;
-
+export interface ExecuteSettings {
   /** Durable stream for journaling. */
   stream: DurableStream;
 
@@ -87,6 +86,12 @@ export interface ExecuteOptions {
   /** Custom modifier factories to register */
   modifiers?: Record<string, ModifierFactory>;
 }
+
+/**
+ * What to execute and how: the root document — a path, or text supplied with
+ * its `<eval>` identity — together with the run's settings.
+ */
+export type ExecuteOptions = RootDocumentSource & ExecuteSettings;
 
 /**
  * What resolving a name decided, in a form the journal can hold.
@@ -103,15 +108,22 @@ type DurableSelection =
 
 function* durableImportComponent(
   name: string,
-  rootDocPath: string | undefined,
+  root: RootDocumentSource | undefined,
   searchPaths: string[],
   registry: ComponentRegistry,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   const selection = (yield createDurableOperation<DurableSelection>(
     { type: "import_component", name },
     function* (): Operation<DurableSelection> {
-      if (name === "__root__" && rootDocPath) {
-        return { kind: "repository", path: rootDocPath, content: yield* readTextFile(rootDocPath) };
+      if (name === "__root__" && root) {
+        // Inside the durable operation, so the journal holds the root's identity
+        // and its text: a replay restores both without reading anything, whether
+        // the source was a file or supplied.
+        return {
+          kind: "repository",
+          path: rootSourcePath(root),
+          content: yield* readRootSource(root),
+        };
       }
 
       const selected = yield* selectComponent(name, { componentDirs: searchPaths, registry });
@@ -308,8 +320,8 @@ function* runValueRoot(
 
 function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
   // Import root — same pipeline as any component. The provider middleware
-  // installed by execute maps "__root__" to the document path. The
-  // ephemeral() wrapper bridges typing only — the import inside remains a
+  // installed by execute maps "__root__" to the run's root document source.
+  // The ephemeral() wrapper bridges typing only — the import inside remains a
   // durable, journaled operation.
   const root = yield* ephemeral(importComponent("__root__"));
 
@@ -454,12 +466,15 @@ export interface DocumentExecution extends Operation<Result<Json>> {
  */
 function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution> {
   const {
-    path: rootPath,
     stream,
     props = {},
     componentDirs = [...DEFAULT_COMPONENT_DIRS],
     modifiers: customModifiers = {},
   } = options;
+
+  // Carried through exactly as supplied. Rewriting an identity here would let
+  // the same value inspect and execute under different ones.
+  const root: RootDocumentSource = options;
 
   // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
@@ -524,7 +539,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
             const registered = yield* Component.operations.registry;
             return yield* durableImportComponent(
               name,
-              name === "__root__" ? rootPath : undefined,
+              name === "__root__" ? root : undefined,
               componentDirs,
               registered,
             );

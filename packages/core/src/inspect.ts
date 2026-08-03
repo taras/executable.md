@@ -5,16 +5,19 @@ import type { ComponentOrigin, PropsSchema, ReturnsSchema } from "./types.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 import { Component } from "./component-api.ts";
 import { selectComponent } from "./components/select.ts";
+import { readRootSource, rootSourcePath } from "./root-source.ts";
+import type { RootDocumentSource } from "./root-source.ts";
 
 const TEXT_RETURN_SCHEMA: ReturnsSchema = { type: "string" };
 
-export interface InspectOptions {
-  /** Path to the root markdown document, resolved from the contextual cwd. */
-  path: string;
-}
+/**
+ * The root document to describe: a path resolved from the contextual cwd, or
+ * text supplied with its `<eval>` identity.
+ */
+export type InspectOptions = RootDocumentSource;
 
 export interface DocumentInfo {
-  /** The path the document was read from. */
+  /** The path the document was read from, or `<eval>` for supplied text. */
   path: string;
 
   /** Frontmatter keys other than the reserved `props`, `required`, and `returns`. */
@@ -38,21 +41,23 @@ export interface DocumentInfo {
 }
 
 /**
- * Read a root markdown document and return what it declares, without
- * running it. Inspection performs the same frontmatter and schema
+ * Describe a root markdown document — read from a path or supplied as text —
+ * and return what it declares, without running it. Inspection performs the same
+ * frontmatter and schema
  * validation as execution, but never expands the document, evaluates a
  * code block, imports a body component, starts an agent, or creates a
  * journal — so describing a document is always free of its effects.
  */
 export function* inspectDocument(options: InspectOptions): Operation<DocumentInfo> {
-  const { path } = options;
+  const path = rootSourcePath(options);
   if (isFunctionComponentPath(path)) {
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
   // Reading through the contextual filesystem resolves a relative path
-  // against the working directory, exactly as execution does.
-  const content = yield* readTextFile(path);
+  // against the working directory, exactly as execution does. Supplied text
+  // is already here, so describing it reads nothing.
+  const content = yield* readRootSource(options);
   const definition = parseMarkdownDefinition("__root__", path, content);
 
   return {
