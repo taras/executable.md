@@ -49,8 +49,8 @@ Error handling has two layers:
 
 1. **Lexical structure** — the document applies context, in two forms:
    context values (`<Output>` sets the `output` error mode) and middleware
-   (`<PrintErrors>` installs failure printing; `<Retry>` installs
-   retry middleware).
+   (`<Retry>` installs retry middleware). `<PrintErrors>` uses both: it sets
+   `print` for its region and installs printing middleware.
 2. **Runtime execution** — execution runs under the context applied by the
    enclosing structure.
 
