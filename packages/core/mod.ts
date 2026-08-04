@@ -202,3 +202,10 @@ export { SecretDetectedError, SecretScannerError } from "./src/secrets/findings.
 export type { SecretFinding } from "./src/secrets/findings.ts";
 export { scanFiles } from "./src/secrets/files.ts";
 export type { FileSecretFinding } from "./src/secrets/files.ts";
+
+// The running execution's policy. Read-only by construction: what a caller can
+// reach is a detached description and an execution-bound scan. The policy
+// itself, its scanner, and the context it is bound in stay private, so nothing
+// here can disable, replace, or outlive the detection an execution runs under.
+export { scanSecrets, secretPolicy } from "./src/secrets/policy.ts";
+export type { SecretPolicy } from "./src/secrets/policy.ts";
