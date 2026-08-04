@@ -1,9 +1,10 @@
 ---
-required: [instructions, planner]
+required: [instructions, planner, request]
 
 props:
   instructions: { type: string }
   planner: { type: string }
+  request: { type: string }
 ---
 
 # Discovery
@@ -23,7 +24,7 @@ issue may enter directly at implementor planning.
 
       User request:
 
-      <Content />
+      {props.request}
 
       Produce a user-validated design handoff and a falsifiable implementation
       theory. Distinguish user decisions from hypotheses the implementor must
@@ -51,8 +52,10 @@ selects the agent from a validated prop rather than a literal: the agent
 components take their props from a literal or from an expression that resolves
 to a string. An expression prop reads the bare binding, while the prompt body
 above interpolates `{props.instructions}` — the two spellings that #305 will
-unify. Its caller supplies the request as content and decides whether and where
-to persist the result. The handoff is a theory for investigation, not an
+unify. Its caller supplies the request as the `request` prop and decides whether
+and where to persist the result. It would read better as projected content, but
+`<Content />` does not substitute inside a `<Prompt>` (#328), so a prop carries
+it. The handoff is a theory for investigation, not an
 implementation plan that the implementor follows unquestioningly.
 
 The prompt sits outside `<Output>`, so it runs under the `throw` error mode:

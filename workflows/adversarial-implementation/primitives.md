@@ -248,7 +248,8 @@ The remaining contracts are missing on the same terms:
 authored Markdown components, not runtime primitives. `<UserCheckpoint>`
 combines an agent prompt, conditional control flow, and `<Elicit>` to determine
 whether a material choice requires the user and to obtain the user's answer
-when it does.
+when it does. It is the one of the four that declares `returns`: a gate has to
+bind a validated boolean, not prose a caller would have to interpret.
 
 Where a primitive is still missing, the manual exercise replaces it with an
 explicit user-run step and records the replacement as evidence for prioritizing

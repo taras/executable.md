@@ -3,7 +3,14 @@ required: [plan, authorization, instructions, planner, implementor]
 
 props:
   plan: { type: string }
-  authorization: { type: string }
+  authorization:
+    type: object
+    properties:
+      proceed: { type: boolean }
+      assessment: { type: string }
+      response: { type: string }
+      rationale: { type: string }
+    required: [proceed, assessment, response, rationale]
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
@@ -91,7 +98,9 @@ remote effects.
 
         Authorization record:
 
-        {props.authorization}
+        {props.authorization.assessment}
+        User response: {props.authorization.response}
+        Rationale: {props.authorization.rationale}
 
         Result contract:
 
@@ -165,7 +174,9 @@ remote effects.
 
         Authorization record:
 
-        {props.authorization}
+        {props.authorization.assessment}
+        User response: {props.authorization.response}
+        Rationale: {props.authorization.rationale}
 
         Pull request:
 
@@ -228,11 +239,7 @@ remote effects.
     </If>
   </Each>
 
-  <UserCheckpoint
-    purpose="resolve the pull-request review"
-    agent={planner}
-    as="reviewCheckpoint"
-  >
+  <Capture as="checkpointMaterial">
     ## Authorized plan
 
     {props.plan}
@@ -254,55 +261,95 @@ remote effects.
 
     {finding.description}
     </Each>
-  </UserCheckpoint>
-  <If condition={verdict.passed}>
-    <Break />
+  </Capture>
+  <UserCheckpoint
+    purpose="resolve the pull-request review"
+    agent={planner}
+    material={checkpointMaterial}
+    as="reviewCheckpoint"
+  />
+  <If condition={reviewCheckpoint.proceed}>
+    <If condition={verdict.passed}>
+      <Break />
+      <Else>
+        <Prompt agent={implementor} session="implementor">
+          Revise the implementation using this review:
+
+          {verdict.review}
+
+          Focused revision prompt:
+
+          {verdict.revisionPrompt}
+
+          User involvement record:
+
+          {reviewCheckpoint.assessment}
+          User response: {reviewCheckpoint.response}
+          Rationale: {reviewCheckpoint.rationale}
+        </Prompt>
+      </Else>
+    </If>
     <Else>
-      <Prompt agent={implementor} session="implementor">
-        Revise the implementation using this review:
-
-        {verdict.review}
-
-        Focused revision prompt:
-
-        {verdict.revisionPrompt}
-
-        User involvement record:
-
-        {reviewCheckpoint}
-      </Prompt>
+      <Break />
     </Else>
   </If>
 </Loop>
 
 <Output>
-  # Implementation result
+  <If condition={reviewCheckpoint.proceed}>
+    # Implementation result
 
-  ## Pull request
+    ## Pull request
 
-  {pullRequest}
+    {pullRequest}
 
-  ## Planner review
+    ## Planner review
 
-  Passed: {verdict.passed}
+    Passed: {verdict.passed}
 
-  {verdict.review}
+    {verdict.review}
 
-  ## Findings
+    ## Findings
 
-  <Each in={verdict.findings} let="finding">
-  ### {finding.title}
+    <Each in={verdict.findings} let="finding">
+    ### {finding.title}
 
-  Disposition: {finding.disposition}
+    Disposition: {finding.disposition}
 
-  {finding.description}
-  </Each>
+    {finding.description}
+    </Each>
+    <Else>
+    # Pull-request review rejected
+
+    The user declined to continue at the pull-request review checkpoint. The
+    implementation below was neither revised nor accepted.
+
+    {reviewCheckpoint.rationale}
+
+    ## Pull request
+
+    {pullRequest}
+
+    ## Planner review
+
+    Passed: {verdict.passed}
+
+    {verdict.review}
+    </Else>
+  </If>
 </Output>
 
 The agent, parsing, and control-flow syntax in this component runs today, on
 the same terms as `Planning`: the body outside `<Output>` runs under the
 `throw` error mode, so the final `<Parse>` in each repair loop ends the stage
 rather than passing malformed data to a durable effect.
+
+The user's decision outranks the verdict here too. `reviewCheckpoint.proceed` is
+read before `verdict.passed`, so a declined pull-request review leaves the loop
+without revising the implementation and without reporting it as reviewed. The
+stage is reached at all only because `start.md` gated it on
+`authorization.proceed`; a declined authorization means these prompts and the
+durable effects below them never run.
 
 `<Commit>` (#294), `<PullRequest>` (#295), and `<Issue>` (#296) do not exist,
 and reconciling those durable GitHub effects idempotently is #297. Until they
