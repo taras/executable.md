@@ -58,7 +58,7 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
   // against the working directory, exactly as execution does. Supplied text
   // is already here, so describing it reads nothing.
   const content = yield* readRootSource(options);
-  const definition = parseMarkdownDefinition("__root__", path, content);
+  const definition = yield* parseMarkdownDefinition("__root__", path, content);
 
   return {
     path,
@@ -134,7 +134,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
         return { kind: "function", origin };
       }
       const source = yield* readTextFile(selected.path);
-      const definition = parseMarkdownDefinition(name, selected.path, source);
+      const definition = yield* parseMarkdownDefinition(name, selected.path, source);
       return {
         kind: "markdown",
         origin,

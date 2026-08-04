@@ -62,16 +62,16 @@ export interface PreparedElicitation {
  * Synchronous and effect-free: it either produces a question that can be asked
  * or throws, and a caller that has not yet begun anything can still stop.
  */
-export function prepareElicitation(
+export function* prepareElicitation(
   schema: Json,
   label: string = DEFAULT_LABEL,
-): PreparedElicitation {
+): Operation<PreparedElicitation> {
   const declaration = readParseSchema(label, schema);
 
   refuseUnsupportedNames(label, declaration);
   refuseExternalReferences(label, declaration);
 
-  return { schema: declaration, validate: compileParseSchema(label, declaration), label };
+  return { schema: declaration, validate: yield* compileParseSchema(label, declaration), label };
 }
 
 /** Ask the configured provider, and judge what it returns. */
@@ -94,12 +94,15 @@ export function* runPreparedElicitation(
 }
 
 /** Compile and ask in one step, for a host with no ordering of its own. */
-export function elicit(request: {
+export function* elicit(request: {
   message: string;
   schema: Json;
   label?: string;
 }): Operation<Json> {
-  return runPreparedElicitation(prepareElicitation(request.schema, request.label), request.message);
+  return yield* runPreparedElicitation(
+    yield* prepareElicitation(request.schema, request.label),
+    request.message,
+  );
 }
 
 /**

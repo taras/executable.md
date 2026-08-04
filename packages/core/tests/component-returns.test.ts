@@ -142,6 +142,16 @@ function valueComponent(declaration: string, expression: string): string {
 /** A body effect that must not run when structural validation fails. */
 const BODY_EFFECT = "```sh exec\necho BODY_RAN\n```";
 
+/** The failure an operation raised, so an assertion can read it. */
+function* raised(operation: () => Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the operation to fail");
+}
+
 describe("Tier RV — component return values", () => {
   beforeAll(() => useTempFileCompiler());
 
@@ -811,12 +821,18 @@ describe("Tier RV — component return values", () => {
   describe("schema compilation", () => {
     it("keeps props and return contracts independent for the same schema object", function* () {
       const compiledAsReturnFirst = { type: "string" };
-      compileReturnsSchema(compiledAsReturnFirst);
-      expect(() => compilePropsSchema(compiledAsReturnFirst)).toThrow(PropsSchemaError);
+      yield* compileReturnsSchema(compiledAsReturnFirst);
+      expect(yield* raised(() => compilePropsSchema(compiledAsReturnFirst))).toBeInstanceOf(
+        PropsSchemaError,
+      );
 
       const compiledAsPropsFirst = { type: "string" };
-      expect(() => compilePropsSchema(compiledAsPropsFirst)).toThrow(PropsSchemaError);
-      expect(validateReturnValue("Verdict", "shipped", compiledAsPropsFirst)).toBe("shipped");
+      expect(yield* raised(() => compilePropsSchema(compiledAsPropsFirst))).toBeInstanceOf(
+        PropsSchemaError,
+      );
+      expect(yield* validateReturnValue("Verdict", "shipped", compiledAsPropsFirst)).toBe(
+        "shipped",
+      );
     });
   });
 });

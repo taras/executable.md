@@ -12,23 +12,46 @@
 
 import { Ajv } from "ajv";
 import type { ValidateFunction } from "ajv";
-import { Err, Ok } from "effection";
-import type { Result } from "effection";
+import { createContext, Err, Ok } from "effection";
+import type { Context, Operation, Result } from "effection";
 import { SchemaValidationError, normalizeIssues } from "../validate.ts";
 import type { NormalizedIssue } from "../validate.ts";
 import { parseJson, parseJsonObject } from "../json.ts";
 import type { Json, JsonObject } from "../types.ts";
 
-const ajv = new Ajv({
-  strict: true,
-  allErrors: true,
-  validateSchema: true,
-  useDefaults: false,
-  coerceTypes: false,
-  removeAdditional: false,
-  addUsedSchema: false,
-  validateFormats: false,
-});
+function createParseCompiler(): Ajv {
+  return new Ajv({
+    strict: true,
+    allErrors: true,
+    validateSchema: true,
+    useDefaults: false,
+    coerceTypes: false,
+    removeAdditional: false,
+    addUsedSchema: false,
+    validateFormats: false,
+  });
+}
+
+/**
+ * The compiler one execution parses with.
+ *
+ * Scoped for the same reason the props compiler is (see `validate.ts`): Ajv
+ * remembers every compile in a `Map` keyed by the schema object, so an instance
+ * that outlived a run would accumulate a run's worth of schemas per run and
+ * answer a mutated schema object with the previous run's validator. A document
+ * brings fresh schema objects every time.
+ */
+const ParseCompiler: Context<Ajv | undefined> = createContext<Ajv | undefined>(
+  "component.parseCompiler",
+  undefined,
+);
+
+/** Open the parse compiler for one execution. */
+export function* useParseCompiler(): Operation<Ajv> {
+  const compiler = createParseCompiler();
+  yield* ParseCompiler.set(compiler);
+  return compiler;
+}
 
 /** A schema that could not be read or compiled. Raised before any child runs. */
 export class ParseSchemaError extends Error {
@@ -65,8 +88,14 @@ function headline(componentName: string, issues: NormalizedIssue[]): string {
  * draft-07 compilation, so a document can hold its schema in a code fence or in
  * a binding and get identical behavior.
  */
-export function compileParseSchema(componentName: string, schema: Json): ValidateFunction {
+export function* compileParseSchema(
+  componentName: string,
+  schema: Json,
+): Operation<ValidateFunction> {
   const declaration = readSchema(componentName, schema);
+  // Without a run there is nothing to reclaim: the compiler lives exactly as
+  // long as this call.
+  const ajv = (yield* ParseCompiler.get()) ?? createParseCompiler();
 
   // Ajv does not reject an async schema — it compiles a validator that returns
   // a promise. Reject it before and after compiling so validation stays

@@ -337,7 +337,7 @@ describe("Elicit: judging the answer", () => {
    * where a document would read it.
    */
   it("raises normalized issues, not only prose", function* () {
-    const prepared = prepareElicitation(JSON.parse(DECISION_SCHEMA));
+    const prepared = yield* prepareElicitation(JSON.parse(DECISION_SCHEMA));
     let raised: Error | undefined;
 
     yield* scoped(function* () {

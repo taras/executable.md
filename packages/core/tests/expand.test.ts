@@ -159,6 +159,16 @@ function expandWithEnv(
   });
 }
 
+/** The failure an operation raised, so an assertion can read it. */
+function* raised(operation: () => Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the operation to fail");
+}
+
 describe("expansion", () => {
   // C1: Basic expansion
   it("C1: basic expansion — component body in output", function* () {
@@ -946,39 +956,51 @@ describe("validateProps", () => {
 
   // C14: Undeclared prop rejected
   it("C14: undeclared prop → PropValidationError", function* () {
-    expect(() => validateProps("Comp", { foo: "bar" }, closed({}))).toThrow(
-      "must NOT have additional properties",
-    );
+    expect(
+      String(yield* raised(() => validateProps("Comp", { foo: "bar" }, closed({})))),
+    ).toContain("must NOT have additional properties");
   });
 
   // C15: Required prop missing
   it("C15: required prop missing → PropValidationError", function* () {
-    expect(() => validateProps("Comp", {}, closed({ name: { type: "string" } }, ["name"]))).toThrow(
-      "must have required property",
-    );
+    expect(
+      String(
+        yield* raised(() =>
+          validateProps("Comp", {}, closed({ name: { type: "string" } }, ["name"])),
+        ),
+      ),
+    ).toContain("must have required property");
   });
 
   // C17: Type mismatch rejected
   it("C17: type mismatch → PropValidationError", function* () {
-    expect(() =>
-      validateProps("Comp", { count: "abc" }, closed({ count: { type: "number" } })),
-    ).toThrow("must be number");
+    expect(
+      String(
+        yield* raised(() =>
+          validateProps("Comp", { count: "abc" }, closed({ count: { type: "number" } })),
+        ),
+      ),
+    ).toContain("must be number");
   });
 
   // C18: Enum validated — invalid value
   it("C18: enum invalid value → PropValidationError", function* () {
-    expect(() =>
-      validateProps(
-        "Comp",
-        { model: "bad" },
-        closed({ model: { type: "string", enum: ["a", "b"] } }),
+    expect(
+      String(
+        yield* raised(() =>
+          validateProps(
+            "Comp",
+            { model: "bad" },
+            closed({ model: { type: "string", enum: ["a", "b"] } }),
+          ),
+        ),
       ),
-    ).toThrow("must be equal to one of the allowed values");
+    ).toContain("must be equal to one of the allowed values");
   });
 
   // C19: Enum accepted — valid value
   it("C19: enum valid value → accepted", function* () {
-    const result = validateProps(
+    const result = yield* validateProps(
       "Comp",
       { model: "a" },
       closed({ model: { type: "string", enum: ["a", "b"] } }),
@@ -988,11 +1010,13 @@ describe("validateProps", () => {
 
   // C21: No props, some props → error
   it("C21: no props, some props → PropValidationError", function* () {
-    expect(() => validateProps("Badge", { size: "lg" }, closed({}))).toThrow(PropValidationError);
+    expect(yield* raised(() => validateProps("Badge", { size: "lg" }, closed({})))).toBeInstanceOf(
+      PropValidationError,
+    );
   });
 
   it("applies default when prop not provided", function* () {
-    const result = validateProps(
+    const result = yield* validateProps(
       "Comp",
       {},
       closed({ greeting: { type: "string", default: "Hello" } }),

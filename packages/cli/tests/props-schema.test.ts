@@ -8,6 +8,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import type { Operation } from "effection";
 import { validateProps } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import { z } from "zod";
@@ -56,6 +57,16 @@ const SCALARS: PropsSchema = {
   },
   additionalProperties: false,
 };
+
+/** The failure an operation raised, so an assertion can read it. */
+function* raised(operation: () => Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the operation to fail");
+}
 
 describe("Tier PS — JSON Schema to Standard Schema", () => {
   it("PS1: converts every scalar form the contract names", function* () {
@@ -108,8 +119,10 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
       required: ["a"],
       additionalProperties: false,
     };
-    expect(() => validateProps("x", {}, schema)).toThrow(/required property 'a'/);
-    expect(validateProps("x", { a: "1" }, schema)).toEqual({ a: "1" });
+    expect(String(yield* raised(() => validateProps("x", {}, schema)))).toMatch(
+      /required property 'a'/,
+    );
+    expect(yield* validateProps("x", { a: "1" }, schema)).toEqual({ a: "1" });
   });
 
   it("PS4: local references resolve — draft-7 uses definitions", function* () {
@@ -122,7 +135,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
     };
     const shape = shapeOf(schema);
     expect(shape.user.safeParse({ name: "Ada" }).success).toBe(true);
-    expect(validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
+    expect(yield* validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
       user: { name: "Ada" },
     });
   });
@@ -135,7 +148,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
     };
     expect(() => shapeOf(schema, "draft-7")).toThrow(/Reference not found/);
     expect(shapeOf(schema, "draft-2020-12").user.safeParse({ name: "Ada" }).success).toBe(true);
-    expect(validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
+    expect(yield* validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
       user: { name: "Ada" },
     });
   });
@@ -159,7 +172,7 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
       data: { name: "Ada", role: "member" },
     });
     // ...whereas Ajv is the layer entitled to do so.
-    expect(validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
+    expect(yield* validateProps("x", { user: { name: "Ada" } }, schema)).toEqual({
       user: { name: "Ada", role: "member" },
     });
   });
@@ -171,8 +184,8 @@ describe("Tier PS — JSON Schema to Standard Schema", () => {
       success: true,
       data: { a: "x", extra: 1 },
     });
-    expect(() => validateProps("x", { closed: { a: "y", extra: 1 } }, SCALARS)).toThrow(
-      /must NOT have additional properties/,
-    );
+    expect(
+      String(yield* raised(() => validateProps("x", { closed: { a: "y", extra: 1 } }, SCALARS))),
+    ).toMatch(/must NOT have additional properties/);
   });
 });

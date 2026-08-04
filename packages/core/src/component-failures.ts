@@ -19,18 +19,28 @@ import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.
 import type { Operation } from "effection";
 
 /**
- * Components that continue after failing, remembered by function identity.
+ * The declaration a component wears to say it continues after failing.
  *
- * Identity rather than name: a repository component that happens to share a
- * registered component's name is a different function and inherits nothing.
+ * This is the one thing about a component that is not run state. `printErrors(fn)`
+ * runs while a component module is evaluated — outside any operation, with no run
+ * to own a table and no scope to reach — and what it records is what an author
+ * declared about a function the author owns. So it lives on that function, which
+ * is where its lifetime already is.
+ *
+ * Module-private rather than `Symbol.for`, so nothing outside this module can
+ * forge the declaration, and non-enumerable, so a component that is copied,
+ * wrapped, or inspected does not carry it along by accident. Identity is what
+ * carries it either way: a repository component that happens to share a
+ * registered component's name is a different function object and inherits
+ * nothing.
  */
-const printing = new WeakSet<FunctionComponent>();
+const PRINTS_ERRORS = Symbol("executablemd.core.printsErrors");
 
 /**
  * Continue after this component fails, reporting the failure as a printed error.
  *
- * The component is returned unchanged — marking is membership, not wrapping —
- * so its identity and type survive:
+ * The component is returned unchanged — declaring is marking, not wrapping — so
+ * its identity and type survive:
  *
  * ```ts
  * export default printErrors(function* (props) {
@@ -43,12 +53,12 @@ const printing = new WeakSet<FunctionComponent>();
  * projects is inside it.
  */
 export function printErrors<T extends FunctionComponent>(component: T): T {
-  printing.add(component);
+  Object.defineProperty(component, PRINTS_ERRORS, { value: true, enumerable: false });
   return component;
 }
 
 export function printsErrors(component: FunctionComponent): boolean {
-  return printing.has(component);
+  return Object.hasOwn(component, PRINTS_ERRORS);
 }
 
 /**
@@ -80,7 +90,7 @@ export function* usePrintErrors(): Operation<void> {
         message: `Function component ${failure.name} error: ${failure.error.message}`,
         source: failure.name,
       };
-      attributeCause(segment, failure.error);
+      yield* attributeCause(segment, failure.error);
       return yield* raise(segment);
     },
   });

@@ -1,5 +1,7 @@
 import { Ajv } from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
+import { createContext } from "effection";
+import type { Context, Operation } from "effection";
 import { JsonParseError, parseJson } from "./json.ts";
 import type { Json, PropsSchema, ReturnsSchema } from "./types.ts";
 
@@ -7,16 +9,52 @@ const RESERVED_PROP_NAMES = ["slot", "as"];
 
 // `validateFormats: false` keeps `format` an annotation (no assertion, no extra
 // dependency). `useDefaults` mutates the validated value to fill defaults.
-const ajv = new Ajv({
-  strict: true,
-  allErrors: true,
-  validateSchema: true,
-  useDefaults: true,
-  coerceTypes: false,
-  removeAdditional: false,
-  addUsedSchema: false,
-  validateFormats: false,
-});
+function createPropsCompiler(): Ajv {
+  return new Ajv({
+    strict: true,
+    allErrors: true,
+    validateSchema: true,
+    useDefaults: true,
+    coerceTypes: false,
+    removeAdditional: false,
+    addUsedSchema: false,
+    validateFormats: false,
+  });
+}
+
+/**
+ * The compiler one execution validates props and return values with.
+ *
+ * Ajv keeps every compile in a `Map` of its own, keyed by the schema object it
+ * was handed and never evicted, so a single instance would hold one entry per
+ * schema per run for the life of the process — and a schema object mutated
+ * between runs would get the first run's validator. The compiler therefore
+ * belongs to the run: created when a run installs it, reclaimed with everything
+ * it compiled when the run's scope ends. That `Map` is also the whole cache
+ * this module needs, which is why there is no second one beside it.
+ */
+const PropsCompiler: Context<Ajv | undefined> = createContext<Ajv | undefined>(
+  "component.propsCompiler",
+  undefined,
+);
+
+/** Open the props and returns compiler for one execution. */
+export function* usePropsCompiler(): Operation<Ajv> {
+  const compiler = createPropsCompiler();
+  yield* PropsCompiler.set(compiler);
+  return compiler;
+}
+
+/**
+ * The run's compiler, or one that lives exactly as long as this call.
+ *
+ * Compiling outside a run — a host describing a component, a test — has nothing
+ * to reclaim and nothing to share, so it gets an instance of its own rather
+ * than reaching for one that would outlive it.
+ */
+function* compiler(): Operation<Ajv> {
+  return (yield* PropsCompiler.get()) ?? createPropsCompiler();
+}
 
 export class PropsSchemaError extends Error {
   constructor(message: string) {
@@ -79,18 +117,13 @@ export class ReturnValidationError extends SchemaValidationError {
   }
 }
 
-// Props and returns enforce different root contracts, so each keeps its own
-// cache. A shared one would let a schema first compiled as a return hand
-// `compilePropsSchema` a validator that never met the object-root contract.
-const compiledCache = new WeakMap<PropsSchema, ValidateFunction>();
-const compiledReturnsCache = new WeakMap<ReturnsSchema, ValidateFunction>();
-
-export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
-  const cached = compiledCache.get(schema);
-  if (cached) {
-    return cached;
-  }
-
+// Props and returns enforce different root contracts, and each is checked on
+// every call rather than remembered. Ajv memoizes the compile itself, keyed by
+// the schema object, so a table here would only add the question of which
+// contract a remembered validator was compiled under — and answering it wrong
+// is how a schema first compiled as a return would hand `compilePropsSchema` a
+// validator that never met the object-root contract.
+export function* compilePropsSchema(schema: PropsSchema): Operation<ValidateFunction> {
   enforceRootContract(schema);
   // Ajv does not reject an async schema — it compiles an async validator that
   // returns a promise. Reject it before and after compiling so validation
@@ -99,6 +132,7 @@ export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
     throw new PropsSchemaError("asynchronous props schemas ($async: true) are not supported");
   }
 
+  const ajv = yield* compiler();
   let validate: ValidateFunction;
   try {
     validate = ajv.compile(schema);
@@ -112,7 +146,6 @@ export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
     throw new PropsSchemaError("asynchronous props schemas are not supported");
   }
 
-  compiledCache.set(schema, validate);
   return validate;
 }
 
@@ -121,16 +154,12 @@ export function compilePropsSchema(schema: PropsSchema): ValidateFunction {
  * root carries no object contract — only the same asynchronous-schema
  * rejection that keeps validation synchronous within the Effection path.
  */
-export function compileReturnsSchema(schema: ReturnsSchema): ValidateFunction {
-  const cached = compiledReturnsCache.get(schema);
-  if (cached) {
-    return cached;
-  }
-
+export function* compileReturnsSchema(schema: ReturnsSchema): Operation<ValidateFunction> {
   if (schema["$async"] === true) {
     throw new ReturnSchemaError("asynchronous return schemas ($async: true) are not supported");
   }
 
+  const ajv = yield* compiler();
   let validate: ValidateFunction;
   try {
     validate = ajv.compile(schema);
@@ -144,7 +173,6 @@ export function compileReturnsSchema(schema: ReturnsSchema): ValidateFunction {
     throw new ReturnSchemaError("asynchronous return schemas are not supported");
   }
 
-  compiledReturnsCache.set(schema, validate);
   return validate;
 }
 
@@ -157,11 +185,11 @@ export function compileReturnsSchema(schema: ReturnsSchema): ValidateFunction {
  * — and fills defaults into — that clone, so the producer's own object is
  * never mutated and only JSON reaches the caller.
  */
-export function validateReturnValue(
+export function* validateReturnValue(
   componentName: string,
   value: unknown,
   schema: ReturnsSchema,
-): Json {
+): Operation<Json> {
   let json: Json;
   try {
     json = parseJson(value);
@@ -180,7 +208,7 @@ export function validateReturnValue(
     throw error;
   }
 
-  const validate = compileReturnsSchema(schema);
+  const validate = yield* compileReturnsSchema(schema);
   if (!validate(json)) {
     throw new ReturnValidationError(componentName, (validate.errors ?? []).map(normalizeIssue));
   }
@@ -190,12 +218,12 @@ export function validateReturnValue(
 
 // Validates against a clone, not `callerProps` — Ajv's `useDefaults` mutates
 // the validated object, and the caller's env value must never change.
-export function validateProps(
+export function* validateProps(
   componentName: string,
   callerProps: Record<string, Json>,
   schema: PropsSchema,
-): Record<string, Json> {
-  const validate = compilePropsSchema(schema);
+): Operation<Record<string, Json>> {
+  const validate = yield* compilePropsSchema(schema);
   const clone = structuredClone(callerProps);
 
   if (!validate(clone)) {

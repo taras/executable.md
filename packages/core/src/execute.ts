@@ -36,7 +36,13 @@ import type {
   Segment,
 } from "./types.ts";
 import { parseJson, parseJsonObject } from "./json.ts";
-import { compilePropsSchema, compileReturnsSchema, validateProps } from "./validate.ts";
+import {
+  compilePropsSchema,
+  compileReturnsSchema,
+  usePropsCompiler,
+  validateProps,
+} from "./validate.ts";
+import { useParseCompiler } from "./components/parse-schema.ts";
 import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
@@ -49,7 +55,13 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import type { BlockCounter } from "./expand.ts";
-import { DocumentationError, documentationFailure, durabilityFailure } from "./errors.ts";
+import {
+  DocumentationError,
+  documentationError,
+  documentationFailure,
+  durabilityFailure,
+  useSegmentCauses,
+} from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
@@ -197,7 +209,7 @@ function* durableImportComponent(
       propsExport === undefined
         ? { type: "object", properties: {}, additionalProperties: false }
         : parseJsonObject(propsExport);
-    compilePropsSchema(props);
+    yield* ephemeral(compilePropsSchema(props));
 
     const definition: FunctionComponentDefinition = {
       kind: "function",
@@ -208,7 +220,7 @@ function* durableImportComponent(
 
     if ("returns" in mod && mod.returns !== undefined) {
       const returns = parseReturnsDeclaration(mod.returns);
-      compileReturnsSchema(returns);
+      yield* ephemeral(compileReturnsSchema(returns));
       definition.returns = returns;
     }
 
@@ -216,7 +228,7 @@ function* durableImportComponent(
   }
 
   // Markdown component: parse at runtime — deterministic from content
-  return parseMarkdownDefinition(name, path, content);
+  return yield* ephemeral(parseMarkdownDefinition(name, path, content));
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
@@ -493,9 +505,8 @@ function* runValueRoot(
   yield* scoped(function* () {
     yield* Component.around(
       {
-        // deno-lint-ignore require-yield
         *raise([error], _next) {
-          throw new DocumentationError(error, "throw");
+          throw yield* documentationError(error, "throw");
         },
       },
       { at: "min" },
@@ -540,7 +551,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     throw new Error("Root document must be a markdown file, not a function component");
   }
 
-  const validatedProps = validateProps("__root__", props, root.props);
+  const validatedProps = yield* ephemeral(validateProps("__root__", props, root.props));
 
   const rootEnv: EvalEnv = { values: { ...validatedProps } };
 
@@ -773,8 +784,13 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         *stderr() {},
       });
 
-      // The slot this run's completion reads its failure from. Created here and
-      // reclaimed with this task, so nothing a run decided outlives it.
+      // The state this run owns: the table its printed errors record their
+      // causes in, the schema compilers, and the slot its completion reads its
+      // failure from. All created here and reclaimed with this task, so nothing
+      // a run decided outlives it.
+      yield* useSegmentCauses();
+      yield* usePropsCompiler();
+      yield* useParseCompiler();
       const liveFailure: LiveFailureSlot = {};
       yield* LiveFailure.set(liveFailure);
 
