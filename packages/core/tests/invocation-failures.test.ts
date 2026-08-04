@@ -154,7 +154,10 @@ describe("Tier O — Invocation failure domains", () => {
 
   it("O37: a DocumentationError body failure survives a teardown failure", function* () {
     const timeline: string[] = [];
-    const doc = new DocumentationError({ type: "error", message: "the document is wrong" });
+    const doc = new DocumentationError(
+      { type: "error", message: "the document is wrong" },
+      "throw",
+    );
 
     const caught = yield* capture(() =>
       withInvocation(function* (invocation) {
@@ -187,7 +190,10 @@ describe("Tier O — Invocation failure domains", () => {
 
   it("O39: a durability teardown failure outranks a documentation body failure", function* () {
     const timeline: string[] = [];
-    const doc = new DocumentationError({ type: "error", message: "the document is wrong" });
+    const doc = new DocumentationError(
+      { type: "error", message: "the document is wrong" },
+      "throw",
+    );
     const fatal = new StaleInputError("journal entry no longer describes this run");
 
     const caught = yield* capture(() =>

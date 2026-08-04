@@ -73,8 +73,9 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(String(failure)).toContain("Missing");
   });
 
-  // O29: the same projection inside <Output> prints, and the region emits.
-  it("O29: Markdown <Content /> inside <Output> prints a projected error", function* () {
+  // O29: the same projection inside <Output> carries the region's error mode,
+  // so the projected error fails the region and nothing after it renders.
+  it("O29: Markdown <Content /> inside <Output> fails the region on a projected error", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "components/Wrap.md": ["<Output>", "<Content />", "", "done", "</Output>"].join("\n"),
@@ -82,12 +83,14 @@ describe("Tier O — Eval scope hierarchy", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+    let failure: unknown;
+    try {
+      yield* collect(yield* execute({ path: "doc.md", stream }));
+    } catch (error) {
+      failure = error;
+    }
 
-    expect(output).toContain("ERROR");
-    expect(output).toContain("done");
-    // Reported once on the way out, not again when it crosses back.
-    expect(String(output).split("Cannot resolve component: Missing").length - 1).toBe(1);
+    expect(String(failure)).toContain("Missing");
   });
 
   // O30: value-component documentation carries the same error mode, so a claimed
@@ -207,9 +210,9 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  // O24: the same block inside an <Output> region prints instead, so the
-  // projected error renders as a comment and the region still emits.
-  it("O24: a persistent projection inside <Output> settles under the printing error mode", function* () {
+  // O24: the same block inside an <Output> region settles under `output`, so
+  // the projected error fails the run rather than rendering as a comment.
+  it("O24: a persistent projection inside <Output> settles under the output error mode", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "components/Wrap.md": ["<Output>", ...PROJECTING_BLOCK, "</Output>"].join("\n"),
@@ -217,9 +220,14 @@ describe("Tier O — Eval scope hierarchy", () => {
     });
     yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+    let failure: unknown;
+    try {
+      yield* collect(yield* execute({ path: "doc.md", stream }));
+    } catch (error) {
+      failure = error;
+    }
 
-    expect(output).toContain("ERROR");
+    expect(String(failure)).toContain("Missing");
   });
 
   // O31: the same printing projection, captured — the string rendered the
@@ -228,7 +236,13 @@ describe("Tier O — Eval scope hierarchy", () => {
   it("O31: a captured markdown projection refuses the binding on a projected error", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "components/Wrap.md": ["<Output>", ...PROJECTING_BLOCK, "</Output>"].join("\n"),
+      "components/Wrap.md": [
+        "<Output>",
+        "<PrintErrors>",
+        ...PROJECTING_BLOCK,
+        "</PrintErrors>",
+        "</Output>",
+      ].join("\n"),
       "doc.md": '<Wrap as="cap">\n<Missing />\n</Wrap>\n\nvalue:{cap}:end',
     });
     yield* useEchoExec();

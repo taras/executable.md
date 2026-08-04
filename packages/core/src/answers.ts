@@ -84,7 +84,12 @@ import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
  * arm holds that state, so it binds the recursion and passes it down; nothing
  * here could reconstruct which expansion a region belongs to.
  */
-type ExpandSegments = (segments: Segment[]) => Operation<Segment[]>;
+/**
+ * `owner` is the region the segments render into, when they render at all: the
+ * body writes there as it goes, while a matcher's template produces a value and
+ * keeps its own buffer.
+ */
+type ExpandSegments = (segments: Segment[], owner?: Segment[]) => Operation<Segment[]>;
 
 const ANSWERS = "Answers";
 const ANSWER = "Answer";
@@ -130,6 +135,8 @@ export function strayAnswerError(element: ComponentElement): ErrorSegment {
 export function* expandAnswers(
   element: ComponentElement,
   expand: ExpandSegments,
+  /** The region the answered body renders into. */
+  owner: Segment[],
 ): Operation<Segment[]> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "delegate") {
@@ -200,7 +207,8 @@ export function* expandAnswers(
       { at: "min" },
     );
 
-    return yield* expand(body);
+    yield* expand(body, owner);
+    return [];
   });
 }
 

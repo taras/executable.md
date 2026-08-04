@@ -49,12 +49,17 @@ export interface ProjectionHandle {
    */
   claim(element: ComponentElement): ComponentElement;
   claims(element: ComponentElement): boolean;
-  /** Expand a claimed element's children inside the content scope. */
+  /**
+   * Expand a claimed element's children inside the content scope, writing into
+   * the region the caller is rendering. Projected content is the caller's own
+   * text, so what it produced before a failure belongs to that region.
+   */
   expandClaimed(
     element: ComponentElement,
     meta: Record<string, unknown>,
     props: Record<string, Json>,
     hideSet: Set<string>,
+    owner: Segment[],
   ): Operation<Segment[]>;
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;

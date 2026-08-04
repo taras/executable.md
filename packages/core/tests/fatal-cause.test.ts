@@ -28,10 +28,13 @@ function stale(): StaleInputError {
 }
 
 function documentation(): DocumentationError {
-  return new DocumentationError({
-    type: "error",
-    message: "the document is wrong",
-  });
+  return new DocumentationError(
+    {
+      type: "error",
+      message: "the document is wrong",
+    },
+    "throw",
+  );
 }
 
 /**
@@ -125,11 +128,14 @@ describe("Tier FA — Fatal error discovery", () => {
   });
 
   it("FA7: a documentation failure is found the same way", function* () {
-    const fatal = new DocumentationError({
-      type: "error",
-      message: "boom",
-      source: "x",
-    });
+    const fatal = new DocumentationError(
+      {
+        type: "error",
+        message: "boom",
+        source: "x",
+      },
+      "throw",
+    );
 
     expect(fatalCause(new InvocationTeardownError([fatal]))).toBe(fatal);
   });

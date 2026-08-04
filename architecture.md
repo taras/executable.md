@@ -49,8 +49,8 @@ Error handling has two layers:
 
 1. **Lexical structure** — the document applies context, in two forms:
    context values (`<Output>` sets the `output` error mode) and middleware
-   (`<PrintErrors>` installs failure printing; `<Retry>` installs
-   retry middleware).
+   (`<Retry>` installs retry middleware). `<PrintErrors>` uses both: it sets
+   `print` for its region and installs printing middleware.
 2. **Runtime execution** — execution runs under the context applied by the
    enclosing structure.
 
@@ -211,7 +211,7 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
-| `<Output>` region `output` mode | an undecided error fails the run | defined, unbuilt — on main a region prints and continues |
+| `<Output>` region `output` mode | an undecided error fails the run | built on main |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |

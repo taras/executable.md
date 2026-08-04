@@ -652,12 +652,29 @@ describe("component-declared output", () => {
     expect(output).toContain("ok");
   });
 
-  it("keeps errors inside an <Output> region as comments", function* () {
-    const comp = makeComponent("Err", "<Output>\n<Bogus />\n</Output>");
+  it("fails on an error inside an <Output> region", function* () {
+    const comp = makeComponent("Err", "<Output>\nbefore\n<Bogus />\nafter\n</Output>");
+    const ctx = { Err: comp };
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<Err />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("keeps an error inside an <Output> region as a comment under <PrintErrors>", function* () {
+    const comp = makeComponent(
+      "Err",
+      "<Output>\n<PrintErrors>\n<Bogus />\n</PrintErrors>\nafter\n</Output>",
+    );
     const ctx = { Err: comp };
     const output = yield* expand(scanSegments("<Err />"), ctx);
     expect(output).toContain("<!-- ERROR");
     expect(output).toContain("Failed to import component Bogus");
+    // The region carried on: printing decided the error, so nothing stopped.
+    expect(output).toContain("after");
   });
 
   it("keeps errors as comments when no <Output> is declared", function* () {
@@ -785,13 +802,32 @@ describe("component-declared output", () => {
     expect(threw).toBe(true);
   });
 
-  it("renders a child's Output error as a comment when consumed inside parent Output", function* () {
+  it("stops a parent's region when a child's own region fails inside it", function* () {
     const child = makeComponent("Child", "<Output>\n<Bogus />\n</Output>");
-    const parent = makeComponent("P", "<Output>\n<Child />\n</Output>");
+    const parent = makeComponent("P", "<Output>\n<Child />\ntail\n</Output>");
+    const ctx = { Child: child, P: parent };
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("renders a child's printed error as a comment when consumed inside parent Output", function* () {
+    const child = makeComponent(
+      "Child",
+      "<Output>\n<PrintErrors>\n<Bogus />\n</PrintErrors>\n</Output>",
+    );
+    const parent = makeComponent("P", "<Output>\n<Child />\ntail\n</Output>");
     const ctx = { Child: child, P: parent };
     const output = yield* expand(scanSegments("<P />"), ctx);
     expect(output).toContain("<!-- ERROR");
     expect(output).toContain("Failed to import component Bogus");
+    // The child decided this error once, where it was raised. The parent reads
+    // data, so its own region is unaffected.
+    expect(output).toContain("tail");
   });
 
   it("throws before storing an as= binding that captured a child's Output error", function* () {
@@ -820,13 +856,29 @@ describe("component-declared output", () => {
     expect(threw).toBe(true);
   });
 
-  it("renders a function component's content error once inside parent Output", function* () {
-    const child = makeComponent("Child", "<Output>\n<Echo>\n<Bogus />\n</Echo>\n</Output>");
+  it("renders a function component's printed content error once inside parent Output", function* () {
+    const child = makeComponent(
+      "Child",
+      "<Output>\n<PrintErrors>\n<Echo>\n<Bogus />\n</Echo>\n</PrintErrors>\n</Output>",
+    );
     const parent = makeComponent("P2", "<Output>\n<Child />\n</Output>");
     const ctx = { Child: child, Echo: echoComponent, P2: parent };
     const output = yield* expand(scanSegments("<P2 />"), ctx);
     expect(output).toContain("<!-- ERROR");
     expect(output.match(/Failed to import component Bogus/g) ?? []).toHaveLength(1);
+  });
+
+  it("fails a region on a function component's uncaptured content error", function* () {
+    const child = makeComponent("Child", "<Output>\n<Echo>\n<Bogus />\n</Echo>\n</Output>");
+    const parent = makeComponent("P3", "<Output>\n<Child />\ntail\n</Output>");
+    const ctx = { Child: child, Echo: echoComponent, P3: parent };
+    let threw = false;
+    try {
+      yield* expand(scanSegments("<P3 />"), ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
   });
 
   // --- Structural preflight ---

@@ -45,13 +45,13 @@ import {
 import {
   attributeCause,
   ContentError,
+  decidedByOutput,
   DocumentationError,
   durabilityFailure,
   ErrorMode,
   fatalCause,
-  settle,
 } from "./errors.ts";
-import { printsErrors, useFailurePrinting } from "./component-failures.ts";
+import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -159,13 +159,15 @@ function expandChildrenScoped(
   props: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** Where this expansion accumulates — its caller's region, or a private buffer. */
+  owner: Segment[],
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* provideEnv({ values: { ...(callerEnv?.values ?? {}), ...(override ?? {}) } });
     if (scope) {
       yield* provideEvalScope(scope);
     }
-    return yield* expandSegments(segments, meta, props, hideSet, counter);
+    return yield* expandSegments(segments, meta, props, hideSet, counter, owner);
   });
 }
 
@@ -246,6 +248,13 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
     errors: Segment[];
+    /**
+     * The caller's region, when this projection renders into one. Structural
+     * `<Content />` passes it, so a failure partway leaves the projected prefix
+     * with the document. A string projection passes none: it produces a value,
+     * and a value is not output until it is complete.
+     */
+    owner?: Segment[];
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       const contentScope = yield* state.invocation.useContentScope();
@@ -255,8 +264,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // replacing the documentation failure the caller is meant to see.
       const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
       // Shared with the expansion below, so a failure still leaves behind what it
-      // rendered before stopping.
-      const rendered: Segment[] = [];
+      // rendered before stopping. When the caller owns a region, that array is
+      // the region itself and the prefix is already where the document needs it.
+      const rendered: Segment[] = options.owner ?? [];
       const task = contentScope.scope.run(function* () {
         try {
           yield* ErrorMode.set(options.mode);
@@ -288,7 +298,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       if (result.failure !== undefined) {
         throw result.failure;
       }
-      return [...options.errors, ...result.segments];
+      // A projection that wrote into the caller's region has nothing left to
+      // hand back; one that kept its own returns what it rendered.
+      return options.owner === undefined ? [...options.errors, ...result.segments] : options.errors;
     });
   }
 
@@ -384,6 +396,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       meta: Record<string, unknown>,
       props: Record<string, Json>,
       hideSet: Set<string>,
+      owner: Segment[],
     ): Operation<Segment[]> {
       // Slots were resolved during substitution, so the environment, meta,
       // props and hide set are the body's own — only the resource scope moves.
@@ -400,6 +413,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         inner: state.enclosing,
         loop: state.callerLoop,
         errors: [],
+        owner,
       });
     },
     project: runProjection,
@@ -466,14 +480,19 @@ export function* expandSegments(
   hideSet: Set<string>,
   counter: BlockCounter = createBlockCounter(),
   /**
-   * Where to accumulate, when the caller wants what was rendered even if this
-   * does not finish. Expansion appends as it goes, so a caller holding the same
-   * array still has everything produced before a failure — which is how a
-   * `<Test>` keeps its output when its body stops partway.
+   * The output owner: the accumulator belonging to the region whose text
+   * renders into the document. Expansion appends as it goes, so a caller
+   * holding the same array still has everything produced before a failure —
+   * which is how a failing `<Output>` region keeps what it rendered first, and
+   * how a `<Test>` keeps its output when its body stops partway.
+   *
+   * A call site that produces a binding, a value, or a string passes nothing.
+   * Its buffer is private and never merges into an owner, so a failure cannot
+   * promote content the document was not going to render (§6.9).
    */
-  printedErrors?: Segment[],
+  owner?: Segment[],
 ): Operation<Segment[]> {
-  const result: Segment[] = printedErrors ?? [];
+  const result: Segment[] = owner ?? [];
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
   const loop = yield* ActiveLoop.get();
@@ -506,9 +525,7 @@ export function* expandSegments(
           // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
-            result.push(
-              ...(yield* projection.expandClaimed(segment, parentMeta, parentProps, hideSet)),
-            );
+            yield* projection.expandClaimed(segment, parentMeta, parentProps, hideSet, result);
             break;
           }
         }
@@ -543,14 +560,18 @@ export function* expandSegments(
         if (segment.name === "Each") {
           // Same as <Capture>: expandEach reports its own errors and hands the
           // body's back untouched (§6.9).
-          result.push(...(yield* expandEach(segment, parentMeta, parentProps, hideSet, counter)));
+          result.push(
+            ...(yield* expandEach(segment, parentMeta, parentProps, hideSet, counter, result)),
+          );
           break;
         }
 
         if (segment.name === "If") {
           // No raise() here, like the branches above: expandIf reports the
           // errors it creates, and the selected branch settled its own (§6.9).
-          result.push(...(yield* expandIf(segment, parentMeta, parentProps, hideSet, counter)));
+          // It renders into this expansion's output, so it writes into the owner
+          // rather than handing segments back to be appended.
+          yield* expandIf(segment, parentMeta, parentProps, hideSet, counter, result);
           break;
         }
 
@@ -566,16 +587,14 @@ export function* expandSegments(
         if (segment.name === "Loop") {
           // No raise() here, for the same reason as <If>: expandLoop reports
           // the errors it creates, and the body settled its own (§6.9).
-          result.push(...(yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter)));
+          yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter, result);
           break;
         }
 
         if (segment.name === "PrintErrors") {
           // No raise() here, like the branches above: expandPrintErrors
           // reports the errors it creates, and the body settled its own (§6.9).
-          result.push(
-            ...(yield* expandPrintErrors(segment, parentMeta, parentProps, hideSet, counter)),
-          );
+          yield* expandPrintErrors(segment, parentMeta, parentProps, hideSet, counter, result);
           break;
         }
 
@@ -586,8 +605,11 @@ export function* expandSegments(
           // matcher's template children — so it is handed this expansion's
           // recursion to render them with.
           result.push(
-            ...(yield* expandAnswers(segment, (inner) =>
-              expandSegments(inner, parentMeta, parentProps, hideSet, counter),
+            ...(yield* expandAnswers(
+              segment,
+              (inner, into) =>
+                expandSegments(inner, parentMeta, parentProps, hideSet, counter, into),
+              result,
             )),
           );
           break;
@@ -627,18 +649,14 @@ export function* expandSegments(
           segment.position,
           parentMeta,
           parentProps,
+          result,
         );
-        // Consumer boundary: the callee reported these where they were created,
-        // under whatever error mode its body ran — an `<Output>` region prints,
-        // documentation throws. Settling them here applies this caller's error mode
-        // without reporting them a second time (spec §6.9).
-        for (const expandedSegment of expanded) {
-          if (expandedSegment.type === "error") {
-            result.push(yield* settle(expandedSegment));
-          } else {
-            result.push(expandedSegment);
-          }
-        }
+        // A printed error the callee produced is data, and stays data here: it
+        // was decided once, where it was raised, under the error mode governing
+        // the region that raised it (§6.9). A rendering invocation wrote it
+        // straight into this owner; anything handed back — a binding the callee
+        // refused, an error about the invocation itself — is appended as it is.
+        result.push(...expanded);
         break;
       }
 
@@ -861,6 +879,8 @@ function* expandEach(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** The region a rendering iteration writes into; a captured one keeps its own. */
+  owner: Segment[],
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -929,9 +949,12 @@ function* expandEach(
   const parentEvalScope = yield* evalScope;
 
   const enclosingLoop = yield* ActiveLoop.get();
-  const out: Segment[] = [];
+  // A rendering iteration writes into the caller's region as it goes, so a
+  // failure partway leaves the items it already produced behind. A captured one
+  // builds a value instead: its buffer is private and never becomes output.
+  const out: Segment[] = asBinding === undefined ? owner : [];
   for (const item of items) {
-    const expanded = yield* expandChildrenScoped(
+    yield* expandChildrenScoped(
       segment.children,
       callerEnv ?? undefined,
       { [name]: item },
@@ -940,8 +963,8 @@ function* expandEach(
       parentProps,
       hideSet,
       counter,
+      out,
     );
-    out.push(...expanded);
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
     if (enclosingLoop?.broken) {
@@ -950,7 +973,7 @@ function* expandEach(
   }
 
   if (asBinding === undefined) {
-    return out;
+    return [];
   }
 
   // A capture never swallows an error. The body reported these where they were
@@ -1179,25 +1202,27 @@ function* expandIf(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<Segment[]> {
+  /** The region this renders into: the selected branch writes there directly. */
+  owner: Segment[],
+): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
   );
   if (unknownProp !== undefined) {
-    return [
+    owner.push(
       yield* raise(
         ifError(segment, `<If> only accepts a "condition" prop. Got: "${unknownProp}".`),
       ),
-    ];
+    );
+    return;
   }
 
   const structure = ifStructure(segment);
   if (structure.violations.length > 0) {
-    const reported: Segment[] = [];
     for (const violation of structure.violations) {
-      reported.push(yield* raise(violation));
+      owner.push(yield* raise(violation));
     }
-    return reported;
+    return;
   }
 
   let condition: Json;
@@ -1213,16 +1238,18 @@ function* expandIf(
       );
       condition = resolved.condition;
     } catch (error) {
-      return [
+      owner.push(
         yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
-      ];
+      );
+      return;
     }
   } else {
-    return [yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).'))];
+    owner.push(yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).')));
+    return;
   }
 
   if (typeof condition !== "boolean") {
-    return [
+    owner.push(
       yield* raise(
         ifError(
           segment,
@@ -1230,15 +1257,17 @@ function* expandIf(
             "<If> does not coerce truthy or falsy values.",
         ),
       ),
-    ];
+    );
+    return;
   }
 
-  return yield* expandSegments(
+  yield* expandSegments(
     condition ? structure.whenTrue : structure.whenFalse,
     parentMeta,
     parentProps,
     hideSet,
     counter,
+    owner,
   );
 }
 
@@ -1334,31 +1363,39 @@ function* expandLoop(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<Segment[]> {
+  /** The region this renders into: each iteration writes there as it runs. */
+  owner: Segment[],
+): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
   );
   if (unknownProp !== undefined) {
-    return [
+    owner.push(
       yield* raise(
         loopError(segment, `<Loop> only accepts "max" and "name" props. Got: "${unknownProp}".`),
       ),
-    ];
+    );
+    return;
   }
 
   if ("name" in segment.expressions) {
-    return [yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.'))];
+    owner.push(
+      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.')),
+    );
+    return;
   }
   const name = segment.props.name;
   if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
-    return [
+    owner.push(
       yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
-    ];
+    );
+    return;
   }
 
   const bound = yield* loopBound(segment);
   if (!bound.ok) {
-    return [yield* raise(loopError(segment, bound.error.message))];
+    owner.push(yield* raise(loopError(segment, bound.error.message)));
+    return;
   }
 
   // Taken from the shared block counter, so every `<Loop>` an execution enters
@@ -1367,7 +1404,6 @@ function* expandLoop(
   const identity: LoopIdentity = { id: counter.next(), ...(name === undefined ? {} : { name }) };
 
   const frame: LoopFrame = { broken: false };
-  const out: Segment[] = [];
   let started = 0;
 
   try {
@@ -1376,9 +1412,7 @@ function* expandLoop(
       for (let iteration = 0; iteration < bound.value; iteration++) {
         yield* recordIteration(identity, iteration);
         started = iteration + 1;
-        out.push(
-          ...(yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter)),
-        );
+        yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter, owner);
         if (frame.broken) {
           break;
         }
@@ -1418,7 +1452,6 @@ function* expandLoop(
 
   const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
   yield* recordOutcome(identity, { iterations: started, outcome });
-  return out;
 }
 
 function breakElementViolations(segment: ComponentElement): string[] {
@@ -1497,19 +1530,29 @@ function* expandPrintErrors(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
-): Operation<Segment[]> {
+  /** The region this renders into: it writes there rather than returning. */
+  owner: Segment[],
+): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
-    return [
+    owner.push(
       yield* raise(
         printErrorsPropError(segment, `<PrintErrors> accepts no props. Got: "${names[0]}".`),
       ),
-    ];
+    );
+    return;
   }
 
-  return yield* scoped(function* () {
-    yield* useFailurePrinting();
-    return yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter);
+  yield* scoped(function* () {
+    yield* usePrintErrors();
+    return yield* expandSegments(
+      segment.children,
+      parentMeta,
+      parentProps,
+      hideSet,
+      counter,
+      owner,
+    );
   });
 }
 
@@ -1526,6 +1569,13 @@ function* expandComponent(
   /** The invoking frame's meta and props, for content this element projects. */
   callerMeta: Record<string, unknown> = {},
   callerProps: Record<string, Json> = {},
+  /**
+   * The caller's output owner, when this invocation renders into it. An
+   * invocation captured with `as` produces a binding rather than output and
+   * passes none, so what its body rendered before failing stays out of the
+   * document (§6.9).
+   */
+  owner?: Segment[],
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -1812,6 +1862,7 @@ function* expandComponent(
     return [];
   }
 
+  const bodyOwner = asBinding === undefined ? owner : undefined;
   const expanded = yield* withInvocation(function* (invocation) {
     yield* installInvocation(invocation);
     return yield* expandBody(
@@ -1823,6 +1874,7 @@ function* expandComponent(
       counter,
       callerEvalEnv ?? undefined,
       claimProjection,
+      bodyOwner,
     );
   });
 
@@ -1854,7 +1906,9 @@ function* expandComponent(
     return [];
   }
 
-  return expanded;
+  // A rendering body already wrote into the owner, so there is nothing left to
+  // hand back; one that kept its own returns what it rendered.
+  return bodyOwner === undefined ? expanded : [];
 }
 
 // Without `returns`, a function component's rendering is its return value, so
@@ -2214,7 +2268,22 @@ function* expandFunctionComponent(
       // reporting it again here would double-observe it.
       if (error instanceof ContentExpansionFailure) {
         if (error.cause instanceof DocumentationError) {
-          throw error.cause;
+          // A `throw` decision is final: the region is hidden, so no printing
+          // boundary may undo it. An `output` decision leaves an ordinary
+          // propagating failure — the region already stopped, and printing what
+          // left it is what a boundary is for. The region's own failure travels
+          // on, not the segments it transported: reporting those again would
+          // print an error the region already decided about.
+          if (!decidedByOutput(error.cause)) {
+            throw error.cause;
+          }
+          return [
+            yield* handleFailure({
+              name,
+              ...(metadata.position === undefined ? {} : { position: metadata.position }),
+              error: error.cause,
+            }),
+          ];
         }
         return [...error.errors];
       }
@@ -2244,7 +2313,7 @@ function* expandFunctionComponent(
   // decide the same for its siblings.
   if (printsErrors(definition.fn)) {
     return yield* scoped(function* () {
-      yield* useFailurePrinting();
+      yield* usePrintErrors();
       return yield* invoke();
     });
   }
@@ -2642,6 +2711,13 @@ interface BodyChunk {
   /** true = a rendered `<Output>` region; false = documentation (executed, not rendered). */
   output: boolean;
   segments: Segment[];
+  /**
+   * An error about the region declaration itself rather than about work inside
+   * one. The region never opened, so the mode it would have installed has
+   * nothing to say about it: the enclosing mode decides, which is how a
+   * mistyped `<Output>` stays a printed error in a document that prints.
+   */
+  declaration?: boolean;
 }
 
 function isTopLevelOutput(segment: Segment): boolean {
@@ -2904,7 +2980,7 @@ function buildBody(
     if (segment.type === "component" && segment.name === "Output") {
       const propsError = validateOutputProps(segment);
       if (propsError) {
-        chunks.push({ output: true, segments: [propsError] });
+        chunks.push({ output: true, segments: [propsError], declaration: true });
         continue;
       }
       const outputSegments = substituteSegmentList(
@@ -2930,12 +3006,16 @@ function buildBody(
 /**
  * Expand a definition body (spec §6.9). Without a top-level `<Output>`, the
  * whole body renders (backward compatible). With `<Output>`, only the declared
- * regions render; documentation executes for its side effects under a throwing
- * error mode (fail-fast) and its rendered result is discarded; output
- * regions set a printing error mode of their own, so their errors render as
- * comments; the caller settles them again on the way out.
+ * regions render; documentation executes for its side effects under `throw` and
+ * its rendered result is discarded; output regions install `output`, so an
+ * undecided error in a region fails the run and nothing after it — the rest of
+ * the region, later regions, later documentation — begins.
  * Regions and documentation run in document order, so output can depend on
  * bindings computed by preceding documentation.
+ *
+ * A failing region keeps what it rendered: every region writes into the owner
+ * as it goes, so the caller is already holding the prefix when the failure
+ * reaches it (§6.9 Partial output).
  */
 export function* expandBody(
   bodySegments: Segment[],
@@ -2946,22 +3026,30 @@ export function* expandBody(
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn = passthroughClaim,
+  /**
+   * Where this body renders. A body that renders into the document shares its
+   * caller's owner, so a region that fails partway has already handed over what
+   * it produced; an invocation captured with `as` produces a binding rather
+   * than output and passes none.
+   */
+  owner?: Segment[],
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, meta, props, callerEnv, claim);
-    return yield* expandSegments(substituted, meta, props, hideSet, counter);
+    return yield* expandSegments(substituted, meta, props, hideSet, counter, owner);
   }
 
   const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim);
-  const output: Segment[] = [];
+  const output: Segment[] = owner ?? [];
 
   for (const chunk of chunks) {
-    if (chunk.output) {
-      const expanded = yield* scoped(function* () {
-        yield* ErrorMode.set("print");
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
+    if (chunk.declaration) {
+      yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
+    } else if (chunk.output) {
+      yield* scoped(function* () {
+        yield* ErrorMode.set("output");
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
       });
-      output.push(...expanded);
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {

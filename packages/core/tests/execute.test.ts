@@ -1248,7 +1248,7 @@ describe("component-declared output — document workflow", () => {
     expect(chunks).toHaveLength(1);
   });
 
-  it("emits no partial output when documentation fails in a buffered root", function* () {
+  it("emits what a buffered root selected before its documentation failed", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": "<Output>\nSELECTED\n</Output>\n\n```bash exec\nfailing-command\n```\n",
@@ -1263,7 +1263,10 @@ describe("component-declared output — document workflow", () => {
 
     const result = yield* execution;
     expect(result.ok).toBe(false);
-    expect(chunks.join("")).not.toContain("SELECTED");
+    // The region completed before the documentation ran, so its text is part
+    // of what this run rendered — and a run that fails still hands over what it
+    // rendered (§6.9 Partial output).
+    expect(chunks.join("")).toContain("SELECTED");
   });
 
   it("keeps per-segment streaming for roots without <Output>", function* () {
