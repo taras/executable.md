@@ -23,8 +23,7 @@ import { Component, content } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
-import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
-import type { ErrorMode } from "../src/errors.ts";
+import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import { execute } from "../src/execute.ts";
 import { expandSegments } from "../src/expand.ts";
 import { InvocationTeardownError } from "../src/invocation.ts";
@@ -125,7 +124,7 @@ function run(
     const observed: ErrorSegment[] = [];
     const offered: ComponentFailure[] = [];
     if (options.mode) {
-      yield* AmbientErrorMode.set(options.mode);
+      yield* ErrorMode.set(options.mode);
     }
     yield* Component.around({
       *raise([segment], next) {

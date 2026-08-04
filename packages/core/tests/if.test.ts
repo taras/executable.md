@@ -6,7 +6,7 @@ import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
-import { AmbientErrorMode, DocumentationError } from "../src/errors.ts";
+import { DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -785,7 +785,7 @@ describe("Tier IF — error observation", () => {
   it("IF53: a throwing error mode still aborts on a selected-branch error", function* () {
     let thrown: unknown;
     yield* scoped(function* () {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
       try {
         yield* runRaiseProbe("<If condition={true}><Broken /></If>");
       } catch (error) {

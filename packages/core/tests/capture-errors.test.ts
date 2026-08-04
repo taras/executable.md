@@ -9,7 +9,7 @@ import { printErrors } from "../src/component-failures.ts";
 import { useContent } from "../src/content-context.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
+import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import type {
   ComponentDefinition,
   ErrorSegment,
@@ -334,7 +334,7 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
     const values: Record<string, unknown> = opts.values ?? {};
     yield* Component.around({ env: () => ({ values }) }, { at: "min" });
     if (opts.throwing) {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
     }
     const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
     return { segments, output: renderSegments(segments), trace: log };

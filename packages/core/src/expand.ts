@@ -43,16 +43,15 @@ import {
   raise,
 } from "./component-api.ts";
 import {
-  AmbientErrorMode,
   attributeCause,
   ContentError,
   DocumentationError,
   durabilityFailure,
+  ErrorMode,
   fatalCause,
   settle,
 } from "./errors.ts";
 import { printsErrors, useFailurePrinting } from "./component-failures.ts";
-import type { ErrorMode } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -260,7 +259,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const rendered: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
-          yield* AmbientErrorMode.set(options.mode);
+          yield* ErrorMode.set(options.mode);
           if (options.segments.length === 0) {
             outcome.resolve({ segments: [] });
             return;
@@ -312,7 +311,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     request: ProjectionRequest,
   ): Operation<{ segments: Segment[]; failure?: unknown }> {
     const segments = select(request);
-    const mode = request.mode ?? (yield* AmbientErrorMode.get()) ?? "print";
+    const mode = request.mode ?? (yield* ErrorMode.get()) ?? "print";
     const contentScope = yield* state.invocation.useContentScope();
     // The enclosing handle answers <Content /> written inside projected
     // content: it belongs to the caller's invocation, not to this one.
@@ -334,7 +333,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const errors: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
-          yield* AmbientErrorMode.set(mode);
+          yield* ErrorMode.set(mode);
           if (!slotErrorsEmitted && slots.errors.length > 0) {
             slotErrorsEmitted = true;
             for (const slotError of slots.errors) {
@@ -390,7 +389,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // props and hide set are the body's own — only the resource scope moves.
       // The error mode has to travel with them: the content task does not inherit
       // the documentation or <Output> frame this `<Content />` sits in.
-      const mode = (yield* AmbientErrorMode.get()) ?? "print";
+      const mode = (yield* ErrorMode.get()) ?? "print";
       return yield* runInContentScope({
         segments: element.children,
         mode,
@@ -2959,14 +2958,14 @@ export function* expandBody(
   for (const chunk of chunks) {
     if (chunk.output) {
       const expanded = yield* scoped(function* () {
-        yield* AmbientErrorMode.set("print");
+        yield* ErrorMode.set("print");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
       output.push(...expanded);
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
-        yield* AmbientErrorMode.set("throw");
+        yield* ErrorMode.set("throw");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
     }
@@ -2991,7 +2990,7 @@ function runDocumentation(
   counter: BlockCounter,
 ): Operation<Segment[]> {
   return scoped(function* () {
-    yield* AmbientErrorMode.set("throw");
+    yield* ErrorMode.set("throw");
     return yield* expandSegments(segments, meta, props, hideSet, counter);
   });
 }

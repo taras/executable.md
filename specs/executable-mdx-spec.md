@@ -1455,7 +1455,7 @@ run but are absent from the diagnostic trace.
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
-| `src/errors.ts` | `AmbientErrorMode`, `settle()`, `DocumentationError`, `ContentError` — error settlement (§6.9) and the function-content failure boundary (§5.1.2) |
+| `src/errors.ts` | `ErrorMode`, `settle()`, `DocumentationError`, `ContentError` — error settlement (§6.9) and the function-content failure boundary (§5.1.2) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
@@ -3488,7 +3488,7 @@ propagated, not what went wrong, and what matters is which journal entry stopped
 describing the run — so the loop rethrows the failure found inside the wrapper,
 on the same terms as §6.9's fatal-cause discovery.
 
-A printing error mode is not a loop failure. The printed error is content, the loop
+A print error mode is not a loop failure. The printed error is content, the loop
 keeps iterating, and the outcome is `exhausted` or `break` as usual.
 
 **An interrupted loop has iteration entries and no terminal entry.** This is

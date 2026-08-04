@@ -19,7 +19,7 @@ import type { ErrorSegment } from "./types.ts";
  */
 export type ErrorMode = "print" | "throw";
 
-export const AmbientErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
+export const ErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
   "component.errorMode",
   "print",
 );
@@ -30,7 +30,7 @@ export const AmbientErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
  * an error that already crossed a nested one.
  */
 export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
-  const mode = yield* AmbientErrorMode.get();
+  const mode = yield* ErrorMode.get();
   if (mode === "throw") {
     throw new DocumentationError(segment);
   }

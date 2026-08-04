@@ -43,7 +43,7 @@ export interface ComponentApi {
    *
    * The middleware chain is the observation chain — a segment passes through it
    * once, where it is created. The default implementation settles it under
-   * `AmbientErrorMode`: printed for rendering, or thrown inside
+   * `ErrorMode`: printed for rendering, or thrown inside
    * suppressed documentation.
    *
    * Whoever creates an ErrorSegment calls this. A segment that reaches the

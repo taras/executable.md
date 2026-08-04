@@ -29,8 +29,7 @@ import { Component } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
-import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
-import type { ErrorMode } from "../src/errors.ts";
+import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import type { ErrorSegment, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -207,7 +206,7 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
       },
       { at: "min" },
     );
-    yield* AmbientErrorMode.set(mode);
+    yield* ErrorMode.set(mode);
 
     let segments: Segment[] = [];
     let thrown: unknown;

@@ -14,7 +14,7 @@ import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { Component, env, evalScope, persistent } from "./component-api.ts";
-import { AmbientErrorMode } from "./errors.ts";
+import { ErrorMode } from "./errors.ts";
 import { commitExports, evaluationEnv } from "./eval-env.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
@@ -73,7 +73,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     // Captured here, on the expansion frame, where the block's documentation or
     // <Output> error mode is ambient. A persist block runs on the invocation's
     // eval-scope loop task, which predates that error mode and cannot inherit it.
-    const mode = (yield* ephemeral(AmbientErrorMode.get())) ?? "print";
+    const mode = (yield* ephemeral(ErrorMode.get())) ?? "print";
 
     // Inject output() function into env so eval blocks can produce
     // rendered output. The function is a plain synchronous call:

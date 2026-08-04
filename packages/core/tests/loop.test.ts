@@ -6,7 +6,7 @@ import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { Component } from "../src/component-api.ts";
-import { AmbientErrorMode, DocumentationError } from "../src/errors.ts";
+import { DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -502,7 +502,7 @@ describe("Tier BREAK — validation", () => {
   it("BREAK18b: a malformed <Break> aborts under a throwing error mode", function* () {
     let thrown: unknown;
     yield* scoped(function* () {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
       try {
         yield* runLoop("<Loop max={3}>a<Break>why</Break>b</Loop>");
       } catch (error) {
@@ -532,7 +532,7 @@ describe("Tier LOOP — errors and cancellation stop further iterations", () => 
     let thrown: unknown;
     const started: string[] = [];
     yield* scoped(function* () {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
       try {
         yield* runLoop("<Loop max={5}><Boom /></Loop>", {
           // deno-lint-ignore require-yield

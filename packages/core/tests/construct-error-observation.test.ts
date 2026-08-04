@@ -5,7 +5,7 @@ import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
-import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
+import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import type {
@@ -202,7 +202,7 @@ describe("Tier OBS — construct error observation", () => {
     options: ProbeOptions = {},
   ): Operation<{ thrown: unknown; observed: string[] }> {
     return scoped(function* () {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
       try {
         const probe = yield* runProbe(source, options);
         return { thrown: undefined, observed: probe.observed };
@@ -406,7 +406,7 @@ describe("Tier OBS — construct error observation", () => {
     let thrown: unknown;
 
     yield* scoped(function* () {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
       yield* Component.around({
         *raise([error], next) {
           observed.push(error);
@@ -466,7 +466,7 @@ describe("Tier OBS — construct error observation", () => {
     let thrown: unknown;
 
     yield* scoped(function* () {
-      yield* AmbientErrorMode.set("throw");
+      yield* ErrorMode.set("throw");
       yield* Component.around({
         *raise([error], next) {
           observed.push(error);
