@@ -1,9 +1,23 @@
 ---
-required: [purpose, agent]
+required: [purpose, agent, material]
 
 props:
   purpose: { type: string }
   agent: { type: string }
+  material: { type: string }
+
+returns:
+  requiresUser: { type: boolean }
+  proceed: { type: boolean }
+  assessment: { type: string }
+  recommendation: { type: string }
+  question: { type: string }
+  options:
+    type: array
+    items:
+      type: string
+  response: { type: string }
+  rationale: { type: string }
 ---
 
 # User Checkpoint
@@ -11,6 +25,13 @@ props:
 This authored component asks its supplied agent whether a transition contains a
 material choice. It obtains the user's answer when needed; it never resolves
 that choice on the user's behalf.
+
+It is a **value component**: it declares `returns`, renders nothing, and must be
+invoked with `as`. What it binds is a schema-validated transition decision, so a
+caller gates on `checkpoint.proceed` rather than reading prose. `proceed: false`
+never advances the workflow. The human-readable material travels in the same
+value — `assessment`, `recommendation`, `question`, `options`, `response`, and
+`rationale` — so a later prompt interpolates exactly the fields it needs.
 
 ## Target shape
 
@@ -43,9 +64,10 @@ that choice on the user's behalf.
 
 </Capture>
 
-<Capture as="elicitationSchema" select="code[lang=json]">
+<Capture as="decisionSchema" select="code[lang=json]">
 ```json
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
     "proceed": {
@@ -68,7 +90,7 @@ that choice on the user's behalf.
 
       Material to assess:
 
-      <Content />
+      {props.material}
 
       Result contract:
 
@@ -124,7 +146,7 @@ that choice on the user's behalf.
 </Agent>
 
 <If condition={assessment.requiresUser}>
-  <Elicit schema={elicitationSchema} as="elicitation">
+  <Elicit schema={decisionSchema} as="decision">
     {assessment.question}
 
     Options:
@@ -135,52 +157,51 @@ that choice on the user's behalf.
 
     Recommendation: {assessment.recommendation}
   </Elicit>
+  <Else>
+    <Parse schema={decisionSchema} as="decision">
+    {"proceed": true, "response": "continue", "rationale": "The assessing agent found no material choice, so this transition needs no user decision."}
+    </Parse>
+  </Else>
 </If>
 
-<Output>
-## User involvement assessment
+<Return value={{requiresUser: assessment.requiresUser, proceed: decision.proceed, assessment: assessment.assessment, recommendation: assessment.recommendation, question: assessment.question, options: assessment.options, response: decision.response, rationale: decision.rationale}} />
 
-{assessment.assessment}
+## Continuation is represented, never inferred
 
-Recommendation: {assessment.recommendation}
-
-<If condition={assessment.requiresUser}>
-Question: {assessment.question}
-
-Options:
-
-<Each in={assessment.options} let="option">
-- {option}
-</Each>
-
-## User response
-
-Proceed: {elicitation.proceed}
-
-Response: {elicitation.response}
-
-Rationale: {elicitation.rationale}
-</If>
-</Output>
+Both branches bind `decision` against the same `decisionSchema`, so `proceed` is
+always a validated boolean that some path explicitly produced. When the agent
+reports no material choice, the `<Else>` branch parses an explicit
+`"proceed": true` with the reason recorded. Nothing reads a missing elicitation
+as consent, which is what keeps #290's "cannot become implicit approval"
+requirement intact: a transition advances because a decision said so, not
+because no decision was found.
 
 `UserInvolvementAssessment` distinguishes whether involvement is required from
-the choice itself. The caller renders the complete material to assess as child
-content rather than asking the agent to locate or read it.
+the choice itself. The caller passes the complete material to assess as the
+`material` prop rather than asking the agent to locate or read it.
+
+**Missing: projecting the material as content.** `material` would read better as
+`<Content />` — the caller writing the material as children — but `<Content />`
+is substituted only at a body's top level or directly inside `<Output>`, never
+nested inside a `<Prompt>` where this component needs it
+([issue #328](https://github.com/taras/executable.md/issues/328)). A prop
+interpolates anywhere, so that is what this component takes until #328 lands.
 
 `<Elicit>` asks without choosing how. It requires `schema` and `as`, compiles
 the schema before its content expands, renders that content as the request
 message, and validates the provider's answer against the same compiled schema
 before binding it. There is no `mode`, `provider`, or `uiSchema` prop and no
-built-in approve, decline, or cancel — `elicitationSchema` above defines every
-response available. Where the asking happens is the host's decision, made
-through the Elicitation Api: `xmd run` composes WebForm as its current
-provider, so this checkpoint opens a loopback browser form under the CLI.
-Only the validated answer is journaled, keyed by a fingerprint of the compiled
-schema and the rendered message, so a resumed run restores the answer instead
-of asking twice and refuses a recorded answer whose question does not match.
-A document that already knows the answer — a test, a demo, a non-interactive
-region — wraps this component in an `<Answers>` region and supplies it with
-`<Answer>` matchers, which changes who answers without changing this file.
+built-in approve, decline, or cancel — `decisionSchema` above defines every
+response available, and `proceed` is a field the author declared rather than a
+built-in verb. Where the asking happens is the host's decision, made through the
+Elicitation Api: `xmd run` composes WebForm as its current provider, so this
+checkpoint opens a loopback browser form under the CLI. Only the validated
+answer is journaled, keyed by a fingerprint of the compiled schema and the
+rendered message, so a resumed run restores the answer instead of asking twice
+and refuses a recorded answer whose question does not match. A document that
+already knows the answer — a test, a demo, a non-interactive region — wraps this
+component in an `<Answers>` region and supplies it with `<Answer>` matchers,
+which changes who answers without changing this file.
 
 What `<Elicit>` does not solve is stopping between processes. It answers a
 question inside one run; selecting and resuming a stopped stage in a later
@@ -197,11 +218,10 @@ from continuing after the bounded repair loop with malformed output. The schema
 is ordinary captured document content rather than a registry entry or
 `<Prompt schema>` prop.
 
-Every construct above sits outside `<Output>`, so the whole assessment runs
-under the `throw` error mode: the final `<Parse>` failing ends the stage rather
-than printing an error into a region nobody reads. The `<Output>` region itself
-runs under `output` and is equally fail-fast, keeping only what it had rendered
-before any failure.
+A value component's body is not documentation in the ordinary sense — a value
+root and a value component both run fail-fast, so the assessment, the repair
+loop, and the elicitation all end the stage rather than binding something a
+caller would mistake for a decision.
 
 `<Agent name={agent}>` reads the bare binding because that is the expression-
 prop spelling current main supports, while `{props.purpose}` in the prompt body
