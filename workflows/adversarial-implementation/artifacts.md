@@ -86,12 +86,13 @@ else renders nothing — not an error, a value with no destination.
 ### What a failing stage returns
 
 Nothing partial. A text component's `<Output>` region runs under the `output`
-error mode and everything outside it under `throw`; a value component's whole
-body runs fail-fast. Either way an undecided error fails the run rather than
-producing a result the caller would bind, and a value component that fails binds
-nothing at all — there is no half-validated return. A failing `<Output>` region
-keeps only the text it had already rendered, and that text reaches the output
-stream; nothing after the failure does. A failed run is still a complete
+error mode and everything outside it under `throw`. A value component has no such
+split — it renders nothing, so `<Output>` inside one is a structural error — and
+its whole body runs fail-fast. Either way an undecided error fails the run rather
+than producing a result the caller would bind, and a value component that fails
+binds nothing at all: there is no half-validated return. A failing `<Output>`
+region keeps only the text it had already rendered, and that text reaches the
+output stream; nothing after the failure does. A failed run is still a complete
 record — replay restores its output and its failure without re-executing
 anything.
 

@@ -257,13 +257,14 @@ use the bare spelling in expression props, and #305 migrates them.
 
 ## Error modes in a stage
 
-Every stage component is split by its `<Output>` boundary, and the two halves
-fail differently:
+How a component fails depends on which kind it is.
+
+A **text component** — `InstructionFiles` and `Discovery` — is split by its
+`<Output>` boundary:
 
 - Everything **outside** `<Output>` is documentation and runs under the `throw`
   error mode. The first error stops the body and fails the run, and no
-  `<PrintErrors>` region can print it instead — which is what makes each
-  stage's final `<Parse>` a real gate rather than a formality.
+  `<PrintErrors>` region can print it instead.
 - The **`<Output>` region** runs under the `output` error mode: an undecided
   error there fails the run too, though a `<PrintErrors>` region may print it
   instead. Either way the region keeps what it had already rendered — that
@@ -271,10 +272,15 @@ fail differently:
   Printing an `output` decision is the contract; the engine does not do it yet
   (#327).
 
-So a stage either returns a complete, schema-validated result or it fails. It
-never returns a half-record. The `throwOnError` on each `<Prompt>` is
-load-bearing for the same reason: a failed prompt without it records its
-failure and returns its text, raising nothing for the error mode to decide.
+A **value component** — `UserCheckpoint`, `Planning`, `Implementation` — has no
+such split. Declaring `returns` means it renders nothing, so `<Output>` inside
+one is a structural error; its whole body runs fail-fast and a failure binds
+nothing at all. There is no partially validated return for a caller to gate on.
+
+Either way a stage returns a complete, schema-validated result or it fails, and
+never a half-record. The `throwOnError` on each `<Prompt>` is load-bearing for
+the same reason: a failed prompt without it records its failure and returns its
+text, raising nothing for the error mode to decide.
 
 ## What runs today
 
@@ -327,11 +333,13 @@ with nothing derived from them. The three checkpoints bind decisions. This
 document renders the human-readable reports from those returned fields rather
 than receiving them pre-rendered.
 
-Neither stage returns the pull-request handle. `<PullRequest>` (#295) resolves a
-structured handle with the number, URL, head and base identities, state, reviews,
-comments, and checks; nothing here consumes it, and the artifact ledger (#291)
-records it independently. `Implementation` renders the fields a reader needs into
-its `report`.
+Neither stage returns the pull-request handle, but `Implementation` consumes it
+in full. `<PullRequest>` (#295) resolves the number, URL, head and base
+identities, state, reviews, comments, and checks; the planner has no network
+access, so `Implementation` renders every category explicitly into the review
+prompt and into the checkpoint material, and the artifact ledger (#291) records
+the effect independently. What `start.md` gates on is the verdict and the
+decision, so the handle itself never crosses the stage boundary.
 
 ## Details
 

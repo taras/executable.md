@@ -254,12 +254,14 @@ presenting it as reviewed — a rejection is neither a revision request nor an
 acceptance. `<Break />` works from that nested position, so the two conditions
 compose without a flag binding between them.
 
-A value component's body runs fail-fast, which is what makes the bounded repair
-turns a real gate: `<SafeParse>` absorbs a malformed verdict so the document can
-show the correction prompt, and the final `<Parse>` ends the stage if the
-candidate is still invalid. `throwOnError` on each `<Prompt>` is required for the
-same reason — a failed prompt without it records its failure and returns its
-text, raising nothing.
+This component declares `returns`, so it contains no `<Output>` and there is no
+documentation split: the whole body runs fail-fast and binds nothing if it
+fails. That is what makes the bounded repair turns a real gate — `<SafeParse>`
+absorbs a malformed verdict so the document can show the correction prompt, and
+the final `<Parse>` ends the stage if the candidate is still invalid, rather than
+returning something half-formed for a caller to branch on. `throwOnError` on each
+`<Prompt>` is required for the same reason: a failed prompt without it records
+its failure and returns its text, raising nothing.
 
 **Outstanding gap: the terminal policy for exhaustion.** Reaching `max`
 completes the loop normally — exhaustion is not a failure and produces no

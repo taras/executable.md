@@ -220,14 +220,38 @@ remote effects.
         #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
         head {pullRequest.headSha} onto base {pullRequest.baseSha}
 
+        Reviews:
+
+        <Each in={pullRequest.reviews} let="review">
+        - {review.author} ({review.state}) on {review.headSha}: {review.body}
+        </Each>
+
+        Comments:
+
+        <Each in={pullRequest.comments} let="comment">
+        - {comment.author} on {comment.path}: {comment.body}
+        </Each>
+
+        Checks:
+
+        <Each in={pullRequest.checks} let="check">
+        - {check.name}: {check.status} / {check.conclusion} — {check.url}
+        </Each>
+
         Result contract:
 
         {pullRequestVerdictSchema}
 
-        Review the pull request against the authorized plan and instruction
-        content above. Classify every finding and include a focused revision
-        prompt when the review fails. Return only JSON matching the supplied
-        result contract.
+        Review the diff at {pullRequest.headSha} against {pullRequest.baseSha},
+        together with the authorized plan and instruction content above. The
+        reviews, comments, and checks listed here are the complete current
+        state; you have no network access, so do not attempt to fetch more.
+
+        A verdict is about one head. If the head moves, this verdict no longer
+        describes the pull request and a fresh review is required.
+
+        Classify every finding and include a focused revision prompt when the
+        review fails. Return only JSON matching the supplied result contract.
       </Prompt>
 
       <Loop max={2}>
@@ -277,6 +301,24 @@ remote effects.
 
     #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
     head {pullRequest.headSha} onto base {pullRequest.baseSha}
+
+    ### Reviews
+
+    <Each in={pullRequest.reviews} let="review">
+    - {review.author} ({review.state}) on {review.headSha}
+    </Each>
+
+    ### Comments
+
+    <Each in={pullRequest.comments} let="comment">
+    - {comment.author} on {comment.path}: {comment.body}
+    </Each>
+
+    ### Checks
+
+    <Each in={pullRequest.checks} let="check">
+    - {check.name}: {check.status} / {check.conclusion}
+    </Each>
 
     ## Planner review
 
@@ -351,19 +393,41 @@ and nothing derived from them. The caller reads
 `decision.proceed && verdictPassed` directly, so there is no second copy of that
 answer to disagree with the first.
 
-The pull-request handle is **not** returned. `<PullRequest>` (#295) resolves a
-structured handle carrying the number, URL, head and base identities, state,
-reviews, comments, and checks, and `start.md` consumes none of it — the artifact
-ledger (#291) records the effect and its handle independently. The `report`
-above renders the specific fields a reader needs. A return field typed `string`
-would be worse than useless here: a conforming `<PullRequest>` would perform its
-durable effects and only then fail this component's return validation. If a
-later caller genuinely needs the handle, it is added with #295's object schema,
-never a placeholder.
+## The reviewer sees the complete pull request
 
-The agent, parsing, and control-flow syntax runs today. A value component's body
-runs fail-fast, so the final `<Parse>` in each repair loop ends the stage rather
-than passing malformed data to a durable effect.
+`<PullRequest>` (#295) resolves a structured handle carrying the number, URL,
+head and base identities, state, reviews, comments, and checks. This stage
+consumes all of it, because the planner cannot recover any of it itself: agent
+network access is denied for the supervised exercise, so whatever the prompt does
+not render is invisible to the review. Every category is rendered explicitly —
+each collection iterated with `<Each>`, never stringified as an object — into
+both the planner prompt and the checkpoint material the user reads. A review that
+cannot see a failing check or an existing objection is not adversarial, it is
+uninformed.
+
+The prompt names the revision under review: the planner reviews the diff at
+`headSha` against `baseSha`, and a verdict describes that head only. A moved head
+invalidates it and a fresh review is required — the same rule #295 states for a
+stored verdict.
+
+The **member field names** used above — a review's `author`, `state`, `headSha`
+and `body`, a comment's `author`, `path` and `body`, a check's `name`, `status`,
+`conclusion` and `url` — are #295's to settle. This document depends on that
+schema rather than defining a competing one; what is settled here is that the
+planner receives the complete snapshot, not what each member is called.
+
+The handle stays internal: it is not part of this component's declared return,
+because `start.md` gates on the verdict and decision rather than on pull-request
+state, and the artifact ledger (#291) records the effect and its handle
+independently. A return field typed `string` would be worse than useless — a
+conforming `<PullRequest>` would perform its durable effects and only then fail
+this component's return validation. If a later caller genuinely needs the handle,
+it is declared with #295's object schema, never a placeholder.
+
+The agent, parsing, and control-flow syntax runs today. This component declares
+`returns`, so it contains no `<Output>` and its whole body runs fail-fast: the
+final `<Parse>` in each repair loop ends the stage rather than passing malformed
+data to a durable effect, and a failure binds nothing at all.
 
 The user's decision outranks the verdict here too. `reviewCheckpoint.proceed` is
 read before `verdict.passed`, so a declined pull-request review leaves the loop

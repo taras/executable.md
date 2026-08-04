@@ -67,12 +67,15 @@ structure and read where an error is raised:
 A failing region keeps what it had already rendered: that text reaches the
 output stream, and nothing after the failure does.
 
-A component body is split by its `<Output>` boundary: the region inside runs
-under `output`, everything outside is documentation and runs under `throw`.
-Every stage in this workflow puts its prompts, parsing, and control flow outside
-`<Output>`, so a stage returns a complete validated result or it fails — it
-never returns a half-record. `<Retry>` and `<Result as>` would let a document
-handle a failure instead of ending on it; both are defined and unbuilt.
+A **text component**'s body is split by its `<Output>` boundary: the region
+inside runs under `output`, everything outside is documentation and runs under
+`throw`. A **value component** declares `returns` and renders nothing, so it
+cannot contain `<Output>` — that is a structural error — and its entire body
+runs fail-fast, binding nothing when it fails.
+
+Either way a component returns a complete validated result or it fails; neither
+kind can hand a caller a half-record. `<Retry>` and `<Result as>` would let a
+document handle a failure instead of ending on it; both are defined and unbuilt.
 
 **Missing: printing an `output` decision.** The `output` row above is the
 settled contract, and the engine does not meet it yet — an outer
