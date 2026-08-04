@@ -14,6 +14,31 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
+
+returns:
+  plan: { type: string }
+  verdictPassed: { type: boolean }
+  review: { type: string }
+  revisionPrompt: { type: string }
+  authorized: { type: boolean }
+  terminal: { type: string }
+  decision:
+    type: object
+    properties:
+      requiresUser: { type: boolean }
+      proceed: { type: boolean }
+      assessment: { type: string }
+      recommendation: { type: string }
+      question: { type: string }
+      options:
+        type: array
+        items:
+          type: string
+      response: { type: string }
+      rationale: { type: string }
+    required:
+      [requiresUser, proceed, assessment, recommendation, question, options, response, rationale]
+    additionalProperties: false
 ---
 
 # Planning
@@ -183,44 +208,42 @@ resolves factual disagreement, while the user resolves material choices.
   </If>
 </Loop>
 
-<Output>
-  <If condition={planCheckpoint.proceed}>
-    # Implementation plan
+<Return value={{
+  plan: plan,
+  verdictPassed: verdict.passed,
+  review: verdict.review,
+  revisionPrompt: verdict.revisionPrompt,
+  decision: planCheckpoint,
+  authorized: planCheckpoint.proceed && verdict.passed,
+  terminal: planCheckpoint.proceed ? (verdict.passed ? "converged" : "exhausted") : "declined"
+}} />
 
-    {plan}
+## The stage returns its control state
 
-    ## Planner review
+This is a **value component**. A stage that resolves a user decision internally
+cannot discard it as rendered prose: its caller has to gate on that decision,
+and prose gives a caller nothing to branch on. So `Planning` declares `returns`,
+renders nothing, and hands back the plan, the parsed verdict's fields, the
+complete plan-review `UserDecision`, and two derived fields the caller reads
+directly:
 
-    Passed: {verdict.passed}
+- **`authorized`** is `planCheckpoint.proceed && verdict.passed`. Only a plan
+  that both passed review *and* was approved may reach authorization. Either one
+  alone is not enough.
+- **`terminal`** distinguishes how the loop ended: `converged` (approved and
+  passing), `declined` (the user stopped it), or `exhausted` (approved but still
+  failing after `max` rounds).
 
-    {verdict.review}
-    <Else>
-    # Plan review rejected
-
-    The user declined to continue at the plan-review checkpoint. The plan below
-    was neither revised nor accepted.
-
-    {planCheckpoint.rationale}
-
-    ## Implementation plan as it stood
-
-    {plan}
-
-    ## Planner review
-
-    Passed: {verdict.passed}
-
-    {verdict.review}
-    </Else>
-  </If>
-</Output>
+`authorized` is false for both `declined` and `exhausted`, so neither can
+advance the workflow. That is failing closed, not a decision about what an
+exhausted loop *should* do.
 
 The loop is bounded and records why it stopped. `<Loop>` journals every
 iteration it enters and one terminal record whose outcome is `break` — a passing
 verdict or a declined checkpoint — `exhausted`, or `error`, and it refuses a
 replay whose stored outcome or iteration count disagrees with what this run
 reached. `<Loop>` opens no binding scope, so `plan`, `verdict`, and
-`planCheckpoint` hold their final values in the `<Output>` region above.
+`planCheckpoint` hold their final values where `<Return>` reads them.
 
 The user's decision outranks the verdict. The outer `<If>` reads
 `planCheckpoint.proceed` before the inner one reads `verdict.passed`, so a
@@ -229,24 +252,21 @@ presenting it as reviewed — a rejection is neither a revision request nor an
 acceptance. `<Break />` works from that nested position, so the two conditions
 compose without a flag binding between them.
 
-The body outside `<Output>` runs under the `throw` error mode, which is what
-makes the bounded repair turns a real gate: `<SafeParse>` absorbs a malformed
-verdict so the document can show the correction prompt, and the final `<Parse>`
-ends the stage if the candidate is still invalid. `throwOnError` on each
-`<Prompt>` is required for the same reason — a failed prompt without it records
-its failure and returns its text, raising nothing.
+A value component's body runs fail-fast, which is what makes the bounded repair
+turns a real gate: `<SafeParse>` absorbs a malformed verdict so the document can
+show the correction prompt, and the final `<Parse>` ends the stage if the
+candidate is still invalid. `throwOnError` on each `<Prompt>` is required for the
+same reason — a failed prompt without it records its failure and returns its
+text, raising nothing.
 
-**Outstanding gap: exhaustion is unhandled.** Reaching `max` completes the loop
-normally — exhaustion is not a failure and produces no diagnostic — so whether
-an exhausted planning loop counts as converged is this document's policy to
-state, and this document does not yet state it. An exhausted loop leaves
-`planCheckpoint.proceed` true and `verdict.passed` false, so it takes the same
-`<Output>` branch as a converged plan and is distinguished only by the flag it
-reports. That branch reports `verdict.passed` rather than titling itself
-converged, but reporting the flag is not deciding what should happen. What the
-workflow does when five rounds end without a passing verdict — return the
-failing plan, fail the stage, or return to the user — is an unresolved product
-decision recorded against
+**Outstanding gap: the terminal policy for exhaustion.** Reaching `max`
+completes the loop normally — exhaustion is not a failure and produces no
+diagnostic. This stage reports it as `terminal: "exhausted"` with `authorized`
+false, so an exhausted loop is distinguishable from a converged one and cannot
+advance. That is the minimum needed to keep the workflow safe; it is not the
+policy. What the workflow *should* do when five rounds end without a passing
+verdict — return the failing plan, fail the stage, or return to the user — is an
+unresolved product decision recorded against
 [issue #290](https://github.com/taras/executable.md/issues/290), whose
 acceptance pins the behavior. This synchronization slice does not choose it.
 

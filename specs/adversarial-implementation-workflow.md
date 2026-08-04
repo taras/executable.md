@@ -43,15 +43,32 @@ but the component does not encode that role. It may determine that user
 involvement is unnecessary, but only the user resolves a material choice.
 
 That authority controls execution rather than describing it. A checkpoint binds
-a schema-validated decision, and every material transition is gated on its
-`proceed`: `proceed: false` never advances the workflow. A declined handoff does
-not start planning, a declined authorization does not start implementation, a
-declined review neither revises nor accepts, and a declined acceptance finishes
-as rejected. A checkpoint that found no material choice produces an explicit
-`proceed: true` recording why, so a transition never advances because a decision
-was missing. What remains missing is stopping *at* the boundary — halting
-cleanly where the user answered so a later invocation resumes there, with a
-recorded stop reason — which is `<Stage>` (#298) over `<Workflow>` (#289).
+a schema-validated decision, and every material transition is gated on it:
+`proceed: false` never advances the workflow. A declined handoff does not start
+planning; a declined authorization does not start implementation; a declined
+review neither revises, nor creates the deferred issues it proposed, nor
+accepts; a declined acceptance finishes as rejected.
+
+A decision resolved inside a stage is gated the same way, because the stage
+returns it. `authorized` — the review's approval *and* a passing verdict —
+is what the caller reads, so a stage cannot approve its own advancement. An
+exhausted review loop reports `terminal: "exhausted"` with `authorized` false
+and therefore fails closed; what the workflow should ultimately do with an
+exhausted loop is an unresolved product decision under #290, and failing closed
+is not an answer to it.
+
+`proceed: true` authorizes the exact transition and effects the checkpoint
+assessed, and nothing more. Free-text fields in a decision record the user's
+reasoning; nothing reads them to amend what runs, because an effect that has
+already executed cannot be amended by prose. This is why durable effects follow
+their approval rather than preceding it — the deferred issues a review proposes
+are created inside the approved path, after the checkpoint.
+
+A checkpoint that found no material choice produces an explicit `proceed: true`
+recording why, so a transition never advances because a decision was missing.
+What remains missing is stopping *at* the boundary — halting cleanly where the
+user answered so a later invocation resumes there, with a recorded stop reason —
+which is `<Stage>` (#298) over `<Workflow>` (#289).
 
 ## Smallest complete path
 
@@ -221,11 +238,19 @@ normalized clone reaches the caller. `<Glob>` declares `returns`, so the
 `string[]` this workflow binds is that validated clone rather than a
 by-reference binding.
 
-Every stage component in this workflow is a text component, because each
-stage's output is also material a user reads at a checkpoint.
-`<UserCheckpoint>` is not a stage and is the one exception: it declares
-`returns` and binds a validated transition decision, because its result is
-branched on rather than read.
+A stage that only produces material for the next prompt is a text component:
+`InstructionFiles` and `Discovery` render their result and a caller's `as` binds
+that text. A stage that resolves a user decision inside itself declares
+`returns` instead. `Planning` and `Implementation` each run a review loop that
+asks the user a question, so each returns its prose, its parsed verdict, the
+complete `UserDecision` it resolved, and the derived `authorized` and `terminal`
+its caller gates on. `<UserCheckpoint>` does the same for a single decision.
+
+The rule is about where authority lives. A controller that resolves a decision
+and returns only a rendering of it has discarded the thing its caller needs: the
+caller would go on to ask the next question regardless, and could report a change
+accepted whose review the user rejected. Control state crosses a component
+boundary as data or it does not cross at all.
 
 ### A stage fails rather than returning a half-record
 

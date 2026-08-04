@@ -20,12 +20,15 @@ Its component markup is the intended executable form. The three wrappers —
 that do not exist yet, and one of the stages they wrap is not expressible
 either. "What runs today" below says exactly which.
 
-Each of the four *stage* components is a text component: it declares no
-`returns`, so its `<Output>` region is its return value and the caller's `as`
-binds that rendered text. Two things here declare `returns` instead, render
-nothing, require `as`, and bind a JSON value validated against a clone of what
-they produced: `<Glob>`, which binds a `string[]`, and `<UserCheckpoint>`, which
-binds the transition decision the flow gates on. The [executable MDX
+Components here split by what their caller needs from them. `InstructionFiles`
+and `Discovery` are **text components**: they declare no `returns`, so an
+`<Output>` region is the return value and `as` binds that rendered text, which
+is all a prompt downstream needs. `Planning`, `Implementation`,
+`UserCheckpoint`, and `<Glob>` declare `returns` instead: they render nothing,
+require `as`, and bind a JSON value validated against a clone of what they
+produced. A stage that resolves a user decision inside itself has to be in the
+second group — a controller cannot discard its control state as prose and still
+let its caller gate on it. The [executable MDX
 specification](../../specs/executable-mdx-spec.md) is the authority for both.
 `<Workflow>` will create a run identity, record those captured results as
 artifact versions, and restore them when a later stage resumes (#289, #291);
@@ -62,53 +65,91 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
           instructions={instructions}
           planner={planner}
           implementor={implementor}
-          as="plan" />
-        <UserCheckpoint
-          purpose="authorize implementation"
-          agent={planner}
-          material={plan}
-          as="authorization"
-        />
-        <If condition={authorization.proceed}>
-          <Implementation plan={plan}
-            authorization={authorization}
-            instructions={instructions}
-            planner={planner}
-            implementor={implementor}
-            as="implementationResult" />
+          as="planning" />
+        <If condition={planning.authorized}>
+          <Capture as="planReport">
+            ## Implementation plan
+
+            {planning.plan}
+
+            ## Planner review
+
+            {planning.review}
+          </Capture>
           <UserCheckpoint
-            purpose="accept the completed change"
+            purpose="authorize implementation"
             agent={planner}
-            material={implementationResult}
-            as="acceptance"
+            material={planReport}
+            as="authorization"
           />
+          <If condition={authorization.proceed}>
+            <Implementation plan={planning.plan}
+              authorization={authorization}
+              instructions={instructions}
+              planner={planner}
+              implementor={implementor}
+              as="implementation" />
+            <If condition={implementation.authorized}>
+              <UserCheckpoint
+                purpose="accept the completed change"
+                agent={planner}
+                material={implementation.report}
+                as="acceptance"
+              />
+            </If>
+          </If>
         </If>
       </If>
       <Output>
         <If condition={handoffCheckpoint.proceed}>
-          <If condition={authorization.proceed}>
-            <If condition={acceptance.proceed}>
-              # Accepted
+          <If condition={planning.authorized}>
+            <If condition={authorization.proceed}>
+              <If condition={implementation.authorized}>
+                <If condition={acceptance.proceed}>
+                  # Accepted
 
-              {acceptance.rationale}
+                  {acceptance.rationale}
 
-              {implementationResult}
+                  {implementation.report}
+                  <Else>
+                  # Rejected at acceptance
+
+                  The change was completed and reviewed, but the user did not
+                  accept it.
+
+                  {acceptance.rationale}
+
+                  {implementation.report}
+                  </Else>
+                </If>
+                <Else>
+                # Stopped in implementation: {implementation.terminal}
+
+                The pull-request review ended `{implementation.terminal}`, so
+                the change was never offered for acceptance.
+
+                {implementation.decision.rationale}
+
+                {implementation.report}
+                </Else>
+              </If>
               <Else>
-              # Rejected at acceptance
+              # Stopped: implementation was not authorized
 
-              The change was completed but the user did not accept it.
+              {authorization.rationale}
 
-              {acceptance.rationale}
-
-              {implementationResult}
+              {planning.plan}
               </Else>
             </If>
             <Else>
-            # Stopped: implementation was not authorized
+            # Stopped in planning: {planning.terminal}
 
-            {authorization.rationale}
+            The plan review ended `{planning.terminal}`, so authorization was
+            never requested.
 
-            {plan}
+            {planning.decision.rationale}
+
+            {planning.plan}
             </Else>
           </If>
           <Else>
@@ -130,17 +171,36 @@ pinned filesystem even if the branch moves while execution is in progress.
 
 ## User authority is a gate, not a report
 
-Every material transition is gated on a checkpoint's `proceed`. `UserCheckpoint`
-declares `returns`, so what a caller binds is a schema-validated decision rather
-than prose to be read: a declined handoff never starts `Planning`, and a declined
-authorization never starts `Implementation`. A checkpoint that found no material
-choice still produces an explicit `proceed: true` with its reason, so nothing
-advances because a decision was absent.
+Every material transition is gated on a decision, and a decision never crosses a
+component boundary as prose.
 
-`<Output>` reports which gate the run reached. A rejected acceptance finishes as
-rejected — the flow does not fall into the accepted branch — and a run stopped
-earlier renders the artifact it stopped on rather than a value it never
-produced.
+Two of the gates read a checkpoint this document invoked directly:
+`handoffCheckpoint.proceed` before `Planning`, and `authorization.proceed`
+before `Implementation`. The other two read a decision a stage resolved
+*internally* and returned: `planning.authorized` and
+`implementation.authorized`. Each is `proceed && verdict.passed` — a plan that
+was approved but never passed review cannot reach authorization, and one that
+passed review but was declined cannot either.
+
+That second pair is what keeps authority from leaking across a boundary. A stage
+that asks the user a question and then returns only a report leaves its caller
+guessing; the caller would ask the next question anyway and could accept a change
+whose review the user rejected. Returning `authorized` and `terminal` makes the
+internal decision the caller's gate.
+
+An exhausted loop fails closed. `terminal` distinguishes `converged`, `declined`,
+and `exhausted`, and `authorized` is false for the last two, so neither advances.
+What an exhausted planning loop *should* do remains an unresolved product
+decision under #290 — failing closed is not an answer to it.
+
+A checkpoint that found no material choice still produces an explicit
+`proceed: true` with its reason, so nothing advances because a decision was
+absent.
+
+`<Output>` reports which gate the run reached, naming the stage's `terminal`
+where a stage stopped. A rejected acceptance finishes as rejected — the flow does
+not fall into the accepted branch — and a run stopped earlier renders the
+artifact it stopped on rather than a value it never produced.
 
 **Missing: stopping at the boundary.** Nesting expresses the gate, and it is
 what the language supports today, but it is not the same as *stopping*. The run
@@ -225,14 +285,17 @@ manual stages.
 | `instructions`         | `InstructionFiles` (text)  | every agent prompt                                  |
 | `handoff`              | `Discovery` (text)          | handoff `UserCheckpoint`, `Planning`                |
 | `handoffCheckpoint`    | handoff `UserCheckpoint` (decision) | the `Planning` gate, and `Planning`         |
-| `plan`                 | `Planning` (text)           | authorization `UserCheckpoint`, `Implementation` |
+| `planning`             | `Planning` (structured)     | the authorization gate (`.authorized`), the authorization checkpoint (`.plan`, `.review`), and `Implementation` (`.plan`) |
 | `authorization`        | authorization checkpoint (decision) | the `Implementation` gate, and `Implementation` |
-| `implementationResult` | `Implementation` (text)     | acceptance `UserCheckpoint`                         |
+| `implementation`       | `Implementation` (structured) | the acceptance gate (`.authorized`), the acceptance checkpoint (`.report`) |
 | `acceptance`           | acceptance checkpoint (decision) | workflow output, terminal record               |
 
-A stage binds rendered text; a checkpoint binds a decision object. The four
-`UserCheckpoint` invocations are the only value components here — everything
-else declares no `returns`, so `as` binds what it rendered.
+`instructions` and `handoff` are rendered text. `planning` and `implementation`
+are structured stage results carrying `authorized` and `terminal` alongside the
+plan or report, the parsed verdict's fields, and the complete `UserDecision`
+that stage resolved. The three checkpoints bind decisions. This document renders
+the human-readable reports from those returned fields rather than receiving them
+pre-rendered.
 
 ## Details
 
