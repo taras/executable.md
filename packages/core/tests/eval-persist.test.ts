@@ -190,6 +190,53 @@ describe("Tier T6 — persist modifier", () => {
     expect(output).toContain("alive=false");
   });
 
+  // L8: a persist block the caller projected into a component anchors in the
+  // content scope, so it stops ahead of a persist resource the component
+  // retained for itself — even though the component retained that one after
+  // projecting, which is the order a single scope would release in reverse.
+  it("L8: a projected persist resource stops before the component's own", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "components/Holder.md": [
+        "<Content />",
+        "",
+        "```js persist eval",
+        "globalThis.__l8.push('start:own');",
+        "yield* spawn(function*() {",
+        "  try { yield* suspend(); } finally { globalThis.__l8.push('stop:own'); }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+      ].join("\n"),
+      "doc.md": [
+        "```js eval",
+        "globalThis.__l8 = [];",
+        "```",
+        "",
+        "<Holder>",
+        "",
+        "```js persist eval",
+        "globalThis.__l8.push('start:projected');",
+        "yield* spawn(function*() {",
+        "  try { yield* suspend(); } finally { globalThis.__l8.push('stop:projected'); }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+        "",
+        "</Holder>",
+        "",
+        "```js eval",
+        "output(globalThis.__l8.join(','));",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
+
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+
+    expect(output).toContain("start:projected,start:own,stop:projected,stop:own");
+  });
+
   // T49b: persist eval retains spawned resource across blocks
   // A background task spawned in a persist eval block sets status.ready
   // after 10ms. The next eval block uses when() to converge on it.

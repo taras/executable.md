@@ -118,6 +118,61 @@ describe("Tier Q — Daemon integration", () => {
     }
   });
 
+  // Q14: the caller writes the daemon and the component only projects it, so
+  // the process belongs to the content scope rather than to the component's
+  // own. It still stops with the invocation that hosted the projection.
+  //
+  // Both markers are load-bearing and both fail closed. `RUNNING` is printed
+  // only once the process has been seen alive from inside the component, so a
+  // daemon that never started cannot satisfy the premise; `STOPPED` is chosen
+  // only against a pid that exists, so a missing pid file reports NOPID rather
+  // than passing for the absence of a process.
+  it("Q14: a daemon in projected content is gone once the invocation completes", function* () {
+    const tmpDir = makeTempDir();
+
+    try {
+      const pidFile = path.join(tmpDir, "daemon.pid");
+      writeFiles(tmpDir, {
+        "components/Holder.md": "<Content />\n",
+        "doc.md": [
+          "<Holder>",
+          "",
+          "```bash daemon exec",
+          `sh -c 'echo $$ > ${pidFile}; while true; do sleep 1; done'`,
+          "```",
+          "",
+          "```bash exec",
+          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done`,
+          `if [ -s ${pidFile} ] && kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo RUNNING; fi`,
+          "```",
+          "",
+          "</Holder>",
+          "",
+          "```bash exec",
+          `if [ ! -s ${pidFile} ]; then echo NOPID;`,
+          `elif kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED;`,
+          "else echo STOPPED; fi",
+          "```",
+        ].join("\n"),
+      });
+
+      const stream = new InMemoryStream();
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream,
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+
+      expect(output).toContain("RUNNING");
+      expect(output).toContain("STOPPED");
+      expect(output).not.toContain("LEAKED");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
   // Q3: daemon returns empty output — no rendered output in document
   it("Q3: daemon produces no rendered output", function* () {
     const tmpDir = makeTempDir();
