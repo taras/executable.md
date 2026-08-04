@@ -20,14 +20,11 @@
  * Nothing here reads profiler output — it exists for Secretlint's `--profile`
  * CLI flag, which this package does not use.
  *
- * ## Why a counter
- *
- * The thing being silenced is process-global, but the silence is scope-bound, and
- * executions overlap: two concurrent runs would otherwise have the inner one
- * restore the outer one's silence, or the first to finish un-silence a run still
- * going. The counter is the smallest thing that makes "restore what we found,
- * once everyone is done" correct. It describes the process, not any execution —
- * no execution's state lives here, and it returns to zero when the last one ends.
+ * The cost is worst where a runtime shares one process across a whole test
+ * corpus. Bun does: a second test file starts with the marks the first one
+ * emitted still counted, so scans get slower the further into a run they are.
+ * Deno gives each file its own process, which is why the same corpus only shows
+ * it under Bun.
  */
 
 import { resource } from "effection";
@@ -38,32 +35,33 @@ type Mark = typeof secretLintProfiler.mark;
 
 const silent: Mark = () => {};
 
-let holders = 0;
-let noisy: Mark | undefined;
-
 /**
  * Silence the profiler until the current operation ends.
  *
- * The first holder replaces `mark` and remembers what was there; the last one
- * to leave puts it back, so a process that ran a document is left as it was
- * found.
+ * What it found is held in this operation's own frame and put back when the
+ * operation ends, so nothing about the silence outlives the run that asked for
+ * it and no state is kept here between runs.
+ *
+ * A run that finds the profiler already silent leaves it alone and restores
+ * nothing. That is what makes overlapping runs settle correctly without any
+ * shared bookkeeping: exactly one of them holds the real `mark`, so however
+ * they interleave, the process ends up as noisy as it started. The cost is that
+ * a run finishing while another is still going hands profiling back early —
+ * which the other run pays for in speed and never in correctness.
  */
 export function useSilentSecretProfiler(): Operation<void> {
   return resource(function* (provide) {
-    if (holders === 0) {
-      noisy = secretLintProfiler.mark;
-      secretLintProfiler.mark = silent;
+    const noisy = secretLintProfiler.mark;
+    if (noisy === silent) {
+      yield* provide();
+      return;
     }
-    holders += 1;
 
+    secretLintProfiler.mark = silent;
     try {
       yield* provide();
     } finally {
-      holders -= 1;
-      if (holders === 0 && noisy) {
-        secretLintProfiler.mark = noisy;
-        noisy = undefined;
-      }
+      secretLintProfiler.mark = noisy;
     }
   });
 }
