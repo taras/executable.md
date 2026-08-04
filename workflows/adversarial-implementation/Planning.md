@@ -20,8 +20,6 @@ returns:
   verdictPassed: { type: boolean }
   review: { type: string }
   revisionPrompt: { type: string }
-  authorized: { type: boolean }
-  terminal: { type: string }
   decision:
     type: object
     properties:
@@ -213,9 +211,7 @@ resolves factual disagreement, while the user resolves material choices.
   verdictPassed: verdict.passed,
   review: verdict.review,
   revisionPrompt: verdict.revisionPrompt,
-  decision: planCheckpoint,
-  authorized: planCheckpoint.proceed && verdict.passed,
-  terminal: planCheckpoint.proceed ? (verdict.passed ? "converged" : "exhausted") : "declined"
+  decision: planCheckpoint
 }} />
 
 ## The stage returns its control state
@@ -223,20 +219,26 @@ resolves factual disagreement, while the user resolves material choices.
 This is a **value component**. A stage that resolves a user decision internally
 cannot discard it as rendered prose: its caller has to gate on that decision,
 and prose gives a caller nothing to branch on. So `Planning` declares `returns`,
-renders nothing, and hands back the plan, the parsed verdict's fields, the
-complete plan-review `UserDecision`, and two derived fields the caller reads
-directly:
+renders nothing, and hands back the plan, the parsed verdict's fields, and the
+complete plan-review `UserDecision`.
 
-- **`authorized`** is `planCheckpoint.proceed && verdict.passed`. Only a plan
-  that both passed review *and* was approved may reach authorization. Either one
-  alone is not enough.
-- **`terminal`** distinguishes how the loop ended: `converged` (approved and
-  passing), `declined` (the user stopped it), or `exhausted` (approved but still
-  failing after `max` rounds).
+It returns those sources and nothing derived from them. A field like
+`authorized` would be a second copy of `decision.proceed && verdictPassed`, and
+a return schema cannot express that the copy must agree with its sources — a
+record claiming approval over a decline would validate. The caller reads the two
+authoritative fields and computes the gate itself, so there is only ever one
+answer.
 
-`authorized` is false for both `declined` and `exhausted`, so neither can
-advance the workflow. That is failing closed, not a decision about what an
-exhausted loop *should* do.
+Three outcomes are distinguishable from those fields alone, which is all a caller
+needs:
+
+| `decision.proceed` | `verdictPassed` | What happened |
+| --- | --- | --- |
+| `true` | `true` | the review passed and the user approved it |
+| `false` | either | the user declined; the loop stopped without revising |
+| `true` | `false` | the loop reached `max` still failing — exhaustion |
+
+Only the first pair advances.
 
 The loop is bounded and records why it stopped. `<Loop>` journals every
 iteration it enters and one terminal record whose outcome is `break` — a passing
@@ -261,10 +263,10 @@ text, raising nothing.
 
 **Outstanding gap: the terminal policy for exhaustion.** Reaching `max`
 completes the loop normally — exhaustion is not a failure and produces no
-diagnostic. This stage reports it as `terminal: "exhausted"` with `authorized`
-false, so an exhausted loop is distinguishable from a converged one and cannot
-advance. That is the minimum needed to keep the workflow safe; it is not the
-policy. What the workflow *should* do when five rounds end without a passing
+diagnostic. The returned pair identifies it (`decision.proceed` true,
+`verdictPassed` false) and the caller's gate refuses it, so an exhausted loop
+cannot advance. That is the minimum needed to keep the workflow safe; it is not
+the policy. What the workflow *should* do when five rounds end without a passing
 verdict — return the failing plan, fail the stage, or return to the user — is an
 unresolved product decision recorded against
 [issue #290](https://github.com/taras/executable.md/issues/290), whose
