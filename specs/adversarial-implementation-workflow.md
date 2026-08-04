@@ -60,11 +60,18 @@ should ultimately do with an exhausted loop is an unresolved product decision
 under #290, and refusing to advance is not an answer to it.
 
 `proceed: true` authorizes the exact transition and effects the checkpoint
-assessed, and nothing more. Free-text fields in a decision record the user's
-reasoning; nothing reads them to amend what runs, because an effect that has
-already executed cannot be amended by prose. This is why durable effects follow
-their approval rather than preceding it — the deferred issues a review proposes
-are created inside the approved path, after the checkpoint.
+assessed, and nothing more. The rule binds the material as much as the decision:
+whatever an approval sets in motion has to appear in what the user assessed, in
+its original form. A review checkpoint therefore shows the revision prompt that
+would reach the implementor and the evidence attached to every finding that would
+become an issue — not a summary of either, since approving instructions nobody
+read is the same authority leak as not asking.
+
+Free-text fields in a decision record the user's reasoning; nothing reads them to
+amend what runs, because an effect that has already executed cannot be amended by
+prose. This is why durable effects follow their approval rather than preceding
+it — the deferred issues a review proposes are created inside the approved path,
+after the checkpoint.
 
 A checkpoint that found no material choice produces an explicit `proceed: true`
 recording why, so a transition never advances because a decision was missing.
