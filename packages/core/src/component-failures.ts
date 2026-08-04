@@ -4,8 +4,9 @@
  * A component that fails fails the operation it is part of, like any other
  * Effection work. Carrying on instead is a decision somebody makes: either the
  * component says so about itself with `printErrors()`, or a document says so
- * about a region with `<PrintErrors>`. Both install the same middleware, so
- * "the nearest printing boundary handles it" is one rule rather than two.
+ * about a region with `<PrintErrors>`. Both install the boundary through
+ * `usePrintErrors()`, so "the nearest printing boundary handles it" is one rule
+ * rather than two.
  *
  * A boundary sets `print` for its region and turns a propagating failure into
  * one printed error. Both halves are the same decision: the region prints, and
@@ -68,7 +69,7 @@ export function printsErrors(component: FunctionComponent): boolean {
  * again. The original failure is attributed as the printed error's cause, so
  * what the component actually did remains reachable from the outside.
  */
-export function* useFailurePrinting(): Operation<void> {
+export function* usePrintErrors(): Operation<void> {
   if ((yield* ErrorMode.get()) !== "throw") {
     yield* ErrorMode.set("print");
   }

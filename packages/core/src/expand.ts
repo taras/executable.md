@@ -51,7 +51,7 @@ import {
   ErrorMode,
   fatalCause,
 } from "./errors.ts";
-import { printsErrors, useFailurePrinting } from "./component-failures.ts";
+import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -1544,7 +1544,7 @@ function* expandPrintErrors(
   }
 
   yield* scoped(function* () {
-    yield* useFailurePrinting();
+    yield* usePrintErrors();
     return yield* expandSegments(
       segment.children,
       parentMeta,
@@ -2313,7 +2313,7 @@ function* expandFunctionComponent(
   // decide the same for its siblings.
   if (printsErrors(definition.fn)) {
     return yield* scoped(function* () {
-      yield* useFailurePrinting();
+      yield* usePrintErrors();
       return yield* invoke();
     });
   }

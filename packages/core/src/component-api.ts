@@ -133,8 +133,8 @@ export interface ComponentApi {
    * does; a printing boundary answers with a printed error instead.
    *
    * Distinct from `raise`: this handles an operation failure, while `raise`
-   * observes an `ErrorSegment`. Failure printing uses both — it converts, then
-   * observes exactly once.
+   * observes an `ErrorSegment`. A printing boundary uses both — it converts,
+   * then observes exactly once.
    */
   handleFailure(failure: ComponentFailure): Operation<ErrorSegment>;
   /**
