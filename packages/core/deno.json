@@ -19,6 +19,7 @@
     "remend": "npm:remend@^1.2.2",
     "zod": "npm:zod@^4.3.6",
     "unist-util-select": "npm:unist-util-select@^5",
-    "mdast-util-to-string": "npm:mdast-util-to-string@^4"
+    "mdast-util-to-string": "npm:mdast-util-to-string@^4",
+    "@secretlint/profiler": "npm:@secretlint/profiler@13.0.4"
   }
 }

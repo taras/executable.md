@@ -23,7 +23,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, createContext, Err, Ok, scoped, withResolvers } from "effection";
+import { all, createContext, Err, Ok, scoped, sleep, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type { Json } from "../src/types.ts";
 import { forEach } from "@effectionx/stream-helpers";
@@ -37,6 +37,7 @@ import { createScannerWith, createSecretScanner } from "../src/secrets/scanner.t
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
 import { scanSecrets, secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
+import { profilerIsSilenced } from "../src/secrets/profiler.ts";
 import type { SecretPolicy } from "../src/secrets/policy.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -615,6 +616,54 @@ describe("default-on secret detection", () => {
       expect(Reflect.ownKeys(retained ?? {})).toEqual(["enabled"]);
       const error = yield* rejection(deferred ?? scanSecrets(CANARY));
       expect(error.name).toBe("SecretPolicyUnavailableError");
+    });
+
+    it("silences the profiler for the run and leaves it as it was found", function* () {
+      expect(profilerIsSilenced()).toBe(false);
+
+      const during = yield* runObserving(
+        CLEAN,
+        new InMemoryStream(),
+        undefined,
+        // deno-lint-ignore require-yield
+        function* () {
+          return profilerIsSilenced();
+        },
+      );
+
+      expect(during).toBe(true);
+      expect(profilerIsSilenced()).toBe(false);
+    });
+
+    it("keeps the profiler silent until the last overlapping run ends", function* () {
+      const first = withResolvers<void>();
+      const second = withResolvers<void>();
+      let whileFirstAlone = false;
+
+      yield* scoped(function* () {
+        // Two runs whose lifetimes cross rather than nest: the second starts
+        // while the first is live, and the first ends first. A save-and-restore
+        // without a count would un-silence the second run here.
+        yield* spawn(function* () {
+          yield* runObserving(CLEAN, new InMemoryStream(), undefined, function* () {
+            first.resolve();
+            yield* second.operation;
+          });
+        });
+        yield* first.operation;
+
+        yield* spawn(function* () {
+          yield* runObserving(CLEAN, new InMemoryStream(), undefined, function* () {
+            second.resolve();
+            yield* sleep(50);
+            whileFirstAlone = profilerIsSilenced();
+          });
+        });
+        yield* sleep(120);
+      });
+
+      expect(whileFirstAlone).toBe(true);
+      expect(profilerIsSilenced()).toBe(false);
     });
 
     it("does not rescan a journal it replays", function* () {
