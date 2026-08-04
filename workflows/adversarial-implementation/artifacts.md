@@ -95,34 +95,68 @@ re-executing anything.
 
 ### Logical result contracts
 
-The following names describe the JSON these agents produce. They are labels for
-shapes these documents declare inline, not component return declarations, not
-entries in a schema registry, and the workflow does not assume a
-`<Prompt schema>` prop. Each name is used for exactly one shape, here and in
-the stage that produces it.
+These names label the results the stages pass between each other. They are not
+component return declarations and not entries in a schema registry, and the
+workflow does not assume a `<Prompt schema>` prop. They fall into three kinds,
+and the difference matters: only the parsed ones can be branched on.
 
-- `PlannerHandoff` separates user decisions from implementation hypotheses.
-- `ImplementationPlan` records confirmed and refuted assumptions, evidence,
-  validation, environmental effects, and pull-request boundaries.
-- `PlannerVerdict` records pass/fail state, evidence, user questions, and a
-  focused revision prompt.
-- `ImplementationResult` records changed files, proposed commit metadata,
-  validation, and newly discovered scope.
-- `PullRequestVerdict` records findings, dispositions, evidence, user
-  questions, and a focused revision prompt.
-- `UserInvolvementAssessment` records whether involvement is required, the
-  material choice, viable options, consequences, evidence, and recommendation.
-- `UserDecision` records the request, options, selection, rationale, actor, and
-  time.
+**Prose.** No schema, no parsing. The stage renders text and its caller binds
+that text, because nothing downstream reads an individual field.
+
+- `PlannerHandoff` — what `Discovery` returns. It separates user decisions from
+  implementation hypotheses in prose the implementor reads, and the sections it
+  should contain are listed in [`Discovery`](./Discovery.md) rather than
+  enforced by a schema.
+- `ImplementationPlan` — what `Planning` returns. Confirmed and refuted
+  assumptions, evidence, validation, environmental effects, and pull-request
+  boundaries appear inside `plan`, which is one `<Prompt>`'s rendered reply.
+
+Neither is validated, so neither can gate a transition. `Planning` branches on
+the separately parsed `PlannerVerdict`, not on the plan text.
+
+**Parsed JSON.** Each has a draft-07 schema captured inline in the stage that
+produces it, and each description below names only fields that schema actually
+declares.
+
+- `PlannerVerdict` — `passed`, `review`, `revisionPrompt`
+  ([`Planning`](./Planning.md)). Evidence and any user question live inside the
+  `review` prose; they are not separate fields.
+- `ImplementationResult` — `changedFiles`, `commitMessage`, `report`
+  ([`Implementation`](./Implementation.md)). Validation and newly discovered
+  scope are reported inside `report`.
+- `PullRequestVerdict` — `passed`, `review`, `revisionPrompt`, and `findings`,
+  each finding carrying `disposition`, `title`, `description`, and `evidence`
+  ([`Implementation`](./Implementation.md)).
+- `UserInvolvementAssessment` — `requiresUser`, `assessment`, `question`,
+  `options`, `recommendation` ([`UserCheckpoint`](./UserCheckpoint.md)).
+
+**A declared return.** `UserCheckpoint` is the one value component here, so its
+result is a validated JSON value bound through `as` rather than parsed out of
+rendered text.
+
+- `UserDecision` — the transition decision a caller gates on. Two parts combine
+  into it. The **decision** is `proceed`, `response`, and `rationale`, validated
+  against one schema on both paths: `<Elicit>` binds it when the assessment
+  reports a material choice, and an explicit `<Parse>` binds it when there is
+  none. `UserCheckpoint` returns those alongside the assessment fields, so one
+  value carries both the gate and the material a later prompt quotes.
+  **Missing:** the provenance that makes a decision auditable after the fact —
+  which actor answered, when, against which run and stage — belongs to the
+  artifact ledger (#291) and does not exist. Nothing in the returned value
+  identifies the person who answered.
 
 Prompt output used for control flow is JSON parsed against captured draft-07
 JSON Schema content. `<SafeParse>` exposes the candidate and normalized errors
 for a visible, bounded correction turn; a final `<Parse>` prevents invalid data
 from reaching control flow or deterministic effects. Prose capture remains
-acceptable when no later transition depends on internal fields.
+acceptable when no later transition depends on internal fields — which is
+exactly the line between the first group above and the second.
 
 Parsing content inside a document and declaring a component's return value are
-separate mechanisms, and both are shipped. A stage component could declare
-`returns` and hand its caller the parsed verdict directly instead of rendered
-text; these documents keep the text form because each stage's output is also
-material a user reads at a checkpoint.
+separate mechanisms, and both are shipped. The stages keep the text form because
+each stage's output is also material a user reads at a checkpoint.
+`UserCheckpoint` is the exception, and the reason is the distinction above: its
+result is not something a user reads, it is something the workflow branches on.
+A checkpoint that returned prose could not gate anything — a caller would have
+to guess consent from text — so it declares `returns` and hands back a validated
+decision instead.
