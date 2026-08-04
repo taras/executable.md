@@ -43,7 +43,7 @@ export interface NormalizedIssue {
 /**
  * A value that failed its declared schema, carrying the component it belongs
  * to and the normalized issues. Props and returns raise distinct subclasses so
- * a diagnostic names the contract it broke, while segment conversion reads the
+ * a printed error names the contract it broke, while segment conversion reads the
  * shape once.
  */
 export class SchemaValidationError extends Error {
@@ -229,7 +229,7 @@ function enforceRootContract(schema: PropsSchema): void {
 /**
  * Ajv's errors in the shape every consumer reads. Exported because parsing
  * (§6.12) reports the same issues from its own Ajv instance, and a second copy
- * of this shape would be free to drift from the one diagnostics already carry.
+ * of this shape would be free to drift from the one printed errors already carry.
  */
 export function normalizeIssues(errors: readonly ErrorObject[]): NormalizedIssue[] {
   return errors.map(normalizeIssue);

@@ -27,7 +27,7 @@
  *
  * A function component sees `content()` — rendered text. Matchers are
  * structure: `value` is an expression prop, `template` is a prop-or-children
- * pair, and each needs its own position for diagnostics, and only the element
+ * pair, and each needs its own position for printed errors, and only the element
  * itself carries those. That is why these are structural rather than
  * components: being reserved means a repository file named `Answers.md` never
  * stands in, and it could not implement matcher semantics if it did.
@@ -152,8 +152,8 @@ export function* expandAnswers(
       const parsed = yield* readAnswer(child, expand);
       if (isErrorSegment(parsed)) {
         // The region cannot be trusted to answer anything, so it does not
-        // expand a body that would ask. The diagnostic is returned rather than
-        // only raised, so the caller settles it under its own policy.
+        // expand a body that would ask. The printed error is returned rather than
+        // only raised, so the caller settles it under its own error mode.
         return [parsed];
       }
       matchers.push(parsed);
@@ -245,7 +245,7 @@ function isErrorSegment(value: Matcher | ErrorSegment): value is ErrorSegment {
   return "type" in value && value.type === "error";
 }
 
-/** One `<Answer>`, or the diagnostic that says why it is not one. */
+/** One `<Answer>`, or the printed error that says why it is not one. */
 function* readAnswer(
   element: ComponentElement,
   expand: ExpandSegments,

@@ -18,7 +18,7 @@ export const RESERVED_STRUCTURAL: ReadonlySet<string> = new Set([
   "Else",
   "Loop",
   "Break",
-  "CollectFailures",
+  "PrintErrors",
   "Answers",
   "Answer",
 ]);

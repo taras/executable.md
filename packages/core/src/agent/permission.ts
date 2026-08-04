@@ -104,7 +104,7 @@ export function* installApproveReads(): Operation<void> {
  * though the author did not write `throwOnError`.
  *
  * A host that runs documents as tests needs a failed prompt to fail the test
- * rather than render its diagnostic and continue. `decide` is consulted once per
+ * rather than render its printed error and continue. `decide` is consulted once per
  * prompt, after its content has rendered and before the durable operation, so a
  * policy can depend on where the prompt is — inside a test, say. An explicit
  * `throwOnError={true}` wins without consulting it.

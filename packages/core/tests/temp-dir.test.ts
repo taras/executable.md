@@ -358,9 +358,9 @@ describe("Tier TD — TempDir", () => {
 
   // TD13: resuming from a partial journal would otherwise replay an effect
   // recorded under a directory this run never created. It is a durability
-  // failure, not a document diagnostic: the execution fails, and nothing after
+  // failure, not a document printed error: the execution fails, and nothing after
   // the component runs.
-  it("TD13: a stale replay fails the execution instead of rendering a diagnostic", function* () {
+  it("TD13: a stale replay fails the execution instead of rendering a printed error", function* () {
     const dir = yield* useFixture();
     const after = join(dir, "sibling-ran.txt");
     yield* writeDocument(
@@ -394,7 +394,7 @@ describe("Tier TD — TempDir", () => {
 
     // Without the root Close the next run replays what is journaled and then
     // continues live — the shape that would consume the stale exec entry. The
-    // root policy is "collect", so this also proves the ambient policy cannot
+    // root error mode is "print", so this also proves the ambient error mode cannot
     // downgrade the refusal to a rendered comment.
     const events = yield* stream.readAll();
     const partial = events.filter(
@@ -409,7 +409,7 @@ describe("Tier TD — TempDir", () => {
       return yield* execution;
     });
 
-    // The execution failed rather than completing with a diagnostic in it.
+    // The execution failed rather than completing with a printed error in it.
     expect(outcome.ok).toBe(false);
     const error = outcome.ok ? undefined : outcome.error;
     expect(error).toBeInstanceOf(StaleInputError);
@@ -500,9 +500,9 @@ describe("Tier TD — TempDir", () => {
   });
 
   // TD14: an ordinary failure inside the directory is still an ordinary
-  // diagnostic — the fatal rule is for stale journal entries, not for
+  // printed error — the fatal rule is for stale journal entries, not for
   // everything that goes wrong inside a `<TempDir>`.
-  it("TD14: an ordinary failure inside TempDir stays a rendered diagnostic", function* () {
+  it("TD14: an ordinary failure inside TempDir stays a rendered printed error", function* () {
     const dir = yield* useFixture();
     const after = join(dir, "sibling-ran.txt");
     yield* writeDocument(

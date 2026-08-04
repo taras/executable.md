@@ -26,11 +26,11 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
 import { Component } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { printErrors } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
-import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
-import type { ErrorPolicy } from "../src/errors.ts";
+import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
+import type { ErrorMode } from "../src/errors.ts";
 import type { ErrorSegment, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -139,7 +139,7 @@ interface Observation {
  * A failing child, so the segment it reports is identifiable by reference.
  *
  * Failing rather than returning is what makes it a stand-in at all: the engine
- * reports a diagnostic for the failed invocation, and that segment — not text a
+ * reports a printed error for the failed invocation, and that segment — not text a
  * component chose to render — is the one `<File>` finds among its content and
  * the one the assertions below follow by identity.
  */
@@ -148,16 +148,16 @@ const BROKEN: FunctionComponentDefinition = {
   name: "Broken",
   props: { type: "object", properties: {}, additionalProperties: false },
   // deno-lint-ignore require-yield
-  fn: collectFailures(function* () {
+  fn: printErrors(function* () {
     throw new Error("broken");
   }),
 };
 
-/** What the engine's diagnostic for a failed `<Broken />` reads. */
+/** What the engine's printed error for a failed `<Broken />` reads. */
 const BROKE = "Function component Broken error: broken";
 
 /**
- * Expand `source` against the real `<File>` definition under `policy`, observing
+ * Expand `source` against the real `<File>` definition under `mode`, observing
  * every error where it is reported.
  *
  * `execute()` is the harness everywhere else here, because what the other tests
@@ -166,7 +166,7 @@ const BROKE = "Function component Broken error: broken";
  * which error object, carrying which others — are not things rendered output can
  * show.
  */
-function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operation<Observation> {
+function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<Observation> {
   return scoped(function* () {
     const definition = CORE_REGISTRY.get("File")?.default?.definition;
     if (!definition) {
@@ -182,7 +182,7 @@ function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operati
         try {
           return yield* next(error);
         } catch (failure) {
-          // The chain is where a throwing policy constructs the
+          // The chain is where a throwing error mode constructs the
           // DocumentationError, so capturing it here is what lets the test
           // assert which of them leaves the expansion.
           if (failure instanceof DocumentationError) {
@@ -207,7 +207,7 @@ function observe(fixture: Fixture, source: string, policy: ErrorPolicy): Operati
       },
       { at: "min" },
     );
-    yield* AmbientErrorPolicy.set(policy);
+    yield* AmbientErrorMode.set(mode);
 
     let segments: Segment[] = [];
     let thrown: unknown;
@@ -254,7 +254,7 @@ function* temporaries(fixture: Fixture): Operation<string[]> {
 }
 
 /**
- * A containment diagnostic may name the path the document wrote and nothing
+ * A containment printed error may name the path the document wrote and nothing
  * else — not the resolved workspace, and not what a symlink pointed at (§1.2).
  */
 function expectNoAbsolutePaths(output: string, fixture: Fixture): void {
@@ -488,9 +488,9 @@ describe("Tier FL — File", () => {
     expect(yield* read(fixture, "notes.md")).toBe("second");
   });
 
-  // FL5: a missing file is a document diagnostic, not a crash — the sibling
+  // FL5: a missing file is a document printed error, not a crash — the sibling
   // after it still runs.
-  it("FL5: reading a missing path fails as a diagnostic", function* () {
+  it("FL5: reading a missing path fails as a printed error", function* () {
     const fixture = yield* useFixture();
 
     const output = text(yield* run(fixture, ['<File path="absent.md" />', "", "after"].join("\n")));
@@ -597,9 +597,9 @@ describe("Tier FL — File", () => {
     expectNoAbsolutePaths(output, fixture);
   });
 
-  // FL12: a failing block is an ordinary diagnostic, which for a component
+  // FL12: a failing block is an ordinary printed error, which for a component
   // that renders its content would simply appear in place. `<File>` renders
-  // nothing, so the diagnostic would have been written into the file instead.
+  // nothing, so the printed error would have been written into the file instead.
   // The invocation fails rather than writing, and carries the reason out.
   it("FL12: a failing child leaves an existing file untouched", function* () {
     const fixture = yield* useFixture();
@@ -652,7 +652,7 @@ describe("Tier FL — File", () => {
     }
     expect(thrown).toBe(observed.failures[1]);
     // Not the child's decision resurrected: a different object, carrying the
-    // diagnostic about the write that did not happen.
+    // printed error about the write that did not happen.
     expect(thrown).not.toBe(observed.failures[0]);
     expect(thrown.message).toContain('did not write "notes.md": its content failed to expand.');
     expect(thrown.message).toContain(BROKE);
@@ -670,14 +670,14 @@ describe("Tier FL — File", () => {
     expect(chain.includes(observed.failures[0])).toBe(true);
   });
 
-  // FL12c: the collecting half of the same translation. The component reports
-  // the same diagnostic once, and it is the whole invocation's result — the
+  // FL12c: the printing half of the same translation. The component reports
+  // the same printed error once, and it is the whole invocation's result — the
   // child's segment is accounted for inside it rather than appended beside it.
-  it("FL12c: a collected translation reports File's diagnostic once", function* () {
+  it("FL12c: a printed translation reports File's printed error once", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
 
-    const observed = yield* observe(fixture, '<File path="notes.md"><Broken /></File>', "collect");
+    const observed = yield* observe(fixture, '<File path="notes.md"><Broken /></File>', "print");
 
     expect(yield* read(fixture, "notes.md")).toBe("first");
     expect(observed.thrown).toBeUndefined();
@@ -847,7 +847,7 @@ describe("Tier FL — File", () => {
 
   // FL18b: the lexical half of validation runs before the children, so an
   // absolute path costs nothing. The block would leave a file behind if it
-  // ran, and the diagnostic would name the rejected path if the failure came
+  // ran, and the printed error would name the rejected path if the failure came
   // from the content stage instead.
   it("FL18b: a content-form absolute path is rejected before the children run", function* () {
     const fixture = yield* useFixture();
@@ -956,7 +956,7 @@ describe("Tier FL — File", () => {
   });
 
   // FL21: the commit throwing before it reached the filesystem. The old file
-  // stands, but the diagnostic cannot say so — a handler may equally throw
+  // stands, but the printed error cannot say so — a handler may equally throw
   // *after* committing (FL21b), and from inside the component the two are the
   // same event. So the wording is conservative for both.
   it("FL21: a rename that throws before next leaves the previous content", function* () {
@@ -991,7 +991,7 @@ describe("Tier FL — File", () => {
   // FL21b: the same throw, on the far side of `next()`. `around` middleware may
   // do work either side of it, so this is the error twin of FL22 — and it is
   // why FL21's wording cannot claim the previous file survived. Here it did
-  // not: the replacement is committed and the diagnostic is still correct.
+  // not: the replacement is committed and the printed error is still correct.
   it("FL21b: a rename that throws after next leaves the replacement committed", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
@@ -1145,7 +1145,7 @@ describe("Tier FL — File", () => {
 
     // The old file did survive this run's failed commit...
     expect(yield* read(fixture, "notes.md")).toBe("first");
-    // ...and the temporary remains, which is what the diagnostic warned about.
+    // ...and the temporary remains, which is what the printed error warned about.
     expect(yield* temporaries(fixture)).toHaveLength(1);
   });
 
@@ -1174,7 +1174,7 @@ describe("Tier FL — File", () => {
       expect(output).toContain('cannot read "request.md": the filesystem operation failed.');
       expect(output).not.toContain(PLANTED);
       expect(output).not.toContain("secret");
-      // One diagnostic, on one line: a newline or a comment terminator in the
+      // One printed error, on one line: a newline or a comment terminator in the
       // planted text would otherwise split or escape it.
       expect(output.split("ERROR:")).toHaveLength(2);
       expect(output.trim().split("\n")).toHaveLength(1);
@@ -1205,7 +1205,7 @@ describe("Tier FL — File", () => {
 
   // FL25: the working directory is inside itself. `.` is not an escape — it is
   // a directory, which is a question about the target rather than containment,
-  // and the diagnostic should say so.
+  // and the printed error should say so.
   it("FL25: the working directory itself is contained, and reported as a directory", function* () {
     const fixture = yield* useFixture();
 

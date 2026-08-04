@@ -5,7 +5,7 @@
  * its resources, its middleware and anything its body projects are dismantled
  * in that order before the next test starts. What the component keeps is the
  * part that is a test rather than a component — the isolated binding
- * environment, the raise interception that turns any diagnostic in the body
+ * environment, the raise interception that turns any printed error in the body
  * into this test's failure, and the timeout.
  *
  * One thing an invocation boundary sits outside of is its own teardown, so a
@@ -36,7 +36,7 @@ import type {
   PropsSchema,
 } from "@executablemd/core";
 import { AssertionError } from "./assert.ts";
-import { AssertionDiagnostic } from "./assertions.ts";
+import { AssertionReport } from "./assertions.ts";
 import { persistTestResult } from "./journal.ts";
 import { inTest, record, Test, testing } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
@@ -135,8 +135,8 @@ export function* stageResult(location: string, result: TestResult): Operation<vo
  *
  * Returns `true` when it belonged to a staged test. A failure with no staged
  * entry is a test that died before it could stage one — its own middleware
- * install threw, or the nested-`<Test>` diagnostic threw under a documentation
- * policy — and is staged here as an error so it is still reported and still
+ * install threw, or the nested-`<Test>` printed error threw under a documentation
+ * error mode — and is staged here as an error so it is still reported and still
  * counted, rather than disappearing from the run.
  */
 export function* absorbTestFailure(location: string, error: unknown): Operation<TestResult> {
@@ -205,7 +205,7 @@ export function classify(
       message: `test timed out after ${timeoutMs / 1000} seconds`,
     });
   }
-  if (bodyError instanceof AssertionDiagnostic) {
+  if (bodyError instanceof AssertionReport) {
     return failResult(name, location, {
       kind: "assertion",
       message: bodyError.message,
@@ -223,7 +223,7 @@ export function classify(
   return failResult(name, location, { kind: "error", message });
 }
 
-export function failureDiagnostic(result: TestResult, options: { detail: boolean }): string {
+export function failureReport(result: TestResult, options: { detail: boolean }): string {
   const title = result.name ? `**${result.name}**` : `test at ${result.location}`;
   const error = result.error;
   const lines = [`> ❌ Test ${title} failed (${error?.kind ?? "error"}): ${error?.message ?? ""}`];
@@ -311,13 +311,13 @@ export function createTest(timeoutMs: number) {
 
     if (result.status === "fail") {
       // Containment: a completed test returns only text. A returned ErrorSegment
-      // would be settled under the AMBIENT policy — after this test's
+      // would be settled under the AMBIENT error mode — after this test's
       // interception scope has ended — so it is formatted in instead.
-      if (bodyError instanceof AssertionDiagnostic) {
-        text += bodyError.diagnostic;
-        text += failureDiagnostic(result, { detail: false });
+      if (bodyError instanceof AssertionReport) {
+        text += bodyError.report;
+        text += failureReport(result, { detail: false });
       } else {
-        text += failureDiagnostic(result, { detail: true });
+        text += failureReport(result, { detail: true });
       }
     }
     return text;

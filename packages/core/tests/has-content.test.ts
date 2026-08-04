@@ -61,7 +61,7 @@ describe("Tier IS — Invocation shape", () => {
   // IS5: the failing form of IS4. `content()` is the failure boundary, so
   // content the component never asks for cannot fail it — a broken element in
   // there is neither expanded nor reported. Counting `raise` is what shows it:
-  // a collecting policy renders a reported diagnostic and one that was never
+  // a printing error mode renders a reported printed error and one that was never
   // produced indistinguishably.
   it("IS5: hasContent() does not expand or observe an error in the content", function* () {
     const observed: string[] = [];

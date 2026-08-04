@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { printErrors } from "../src/component-failures.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
@@ -80,8 +80,8 @@ function useTestComponents(
 
 /**
  * `<Broken />` — a component that fails, which plants an ErrorSegment inside a
- * region so the region's policy is what settles it. It collects, so the failure
- * becomes one reported diagnostic rather than stopping the expansion the
+ * region so the region's error mode is what settles it. It prints, so the failure
+ * becomes one reported printed error rather than stopping the expansion the
  * assertion is about.
  */
 const BROKEN: FunctionComponentDefinition = {
@@ -89,7 +89,7 @@ const BROKEN: FunctionComponentDefinition = {
   name: "Broken",
   props: { type: "object", properties: {}, additionalProperties: false },
   // deno-lint-ignore require-yield
-  fn: collectFailures(function* () {
+  fn: printErrors(function* () {
     throw new Error("broken thing");
   }),
 };
@@ -353,8 +353,8 @@ describe("expansion", () => {
 
   // A non-zero exit is a failure whatever the command printed (#307). What it
   // printed is usually the explanation, so it is kept — the output segment
-  // first, then the diagnostic, once.
-  it("code block with non-zero exit and stdout → output, then one diagnostic", function* () {
+  // first, then the printed error, once.
+  it("code block with non-zero exit and stdout → output, then one printed error", function* () {
     const segments = scanSegments("```bash exec\nfoo\n```\n");
     const output = yield* expand(
       segments,
@@ -366,7 +366,7 @@ describe("expansion", () => {
     expect(output).toBe("partial\n<!-- ERROR: Command failed (exit 1): boom -->");
   });
 
-  it("keeps the output segment ahead of the diagnostic it explains", function* () {
+  it("keeps the output segment ahead of the printed error it explains", function* () {
     const expanded = yield* expandToSegments(
       scanSegments("```bash exec\nfoo\n```\n"),
       {},
@@ -714,8 +714,8 @@ describe("component-declared output", () => {
       caught = error;
     }
 
-    // The ambient policy decided this execution fails, so what surfaces is the
-    // documentation failure and not a diagnostic.
+    // The ambient error mode decided this execution fails, so what surfaces is the
+    // documentation failure and not a printed error.
     if (!(caught instanceof DocumentationError)) {
       throw new Error(`expected DocumentationError, received ${String(caught)}`);
     }
@@ -738,7 +738,7 @@ describe("component-declared output", () => {
     expect(output).toContain("ok");
   });
 
-  it("renders a failing component's error inside <Output> under the collecting policy", function* () {
+  it("renders a failing component's error inside <Output> under the printing error mode", function* () {
     const comp = makeComponent("Region", "<Output>\n<Broken />\n</Output>");
     const output = yield* expand(scanSegments("<Region />"), { Region: comp, Broken: BROKEN });
     expect(output).toContain("broken thing");
@@ -831,7 +831,7 @@ describe("component-declared output", () => {
 
   // --- Structural preflight ---
 
-  it("aggregates a nested <Output> into one diagnostic and runs no side effects", function* () {
+  it("aggregates a nested <Output> into one printed error and runs no side effects", function* () {
     const comp = makeComponent(
       "Struct",
       "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output>x</Output>\n</Wrapper>\n",
@@ -843,7 +843,7 @@ describe("component-declared output", () => {
     expect(execCalls).toHaveLength(0);
   });
 
-  it("aggregates every misplaced <Output> into a single diagnostic", function* () {
+  it("aggregates every misplaced <Output> into a single printed error", function* () {
     const comp = makeComponent(
       "Many",
       "<A>\n<Output>one</Output>\n</A>\n\n<B>\n<Output>two</Output>\n</B>\n",
@@ -870,7 +870,7 @@ describe("component-declared output", () => {
     expect(output).toContain("must be a direct top-level");
   });
 
-  it("throws a structural diagnostic when an invalid child is used from documentation", function* () {
+  it("throws a structural printed error when an invalid child is used from documentation", function* () {
     const child = makeComponent("BadChild", "<Wrapper>\n<Output>x</Output>\n</Wrapper>");
     const parent = makeComponent("P", "<BadChild />\n\n<Output>tail</Output>");
     const ctx = { BadChild: child, P: parent };

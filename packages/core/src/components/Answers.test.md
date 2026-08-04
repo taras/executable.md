@@ -202,7 +202,7 @@ const stepSchema = {
 
 Everything else is asserted in `answers-component.test.ts`: an unmatched
 elicitation without `delegate`, a value the asking schema rejects, and the
-configuration diagnostics — a misplaced `<Answer>`, an `<Answers>` with no body,
+configuration printed errors — a misplaced `<Answer>`, an `<Answers>` with no body,
 both template forms at once, an unparseable template, and a `value` that is not
-JSON. Those are raised diagnostics and thrown failures rather than values, so a
+JSON. Those are raised printed errors and thrown failures rather than values, so a
 document cannot assert on them about itself.

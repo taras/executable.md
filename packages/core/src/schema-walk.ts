@@ -17,7 +17,7 @@
 import type { Json, JsonObject } from "./types.ts";
 import { isJsonObject } from "./json.ts";
 
-/** Where a declared name came from, for diagnostics. */
+/** Where a declared name came from, for printed errors. */
 export type NameKind =
   | "property"
   | "pattern property"

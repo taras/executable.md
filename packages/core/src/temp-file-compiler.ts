@@ -82,7 +82,7 @@ export function* compileTempFile(
 /**
  * Install the temp-file compiler as the base provider on the current scope.
  *
- * `at: "min"` puts it beneath ordinary middleware, so a policy installed
+ * `at: "min"` puts it beneath ordinary middleware, so middleware installed
  * later can inspect a block and delegate here.
  */
 export function* useTempFileCompiler(): Operation<void> {

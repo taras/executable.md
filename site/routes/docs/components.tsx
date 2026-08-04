@@ -406,7 +406,7 @@ export default define.page(function Components() {
       <p>
         Inside a <strong>wrapping</strong> <code>&lt;TempDir&gt;</code>{" "}
         that is caught: the effect fails, the whole execution fails with it, and
-        nothing after the component runs. It is not a diagnostic the document
+        nothing after the component runs. It is not a printed error the document
         can collect and continue past — re-run from the beginning.
       </p>
       <p>
@@ -505,9 +505,9 @@ export default define.page(function Components() {
       <p>
         Children expand completely before anything is written, so a failing
         block leaves the existing file exactly as it was — and because the write
-        has nowhere to render a diagnostic, it fails the invocation rather than
-        writing the diagnostic into your file. The write itself lands through a
-        rename, and that rename is the commit point:
+        has nowhere to render a printed error, it fails the invocation rather
+        than writing the printed error into your file. The write itself lands
+        through a rename, and that rename is the commit point:
       </p>
       <ul>
         <li>
@@ -866,9 +866,10 @@ export default define.page(function Components() {
       </p>
       <p>
         An elicitation no matcher answers is an error by default, and the
-        diagnostic names both the message and every template that was tried. A
-        document supplying answers is saying what will be asked, and being wrong
-        about that is a mistake rather than a reason to go find someone.{" "}
+        printed error names both the message and every template that was tried.
+        A document supplying answers is saying what will be asked, and being
+        wrong about that is a mistake rather than a reason to go find someone.
+        {" "}
         <code>delegate</code>{" "}
         says the other thing on purpose: whatever this region cannot answer
         passes outward, to an enclosing region or to whatever the host

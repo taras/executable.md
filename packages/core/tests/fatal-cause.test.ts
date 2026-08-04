@@ -2,7 +2,7 @@
  * Tier FA — fatal error discovery (spec §6.11).
  *
  * `fatalCause` decides whether a failure ends the execution or becomes a
- * diagnostic, and it runs from every generic catch in expansion. A cause graph
+ * printed error, and it runs from every generic catch in expansion. A cause graph
  * is arbitrary — nothing stops one from pointing back at itself — so the
  * traversal has to survive whatever it is handed.
  */
@@ -135,9 +135,9 @@ describe("Tier FA — Fatal error discovery", () => {
   });
 
   // FA8: the whole point, end to end. A cyclic ordinary error reaches
-  // expansion's catch, is collected as a diagnostic, and the next block runs —
+  // expansion's catch, becomes a printed error, and the next block runs —
   // rather than overflowing the stack on the way to that decision.
-  it("FA8: a cyclic ordinary error is collected and later content still runs", function* () {
+  it("FA8: a cyclic ordinary error is printed and later content still runs", function* () {
     const expanded = yield* scoped(function* () {
       yield* Component.around(
         {

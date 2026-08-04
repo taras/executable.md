@@ -709,7 +709,7 @@ describe("Tier CR — selection is journaled", () => {
     };
     const resumed = String(yield* runRegistered(dir, yield* partial(stream), [other]));
 
-    // The diagnostic names both the recorded origin and the one found instead…
+    // The printed error names both the recorded origin and the one found instead…
     expect(resumed).toContain("host-a");
     expect(resumed).toContain("host-b");
     // …and the component that was found was never invoked.

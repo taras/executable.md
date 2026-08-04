@@ -5,8 +5,8 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
-import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
+import { printErrors } from "../src/component-failures.ts";
+import { AmbientErrorMode, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -376,8 +376,8 @@ describe("Tier IF — the unselected branch performs no work", () => {
   });
 });
 
-describe("Tier IF — diagnostics carry source positions", () => {
-  it("IF35: a local position anchors the diagnostic", function* () {
+describe("Tier IF — printed errors carry source positions", () => {
+  it("IF35: a local position anchors the printed error", function* () {
     const run = yield* runIf("line one\n<If>body</If>\n");
     expect(errorMessages(run.segments)[0]).toContain("(2:1)");
   });
@@ -648,7 +648,7 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
   // What the branch rule promises is that an unselected branch's component
   // never runs. Its body is the observable: PROBE_BODY appears only when the
   // branch was selected. An expansion log would say the same thing less
-  // directly, and only a claim could collect one.
+  // directly, and only a claim could print one.
   it("IF44: no component in the unselected branch expands", function* () {
     const skipped = yield* runProbe(false);
     expect(skipped.output).not.toContain("PROBE_BODY");
@@ -701,7 +701,7 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
  *
  * `<Broken />` is a component that fails, supplied through the import
  * middleware because these drive `expandSegments` directly. It fails rather
- * than returning anything: the ErrorSegment counted below is the diagnostic the
+ * than returning anything: the ErrorSegment counted below is the printed error the
  * engine reports for a failed invocation, so what `<If>` must not double is a
  * real observation and not text a component chose to render.
  */
@@ -716,12 +716,12 @@ describe("Tier IF — error observation", () => {
     name: "Broken",
     props: { type: "object", properties: {}, additionalProperties: false },
     // deno-lint-ignore require-yield
-    fn: collectFailures(function* () {
+    fn: printErrors(function* () {
       throw new Error("broken thing");
     }),
   };
 
-  /** What the engine's diagnostic for a failed `<Broken />` reads. */
+  /** What the engine's printed error for a failed `<Broken />` reads. */
   const BROKE = "Function component Broken error: broken thing";
 
   function runRaiseProbe(source: string): Operation<RaiseProbe> {
@@ -782,10 +782,10 @@ describe("Tier IF — error observation", () => {
     expect(structure.observed[0]).toContain("accepts no props");
   });
 
-  it("IF53: a throwing policy still aborts on a selected-branch error", function* () {
+  it("IF53: a throwing error mode still aborts on a selected-branch error", function* () {
     let thrown: unknown;
     yield* scoped(function* () {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* AmbientErrorMode.set("throw");
       try {
         yield* runRaiseProbe("<If condition={true}><Broken /></If>");
       } catch (error) {

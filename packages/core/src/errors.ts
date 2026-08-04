@@ -14,24 +14,24 @@ import type { ErrorSegment } from "./types.ts";
  *
  * `Component.raise` is the observation chain — every segment passes through it
  * exactly once, where it is created. Settlement is this separate value, so an
- * error crossing from a component's own policy to its caller's does not emit a
+ * error crossing from a component's own error mode to its caller's does not emit a
  * second observation.
  */
-export type ErrorPolicy = "collect" | "throw";
+export type ErrorMode = "print" | "throw";
 
-export const AmbientErrorPolicy: Context<ErrorPolicy> = createContext<ErrorPolicy>(
-  "component.errorPolicy",
-  "collect",
+export const AmbientErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
+  "component.errorMode",
+  "print",
 );
 
 /**
- * Settle a segment under the ambient policy: the default `Component.raise`
- * implementation calls this, and so does a consumer applying its own policy to
+ * Settle a segment under the ambient error mode: the default `Component.raise`
+ * implementation calls this, and so does a consumer applying its own error mode to
  * an error that already crossed a nested one.
  */
 export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
-  const policy = yield* AmbientErrorPolicy.get();
-  if (policy === "throw") {
+  const mode = yield* AmbientErrorMode.get();
+  if (mode === "throw") {
     throw new DocumentationError(segment);
   }
   return segment;
@@ -54,7 +54,7 @@ const segmentCauses = new WeakMap<ErrorSegment, unknown>();
 /**
  * Internal: record what expansion translated into this segment, before raising
  * it. Not part of the package surface — an author reports a failure by throwing
- * it, and the engine decides what a diagnostic is made from.
+ * it, and the engine decides what a printed error is made from.
  */
 export function attributeCause(segment: ErrorSegment, from: unknown): void {
   segmentCauses.set(segment, from);
@@ -94,10 +94,10 @@ export class DocumentationError extends Error {
  *
  * Catching this at `yield* content()` is explicit recovery: the component
  * decides what to render instead, and the failure never reaches its consumer.
- * The same shape is presented under both `collect` and `throw`, so recovery
- * code does not branch on the ambient policy. Left uncaught, normal
+ * The same shape is presented under both `print` and `throw`, so recovery
+ * code does not branch on the ambient error mode. Left uncaught, normal
  * continuation stops and the invocation boundary reports the original errors
- * under the consumer's policy.
+ * under the consumer's error mode.
  *
  * A component that recovers and then fails on its own terms keeps this error in
  * the cause chain of the failure it reports, so the content failure it recovered
@@ -127,22 +127,22 @@ export type DurabilityFailure =
   | EarlyReturnDivergenceError
   | ContinuePastCloseDivergenceError;
 
-/** A failure that ends the execution rather than becoming a diagnostic. */
+/** A failure that ends the execution rather than becoming a printed error. */
 export type FatalFailure = DocumentationError | DurabilityFailure;
 
 /**
  * The error that ends the execution, if this failure carries one.
  *
- * Expansion turns a failure into a diagnostic the document can render, which
+ * Expansion turns a failure into a printed error the document can render, which
  * is right for anything the document itself got wrong. Two kinds are not that,
  * and every generic catch in the engine rethrows them:
  *
- * - `DocumentationError` — the ambient policy has already decided this
- *   execution fails (§6.9); collecting it would undo that decision.
+ * - `DocumentationError` — the ambient error mode has already decided this
+ *   execution fails (§6.9); printing it would undo that decision.
  * - a `DurabilityFailure` — the journal no longer describes this run (§6.11).
  *   The document is not wrong and there is nothing useful to render: continuing
  *   would run later siblings on top of work that never happened, and rendering
- *   it as a comment would let the ambient policy downgrade a durability failure
+ *   it as a comment would let the ambient error mode downgrade a durability failure
  *   to a note. It would also bury *where* the journal stopped describing the
  *   run: expansion that carried on would reach another durable operation, whose
  *   own mismatch is then the one reported.
@@ -217,10 +217,10 @@ type OpaqueFailure = (error: object) => boolean;
  * A content failure ends documentation discovery.
  *
  * A `ContentError` reached in a cause graph is recovered context rather than a
- * failure still looking for a policy: it was delivered to a component that
+ * failure still looking for an error mode: it was delivered to a component that
  * caught it and chose a failure of its own, and that choice is what the document
  * has to report. Walking through it would resurrect the decision the component
- * replaced — the component's contextual diagnostic would be built and then
+ * replaced — the component's contextual printed error would be built and then
  * discarded in favour of the child's.
  *
  * Durability discovery looks straight through it. Only the engine's own
@@ -240,7 +240,7 @@ function isRecoveredContent(error: object): boolean {
  *
  * Cause graphs are arbitrary — nothing stops `error.cause` from pointing back
  * at `error` — so traversal remembers what it has seen. Recursing forever would
- * turn an ordinary diagnostic into a stack overflow, which is exactly the
+ * turn an ordinary printed error into a stack overflow, which is exactly the
  * failure this traversal exists to prevent. Every question asked of a failure
  * shares the traversal, so no two can drift on what counts as a wrapper; each
  * names its own reach, so a rule that belongs to one question cannot silence the

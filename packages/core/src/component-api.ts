@@ -39,11 +39,11 @@ export interface ComponentApi {
   importComponent(name: string): Operation<ComponentDefinition | FunctionComponentDefinition>;
   applyModifiers(modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult>;
   /**
-   * Report an ErrorSegment under the ambient error policy (spec §6.9).
+   * Report an ErrorSegment under the ambient error mode (spec §6.9).
    *
    * The middleware chain is the observation chain — a segment passes through it
    * once, where it is created. The default implementation settles it under
-   * `AmbientErrorPolicy`: collected for rendering, or thrown inside
+   * `AmbientErrorMode`: printed for rendering, or thrown inside
    * suppressed documentation.
    *
    * Whoever creates an ErrorSegment calls this. A segment that reaches the
@@ -77,7 +77,7 @@ export interface ComponentApi {
    * normal continuation stops at the `yield* content()` expression: the
    * component's return is not processed and no `as` binding is made. Left
    * uncaught, the invocation is replaced by the original errors under a
-   * collecting policy, or the original `DocumentationError` is restored under a
+   * printing error mode, or the original `DocumentationError` is restored under a
    * throwing one.
    *
    * Catching `ContentError` around the call is explicit recovery — the
@@ -130,10 +130,10 @@ export interface ComponentApi {
    * Called only after `withInvocation()` has dismantled the invocation, so the
    * failure it is handed accounts for the body and its teardown together. The
    * default fails the operation, which is what an ordinary Effection failure
-   * does; a collection boundary answers with a diagnostic instead.
+   * does; a printing boundary answers with a printed error instead.
    *
    * Distinct from `raise`: this handles an operation failure, while `raise`
-   * observes an `ErrorSegment`. A collector uses both — it converts, then
+   * observes an `ErrorSegment`. Failure printing uses both — it converts, then
    * observes exactly once.
    */
   handleFailure(failure: ComponentFailure): Operation<ErrorSegment>;

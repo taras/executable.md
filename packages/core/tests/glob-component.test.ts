@@ -116,7 +116,7 @@ function text(output: Json): string {
 }
 
 /**
- * A diagnostic may name the patterns the document wrote and nothing else — not
+ * A printed error may name the patterns the document wrote and nothing else — not
  * the resolved workspace, and not what a symlink pointed at (§1.2).
  */
 function expectNoAbsolutePaths(output: string, fixture: Fixture): void {
@@ -248,7 +248,7 @@ describe("Tier GB — Glob component", () => {
   // GB6: patterns match paths relative to `Env.cwd`, so an absolute pattern
   // cannot match anything a search produces. Returning `[]` would make a typo
   // indistinguishable from an empty directory, so it fails instead — and the
-  // diagnostic quotes the document's own text, which is the one absolute path
+  // printed error quotes the document's own text, which is the one absolute path
   // §1.2 does not have to withhold, because the document wrote it.
   it("GB6: an absolute pattern fails", function* () {
     const fixture = yield* useFixture();

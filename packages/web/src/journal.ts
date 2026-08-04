@@ -78,7 +78,7 @@ export function fingerprint(question: FormQuestion): string {
  * may yield only durable effects and this is an ordinary one.
  *
  * A `StaleInputError`, so expansion propagates it rather than rendering it: the
- * ambient error policy must not be able to downgrade a durability failure to a
+ * ambient error error mode must not be able to downgrade a durability failure to a
  * comment and let later siblings run on an answer that was never given.
  *
  * This refuses rather than re-asks. Refusing is what the durable protocol

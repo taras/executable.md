@@ -6,9 +6,9 @@
  * environment — never through JSON serialization, which would destroy
  * `RegExp`s, `undefined`, and object identity.
  *
- * The assertion runs on the raw values BEFORE any diagnostic formatting, so
+ * The assertion runs on the raw values BEFORE any report formatting, so
  * formatting arbitrary values (mutating or throwing getters/toJSON/toString)
- * can never change the assertion outcome. Diagnostics are built afterwards
+ * can never change the assertion outcome. Reports are built afterwards
  * under guarded fallback.
  */
 
@@ -140,19 +140,19 @@ function safeFormat(value: unknown): string {
 }
 
 /**
- * An assertion failure enriched with its Markdown diagnostic. Still an
+ * An assertion failure enriched with its Markdown report. Still an
  * `AssertionError`, so containment and classification treat it as the
  * original assertion failure.
  */
-export class AssertionDiagnostic extends AssertionError {
-  override name = "AssertionDiagnostic";
-  diagnostic: string;
+export class AssertionReport extends AssertionError {
+  override name = "AssertionReport";
+  report: string;
   detail: { actual?: string; expected?: string };
 
-  constructor(cause: Error, diagnostic: string, detail: { actual?: string; expected?: string }) {
+  constructor(cause: Error, report: string, detail: { actual?: string; expected?: string }) {
     // Node's AssertionError takes an options bag, not a message string.
     super({ message: cause.message });
-    this.diagnostic = diagnostic;
+    this.report = report;
     this.detail = detail;
     this.cause = cause;
   }
@@ -168,7 +168,7 @@ const KIND_PROPS: Record<AssertionKind, { allowed: string[]; required: string[] 
 };
 
 /**
- * Build a validation diagnostic. Constructing one is separate from reporting
+ * Build a validation printed error. Constructing one is separate from reporting
  * it: the handler that owns the failure raises it (core §6.9) before returning
  * it, so this stays usable from synchronous prop checks.
  */
@@ -177,23 +177,23 @@ export function validationError(name: string, message: string): ErrorSegment {
 }
 
 // Outside a test the throw would abort before the segment could render, so
-// emit the visible diagnostic first.
+// emit the visible report first.
 export function* failVisiblyThenThrow(
   name: string,
   msg: string | undefined,
   detail: { actual?: string; expected?: string },
   failure: Error,
 ): Operation<never> {
-  const diagnostic = buildDiagnostic(name, "failed", msg, detail, failure);
+  const report = buildReport(name, "failed", msg, detail, failure);
   const visible = (yield* testing) || (yield* verbose);
   const inTestScope = yield* inTest;
   if (visible && !inTestScope) {
-    yield* DocumentOutput.operations.output(diagnostic);
+    yield* DocumentOutput.operations.output(report);
   }
-  throw new AssertionDiagnostic(failure, diagnostic, detail);
+  throw new AssertionReport(failure, report, detail);
 }
 
-export function buildDiagnostic(
+export function buildReport(
   name: string,
   outcome: "passed" | "failed",
   msg: string | undefined,
@@ -322,6 +322,6 @@ export function assertionComponent(assertion: AssertionEntry): FunctionComponent
     }
 
     const visible = (yield* testing) || (yield* verbose);
-    return visible ? buildDiagnostic(assertion.name, "passed", values.msg, detail) : "";
+    return visible ? buildReport(assertion.name, "passed", values.msg, detail) : "";
   };
 }

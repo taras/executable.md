@@ -23,7 +23,7 @@ export function inlineSource(source: string): InlineRootDocument {
   return { path: INLINE_SOURCE_PATH, source };
 }
 
-/** The identity diagnostics and source positions report for this root. */
+/** The identity printed errors and source positions report for this root. */
 export function rootSourcePath(root: RootDocumentSource): string {
   return root.path;
 }

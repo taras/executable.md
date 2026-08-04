@@ -60,7 +60,7 @@ export function* compileDataUri(
 /**
  * Install the data: URI compiler as the base provider on the current scope.
  *
- * `at: "min"` puts it beneath ordinary middleware, so a policy installed
+ * `at: "min"` puts it beneath ordinary middleware, so middleware installed
  * later — the behavior-document restriction, an instrumenting wrapper — can
  * inspect a block and delegate here.
  */

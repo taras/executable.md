@@ -34,7 +34,7 @@ import {
   absorbTestFailure,
   RaisedSegmentError,
   createTest,
-  failureDiagnostic,
+  failureReport,
   flushStaged,
   formatLocation,
   Staging,
@@ -77,13 +77,13 @@ export function* installHandlers(
       }
       const location = formatLocation(failure);
       const result = yield* absorbTestFailure(location, failure.error);
-      // Returned, not raised. A raise settles under the ambient policy, which
-      // would let a documentation policy turn one test's teardown failure into
+      // Returned, not raised. A raise settles under the ambient error mode, which
+      // would let a documentation error mode turn one test's teardown failure into
       // the whole document's — and a test failure fails only that test. The
       // engine puts what this returns straight into the output.
       return {
         type: "error",
-        message: failureDiagnostic(result, { detail: true }).trim(),
+        message: failureReport(result, { detail: true }).trim(),
         source: "Test",
       };
     },
@@ -186,7 +186,7 @@ export function decorateCompletion(
   };
 }
 
-/** Whether a failure is, or wraps, a diagnostic an enclosing test intercepted. */
+/** Whether a failure is, or wraps, a printed error an enclosing test intercepted. */
 function carriesRaisedSegment(error: unknown, seen = new Set<unknown>()): boolean {
   if (error instanceof RaisedSegmentError) {
     return true;

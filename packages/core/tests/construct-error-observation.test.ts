@@ -4,8 +4,8 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
-import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
+import { printErrors } from "../src/component-failures.ts";
+import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import type {
@@ -35,7 +35,7 @@ import type {
  * The constructs under test are the engine's, so nothing here claims a name.
  * `<Broken />` is a component that fails on its own terms, resolved through the
  * `importComponent` middleware these install because they drive `expandSegments`
- * directly — there is no registry in this harness. The diagnostic the engine
+ * directly — there is no registry in this harness. The printed error the engine
  * builds for a failed invocation is the ErrorSegment they observe. See
  * `error-observation.test.ts` for the same contract measured across the
  * extension boundary instead.
@@ -73,8 +73,8 @@ function echoComponent(name: string): FunctionComponentDefinition {
 /**
  * Fails on its own terms, without asking for content.
  *
- * It collects: what these assert is how a failure that *becomes* a diagnostic
- * is attributed and observed, which only happens inside a collection boundary.
+ * It prints: what these assert is how a failure that *becomes* a printed error
+ * is attributed and observed, which only happens inside a printing boundary.
  */
 function throwingComponent(name: string, failure: unknown): FunctionComponentDefinition {
   return {
@@ -82,7 +82,7 @@ function throwingComponent(name: string, failure: unknown): FunctionComponentDef
     name,
     props: OPEN_SCHEMA,
     // deno-lint-ignore require-yield
-    fn: collectFailures(function* () {
+    fn: printErrors(function* () {
       throw failure;
     }),
   };
@@ -118,7 +118,7 @@ function recoveringComponent(name: string, caught: ContentError[]): FunctionComp
  * ErrorSegment without any extension installed.
  *
  * A `message` prop names the failure so sibling failures stay distinguishable.
- * It collects, so the failure becomes one diagnostic reported through
+ * It prints, so the failure becomes one printed error reported through
  * `Component.raise` and settled by the construct that contains it, rather than
  * stopping the expansion the assertion is about.
  */
@@ -127,13 +127,13 @@ const BROKEN: FunctionComponentDefinition = {
   name: "Broken",
   props: OPEN_SCHEMA,
   // deno-lint-ignore require-yield
-  fn: collectFailures(function* (props: Record<string, Json>) {
+  fn: printErrors(function* (props: Record<string, Json>) {
     const prop = props.message;
     throw new Error(typeof prop === "string" ? prop : "broken thing");
   }),
 };
 
-/** What the engine's diagnostic for a failed `<Broken />` reads. */
+/** What the engine's printed error for a failed `<Broken />` reads. */
 function broke(message = "broken thing"): string {
   return `Function component Broken error: ${message}`;
 }
@@ -202,7 +202,7 @@ describe("Tier OBS — construct error observation", () => {
     options: ProbeOptions = {},
   ): Operation<{ thrown: unknown; observed: string[] }> {
     return scoped(function* () {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* AmbientErrorMode.set("throw");
       try {
         const probe = yield* runProbe(source, options);
         return { thrown: undefined, observed: probe.observed };
@@ -265,7 +265,7 @@ describe("Tier OBS — construct error observation", () => {
     expect(probe.observed).toEqual([broke()]);
   });
 
-  it("OBS14: a construct's own diagnostic is observed once", function* () {
+  it("OBS14: a construct's own printed error is observed once", function* () {
     const eachProp = yield* runProbe('<Each in={[1]} let="n" bogus="x">body</Each>');
     expect(eachProp.observed).toHaveLength(1);
     expect(eachProp.observed[0]).toContain('only accepts "in", "let", and "as" props');
@@ -305,7 +305,7 @@ describe("Tier OBS — construct error observation", () => {
     expect(fn.output).toContain(broke());
   });
 
-  it("OBS16: an ambient throw policy aborts at the first error on every path", function* () {
+  it("OBS16: an ambient throw error mode aborts at the first error on every path", function* () {
     const cases: Array<[string, ProbeOptions]> = [
       ["<Broken /><Broken />", {}],
       ["<If condition={true}><Broken /><Broken /></If>", {}],
@@ -323,7 +323,7 @@ describe("Tier OBS — construct error observation", () => {
     }
   });
 
-  it("OBS17: a collected error still renders exactly once per path", function* () {
+  it("OBS17: a printed error still renders exactly once per path", function* () {
     const cases: Array<[string, ProbeOptions]> = [
       ["<Broken />", {}],
       ["<If condition={true}><Broken /></If>", {}],
@@ -406,7 +406,7 @@ describe("Tier OBS — construct error observation", () => {
     let thrown: unknown;
 
     yield* scoped(function* () {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* AmbientErrorMode.set("throw");
       yield* Component.around({
         *raise([error], next) {
           observed.push(error);
@@ -466,7 +466,7 @@ describe("Tier OBS — construct error observation", () => {
     let thrown: unknown;
 
     yield* scoped(function* () {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* AmbientErrorMode.set("throw");
       yield* Component.around({
         *raise([error], next) {
           observed.push(error);
@@ -507,13 +507,13 @@ describe("Tier OBS — construct error observation", () => {
     expect(caught).toHaveLength(1);
     const [{ failure, hasCause, cause }] = caught;
     // Present already inside the middleware's catch. A thrown non-Error is
-    // normalized on its way out of the invocation, so the diagnostic's cause is
+    // normalized on its way out of the invocation, so the printed error's cause is
     // that Error and the exact value thrown is one step further down — nothing
     // is lost, it is just no longer the outermost thing.
     expect(hasCause).toBe(true);
     expect(cause).toBeInstanceOf(Error);
     if (!(cause instanceof Error)) {
-      throw new Error("expected the diagnostic's cause to be an Error");
+      throw new Error("expected the printed error's cause to be an Error");
     }
     expect(cause.cause).toBe(undefined);
     expect(Object.hasOwn(cause, "cause")).toBe(true);
@@ -522,7 +522,7 @@ describe("Tier OBS — construct error observation", () => {
     expect(observed[0]).toBe(failure.segment);
   });
 
-  it("OBS24: a collected thrown undefined renders a diagnostic and produces no Error", function* () {
+  it("OBS24: under `print` a thrown undefined renders a printed error and produces no Error", function* () {
     const observed: ErrorSegment[] = [];
     const probe = yield* scoped(function* () {
       yield* Component.around({
@@ -548,7 +548,7 @@ describe("Tier OBS — construct error observation", () => {
       return { segments, output: renderSegments(segments) };
     });
 
-    // Collecting settles a segment; no DocumentationError is ever constructed,
+    // Printing settles a segment; no DocumentationError is ever constructed,
     // so there is no JavaScript Error to carry a cause.
     expect(observed).toHaveLength(1);
     expect(probe.output).toContain("Function component Boom error");

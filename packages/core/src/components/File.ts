@@ -10,7 +10,7 @@
  * The first stage is pure path arithmetic against `Env.cwd`: an empty path, an
  * absolute path, and a lexical `..` escape are refused with no filesystem call
  * at all. It runs **before** the children expand, so an unusable path costs
- * nothing and its diagnostic is written before there is any child failure to
+ * nothing and its printed error is written before there is any child failure to
  * report alongside it.
  *
  * The second stage resolves what is actually on disk and re-checks the result,
@@ -28,13 +28,13 @@
  * cannot: a dangling symlink has nothing to resolve, and `rename` replaces the
  * link rather than following it wherever it points.
  *
- * Diagnostics name only the path the document wrote. A resolved workspace
+ * Printed errors name only the path the document wrote. A resolved workspace
  * path, the destination a symlink pointed at, a temporary file, and a rejected
  * absolute path are all withheld — §1.2 keeps absolute paths out of
- * diagnostics, and a containment failure is the last place to start reporting
+ * printed errors, and a containment failure is the last place to start reporting
  * them. A platform error carries the path it failed on, so every filesystem
  * call is wrapped and nothing from the error it caught is reproduced: the errno
- * code *selects* a phrase from the allowlist in `fs-diagnostics.ts`.
+ * code *selects* a phrase from the allowlist in `fs-error-phrases.ts`.
  *
  * A failed cleanup of the temporary is the one thing reported that the document
  * did not ask for, and it is reported alongside the write's own outcome rather
@@ -61,7 +61,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { randomUUID } from "node:crypto";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { collectFailures } from "../component-failures.ts";
+import { printErrors } from "../component-failures.ts";
 import {
   cwd,
   ensureDir,
@@ -76,7 +76,7 @@ import { content } from "../component-api.ts";
 import { hasContent } from "../content-context.ts";
 import { ContentError } from "../errors.ts";
 import type { Json } from "../types.ts";
-import { reason } from "./fs-diagnostics.ts";
+import { reason } from "./fs-error-phrases.ts";
 
 export const props = {
   type: "object",
@@ -101,14 +101,14 @@ function sentence(requested: string, verb: string, error: unknown): string {
 }
 
 /**
- * Run a filesystem operation, replacing whatever it throws with a diagnostic
+ * Run a filesystem operation, replacing whatever it throws with a printed error
  * built only from the path the document wrote and an allowlisted phrase.
  *
  * Nothing is passed through, including a `FileAccessError`. This component's
  * own checks throw outside guarded calls, so an error surfacing from inside one
  * came from the Api — and an error's class says nothing about whether its
  * message is safe to show. Trusting one would let middleware choose the text of
- * a diagnostic by choosing what to throw.
+ * a printed error by choosing what to throw.
  *
  * Cancellation is not a thrown error in Effection — halting resumes the
  * generator through `return()` — so this never converts a halt into a failure.
@@ -121,7 +121,7 @@ function* guard<T>(requested: string, verb: string, operation: Operation<T>): Op
   }
 }
 
-export default collectFailures(function* (props: Record<string, Json>): Operation<string> {
+export default printErrors(function* (props: Record<string, Json>): Operation<string> {
   const requested = String(props.path);
   const admitted = yield* admissible(requested);
 
@@ -140,20 +140,20 @@ export default collectFailures(function* (props: Record<string, Json>): Operatio
  * The rendered children, or a failure if anything went wrong producing them.
  *
  * `content()` is a failure boundary: content that fails to expand throws
- * `ContentError` there rather than coming back as text with the diagnostic
+ * `ContentError` there rather than coming back as text with the printed error
  * embedded in it. For a component that renders its content, embedding is the
  * right outcome — the reader sees what failed, in place. A write has nowhere to
- * show it, and writing the diagnostic into the file would be worse than
+ * show it, and writing the printed error into the file would be worse than
  * useless, so this recovers from the boundary and turns the whole invocation
  * into a failure instead. Nothing reaches the filesystem, and the target keeps
  * whatever it already held.
  *
  * The original messages come along, because `<File>` renders nothing: this
- * diagnostic is the only place the reader would learn what actually went wrong.
+ * printed error is the only place the reader would learn what actually went wrong.
  * Anything else thrown is not a content failure and passes through untouched.
  *
  * The content failure itself stays in this failure's cause chain. What is
- * reported is this component's own diagnostic — the write is what the document
+ * reported is this component's own printed error — the write is what the document
  * asked for, and that it did not happen is the fact a reader needs — while the
  * failure it was translated from, and the error segments it carries, remain
  * reachable underneath for a host inspecting what ended the execution.
@@ -175,7 +175,7 @@ function* rendered(requested: string): Operation<string> {
 
 /** A path that has passed the lexical stage, carried to the resolving one. */
 interface Admissible {
-  /** The path the document wrote, for diagnostics. */
+  /** The path the document wrote, for printed errors. */
   requested: string;
   /** `requested` joined onto the contextual directory and normalized. */
   lexical: string;
@@ -187,7 +187,7 @@ interface Admissible {
  * An empty path, an absolute path, and a `..` escape are all answerable from
  * `Env.cwd` and path arithmetic alone. Deciding them here means an unusable
  * path is refused before the children of a write run at all, and that the
- * diagnostic never has to mention a path that was rejected for being absolute.
+ * printed error never has to mention a path that was rejected for being absolute.
  *
  * `resolve` normalizes `..` lexically, so this holds against the contextual
  * directory as given — canonicalizing it is stage two's job and would only

@@ -8,7 +8,7 @@
  * 2. a reserved registration — a host protecting an invariant;
  * 3. a repository-local file;
  * 4. a registered default, including core's own components;
- * 5. nothing, which is the unresolved diagnostic.
+ * 5. nothing, which is the unresolved printed error.
  *
  * A repository file therefore overrides any ordinary package default, core's
  * included, while a reserved registration overrides the repository. Only
@@ -129,7 +129,7 @@ export function* selectComponent(
   };
 }
 
-/** The diagnostic a name that resolves to nothing produces. */
+/** The printed error a name that resolves to nothing produces. */
 export function unresolvedMessage(name: string, searched: readonly string[]): string {
   return `Cannot resolve component: ${name} (searched: ${searched.join(", ")})`;
 }

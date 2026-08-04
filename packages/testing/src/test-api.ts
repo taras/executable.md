@@ -51,7 +51,7 @@ export interface TestApi {
    * rather than re-created, and gives that state the test's lifetime.
    */
   testScope: EvalScope | undefined;
-  /** Whether assertion diagnostics render during regular execution. */
+  /** Whether assertion reports render during regular execution. */
   verbose: boolean;
   /** Whether a useTesting() session is already active in this scope. */
   sessionActive: boolean;

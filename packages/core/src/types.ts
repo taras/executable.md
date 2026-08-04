@@ -223,8 +223,8 @@ export interface ComponentFailure {
  *
  * `text` is everything produced before the stop, so a component reporting a
  * failure can show the work that led to it. `failure` is what the content threw
- * — absent when it finished. Error segments the content *collected* are part of
- * `text`, not a failure: they settled under the ambient policy already.
+ * — absent when it finished. Error segments the content *printed* are part of
+ * `text`, not a failure: they settled under the ambient error mode already.
  */
 export interface PartialContent {
   readonly text: string;

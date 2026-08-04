@@ -429,7 +429,7 @@ Expansion originally received its dependencies through an
 threaded as a parameter into every recursive expansion call, while the
 remaining operational state traveled through raw Effection context keys
 (`EvalEnvCtx`, `EvalScopeCtx`, `CodeBlockCtx`, `PersistFlagCtx`,
-`ContentCtx`, `ErrorPolicyCtx`). Two delivery mechanisms meant two
+`ContentCtx`, `ErrorModeCtx`). Two delivery mechanisms meant two
 override models: replacing an import strategy required constructing a
 new container at the call site, while overriding scope state required
 knowing which raw key to set — and neither surface was wrappable for
@@ -451,7 +451,7 @@ own `env`/`evalScope` providers shadow its ancestors' by
 short-circuiting — and installing inside `scoped()` removes them on
 exit, so siblings never observe each other's state. Runtime providers
 (document import, modifier execution, per-component state, error
-policy) all install at `min`.
+mode) all install at `min`.
 
 **Why `max` for instrumentation:** `max` middleware wraps outside every
 implementation, so tracing, mocking, and overrides can observe or

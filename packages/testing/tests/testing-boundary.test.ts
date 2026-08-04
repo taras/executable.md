@@ -36,7 +36,7 @@ const BOOM = new Error("the component failed");
  * Run with a `<Boom />` that fails the way any component does.
  *
  * An ordinary component failure fails the operation it is part of, so this is
- * how expansion stops partway rather than collecting — no middleware standing
+ * how expansion stops partway rather than printing — no middleware standing
  * in for a failure, just a component that fails.
  */
 function stopping(files: Record<string, string>, stream: InMemoryStream): Operation<DocRun> {
@@ -98,7 +98,7 @@ describe("Tier TB — a boundary that never finished", () => {
     expect(yield* boundaryEntries(stream)).toEqual([]);
   });
 
-  it("TB3: a body that only collected is complete, and does report", function* () {
+  it("TB3: a body that only printed is complete, and does report", function* () {
     const stream = new InMemoryStream();
     const doc = [
       "<Testing>",
@@ -111,7 +111,7 @@ describe("Tier TB — a boundary that never finished", () => {
       "",
     ].join("\n");
 
-    // No interceptor: the error settles under the collecting policy, so the
+    // No interceptor: the error settles under the printing error mode, so the
     // projection finishes and the boundary is a real count.
     const run = yield* runDoc({ "README.md": doc }, { stream });
 

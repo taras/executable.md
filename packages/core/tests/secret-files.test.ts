@@ -228,7 +228,7 @@ describe("symbolic links", () => {
     yield* ensure(() => rm(dir));
 
     // The target path itself carries a credential, which is the case where a
-    // dereferencing scanner would leak one through its own diagnostic.
+    // dereferencing scanner would leak one through its own printed error.
     write(outside, `${CANARY}.txt`, "ordinary\n");
     fs.symlinkSync(path.join(outside, `${CANARY}.txt`), path.join(dir, "link.txt"));
 

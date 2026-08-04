@@ -43,7 +43,7 @@ import {
   raise,
 } from "./component-api.ts";
 import {
-  AmbientErrorPolicy,
+  AmbientErrorMode,
   attributeCause,
   ContentError,
   DocumentationError,
@@ -51,8 +51,8 @@ import {
   fatalCause,
   settle,
 } from "./errors.ts";
-import { collectsFailures, useFailureCollection } from "./component-failures.ts";
-import type { ErrorPolicy } from "./errors.ts";
+import { printsErrors, useFailurePrinting } from "./component-failures.ts";
+import type { ErrorMode } from "./errors.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -195,7 +195,7 @@ interface ProjectionState {
    * Where a string projection records the errors it renders away. A handle that
    * only projects structured segments needs none — its caller sees the errors.
    */
-  collect?: Segment[];
+  printedErrors?: Segment[];
 }
 
 /**
@@ -239,7 +239,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
    */
   function* runInContentScope(options: {
     segments: Segment[];
-    policy: ErrorPolicy;
+    mode: ErrorMode;
     env: EvalEnv | undefined;
     meta: Record<string, unknown>;
     props: Record<string, Json>;
@@ -260,7 +260,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const rendered: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
-          yield* AmbientErrorPolicy.set(options.policy);
+          yield* AmbientErrorMode.set(options.mode);
           if (options.segments.length === 0) {
             outcome.resolve({ segments: [] });
             return;
@@ -312,7 +312,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     request: ProjectionRequest,
   ): Operation<{ segments: Segment[]; failure?: unknown }> {
     const segments = select(request);
-    const policy = request.policy ?? (yield* AmbientErrorPolicy.get()) ?? "collect";
+    const mode = request.mode ?? (yield* AmbientErrorMode.get()) ?? "print";
     const contentScope = yield* state.invocation.useContentScope();
     // The enclosing handle answers <Content /> written inside projected
     // content: it belongs to the caller's invocation, not to this one.
@@ -328,13 +328,13 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // Shared with the expansion below, so a failure still leaves behind what it
       // rendered before stopping.
       const rendered: Segment[] = [];
-      // Slot errors are reported inside the policy-bound task, so an empty
+      // Slot errors are reported inside the mode-bound task, so an empty
       // selection cannot settle them under the invocation's baseline. Held out
       // here so a failure still reports them alongside what rendered.
       const errors: Segment[] = [];
       const task = contentScope.scope.run(function* () {
         try {
-          yield* AmbientErrorPolicy.set(policy);
+          yield* AmbientErrorMode.set(mode);
           if (!slotErrorsEmitted && slots.errors.length > 0) {
             slotErrorsEmitted = true;
             for (const slotError of slots.errors) {
@@ -388,12 +388,12 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     ): Operation<Segment[]> {
       // Slots were resolved during substitution, so the environment, meta,
       // props and hide set are the body's own — only the resource scope moves.
-      // The policy has to travel with them: the content task does not inherit
+      // The error mode has to travel with them: the content task does not inherit
       // the documentation or <Output> frame this `<Content />` sits in.
-      const policy = (yield* AmbientErrorPolicy.get()) ?? "collect";
+      const mode = (yield* AmbientErrorMode.get()) ?? "print";
       return yield* runInContentScope({
         segments: element.children,
-        policy,
+        mode,
         env: undefined,
         meta,
         props,
@@ -406,10 +406,10 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     project: runProjection,
     tryProject: runProjectionOutcome,
     *projectToString(request: ProjectionRequest): Operation<string> {
-      const collect = state.collect;
-      if (collect === undefined) {
+      const printedErrors = state.printedErrors;
+      if (printedErrors === undefined) {
         throw new Error(
-          "projectToString() requires an error collector; this handle only supports project().",
+          "projectToString() requires somewhere to record printed errors; this handle only supports project().",
         );
       }
       const segments = yield* runProjection(request);
@@ -417,7 +417,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // where the invocation can refuse an `as=` capture.
       for (const segment of segments) {
         if (segment.type === "error") {
-          collect.push(segment);
+          printedErrors.push(segment);
         }
       }
       return renderSegments(segments);
@@ -452,7 +452,7 @@ const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 /**
  * Expand an array of segments, resolving components and executing code blocks.
  *
- * Component import, modifier execution, bindings, and error policy are all
+ * Component import, modifier execution, bindings, and error mode are all
  * delivered contextually through the Component Api — install providers with
  * `Component.around(..., { at: "min" })` before expanding.
  *
@@ -472,9 +472,9 @@ export function* expandSegments(
    * array still has everything produced before a failure — which is how a
    * `<Test>` keeps its output when its body stops partway.
    */
-  collect?: Segment[],
+  printedErrors?: Segment[],
 ): Operation<Segment[]> {
-  const result: Segment[] = collect ?? [];
+  const result: Segment[] = printedErrors ?? [];
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
   const loop = yield* ActiveLoop.get();
@@ -504,7 +504,7 @@ export function* expandSegments(
           // projection; expanding it here runs that content in the
           // invocation's content scope, which stops before the invocation
           // releases anything of its own. Its segments already went through
-          // the ambient policy, so they are appended as they are.
+          // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
             result.push(
@@ -518,7 +518,7 @@ export function* expandSegments(
           // Definition-owned <Output> is consumed by buildBody before it
           // reaches here. Reaching this branch means a misplaced or
           // dynamically scanned <Output> (e.g. render(markdown) content) —
-          // diagnose it defensively per the ambient policy.
+          // diagnose it defensively per the ambient error mode.
           result.push(yield* raise(misplacedOutputError()));
           break;
         }
@@ -571,11 +571,11 @@ export function* expandSegments(
           break;
         }
 
-        if (segment.name === "CollectFailures") {
-          // No raise() here, like the branches above: expandCollectFailures
+        if (segment.name === "PrintErrors") {
+          // No raise() here, like the branches above: expandPrintErrors
           // reports the errors it creates, and the body settled its own (§6.9).
           result.push(
-            ...(yield* expandCollectFailures(segment, parentMeta, parentProps, hideSet, counter)),
+            ...(yield* expandPrintErrors(segment, parentMeta, parentProps, hideSet, counter)),
           );
           break;
         }
@@ -630,8 +630,8 @@ export function* expandSegments(
           parentProps,
         );
         // Consumer boundary: the callee reported these where they were created,
-        // under whatever policy its body ran — an `<Output>` region collects,
-        // documentation throws. Settling them here applies this caller's policy
+        // under whatever error mode its body ran — an `<Output>` region prints,
+        // documentation throws. Settling them here applies this caller's error mode
         // without reporting them a second time (spec §6.9).
         for (const expandedSegment of expanded) {
           if (expandedSegment.type === "error") {
@@ -675,8 +675,8 @@ export function* expandSegments(
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
           // The output comes first, because a command that prints before it
-          // fails is usually explaining itself, and the diagnostic that follows
-          // is what the ambient policy then settles.
+          // fails is usually explaining itself, and the printed error that follows
+          // is what the ambient error mode then settles.
           if (codeResult.output !== "") {
             result.push({
               type: "execOutput",
@@ -718,7 +718,7 @@ export function* expandSegments(
       default: {
         if (segment.type === "error") {
           // Pre-existing error segments (e.g. slot/substitution errors) follow
-          // the ambient policy.
+          // the ambient error mode.
           result.push(yield* raise(segment));
         } else {
           result.push(segment);
@@ -751,7 +751,7 @@ function captureError(message: string): ErrorSegment {
  *
  * A capture never swallows an error. When the body produced one, `as` creates no
  * binding and the error segments stand in place of the capture, so the reader
- * sees the failure instead of a binding holding a diagnostic as its text.
+ * sees the failure instead of a binding holding a printed error as its text.
  */
 function* expandCapture(
   segment: Extract<Segment, { type: "component" }>,
@@ -806,7 +806,7 @@ function* expandCapture(
 
   // The body reported these where they were created (§6.9). They are returned
   // before rendering or `select` folds them into text, so the binding stays
-  // unset and the diagnostics reach the document unchanged.
+  // unset and the printed errors reach the document unchanged.
   const errors: ErrorSegment[] = [];
   for (const child of expandedChildren) {
     if (child.type === "error") {
@@ -955,7 +955,7 @@ function* expandEach(
   }
 
   // A capture never swallows an error. The body reported these where they were
-  // created (§6.9), so they are returned as they are: the diagnostics reach the
+  // created (§6.9), so they are returned as they are: the printed errors reach the
   // document unchanged and the binding stays unset.
   const errors = out.filter((outSegment) => outSegment.type === "error");
   if (errors.length > 0) {
@@ -973,7 +973,7 @@ function* expandEach(
 }
 
 /**
- * Anchor a diagnostic to the source location of the element that caused it.
+ * Anchor a printed error to the source location of the element that caused it.
  * Segments built without scanning a document carry no position; there the
  * message stands on its own.
  */
@@ -1243,7 +1243,7 @@ function* expandIf(
   );
 }
 
-/** How a `<Loop>` names itself in its own diagnostics. */
+/** How a `<Loop>` names itself in its own printed errors. */
 function loopTag(segment: ComponentElement): string {
   const name = segment.props.name;
   return typeof name === "string" && name.length > 0 ? `<Loop name="${name}">` : "<Loop>";
@@ -1261,7 +1261,7 @@ const LOOP_PROPS = new Set(["max", "name"]);
 
 /**
  * The bound a `<Loop>` runs to, or why the prop rejects it. The caller turns
- * the failure into a positioned diagnostic, because it is the one that raises.
+ * the failure into a positioned printed error, because it is the one that raises.
  */
 function* loopBound(segment: ComponentElement): Operation<Result<number>> {
   let max: Json;
@@ -1309,7 +1309,7 @@ function* loopBound(segment: ComponentElement): Operation<Result<number>> {
  * Expand a bounded repetition (spec §6.5 `<Loop>`). The body expands in
  * document order at most `max` times, and reaching `max` completes the loop
  * normally — exhaustion is not a failure. Whether an exhausted loop means
- * success is the surrounding document's policy to state.
+ * success is the surrounding document's error mode to state.
  *
  * `<Loop>` opens no binding scope. Every iteration expands in the enclosing
  * environment, so an iteration reads what earlier ones bound and the final
@@ -1317,8 +1317,8 @@ function* loopBound(segment: ComponentElement): Operation<Result<number>> {
  *
  * Like `<If>` it is not an observation boundary: it reports the errors it
  * creates itself and hands the body's segments back untouched. It adds no
- * error policy either — under a throwing policy the first failure ends the
- * loop by propagating out of it, and under a collecting one the diagnostic
+ * error mode either — under a throwing error mode the first failure ends the
+ * loop by propagating out of it, and under a printing one the printed error
  * renders and the next iteration runs.
  *
  * The loop writes its own execution records: one entry per iteration entered,
@@ -1443,8 +1443,8 @@ function breakElementViolations(segment: ComponentElement): string[] {
  * the iteration produced before the mark stands.
  *
  * A malformed `<Break>` performs no control action. Only a well-formed one
- * carries the author's instruction, so the diagnostic settles under the
- * ambient policy — aborting under a throwing one, rendering under a collecting
+ * carries the author's instruction, so the printed error settles under the
+ * ambient error mode — aborting under a throwing one, rendering under a printing
  * one while the loop runs on — rather than a rejected element also ending the
  * loop.
  */
@@ -1474,13 +1474,13 @@ function* expandBreak(
   return reported;
 }
 
-function collectFailuresError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "CollectFailures" };
+function printErrorsPropError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "PrintErrors" };
 }
 
 /**
  * Continue past ordinary component failures in this region (spec §6.8.1
- * `<CollectFailures>`).
+ * `<PrintErrors>`).
  *
  * The body expands as structured segments rather than a rendered string: this
  * is a region of the caller's document, expanded in the caller's own frame,
@@ -1492,7 +1492,7 @@ function collectFailuresError(segment: ComponentElement, message: string): Error
  * expanded and a prop expression is never evaluated, because the mistake is the
  * prop being written at all rather than anything its value turns out to be.
  */
-function* expandCollectFailures(
+function* expandPrintErrors(
   segment: ComponentElement,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
@@ -1503,13 +1503,13 @@ function* expandCollectFailures(
   if (names.length > 0) {
     return [
       yield* raise(
-        collectFailuresError(segment, `<CollectFailures> accepts no props. Got: "${names[0]}".`),
+        printErrorsPropError(segment, `<PrintErrors> accepts no props. Got: "${names[0]}".`),
       ),
     ];
   }
 
   return yield* scoped(function* () {
-    yield* useFailureCollection();
+    yield* useFailurePrinting();
     return yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter);
   });
 }
@@ -1695,7 +1695,7 @@ function* expandComponent(
   // {pr}) resolve against the scope where the JSX was written.
   const capturedCallerEnv = callerEvalEnv ?? componentEnv;
   // A body eval block can render errors away through a string projection
-  // (renderChildren, render, useContent); the collector records them so an
+  // (renderChildren, render, useContent); the buffer records them so an
   // `as=` capture can be refused (§6.5).
   const bodyContentErrors: Segment[] = [];
 
@@ -1722,7 +1722,7 @@ function* expandComponent(
       hideSet,
       counter,
       callerLoop: siteLoop,
-      collect: bodyContentErrors,
+      printedErrors: bodyContentErrors,
     });
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
@@ -1744,27 +1744,27 @@ function* expandComponent(
     yield* provideRetain(siteEvalScope);
 
     // Render closures (spec §4.8). Non-serializable, so serializeExports
-    // omits them from the journal. The optional policy is supplied by a
-    // persistent evaluation's binding snapshot (§4.3), which knows the policy of the
+    // omits them from the journal. The optional error mode is supplied by a
+    // persistent evaluation's binding snapshot (§4.3), which knows the error mode of the
     // block that started the projection; an ordinary block leaves it unset and
-    // the projection site's policy applies.
-    componentEnv.values.renderChildren = (override?: unknown, policy?: ErrorPolicy) =>
+    // the projection site's error mode applies.
+    componentEnv.values.renderChildren = (override?: unknown, mode?: ErrorMode) =>
       handle.projectToString({
         kind: "children",
         override: validateRenderOverride(override),
-        policy,
+        mode,
       });
-    componentEnv.values.render = (markdown: unknown, policy?: ErrorPolicy) =>
+    componentEnv.values.render = (markdown: unknown, mode?: ErrorMode) =>
       handle.projectToString({
         kind: "markdown",
         segments: scanSegments(String(markdown)),
-        policy,
+        mode,
       });
-    componentEnv.values.useContent = (slot?: unknown, policy?: ErrorPolicy) =>
+    componentEnv.values.useContent = (slot?: unknown, mode?: ErrorMode) =>
       handle.projectToString({
         kind: "slot",
         name: slot === undefined ? undefined : String(slot),
-        policy,
+        mode,
       });
   }
 
@@ -1789,7 +1789,7 @@ function* expandComponent(
       });
     } catch (error) {
       // Body fail-fast propagates unchanged; a return-value failure is the
-      // component's own diagnostic and follows the caller's policy.
+      // component's own printed error and follows the caller's error mode.
       const fatal = fatalCause(error);
       if (fatal !== undefined) {
         throw fatal;
@@ -1876,7 +1876,7 @@ function asText(output: Json): string {
  * `ContentError` is reporting a component error, not moving errors that were
  * already observed, so it cannot inject unobserved segments into the document.
  *
- * Under a throwing policy the original `DocumentationError` travels as the
+ * Under a throwing error mode the original `DocumentationError` travels as the
  * cause, which is how the boundary restores it by identity when the component
  * does not recover.
  */
@@ -1895,7 +1895,7 @@ function errorSegments(segments: Segment[]): ErrorSegment[] {
  * Carries a non-Error value a function component threw. The invocation
  * boundary transports failures as Errors — `withInvocation` wraps anything
  * else with `asError`, which keeps the string but loses the value — so the
- * value rides across in this carrier and the diagnostic is translated from
+ * value rides across in this carrier and the printed error is translated from
  * the exact value the component threw, `undefined` included.
  */
 class ThrownValue extends Error {
@@ -1905,10 +1905,10 @@ class ThrownValue extends Error {
 }
 
 /**
- * Report a diagnostic built from a failure, keeping that failure reachable
+ * Report a printed error built from a failure, keeping that failure reachable
  * underneath whatever settlement produces.
  *
- * The diagnostic is what the document says, and under a throwing policy the
+ * The printed error is what the document says, and under a throwing error mode the
  * `DocumentationError` carrying it is what the execution fails with. The failure
  * it was built from is the structural account of how the component got there —
  * a component that recovered from failed content and then reported a failure of
@@ -1917,7 +1917,7 @@ class ThrownValue extends Error {
  * The link is attributed to the segment before it is raised, so settlement
  * constructs a failure that already carries it: middleware that catches what
  * `raise` throws is an observer like any other, and there is no moment in which
- * this diagnostic exists without its account. The observation itself is still the
+ * this printed error exists without its account. The observation itself is still the
  * single `raise` of the segment.
  */
 function raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
@@ -2094,7 +2094,7 @@ function* expandFunctionComponent(
               try {
                 segments = yield* handle.project({ kind: "slot", name: slotName });
               } catch (error) {
-                // A throwing policy already decided this execution fails; the call
+                // A throwing error mode already decided this execution fails; the call
                 // site still sees the public shape, and the original failure
                 // travels as the cause so the boundary can restore it.
                 if (error instanceof DocumentationError) {
@@ -2205,7 +2205,7 @@ function* expandFunctionComponent(
       // teardown together.
 
       // Not the document's failure to render: a journal that no longer describes
-      // this run, or a policy that has already decided the document fails.
+      // this run, or an error mode that has already decided the document fails.
       const fatal = fatalCause(error);
       if (fatal !== undefined) {
         throw fatal;
@@ -2225,7 +2225,7 @@ function* expandFunctionComponent(
         return [yield* raise(schemaValidationErrorSegment(error, name))];
       }
       // An ordinary failure. Whether the document carries on is the nearest
-      // collection boundary's decision, and the default is that it does not.
+      // printing boundary's decision, and the default is that it does not.
       const thrown = error instanceof ThrownValue ? error.value : error;
       return [
         yield* handleFailure({
@@ -2241,11 +2241,11 @@ function* expandFunctionComponent(
   // while the invocation is being dismantled — middleware a component installs
   // for itself is gone by then. Outside also puts nested components and
   // projected content inside it, since their scopes descend from this one.
-  // Scoped, so a component that collects its own failures does not quietly
+  // Scoped, so a component that prints its own failures does not quietly
   // decide the same for its siblings.
-  if (collectsFailures(definition.fn)) {
+  if (printsErrors(definition.fn)) {
     return yield* scoped(function* () {
-      yield* useFailureCollection();
+      yield* useFailurePrinting();
       return yield* invoke();
     });
   }
@@ -2881,7 +2881,7 @@ function validateOutputProps(segment: ComponentElement): ErrorSegment | undefine
 }
 
 /**
- * Partition a definition body into ordered chunks (spec §6.9). Output policy
+ * Partition a definition body into ordered chunks (spec §6.9). Output error mode
  * is determined by definition provenance — top-level `<Output>` segments in
  * the source, before `<Content />` substitution — so caller-projected
  * `<Output>` can neither activate nor alter it. `<Content />` inside a
@@ -2932,8 +2932,8 @@ function buildBody(
  * Expand a definition body (spec §6.9). Without a top-level `<Output>`, the
  * whole body renders (backward compatible). With `<Output>`, only the declared
  * regions render; documentation executes for its side effects under a throwing
- * raise policy (fail-fast) and its rendered result is discarded; output
- * regions set a collecting policy of their own, so their errors render as
+ * error mode (fail-fast) and its rendered result is discarded; output
+ * regions set a printing error mode of their own, so their errors render as
  * comments; the caller settles them again on the way out.
  * Regions and documentation run in document order, so output can depend on
  * bindings computed by preceding documentation.
@@ -2959,14 +2959,14 @@ export function* expandBody(
   for (const chunk of chunks) {
     if (chunk.output) {
       const expanded = yield* scoped(function* () {
-        yield* AmbientErrorPolicy.set("collect");
+        yield* AmbientErrorMode.set("print");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
       output.push(...expanded);
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
-        yield* AmbientErrorPolicy.set("throw");
+        yield* AmbientErrorMode.set("throw");
         return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
       });
     }
@@ -2977,9 +2977,9 @@ export function* expandBody(
 
 /**
  * Run documentation for its side effects and discard what it renders. The
- * throwing policy makes the first error stop the body immediately.
+ * throwing error mode makes the first error stop the body immediately.
  *
- * Set as a policy value, not as raise middleware: a projection launched from
+ * Set as an error mode value, not as raise middleware: a projection launched from
  * here runs in the invocation's content scope, which inherits the value but
  * would never see middleware installed on this frame.
  */
@@ -2991,7 +2991,7 @@ function runDocumentation(
   counter: BlockCounter,
 ): Operation<Segment[]> {
   return scoped(function* () {
-    yield* AmbientErrorPolicy.set("throw");
+    yield* AmbientErrorMode.set("throw");
     return yield* expandSegments(segments, meta, props, hideSet, counter);
   });
 }

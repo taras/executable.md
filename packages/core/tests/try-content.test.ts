@@ -69,7 +69,7 @@ describe("Tier TR — tryContent", () => {
     expect(seen?.failure).toBeUndefined();
   });
 
-  it("TR2: an error the content collected is part of the text, not a failure", function* () {
+  it("TR2: an error the content printed is part of the text, not a failure", function* () {
     let seen: PartialContent | undefined;
     const definitions = {
       Report: component("Report", function* () {
@@ -78,8 +78,8 @@ describe("Tier TR — tryContent", () => {
       }),
     };
 
-    // The ambient policy collects, so the missing component settles into a
-    // diagnostic where it was written — exactly as it does outside a component.
+    // The ambient error mode prints, so the missing component settles into a
+    // printed error where it was written — exactly as it does outside a component.
     yield* run("<Report>\nbefore\n\n<Missing />\n\nafter\n</Report>\n", definitions);
 
     expect(seen?.failure).toBeUndefined();

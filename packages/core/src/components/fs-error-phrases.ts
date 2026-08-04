@@ -4,7 +4,7 @@
  * Shared by the components that touch the filesystem — `<File>` (§6.13) and
  * `<Glob>` (§6.14) — because the constraint is the same for both. A platform
  * error message names the path it failed on: `ENOTDIR: not a directory, stat
- * '/private/var/…'`. That is the resolved path §1.2 keeps out of diagnostics,
+ * '/private/var/…'`. That is the resolved path §1.2 keeps out of printed errors,
  * and it can be a path the document never wrote — a generated temporary, or a
  * file somewhere under a directory that was only ever named by a pattern.
  *
@@ -19,7 +19,7 @@
  *
  * A `Map` rather than an object, because a lookup on an object literal answers
  * for inherited keys — `REASONS["toString"]` would hand back a function whose
- * source would then be interpolated into a diagnostic.
+ * source would then be interpolated into a printed error.
  */
 const REASONS: ReadonlyMap<string, string> = new Map([
   ["ENOENT", "no such file or directory"],

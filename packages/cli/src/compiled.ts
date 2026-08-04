@@ -13,7 +13,7 @@ import { runXmd } from "./cli.ts";
 
 await main(function* (args) {
   // The base providers for this host. `at: "min"` puts them beneath ordinary
-  // middleware, so a policy installed later can wrap either one.
+  // middleware, so middleware installed later can wrap either one.
   yield* API.Env.around(
     {
       *command([xmdArgs = []]) {

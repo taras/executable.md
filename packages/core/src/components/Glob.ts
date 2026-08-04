@@ -28,9 +28,9 @@
  * destination to the root or detects a traversal cycle, so following one cannot
  * be offered safely yet.
  *
- * Diagnostics name the pattern the document wrote, or nothing at all. A
+ * Printed errors name the pattern the document wrote, or nothing at all. A
  * traversal failure names no path: what failed is a directory somewhere under
- * `Env.cwd` that the document never wrote and §1.2 keeps out of diagnostics
+ * `Env.cwd` that the document never wrote and §1.2 keeps out of printed errors
  * anyway, so the sentence says the working directory could not be listed and
  * selects its reason from the shared allowlist.
  *
@@ -42,10 +42,10 @@
 
 import { isAbsolute } from "node:path";
 import type { Operation } from "effection";
-import { collectFailures } from "../component-failures.ts";
+import { printErrors } from "../component-failures.ts";
 import { cwd, glob, stat } from "@executablemd/runtime";
 import type { Json } from "../types.ts";
-import { reason } from "./fs-diagnostics.ts";
+import { reason } from "./fs-error-phrases.ts";
 
 export const props = {
   type: "object",
@@ -74,7 +74,7 @@ export class GlobError extends Error {
   }
 }
 
-export default collectFailures(function* (props: Record<string, Json>): Operation<string[]> {
+export default printErrors(function* (props: Record<string, Json>): Operation<string[]> {
   const include = patterns("include", props.include);
   const exclude = patterns("exclude", props.exclude);
 

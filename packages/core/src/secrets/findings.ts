@@ -94,7 +94,7 @@ function describe(findings: readonly SecretFinding[]): string {
  * There is no allowlist, approval, or repair: a finding means a code or
  * data-flow defect that has to be fixed. The message names the rules and
  * positions and nothing else, so this error stays safe when it is serialized
- * into a close event or rendered as a diagnostic.
+ * into a close event or rendered as a printed error.
  */
 export class SecretDetectedError extends Error {
   readonly findings: readonly SecretFinding[];

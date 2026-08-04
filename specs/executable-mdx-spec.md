@@ -121,7 +121,7 @@ exception, because a relative path would resolve against the process's
 directory instead of the one it was given. `<File>` (§6.13) resolves its
 `path` prop against `Env.cwd` itself and hands the Fs Api the absolute result;
 `<Glob>` (§6.14) searches `Env.cwd` and returns relative paths. Nothing either
-resolves reaches a diagnostic or the journal.
+resolves reaches a printed error or the journal.
 
 #### The contextual working directory
 
@@ -848,10 +848,10 @@ Multi-line code blocks are passed as a single string to the `-c` flag.
 
 Whether a block failed is a separate question from what it printed, and
 the exit code alone answers it. A non-zero exit produces an
-`ErrorSegment` — settled by the ambient policy, so a comment under a
-collecting policy and a fail-fast throw in documentation (§6.9) —
+`ErrorSegment` — settled by the ambient error mode, so a comment under a
+printing error mode and a fail-fast throw in documentation (§6.9) —
 whatever the command wrote. Output the command produced is kept as its
-`execOutput` segment and precedes that diagnostic, because a command
+`execOutput` segment and precedes that printed error, because a command
 that prints before it fails is usually explaining itself.
 
 **`silent exec`** — `exec` runs the command and journals the
@@ -1105,11 +1105,11 @@ barrel (`packages/core/mod.ts`); `findFreePort` comes from `@executablemd/runtim
 (and is also re-exported by `packages/core/mod.ts`).
 
 `useContent` is **not** among them. It projects content, and a projection
-settles its errors under the policy of the block that started it, which the
+settles its errors under the error mode of the block that started it, which the
 binding environment carries per evaluation (§4.3) and a module import cannot.
 It arrives instead as a bare binding alongside `renderChildren` and `render`. A
 block may still import it explicitly, which shadows the binding and settles
-under the invocation's baseline policy — a low-level escape hatch, not the
+under the invocation's baseline error mode — a low-level escape hatch, not the
 ordinary way to project content.
 
 A name a block imports is treated as already declared, so the preamble never
@@ -1253,10 +1253,10 @@ written to the invocation's contexts and nothing is swapped on the shared
 record, so evaluations cannot interfere with one another's bindings.
 
 `renderChildren`, `render` and `useContent` project content, and a projection
-settles its errors under the policy of the block that started it (§6.9) — a
+settles its errors under the error mode of the block that started it (§6.9) — a
 `persist eval` block runs on the invocation's eval-scope loop task, which was
-created before that policy existed and does not inherit it. The snapshot carries
-those three as ordinary closures bound to the policy where the block sits, so
+created before that error mode existed and does not inherit it. The snapshot carries
+those three as ordinary closures bound to the error mode where the block sits, so
 persistent work keeps projecting under its own.
 
 ### 4.4 Eval scope and resource lifetime
@@ -1284,7 +1284,7 @@ A component invocation creates its eval scope on its own expansion frame and
 runs its body inside a task that scope owns:
 
 ```
-invocation frame           expansion providers, error policy, DurableCtx
+invocation frame           expansion providers, error mode, DurableCtx
 └─ evalHost
    └─ A's loop task        the invocation's eval scope
       └─ body task         the component body, its resources and its middleware
@@ -1455,7 +1455,7 @@ run but are absent from the diagnostic trace.
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
-| `src/errors.ts` | `AmbientErrorPolicy`, `settle()`, `DocumentationError`, `ContentError` — error settlement (§6.9) and the function-content failure boundary (§5.1.2) |
+| `src/errors.ts` | `AmbientErrorMode`, `settle()`, `DocumentationError`, `ContentError` — error settlement (§6.9) and the function-content failure boundary (§5.1.2) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
@@ -1565,7 +1565,7 @@ An optional `override` layers extra bindings over the caller env for that
 render only: children expand against `{ ...caller.values, ...override }` in a
 fresh scope, so the override shadows caller values but is discarded afterward
 and never mutates or leaks into the caller env. An explicit `override` must be
-a plain object — `null`, arrays, and primitives are rejected with a diagnostic
+a plain object — `null`, arrays, and primitives are rejected with a printed error
 rather than silently spread. Omitting the argument behaves exactly like a bare
 `renderChildren()`. This per-render binding layer is the same mechanism the
 native `<Each>` directive (§6.5) uses to inject each item.
@@ -1953,7 +1953,7 @@ expression:
   segments — the same objects, with their metadata and source order intact —
   and partial content plus any wrapper the function would have produced are
   discarded;
-- later document siblings continue under a collecting policy and abort under a
+- later document siblings continue under a printing error mode and abort under a
   throwing one, as they do for any other first error.
 
 One rule covers captured and uncaptured invocations, default content and named
@@ -1964,8 +1964,8 @@ slots, and both text and declared-return components. For
 ```
 
 the result is the original error from `<Broken />` followed by `TAIL` — not
-`before`, `after`, or a wrapper `Probe` returns. Collection inside the projected
-content is unchanged: a collecting projection still discovers every error it can
+`before`, `after`, or a wrapper `Probe` returns. Printing inside the projected
+content is unchanged: a printing projection still discovers every error it can
 before returning, and the short circuit happens where control would otherwise
 resume the function.
 
@@ -1984,8 +1984,8 @@ export class ContentError extends Error {
 
 `errors` holds the original `ErrorSegment` objects in source order — not copies,
 and not a rendered string. A component recognizes intended content recovery with
-`error instanceof ContentError`; it does not branch on the ambient policy,
-because the same public error is presented under `collect` and under `throw`, so
+`error instanceof ContentError`; it does not branch on the ambient error mode,
+because the same public error is presented under `print` and under `throw`, so
 one piece of recovery code covers both:
 
 ```typescript
@@ -2022,7 +2022,7 @@ is ordinary recovery:
   Recovery decides which failure the document reports: discovery of a
   documentation failure stops at a content failure it reaches there rather than
   continuing into the decision the component replaced, so what the document
-  reports is the component's own diagnostic and not the child's. Discovery of a
+  reports is the component's own printed error and not the child's. Discovery of a
   durability failure does not stop there (§6.11).
 - the engine never uses `halt()` or cancellation to make a documentation failure
   uncatchable. Cancellation remains a lifecycle mechanism, not a way to deliver
@@ -2031,8 +2031,8 @@ is ordinary recovery:
   as `ContentError`; they keep their own identity and precedence.
 
 Left uncaught, the boundary hands the failure to the invocation's consumer: under
-`collect` it transports the original error segments and settles them under the
-consumer's policy, and under `throw` it restores and rethrows the original
+`print` it transports the original error segments and settles them under the
+consumer's error mode, and under `throw` it restores and rethrows the original
 `DocumentationError`, so external fail-fast is unchanged (§6.9). The recovery
 type and the propagated type are deliberately two views of one boundary — a
 component catches `ContentError` at `content()`, and a caller the component did
@@ -2040,8 +2040,8 @@ not recover for still observes `DocumentationError`.
 
 **A reported failure carries what it was translated from.** A function component
 that throws anything else — an ordinary error, a failure of its own after
-recovering from content — is reported as a diagnostic naming the component, and
-that diagnostic is what the document says. Under fail-fast the
+recovering from content — is reported as a printed error naming the component, and
+that printed error is what the document says. Under fail-fast the
 `DocumentationError` built for it keeps the thrown value itself as its `cause`,
 whatever kind of value it was, so a host inspecting what ended the execution
 reaches the component's own failure and everything beneath it. The link is in
@@ -2049,7 +2049,7 @@ place before the failure is observable: `Component.raise` middleware that catche
 what the chain throws already sees it, and the segment is still observed exactly
 once.
 
-Under a collecting policy nothing is thrown, so there is no error to carry a
+Under a printing error mode nothing is thrown, so there is no error to carry a
 cause: what the document keeps is the `ErrorSegment` itself, whose own `cause`
 field is structured diagnostic detail (§2.1) and unrelated to this link.
 
@@ -2144,17 +2144,17 @@ deterministic from the content, so it needs no separate journal entry.
 A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
-   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<CollectFailures>`,
+   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<PrintErrors>`,
    `<Answers>`/`<Answer>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
    repository file named after one never stands in for it. A structural name
-   written where its construct gives it no meaning is a diagnostic, not a
+   written where its construct gives it no meaning is a printed error, not a
    missing component.
 2. **a reserved registration** — a host protecting a language or security
    invariant.
 3. **a repository-local file**, by the candidate order below.
 4. **a registered default**, including the components core supplies.
-5. **nothing**, which is the unresolved diagnostic.
+5. **nothing**, which is the unresolved printed error.
 
 So a repository component overrides any ordinary package default, core's
 included, and a reserved registration overrides the repository. Only genuine
@@ -2174,7 +2174,7 @@ Siblings and concurrent executions never see one another's registrations, and
 leaving the installing scope removes them. Registering describes a component; it
 runs nothing and acquires nothing. Names and schemas are validated where they
 are installed, so a malformed registration is an error in the host rather than a
-diagnostic that appears the first time a document writes the name.
+printed error that appears the first time a document writes the name.
 
 **What a registration declares.** Beyond its name, origin, function and props
 schema, a registration may declare two things the schema cannot describe.
@@ -2239,7 +2239,7 @@ type ComponentOrigin =
 anything. A registration and a Markdown file describe themselves fully — both
 are already parsed or already in the module graph. A repository `.ts` component
 reports only where it is: its schemas live on the module's exports, and loading
-the module would run its top-level code. Collision and unresolved diagnostics
+the module would run its top-level code. Collision and unresolved printed errors
 name the origins and the searched locations they considered.
 
 
@@ -2498,7 +2498,7 @@ A **value root** declares `returns`. It executes its complete body, holds
 exactly one direct top-level `<Return>`, validates that value against its
 schema, and completes with the validated JSON. Its rendered body Markdown is
 not its result: the output stream stays an observability channel a consumer may
-watch independently, and a diagnostic can never pass for a result. A value
+watch independently, and a printed error can never pass for a result. A value
 root's body therefore runs fail-fast — a structural violation, an invalid
 schema, an invalid value, a body error, and a failure raised after `<Return>`
 all complete `Err`, and body text emitted before the failure remains only on
@@ -2514,7 +2514,7 @@ interface, and each operation is also exported directly:
 |---|---|---|
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
-| `raise(error)` | Report an `ErrorSegment` under the ambient error policy (§6.9); whoever creates one calls this | settles it: collected, or thrown inside documentation |
+| `raise(error)` | Report an `ErrorSegment` under the ambient error mode (§6.9); whoever creates one calls this | settles it: printed, or thrown inside documentation |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
@@ -2550,7 +2550,7 @@ invocation (`yield* env`); a provider is middleware returning the value.
 (§5.1.2); `useCodeBlock()` and `useContent(slot?)` remain as ergonomic
 compatibility aliases backed by `codeBlock()` and `content(slot?)`. The
 `useContent` binding injected into eval blocks (§4.3) is a separate,
-policy-carrying closure rather than this alias.
+mode-carrying closure rather than this alias.
 
 `hasContent()` reports the shape of the invocation, not a prediction about what
 it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
@@ -2766,8 +2766,8 @@ Only the resource scope moves. The binding environment, `{meta.key}` /
 exactly as they are for content spliced in place, and expression props on
 projected children still resolve against the caller's environment.
 
-The error policy travels with them. A content task does not inherit the
-documentation or `<Output>` frame the `<Content />` sits in, so the policy is
+The error mode travels with them. A content task does not inherit the
+documentation or `<Output>` frame the `<Content />` sits in, so the error mode is
 captured at the expansion site and carried across (§6.9): a projected error in
 documentation stops the body, and the same error inside an output region renders
 as a comment. It is reported once, where it is created, and passes back to the
@@ -2780,7 +2780,7 @@ re-reporting the caught failure, and the work the projected content started is
 torn down with its scope rather than escaping past the invocation.
 
 A function component's `content()` is the same boundary in its own vocabulary: it
-presents the failure as `ContentError` under either policy (§5.1.2), a catch
+presents the failure as `ContentError` under either error mode (§5.1.2), a catch
 there is the same explicit recovery, and the projected work still unwinds with
 the content scope.
 
@@ -3226,7 +3226,7 @@ Props (only these three are accepted; any other prop is an error):
 
 `<Each>` is **structural**: each iteration expands the body to segments that
 are appended to the loop output, so `ErrorSegment` and `execOutput` segments
-survive and the ambient raise policy applies to them exactly as elsewhere. The
+survive and the ambient error mode applies to them exactly as elsewhere. The
 loop is rendered to a string only when `as` captures it.
 
 Like `<If>` and `<Loop>`, `<Each>` is **not an observation boundary**. Under the
@@ -3238,8 +3238,8 @@ once, as it would inline.
 
 A capture never swallows an error. When the expanded body contains any
 `ErrorSegment`, `as` creates no binding: the error segments stand in place of
-the capture, already reported, so a collecting policy keeps them in the document
-and a throwing policy aborts.
+the capture, already reported, so a printing error mode keeps them in the document
+and a throwing error mode aborts.
 
 This holds for all four capture paths:
 
@@ -3265,7 +3265,7 @@ A markdown component's body hides errors when an eval block string-projects its
 content, so the invocation tracks those and refuses the capture with the recorded
 segments. A value component cannot reach a recorded projection error: `<Output>`
 and `returns` are exclusive, its eval-block projections are bound to the block's
-snapshot policy — `throw` in value-body documentation — and that failure
+snapshot error mode — `throw` in value-body documentation — and that failure
 propagates as the body's fail-fast abort.
 
 Uncaptured `<Each>` is unaffected: without `as` it keeps emitting its body
@@ -3318,7 +3318,7 @@ truthy or falsy value: `<If>` performs no coercion.
 `<Else>` holds the alternative branch. It is optional, accepts no props, takes
 content, and may appear once as a **direct child** of its `<If>`. A nested
 `<If>` owns the `<Else>` elements beneath it. An `<Else>` written anywhere else
-is a diagnostic, not a component invocation — the name never resolves from the
+is a printed error, not a component invocation — the name never resolves from the
 filesystem. `<Else>` structure is validated against the source before either
 branch expands, so a malformed `<Else>` is reported even when it sits in the
 branch the condition does not select.
@@ -3348,7 +3348,7 @@ an environment for the content it expands.
 
 Like `<Each>`, `<If>` is **structural** — the selected branch expands to
 segments that are spliced into the surrounding output, so `ErrorSegment` and
-`execOutput` segments survive and the ambient raise policy applies to them
+`execOutput` segments survive and the ambient error mode applies to them
 exactly as elsewhere.
 
 `<If>` is **not an observation boundary**. Under the one-observation rule
@@ -3356,10 +3356,10 @@ exactly as elsewhere.
 unknown prop, a malformed `<Else>` — and hands back the selected branch's
 segments untouched, because they were already reported where they were
 produced. A failing element inside a selected branch therefore settles exactly
-once, as it would inline, and an ambient `throw` policy still aborts at the
+once, as it would inline, and an ambient `throw` error mode still aborts at the
 first error.
 
-Diagnostics from `<If>` and `<Else>` carry the source location of the element
+Printed errors from `<If>` and `<Else>` carry the source location of the element
 that caused them, as `path:line:column` when the element came from a file and
 `line:column` for text scanned without an origin.
 
@@ -3393,8 +3393,8 @@ Props (only these two are accepted; any other prop is an error):
 
 The body expands in document order, at most `max` times. **Reaching `max`
 completes the loop normally** — exhaustion is not a failure and produces no
-diagnostic. Whether an exhausted bound means the work succeeded is the
-surrounding document's policy to state, written as an ordinary `<If>` on
+printed error. Whether an exhausted bound means the work succeeded is the
+surrounding document's error mode to state, written as an ordinary `<If>` on
 whatever the body bound. Retry-limit failure is therefore something a document
 declares, not something `<Loop>` does.
 
@@ -3406,14 +3406,14 @@ exists only for the iteration that renders it.
 
 Like `<Each>` and `<If>`, `<Loop>` is **structural**: each iteration expands to
 segments appended to the loop's output, so `ErrorSegment` and `execOutput`
-segments survive and the ambient raise policy applies to them exactly as
+segments survive and the ambient error mode applies to them exactly as
 elsewhere. It is **not an observation boundary** either — it reports the errors
 it creates itself (an invalid bound, an invalid name, an unknown prop) and
 hands the body's segments back untouched.
 
-`<Loop>` adds no error policy of its own. Under a throwing policy the first
-failure ends the loop by propagating out of it; under a collecting one the
-diagnostic renders and the next iteration runs. Cancellation stops the loop
+`<Loop>` adds no error mode of its own. Under a throwing error mode the first
+failure ends the loop by propagating out of it; under a printing one the
+printed error renders and the next iteration runs. Cancellation stops the loop
 where it stands. Resources an iteration acquires are released at their own
 invocation boundary (§4.4), so an iteration's resources are gone before the
 next one begins and none of them outlive the loop.
@@ -3448,7 +3448,7 @@ exists only for the three ways a loop reaches an end, and `outcome` says which:
 | --- | --- |
 | `exhausted` | The loop reached `max`. |
 | `break` | A `<Break>` ended it. |
-| `error` | A failure left the loop, under a throwing policy. |
+| `error` | A failure left the loop, under a throwing error mode. |
 
 `iterations` counts the iterations that were **entered**, so a loop that breaks
 on its final iteration and one that exhausts the same bound have identical
@@ -3466,9 +3466,9 @@ stops rather than continuing under an outcome it did not reach. Live, the value
 compared is the one just written, so the check costs nothing.
 
 A stored value that is not a terminal record at all is **described, not quoted**.
-The diagnostic names the loop and the outcome this run derived; what the entry
+The printed error names the loop and the outcome this run derived; what the entry
 held is reported as "an invalid terminal record". Journal content is external
-data, and a diagnostic that reproduced it would carry whatever it happened to
+data, and a printed error that reproduced it would carry whatever it happened to
 hold into logs and rendered output. A well-formed record is safe to name: the
 outcome is one of three known words and the count is a number.
 
@@ -3488,7 +3488,7 @@ propagated, not what went wrong, and what matters is which journal entry stopped
 describing the run — so the loop rethrows the failure found inside the wrapper,
 on the same terms as §6.9's fatal-cause discovery.
 
-A collecting policy is not a loop failure. The diagnostic is content, the loop
+A printing error mode is not a loop failure. The printed error is content, the loop
 keeps iterating, and the outcome is `exhausted` or `break` as usual.
 
 **An interrupted loop has iteration entries and no terminal entry.** This is
@@ -3541,7 +3541,7 @@ one keeps running. There is no way to break a named outer loop.
 
 **Which loop a `<Break>` means is decided by where the author wrote it.** A
 component's own body is isolated from the loop that invoked it: a `<Break>`
-written there belongs to a `<Loop>` in that body, and is a diagnostic when the
+written there belongs to a `<Loop>` in that body, and is a printed error when the
 body has none. Content the caller projects **through** a component is the
 caller's text, written where the caller can see the loop, so a `<Break>` in it
 ends the caller's loop — whether the component renders it through `<Content />`,
@@ -3554,14 +3554,14 @@ component renders. The break takes effect where it was written — at the
 invocation site, once the invocation returns — so the rest of that iteration and
 the iterations that were left do not expand.
 
-A `<Break>` outside any `<Loop>` is a diagnostic rather than a component
+A `<Break>` outside any `<Loop>` is a printed error rather than a component
 invocation. **A malformed `<Break>` performs no control action**: props or
 content on the element mean it does not carry the author's instruction, so the
-diagnostic settles under the ambient policy — aborting under a throwing one,
-rendering under a collecting one while the loop runs to its bound — rather than
+printed error settles under the ambient error mode — aborting under a throwing one,
+rendering under a printing one while the loop runs to its bound — rather than
 a rejected element also ending the loop.
 
-Diagnostics from `<Loop>` and `<Break>` carry source locations on the same
+Printed errors from `<Loop>` and `<Break>` carry source locations on the same
 terms as `<If>`.
 
 ### 6.6 Eval binding interpolation
@@ -3988,39 +3988,39 @@ that leaves the boundary accounts for the body and its teardown together. An
 becomes an `Error` carrying the original value as its `cause`. Later siblings do
 not run.
 
-Continuing instead is an explicit, scope-local choice. `collectFailures(fn)`
+Continuing instead is an explicit, scope-local choice. `printErrors(fn)`
 says it about one component, keyed by the exact function object — a repository
 component that shares a registered component's name is a different function and
-inherits nothing. `<CollectFailures>` says it about a region of a document:
+inherits nothing. `<PrintErrors>` says it about a region of a document:
 
 ```md
-<CollectFailures>
+<PrintErrors>
   <MayFail />
   <StillRuns />
-</CollectFailures>
+</PrintErrors>
 ```
 
-`<CollectFailures>` accepts no props: it names a region and nothing else, so any
+`<PrintErrors>` accepts no props: it names a region and nothing else, so any
 prop — `as` and `slot` included, written as a literal or as an expression — is a
 syntax error reported against the element. An element written that way performs
 no action at all: its body does not expand, and a prop expression is never
 evaluated.
 
-Both install the same middleware, so the nearest collection boundary is the one
+Both install the same middleware, so the nearest printing boundary is the one
 that handles a failure from the invocation tree beneath it, exactly once. The
 boundary sits outside the whole invocation, which is what lets it see a failure
 that happens while the invocation is being dismantled.
 
-Collection turns a failure into one diagnostic whose `cause` is the complete
-original failure. It does not decide what that diagnostic means: the caller's
-ambient policy still settles it (§6.9), so under documentation a collected
+Printing turns a failure into one printed error whose `cause` is the complete
+original failure. It does not decide what that printed error means: the caller's
+ambient error mode still settles it (§6.9), so under documentation a printed
 failure still stops the document.
 
-Some failures are classified before any of this and are never collected: a
-durability failure, a `DocumentationError` the caller's policy already selected,
+Some failures are classified before any of this and are never printed: a
+durability failure, a `DocumentationError` the caller's error mode already selected,
 the content transport that restores already-reported segments, and a schema
-diagnostic that already has a structured representation. Cancellation is not a
-diagnostic either.
+printed error that already has a structured representation. Cancellation is not a
+printed error either.
 
 ### 6.9 Component-declared output: `<Output>`
 
@@ -4065,7 +4065,7 @@ that never render — content inside `<If condition={false}>`, content passed to
 component that has no `<Content />`, an `<Output>` nested inside another
 `<Output>`, or the children of any component that declines to render them. An
 `<Output>` anywhere other than the top level is misplaced; all misplaced
-occurrences in a single component are reported together as one diagnostic that
+occurrences in a single component are reported together as one printed error that
 advises `<Output>` must be a direct top-level declaration and that conditional
 rendering uses `<If>` inside `<Output>`.
 
@@ -4094,7 +4094,7 @@ after a region still runs. The required sequencing:
 
 - Structural placement is validated before any body content executes; a
   structurally invalid component or root runs no eval, exec, `<Capture>`, or
-  nested components and produces only the diagnostic.
+  nested components and produces only the printed error.
 - Documentation and output regions execute in document order.
 - The first error produced while executing documentation stops that body's
   execution immediately and propagates to the caller.
@@ -4114,47 +4114,47 @@ applies and the error propagates rather than being hidden.
 reported: its middleware chain observes each `ErrorSegment` once, where the
 segment is created, which is what lets instrumentation and `<Test>` count
 failures. Its default implementation then *settles* the segment under the
-ambient policy — collected for rendering, or thrown as a documentation failure.
-A documentation chunk and an `<Output>` region select the policy by value rather
+ambient error mode — printed for rendering, or thrown as a documentation failure.
+A documentation chunk and an `<Output>` region select the error mode by value rather
 than by installing reporting middleware, so an error crossing from a component's
-own policy into its caller's is settled again without being reported twice.
+own error mode into its caller's is settled again without being reported twice.
 
 **Whoever creates an `ErrorSegment` reports it.** `Component.raise` is called at
-the point the failure is decided, and a diagnostic that reaches the document
+the point the failure is decided, and a printed error that reaches the document
 without that call never passes the observation chain — middleware that counts,
 logs, or forwards failures never sees it.
 
 **Every path reports once.** The rule is the same wherever segments cross a
 construct: `<If>`, `<Else>`, `<Each>`, `<Capture>`, `<Loop>` and `<Break>` report
 the errors they create and hand a body's segments back untouched, because those
-ran under the same policy. A component invocation is the one boundary that
-settles rather than appends — its body may have run under a policy of its own —
-and settling applies the caller's policy without a second observation. So a
+ran under the same error mode. A component invocation is the one boundary that
+settles rather than appends — its body may have run under an error mode of its own —
+and settling applies the caller's error mode without a second observation. So a
 failing element reports exactly once wherever it is written: inline, in a
 selected branch, in an iteration, inside a capture, in a component body, or
 projected into a `<Content />`.
 
 **Appending and settling stay distinct.** The difference is not cosmetic.
-`<Each>` and `<Capture>` expand inside the caller's own policy frame, so their
+`<Each>` and `<Capture>` expand inside the caller's own error mode frame, so their
 transported errors have already settled there and are appended as they are. A
 component invocation settles instead, because its body may have run inside an
-inner `<Output>` collection frame or a documentation throw frame; appending at
-the caller would let a collected inner error slip past the caller's fail-fast
-policy. `content()` adds an *inner* boundary to a function component's own
+inner `<Output>` printing frame or a documentation throw frame; appending at
+the caller would let a printed inner error slip past the caller's fail-fast
+error mode. `content()` adds an *inner* boundary to a function component's own
 control flow and does not replace that consumer boundary: the content provider
 projects structured segments, presents `ContentError` at the `content()` call,
 and — if the component does not recover — hands the original segments back as the
-invocation's result under `collect` or restores the original `DocumentationError`
+invocation's result under `print` or restores the original `DocumentationError`
 under `throw`. The invocation's consumer then settles under its own ambient
-policy, without reporting anything a second time.
+error mode, without reporting anything a second time.
 
 Observation counts cannot catch a regression here, because appending and
 settling can both observe exactly once. The guards are the consumer-boundary
 tests in `packages/core/tests/expand.test.ts`: a child's `<Output>` error
 consumed from parent documentation throws, the same error consumed inside a
-parent `<Output>` renders as one collected comment, and a captured child
+parent `<Output>` renders as one printed comment, and a captured child
 `<Output>` error throws before the `as` binding is stored. A function component
-whose content collects an error in one policy frame and is consumed by a
+whose content prints an error in one error mode frame and is consumed by a
 throwing parent frame belongs to that same set, and throws rather than appending.
 
 #### Root and component consistency
@@ -4349,18 +4349,18 @@ directory this run created and the reason, and that **ends the execution**: the
 `DocumentExecution` completes `Err`, nothing after the component runs, and the
 document must be re-run from the beginning.
 
-The refusal does not settle under the ambient error policy (§6.9). A policy
-that collects would turn a durability failure into a comment and let later
+The refusal does not settle under the ambient error mode (§6.9). An error mode
+that prints would turn a durability failure into a comment and let later
 siblings run on top of work that never happened, so `StaleInputError` joins
 `DocumentationError` as an error the engine's generic catches rethrow rather
 than convert — including through a teardown aggregate, which must not launder
 it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
-unaffected and remain diagnostics.
+unaffected and remain printed errors.
 
 **Divergence errors are rethrown on the same terms.** A `DivergenceError`, an
 `EarlyReturnDivergenceError`, and a `ContinuePastCloseDivergenceError` all say
 the journal no longer describes this run, so a generic catch that converted one
-into a diagnostic would let expansion continue to the *next* durable operation —
+into a printed error would let expansion continue to the *next* durable operation —
 whose own mismatch is then the failure reported, at a position that has nothing
 to do with where the journal actually stopped describing the run. Every one of
 these is discovered through the same cycle-safe cause traversal, so what the
@@ -4450,7 +4450,7 @@ runs — so a document never does work whose result an unusable schema would the
 refuse to judge.
 
 Only references contained within the supplied schema resolve. An external file
-or HTTP(S) `$ref` fails at compilation with a diagnostic naming the limit;
+or HTTP(S) `$ref` fails at compilation with a printed error naming the limit;
 resolving them is issue #192.
 
 #### What each one binds
@@ -4565,11 +4565,11 @@ tags, and the component never guesses.
 Children expand completely before anything reaches the filesystem, so an
 existing target survives whatever happens among them.
 
-A code block that fails is ordinarily a diagnostic (§6.9): the content still
-renders, with the diagnostic in place. A component that renders its content
-shows it to the reader. `<File>` renders nothing, so the same diagnostic would
+A code block that fails is ordinarily a printed error (§6.9): the content still
+renders, with the printed error in place. A component that renders its content
+shows it to the reader. `<File>` renders nothing, so the same printed error would
 be written into the file instead. It therefore fails the invocation rather
-than writing, and carries the underlying messages in its own diagnostic —
+than writing, and carries the underlying messages in its own printed error —
 which is the only place a reader would otherwise learn what went wrong.
 
 Under fail-fast the reported failure is `<File>`'s as well: the write is what the
@@ -4596,7 +4596,7 @@ directory, which is a question about the target rather than about containment,
 and it fails as one.
 
 For the write form this stage runs **before the children expand**. An unusable
-path costs nothing, and the diagnostic it produces is about the path rather
+path costs nothing, and the printed error it produces is about the path rather
 than about whatever the children then did.
 
 A lexical check is not enough on its own, because a symlink inside the
@@ -4662,12 +4662,12 @@ A failed cleanup is orthogonal and composes with any of the three, appending:
 A temporary file beside it may remain.
 ```
 
-#### Diagnostics
+#### Printed errors
 
-A diagnostic names the path the document wrote, and nothing else. The resolved
+A printed error names the path the document wrote, and nothing else. The resolved
 working directory, the destination a symlink pointed at, the temporary file,
 and a rejected absolute path are all withheld: §1.2 keeps absolute paths out of
-diagnostics, and reporting where an escape led would perform the disclosure the
+printed errors, and reporting where an escape led would perform the disclosure the
 refusal exists to prevent.
 
 A platform error carries the path it failed on — `ENOTDIR: not a directory,
@@ -4682,7 +4682,7 @@ Api, so it can hold a path, a newline, or a comment terminator as easily as
 The error's class carries no authority either. A `FileAccessError` arriving
 from a wrapped call is replaced like any other, because a class says nothing
 about whether a message is safe to show — trusting one would let an Fs
-implementation choose the text of a diagnostic by choosing what to throw.
+implementation choose the text of a printed error by choosing what to throw.
 
 #### When cleanup fails
 
@@ -4697,7 +4697,7 @@ A temporary file beside it may remain.
 ```
 
 A cleanup failure never replaces the write failure it may accompany. Both are
-collected rather than thrown — a destructor that threw would displace the
+printed rather than thrown — a destructor that threw would displace the
 failure it was unwinding — and reported together, followed by the target's
 outcome and then the leftover sentence. With a rename that threw and a cleanup
 that failed:
@@ -4789,7 +4789,7 @@ the host's locale, and not in the order the filesystem handed entries back,
 which is not an order at all.
 
 Finding nothing is a result. An empty array succeeds and the document carries
-on; it is not a failure and not a diagnostic.
+on; it is not a failure and not a printed error.
 
 #### The pattern dialect
 
@@ -4867,12 +4867,12 @@ expression the author never wrote, and which pattern it was is not recoverable
 from it. The candidates are listed rather than one being named; they are the
 document's own text.
 
-#### Diagnostics
+#### Printed errors
 
-A diagnostic names the patterns the document wrote, and nothing else. A
+A printed error names the patterns the document wrote, and nothing else. A
 traversal failure names **no path at all**: what failed is a directory under
 `Env.cwd` that the document never wrote, and §1.2 keeps absolute paths out of
-diagnostics.
+printed errors.
 
 As in §6.13, nothing from a caught platform error is reproduced. The errno code
 **selects** a phrase from the fixed allowlist the filesystem components share,
@@ -4971,7 +4971,7 @@ Three steps happen in a fixed order, and the order is the contract:
    result against the same compiled schema before it binds or journals anything.
 
 An answer that fails its schema fails once, with normalized validation
-diagnostics. Core does not ask again: interactive correction belongs inside a
+printed errors. Core does not ask again: interactive correction belongs inside a
 provider, and workflow retry belongs in visible Markdown control flow. A
 provider's own failure propagates as it was raised — the provider knows why it
 could not reach anyone, and `<Elicit>` does not. Halting the execution halts the
@@ -5017,7 +5017,7 @@ execution identities, and it owns only its live interaction and transport
 lifetime.
 
 Core owns schema parsing and compilation, final response validation, capture and
-source diagnostics, durable recording and replay, and interruption through the
+source printed errors, durable recording and replay, and interruption through the
 surrounding scope.
 
 A host installs a provider with `Elicitation.around({ *elicit([request], next)
@@ -5027,7 +5027,7 @@ is. At `min` the nearest provider answers and the outer one is restored when its
 scope ends.
 
 When no provider is installed, `<Elicit>` fails immediately with a
-`no elicitation provider configured` diagnostic. There is no fallback
+`no elicitation provider configured` printed error. There is no fallback
 interaction and no silent skip.
 
 Provider selection happens only through this Api. `xmd run` composes the WebForm
@@ -5105,7 +5105,7 @@ stating: a prop *string* is captured JSON text, so an answer that is itself a
 string is written JSON-quoted — `value='"approve"'`. An object literal written
 as an expression, `value={{ decision: "approve" }}`, arrives already structured
 and needs no quoting. `value="approve"` and `value={"approve"}` are the same
-un-quoted string and are refused, with a diagnostic naming the spelling that
+un-quoted string and are refused, with a printed error naming the spelling that
 works.
 
 Templates match the **whole rendered message**: literal text constrains,
@@ -5122,7 +5122,7 @@ significant, and a broad template above a narrow one shadows it permanently. A
 matcher that never fires is not an error.
 
 **Unmatched elicitations.** `delegate` on `<Answers>` is a boolean, default
-`false`. By default an elicitation no matcher answers fails, with a diagnostic
+`false`. By default an elicitation no matcher answers fails, with a printed error
 naming the message and every template tried — a document supplying answers is
 stating what will be asked, and being wrong about that is a mistake rather than
 a cue to find someone. `delegate={true}` says the other thing explicitly: the
@@ -5131,12 +5131,12 @@ elicitation passes to the next provider outward, which is an enclosing
 at `{ at: "min" }`, so the nearest answers first and the chain composes outward.
 
 **A stray `<Answer>`** — one written outside the `<Answers>` that would have
-read it — is a positioned diagnostic, mirroring `<Else>` outside `<If>`. It
+read it — is a positioned printed error, mirroring `<Else>` outside `<If>`. It
 names no component: being structural (§5.3) means the name resolves to nothing
 else, wherever it is written.
 
-**Configuration diagnostics** are positioned and raised under the ambient
-policy: a misplaced `<Answer>`, an `<Answers>` with no body (self-closing, or
+**Configuration printed errors** are positioned and raised under the ambient
+error mode: a misplaced `<Answer>`, an `<Answers>` with no body (self-closing, or
 nothing but matchers — it could never answer anything), both template forms at
 once, a template that will not parse, a missing `value`, and a `value` that is
 not JSON. A region whose matchers are malformed does not expand its body: one
@@ -5197,7 +5197,7 @@ const inline = inlineSource("# Hello");
 ```
 
 Supplied text reports the stable identity `<eval>`: `inlineSource` attaches it,
-so the text and its identity cannot be separated, and diagnostics and source
+so the text and its identity cannot be separated, and printed errors and source
 positions carry it — `(<eval>:5:1)` — exactly as a path would. Everything else is
 unchanged. Component directories, `<File>`, `<Glob>` and every other relative
 operation resolve from the contextual working directory, never from the root's
@@ -5222,7 +5222,7 @@ load the definition through the same path.
 
 `DocumentExecution` is an `Operation<Result<Json>>`: `yield* execution`
 completes with `Ok(value)` on success and `Err(error)` on document,
-infrastructure, or policy failure. The successful value is the document's
+infrastructure, or middleware failure. The successful value is the document's
 return value — its rendered Markdown for a text root, its validated JSON for a
 value root (§5.4). `collect(execution)` unwraps that same value and throws on
 `Err`. Once `execute` has returned a handle, completion never throws — every
@@ -5295,7 +5295,7 @@ The output pipeline has three UX issues:
 ### 9.2 The Document Output Api
 
 A single Effection Api named `DocumentOutput` with one operation: `output`. The Api
-is the system's public surface — extensible to progress, diagnostics, etc.
+is the system's public surface — extensible to progress, printed errors, etc.
 as needs grow.
 
 ```typescript
@@ -5527,12 +5527,12 @@ which performs no document effects, and routes the channels accordingly:
   newline; a string result stays a quoted JSON string. It is written directly,
   bypassing markdown normalization and terminal formatting.
 - rendered body output is observability: `--verbose` sends it, and the journal
-  diagnostics, to stderr; without `--verbose` it is discarded.
+  printed errors, to stderr; without `--verbose` it is discarded.
 - every failure — structural, schema, value, body, or after `<Return>` — writes
-  its diagnostic to stderr, exits non-zero, and writes nothing to stdout.
+  its printed error to stderr, exits non-zero, and writes nothing to stdout.
 
 Text roots are unchanged: rendered Markdown goes to stdout and `--verbose` adds
-diagnostics on stderr. `xmd test` reports on stdout in both modes; the JSON
+printed errors on stderr. `xmd test` reports on stdout in both modes; the JSON
 result contract belongs to `xmd run`.
 
 ### 9.7 Execution flows
@@ -5626,7 +5626,7 @@ handle.
 #### `blockId` counter
 
 `expandSegments` uses `result.length` as the `blockId` index. Calling
-it once per root segment resets the counter, producing duplicate diagnostic
+it once per root segment resets the counter, producing duplicate printed error
 operation names. See §6.1 for the fix: a mutable counter threaded through the
 expansion context.
 
@@ -5768,7 +5768,7 @@ function renderSegment(segment: Segment): string {
 Errors are rendered as HTML comments by default. This keeps the output
 valid markdown while making errors visible. An error rendering strategy
 is configurable at the host level (e.g., throw on error, render as
-visible warning blocks, collect into a separate error report).
+visible warning blocks, gather into a separate error report).
 
 ---
 
@@ -5869,8 +5869,8 @@ visible warning blocks, collect into a separate error report).
 | C38 | `<Output>` props rejected | Props/expression props on `<Output>` produce an ErrorSegment |
 | C39 | `<Content />` in `<Output>` | Caller content projects into a top-level `<Output>` region |
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
-| C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate diagnostic and runs no body side effects |
-| C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's policy |
+| C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate printed error and runs no body side effects |
+| C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's error mode |
 | C43 | Documentation fail-fast | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; errors inside `<Output>` or with no `<Output>` remain comments |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
 | C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
@@ -5884,7 +5884,7 @@ visible warning blocks, collect into a separate error report).
 | D1 | `bash exec` golden run | `execHandler` runs, stdout in output, journal has exec entry |
 | D2 | Exec repeated run | Command executes again and current stdout is used |
 | D3 | Non-zero exit code | ErrorSegment in output. The exit code alone decides — what the command printed does not enter into it |
-| D3b | **Non-zero exit with stdout** | `execOutput` segment, then the ErrorSegment it explains; a throw under a documentation policy, which stops the next sibling from running |
+| D3b | **Non-zero exit with stdout** | `execOutput` segment, then the ErrorSegment it explains; a throw under a documentation error mode, which stops the next sibling from running |
 | D4 | Multi-line command | Full script passed to `-c` |
 | D5 | `python exec` | `python -c` invocation |
 | D6 | `bash silent exec` | Chain: silent wraps exec. Exec journals. Silent returns empty output and the inner outcome |
@@ -6023,7 +6023,7 @@ visible warning blocks, collect into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| H1 | Missing-provider diagnostics | `importComponent`, `applyModifiers`, `codeBlock`, and `content` report clear missing-provider errors when no provider is installed |
+| H1 | Missing-provider printed errors | `importComponent`, `applyModifiers`, `codeBlock`, and `content` report clear missing-provider errors when no provider is installed |
 | H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block via standard imports |
 | H3 | executable.md globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `@executablemd/core` |
 | H5 | `compileBlock` returns generator function | `yield* compileBlock(code, [])` returns a callable generator function |
@@ -6114,7 +6114,7 @@ visible warning blocks, collect into a separate error report).
 | O15 | TypeScript nesting | Nested invocations leaf-first; siblings isolated |
 | O25 | Exports commit to shared bindings | A later block reads a declared export, including a live object the journal cannot carry |
 | O26 | Snapshot isolation | A later evaluation rebinding a name does not reach the closure persistent work captured |
-| O28 | `<Content />` in documentation | A projected error stops the body instead of being collected and discarded with the region |
+| O28 | `<Content />` in documentation | A projected error stops the body instead of being printed and discarded with the region |
 | O29 | `<Content />` inside `<Output>` | The same error renders once and the region still emits |
 | O30 | Value-component documentation | A projected error fails fast rather than being discarded |
 | O27 | Explicit import | An explicitly imported `useContent` compiles without a duplicate injected declaration |
@@ -6123,8 +6123,8 @@ visible warning blocks, collect into a separate error report).
 | O18 | Nested and sibling invocations | Nested invocations tear down leaf-first; siblings never interleave |
 | O19 | No ambient eval scope required | A component expands, and projects content, with no `evalScope` provider installed |
 | O21 | Boundary owns its scope | Invocation resources are gone the moment expansion returns, inside a longer-lived parent scope |
-| O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing policy of the block's own position, not the invocation's baseline |
-| O24 | Persistent projection inside `<Output>` | The same block inside a region collects instead, and the projected error renders |
+| O23 | Persistent projection in documentation | A `persist eval` block's projection settles under the throwing error mode of the block's own position, not the invocation's baseline |
+| O24 | Persistent projection inside `<Output>` | The same block inside a region prints instead, and the projected error renders |
 | O31 | Captured markdown projection | The same block under `as=` refuses the binding: the interpolation stays literal and the recorded error returns to the caller once |
 | O32 | Caught projection error | A caught `DocumentationError` is explicit recovery: nothing is recorded, the component completes, and the capture succeeds |
 | O33 | Recovery leaks nothing | Work the projected content started is torn down with its scope; catching the error lets none of it escape the invocation |
@@ -6162,8 +6162,8 @@ visible warning blocks, collect into a separate error report).
 | TD10 | Captured form | `<TempDir as>` renders nothing at the site and the directory is still live for a later sibling |
 | TD11 | Retention ends | A captured directory is gone once the execution that owned it finishes |
 | TD12 | Prop validation | An undeclared prop is rejected by ordinary validation |
-| TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err` under a collecting policy, and the block after `</TempDir>` never runs |
-| TD14 | Ordinary failures are unchanged | A failing block inside a `<TempDir>` still renders a diagnostic and the following sibling still runs |
+| TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err` under a printing error mode, and the block after `</TempDir>` never runs |
+| TD14 | Ordinary failures are unchanged | A failing block inside a `<TempDir>` still renders a printed error and the following sibling still runs |
 | TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
 | TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
 | TD17 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
@@ -6181,10 +6181,10 @@ visible warning blocks, collect into a separate error report).
 | PC7 | Ordering | With an unusable schema, an `exec` child of `<Parse>` never runs |
 | PC8 | Ordering under SafeParse | The same holds for `<SafeParse>` — an unusable schema is not a safe failure |
 | PC9 | Child failures propagate | A failing child of `<SafeParse>` fails the document; no result is bound |
-| PC10 | Failure diagnostics | A `<Parse>` schema failure names the component and carries its normalized issues |
+| PC10 | Failure printed errors | A `<Parse>` schema failure names the component and carries its normalized issues |
 | PC11 | Malformed JSON | Content that is not JSON fails `<Parse>` as a parse failure |
 | PC12 | No rendered output | Neither component contributes to the rendering |
-| PC13 | External reference | An external `$ref` fails with a diagnostic naming the #192 limit |
+| PC13 | External reference | An external `$ref` fails with a printed error naming the #192 limit |
 | PC14 | Capture and replay | A replay reproduces the bound value and appends no journal entry |
 | PC15 | Colocated documents | `xmd test packages/core/src/components` runs `Parse.test.md` and `SafeParse.test.md` beside `TempDir.test.md`, with no search path and no JavaScript: both schema forms, every JSON result kind, a local `$ref`, both `<SafeParse>` variants, the preserved input, and the three non-transformation guarantees |
 
@@ -6196,10 +6196,10 @@ visible warning blocks, collect into a separate error report).
 | FL2 | Write renders nothing | The write form contributes no output and no path |
 | FL3 | Parent directories | A write creates the directories its path names |
 | FL4 | Replacement | A second write replaces the content, and rewriting the same content changes nothing |
-| FL5 | Missing file | Reading a missing path is a diagnostic, and the sibling after it still runs |
+| FL5 | Missing file | Reading a missing path is a printed error, and the sibling after it still runs |
 | FL6 | Directory target | Reading a directory fails naming what it is |
-| FL7 | Absolute path | Rejected before the filesystem is touched; neither the target's content nor the supplied path appears in the diagnostic |
-| FL8 | Lexical escape | `..` out of the working directory is rejected, the content it aimed at never appears, and no absolute path reaches the diagnostic |
+| FL7 | Absolute path | Rejected before the filesystem is touched; neither the target's content nor the supplied path appears in the printed error |
+| FL8 | Lexical escape | `..` out of the working directory is rejected, the content it aimed at never appears, and no absolute path reaches the printed error |
 | FL9 | Internal symlink | Followed for both reads and writes; the write updates the linked file and leaves the link a link |
 | FL10 | Escaping file symlink | Rejected, the outside content never appears, and the destination it pointed at is not named |
 | FL11 | Escaping parent symlink | Rejected for a file that does not exist yet, nothing is created outside, and no absolute path is named |
@@ -6216,15 +6216,15 @@ visible warning blocks, collect into a separate error report).
 | FL18c | Lexical escape decided before children | The same for `..`, with nothing created outside |
 | FL19 | Failure inside the temporary write | The temporary is removed, the existing target is unchanged, and the outcome says so |
 | FL20 | Cancellation before the commit | The same, when the run is halted rather than failed |
-| FL21 | Rename throws before `next` | The previous content stands, and the diagnostic reports the outcome as unknown rather than claiming it |
-| FL21b | Rename throws after `next` | The replacement is committed, and the same diagnostic is still factually correct — the error twin of FL22 |
+| FL21 | Rename throws before `next` | The previous content stands, and the printed error reports the outcome as unknown rather than claiming it |
+| FL21b | Rename throws after `next` | The replacement is committed, and the same printed error is still factually correct — the error twin of FL22 |
 | FL22 | Cancellation after the commit | A completed replacement is not rolled back |
 | FL23 | Platform errors carry no path | `realpath`, `stat`, `readTextFile`, `ensureDir`, `writeTextFile`, and `rename` each throw an error whose message names an absolute path; the document receives an allowlisted phrase and no path |
 | FL23b | Cleanup failure is reported | A failing `remove` is reported against the document's own path, says the file was written, appends the leftover sentence, and names no temporary |
 | FL23c | Cleanup composes with the write failure | A failing `rename` and a failing `remove` are both reported, followed by the unknown-outcome sentence and the leftover sentence, and the temporary is observably left behind |
 | FL24 | Regular file as a path component | `parent/child.txt` with `parent` a file fails for both forms without naming the resolved path |
 | FL25 | The working directory itself | `.` and a path normalizing to it are contained, and fail as a directory rather than as an escape |
-| FL26 | Adversarial error shapes | A `code` holding an absolute path, markup and a newline, an inherited key (`toString`), a planted path in both message and code, and an externally thrown `FileAccessError` all produce the generic phrase; nothing planted reaches the document and the diagnostic stays one line |
+| FL26 | Adversarial error shapes | A `code` holding an absolute path, markup and a newline, an inherited key (`toString`), a planted path in both message and code, and an externally thrown `FileAccessError` all produce the generic phrase; nothing planted reaches the document and the printed error stays one line |
 | FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
@@ -6235,7 +6235,7 @@ visible warning blocks, collect into a separate error report).
 | FA5 | Discovery through a wrapper | A fatal error is found inside a teardown aggregate, an `AggregateError`, and an ordinary `cause` |
 | FA6 | Both at once | A fatal error is still found when the wrapper holding it is itself cyclic |
 | FA7 | Documentation failures | A `DocumentationError` is discovered the same way |
-| FA8 | Ordinary errors are unaffected | A cyclic ordinary error is collected as a diagnostic and the next block still runs |
+| FA8 | Ordinary errors are unaffected | A cyclic ordinary error is printed and the next block still runs |
 | FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `EarlyReturnDivergenceError`, and `ContinuePastCloseDivergenceError` are each discovered as fatal, bare and wrapped |
 | FA10 | Precedence, either order | Each of the four outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
 | FA11 | Precedence through a teardown | The same holds for an `InvocationTeardownError`'s stage failures |
@@ -6266,7 +6266,7 @@ visible warning blocks, collect into a separate error report).
 | # | Test | Verify |
 |---|------|--------|
 | AF1-AF2 | Expression props | A string and a boolean expression prop resolve, which the claimed handler rejected |
-| AF3-AF4 | Validation first | A wrong type or an unknown prop is the engine's diagnostic, and the component performs nothing |
+| AF3-AF4 | Validation first | A wrong type or an unknown prop is the engine's printed error, and the component performs nothing |
 | AF5-AF6 | Core-owned `as` | The returned string is captured once and not also emitted; an invalid `as` prevents every effect |
 | AF7-AF8 | Content before effects | A failing wrapper performs no lookup, prompt or journal work; an empty wrapper still beats `text` |
 | AF9-AF12 | Fatality survives nesting | A `throwOnError` prompt ends the document inside `<Agent>`, inside `<Agent><Session>`, and inside a repository component projecting it as content; the error stays the original `AgentPromptError` |
@@ -6289,7 +6289,7 @@ visible warning blocks, collect into a separate error report).
 | CR15 | Reserved over repository | A reserved registration outranks a file on disk |
 | CR16 | Repository over default | A repository file outranks a registered default, including each of core's |
 | CR17 | Defaults resolve | Core's components resolve with nothing on disk |
-| CR18 | Unresolved | The diagnostic names the searched directories and the registered origins considered |
+| CR18 | Unresolved | The printed error names the searched directories and the registered origins considered |
 | CR19/CR20 | Candidate order | Markdown before TypeScript, earlier directories first, dots addressing subdirectories |
 | CR21 | Order independence | Reserved beats default however the two were installed, across scopes and within one |
 | CR22 | End to end | A repository component replaces one of core's in a running document |
@@ -6420,7 +6420,7 @@ visible warning blocks, collect into a separate error report).
 | RC3 | `render()` expands arbitrary markdown | `render("# Hello")` → rendered heading |
 | RC4 | `renderChildren(override)` visible + shadows | Override binding resolves in body text/eval; shadows caller value |
 | RC5 | `renderChildren(override)` no leak | Override absent from caller env after the render |
-| RC6 | `renderChildren(override)` rejects non-object | `null`/array/primitive override → diagnostic |
+| RC6 | `renderChildren(override)` rejects non-object | `null`/array/primitive override → printed error |
 
 ### Tier Each — `<Each>` iteration directive
 
@@ -6458,7 +6458,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF13 | Missing `condition` | Rejected; the body does not render |
 | IF14 | No coercion | String, number (including `0`/`1`), `null`, array, and object are rejected |
 | IF15 | Non-boolean expression result | A numeric binding is rejected with its kind named |
-| IF16 | Unresolvable expression | The failing expression is quoted in the diagnostic |
+| IF16 | Unresolvable expression | The failing expression is quoted in the printed error |
 | IF17 | Unknown props | Literal and expression props other than `condition` are rejected |
 | IF18 | `<Else>` outside `<If>` | Diagnosed; no component named `Else` is imported |
 | IF19 | Duplicate `<Else>` | A second `<Else>` is rejected |
@@ -6477,8 +6477,8 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF32 | No code block from the unselected branch | The modifier chain is never applied |
 | IF33 | Selected control | The selected branch does run its code block |
 | IF34 | Unselected `<Else>` | A component in an unselected `<Else>` is never imported |
-| IF35 | Local position | A diagnostic carries `line:column` |
-| IF36 | Origin position | A scanned origin adds `path:` to the diagnostic |
+| IF35 | Local position | A printed error carries `line:column` |
+| IF36 | Origin position | A scanned origin adds `path:` to the printed error |
 | IF37 | `<Else>` position | A stray `<Else>` reports its own location |
 | IF38 | No position | An element built without scanning diagnoses without a location |
 | IF39 | Journal | Only the selected branch's eval entry reaches the journal |
@@ -6495,7 +6495,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF50 | Selected branch observed once | The same error inside a selected branch is observed once, not twice |
 | IF51 | Unselected branch unobserved | An error in the unselected branch is observed zero times |
 | IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
-| IF53 | Throwing policy | An ambient `throw` policy still aborts on a selected-branch error |
+| IF53 | Throwing error mode | An ambient `throw` error mode still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
 
 ### Tier OBS — error observation
@@ -6514,17 +6514,17 @@ at OBS7: OBS1–OBS6 measured the retired extension boundary and went with it.
 | OBS11 | Component body | Observed once |
 | OBS12 | Projected `<Content />` | Observed once, through both the segment and the string-projection path |
 | OBS13 | `<Loop>` body | Observed once |
-| OBS14 | Construct-owned diagnostics | `<Each>` and `<Capture>` prop and structure errors each report once |
+| OBS14 | Construct-owned printed errors | `<Each>` and `<Capture>` prop and structure errors each report once |
 | OBS15 | Refused captures | `<Capture as>`, `<Each as>` and a component `as` each report the body error once and set no binding |
-| OBS16 | Throwing policy | An ambient `throw` policy aborts at the first error on every path above |
-| OBS17 | Collecting policy | A collected error renders exactly one comment on every path above |
+| OBS16 | Throwing error mode | An ambient `throw` error mode aborts at the first error on every path above |
+| OBS17 | Printing error mode | A printed error renders exactly one comment on every path above |
 | OBS18 | Uncaught function content | The invocation comes back as the same segment objects `Component.raise` returned |
 | OBS19 | Refused function capture | The same, with no binding made |
 | OBS20 | Sibling content failures | Two failures keep source order and one observation each |
 | OBS21 | Recovered content failure | The `ContentError` carries the raised segments in source order, and recovery settles nothing |
 | OBS22 | Where the cause is attached | Raise middleware that catches what the chain throws already sees the thrown component failure as the `DocumentationError`'s cause, the same object leaves the expansion, and the contextual segment is observed once |
-| OBS23 | Thrown `undefined` under a throwing policy | The diagnostic records it as its own `cause` — an Error whose own `cause` is the `undefined` that was thrown — so "translated from undefined" stays distinguishable from "no attribution at all" |
-| OBS24 | Thrown `undefined` under a collecting policy | It settles as a rendered diagnostic and constructs no `DocumentationError`, so there is no Error to carry a cause, and later content still renders |
+| OBS23 | Thrown `undefined` under a throwing error mode | The printed error records it as its own `cause` — an Error whose own `cause` is the `undefined` that was thrown — so "translated from undefined" stays distinguishable from "no attribution at all" |
+| OBS24 | Thrown `undefined` under a printing error mode | It settles as a rendered printed error and constructs no `DocumentationError`, so there is no Error to carry a cause, and later content still renders |
 
 Provider families carry the same contract in their own tiers: `AC20`
 (`<Prompt>` prop validation), the assertion validation row in
@@ -6554,12 +6554,12 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP15 | Non-positive and fractional bounds | `0`, `-1`, and `1.5` are rejected |
 | LOOP16 | No coercion | String, boolean, `null`, array, and object bounds are rejected with their kind named |
 | LOOP17 | Non-finite bounds | `Infinity` and `NaN` are rejected |
-| LOOP18 | Unresolvable expression | The failing expression is quoted in the diagnostic |
+| LOOP18 | Unresolvable expression | The failing expression is quoted in the printed error |
 | LOOP19 | Invalid bound runs nothing | No component in the body is imported |
 | LOOP20 | Unknown props | Literal and expression props other than `max`/`name` are rejected |
 | LOOP21 | `name` is inert | A named loop renders exactly what an unnamed one does |
 | LOOP22 | `name` binds nothing | Neither `{name}` nor the label resolves in the body |
-| LOOP23 | `name` in diagnostics | The loop's own errors name it |
+| LOOP23 | `name` in printed errors | The loop's own errors name it |
 | LOOP24 | `name={expr}` | Rejected — `name` is a string literal |
 | LOOP25 | Empty or non-string `name` | Rejected |
 | BREAK1 | Immediate break | `max={5}` with a `<Break>` in the body runs one iteration |
@@ -6579,19 +6579,19 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | BREAK15 | Stray break resolves nothing | No component named `Break` is imported |
 | BREAK16 | Props on `<Break>` | Literal and expression props are both rejected |
 | BREAK17 | Content on `<Break>` | Rejected |
-| BREAK18 | Malformed break performs no control action | Under a collecting policy the diagnostic renders and the loop still runs to its bound, with each iteration intact |
-| BREAK18b | Malformed break under a throwing policy | The diagnostic aborts through the ambient policy |
+| BREAK18 | Malformed break performs no control action | Under a printing error mode the printed error renders and the loop still runs to its bound, with each iteration intact |
+| BREAK18b | Malformed break under a throwing error mode | The printed error aborts through the ambient error mode |
 | BREAK19 | Component body boundary | A `<Break>` a component writes is diagnosed and the caller's loop keeps running |
 | BREAK20 | Projection through `<Content />` | A `<Break>` the caller projects exits the caller's loop; the component still finishes rendering |
 | BREAK21 | Component-written break end to end | Diagnosed, and every iteration keeps its trailing content |
 | BREAK22 | Projection through `content()` | The same holds for a component that renders content from a code block |
-| LOOP26 | Throwing policy | The first failing iteration aborts the loop |
-| LOOP27 | Collecting policy | The diagnostic renders and the next iteration runs |
+| LOOP26 | Throwing error mode | The first failing iteration aborts the loop |
+| LOOP27 | Printing error mode | The printed error renders and the next iteration runs |
 | LOOP28 | Cancellation | Halting mid-loop stops it where it stands |
 | LOOP29 | Teardown per iteration | An iteration's resources are released before the next begins |
 | LOOP30 | Teardown on break | The breaking iteration's resources are released before the loop exits |
-| LOOP31 | Local position | A diagnostic carries `line:column` |
-| LOOP32 | Origin position | A scanned origin adds `path:` to the diagnostic |
+| LOOP31 | Local position | A printed error carries `line:column` |
+| LOOP32 | Origin position | A scanned origin adds `path:` to the printed error |
 | LOOP33 | `<Break>` position | A stray `<Break>` reports its own location |
 | LOOP34 | No position | An element built without scanning diagnoses without a location |
 | LOOP35 | Body entries per iteration | Each iteration journals a distinct, deterministic eval entry |
@@ -6603,8 +6603,8 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP41 | Empty-body records | Three iteration entries and an `exhausted` terminal record, with no body to journal |
 | LOOP42 | Immediate break records | One iteration entry and a `break` terminal record — distinct from empty exhaustion |
 | LOOP43 | Final-iteration break | Identical iteration entries to an exhausted loop; only `outcome` differs |
-| LOOP44 | Failure records | A throwing policy records an `error` terminal record with the iterations entered, and the execution ends with root `Close(err)` |
-| LOOP45 | Collecting policy is not failure | The diagnostic renders and the terminal outcome is `exhausted` |
+| LOOP44 | Failure records | A throwing error mode records an `error` terminal record with the iterations entered, and the execution ends with root `Close(err)` |
+| LOOP45 | Printing error mode is not failure | The printed error renders and the terminal outcome is `exhausted` |
 | LOOP46 | Interrupted state | Iteration entries for the iterations entered, no terminal loop record, and no root `Close` — observably different from a completed run (`ok`) and a failed one (`err`), without saying why it stopped |
 | LOOP47 | Nested identities | Each entry into a nested loop records its own distinct identity |
 | LOOP48 | Identity is internal | `{iteration}` resolves to nothing in the body |
@@ -6613,7 +6613,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP52 | Durability failure is not an outcome | A stale `<TempDir>` replay inside a loop stays a `StaleInputError`; the loop records no `error` outcome and the stored terminal entry is untouched |
 | LOOP54 | Wrapped durability failure | The caller receives the exact nested failure, not the wrapper, and the loop records no outcome for it |
 | LOOP55 | Body divergence | A tampered body entry reports the original `DivergenceError` at the body operation, not a later mismatch at the loop's terminal one; nothing is rendered and no outcome is recorded |
-| LOOP56 | Malformed terminal record | The diagnostic names the loop and the derived outcome and reproduces none of the entry's content |
+| LOOP56 | Malformed terminal record | The printed error names the loop and the derived outcome and reproduces none of the entry's content |
 | LOOP57 | Mixed wrapper | A wrapper carrying a documentation failure *and* a durability failure yields the durability one, and the loop records no outcome |
 | LOOP53 | Agreeing partial replay | A journal whose terminal record matches what the run derives replays cleanly and closes `ok` |
 | LOOP49 | Resumption | An interrupted journal is accepted by a new execution: the recorded iteration entries replay in order, the interrupted iteration's body reruns live because it journaled nothing, the remaining iterations run live, the loop and iteration identities are unchanged, exactly one terminal record is written with `exhausted` and the right count, and the run ends with root `Close(ok)` |
@@ -6746,7 +6746,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | # | Decision | Rationale |
 |---|----------|-----------|
 | 1 | Root document treated as a component | Uniform resolution, parsing, and error handling |
-| 2 | All paths are workspace-relative | Diagnostic portability and no absolute-path leakage |
+| 2 | All paths are workspace-relative | Printed error portability and no absolute-path leakage |
 | 3 | Resolution is an Effection Api | Pluggable middleware (search paths, aliases, glob) — runs inside `durableImportComponent` during live execution |
 | 4 | `durableImportComponent` is a single journaled operation | Resolve + read in one `createDurableOperation`; one diagnostic journal entry per component |
 | 5 | Parsing is runtime | Deterministic from file content, no journal needed |
@@ -6806,7 +6806,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 61 | `callLlamafile()` uses `@effectionx/fetch` | The HTTP call is an Effection operation executed once per document run |
 | 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; the hardcoded path covers the supported targets |
 | 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the executable.md `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
-| 64 | `DocumentOutput` Api with single `output` operation | Extensible to progress/diagnostics; middleware-composable via `scope.around`; single Api surface for all output concerns |
+| 64 | `DocumentOutput` Api with single `output` operation | Extensible to progress/printed errors; middleware-composable via `scope.around`; single Api surface for all output concerns |
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
 | 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
 | 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |
@@ -6815,7 +6815,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |
 | 72 | `channel.send()` must be `yield*`'d | Ensures backpressure and cancellation safety — no text "in flight" when scope tears down; without `yield*`, buffering issues or silent cancellation may occur |
-| 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<Result<string>>` (`yield*` for the completion Result) and has `.output` stream for chunks; once a handle exists every failure resolves `Err(error)` — completion never throws, so policy middleware (e.g. testing) can map outcomes without exception control flow |
+| 73 | `DocumentExecution` with `withResolvers` | Execution is both an `Operation<Result<string>>` (`yield*` for the completion Result) and has `.output` stream for chunks; once a handle exists every failure resolves `Err(error)` — completion never throws, so middleware (e.g. testing) can map outcomes without exception control flow |
 | 74 | Function components receive props directly, not wrapped | `function*(props)` not `function*({ props })` — eliminates unnecessary destructuring; props are already validated by the expansion engine before the function is called |
 | 75 | Function-component content is contextual, not a function argument | Decouples function components from the expansion engine's API surface; leaf components don't need to ignore an `expandChildren` parameter; Effection-idiomatic — same contextual pattern as `env`/`evalScope`; supports named slots via `content("header")`, with `useContent()` kept as a compatibility alias |
 | 76 | `.md` wins over `.ts` in resolution | Backward compatibility — existing markdown components are not shadowed by TypeScript files added later; explicit — if both exist, the human-readable markdown is preferred |

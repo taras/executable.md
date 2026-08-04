@@ -5,11 +5,11 @@ import type { Operation } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { printErrors } from "../src/component-failures.ts";
 import { useContent } from "../src/content-context.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
+import { AmbientErrorMode, ContentError, DocumentationError } from "../src/errors.ts";
 import type {
   ComponentDefinition,
   ErrorSegment,
@@ -117,7 +117,7 @@ interface RecoveryOptions {
 }
 
 /**
- * One source text run under both policies: a `try/catch` directly around
+ * One source text run under both error modes: a `try/catch` directly around
  * `yield* content()` that recognizes `ContentError` and nothing else.
  */
 function recovering(
@@ -129,9 +129,9 @@ function recovering(
     kind: "function",
     name,
     props: OPEN_SCHEMA,
-    // Collects: these assert what a recovered — or unrecovered — failure looks
-    // like once it is a diagnostic the capture can see.
-    fn: collectFailures(function* () {
+    // Prints: these assert what a recovered — or unrecovered — failure looks
+    // like once it is a printed error the capture can see.
+    fn: printErrors(function* () {
       try {
         const rendered = yield* content();
         if (options.boom) {
@@ -167,9 +167,9 @@ function forging(name: string, log: Trace, fabricated: ErrorSegment): FunctionCo
     kind: "function",
     name,
     props: OPEN_SCHEMA,
-    // Collects, because what this asserts is how a fabricated content failure
-    // is treated once it becomes a diagnostic.
-    fn: collectFailures(function* () {
+    // Prints, because what this asserts is how a fabricated content failure
+    // is treated once it becomes a printed error.
+    fn: printErrors(function* () {
       yield* recordEntry(log.effects, name);
       throw new ContentError([fabricated]);
     }),
@@ -188,7 +188,7 @@ const BAD = "<Missing />";
  * and object identity are both checkable.
  *
  * It fails rather than returning anything: the ErrorSegment these assert on is
- * the diagnostic the engine builds for a failed invocation, which is a real
+ * the printed error the engine builds for a failed invocation, which is a real
  * reported segment and not prose a component chose to render. That is what keeps
  * the identity assertions meaning something — the object a capture refuses, or
  * that replaces an invocation, is the one `Component.raise` returned.
@@ -203,14 +203,14 @@ function brokenComponent(): FunctionComponentDefinition {
     name: "Broken",
     props: OPEN_SCHEMA,
     // deno-lint-ignore require-yield
-    fn: collectFailures(function* () {
+    fn: printErrors(function* () {
       seq += 1;
       throw new Error(`broken ${seq}`);
     }),
   };
 }
 
-/** What the engine's diagnostic for the nth failed `<Broken />` reads. */
+/** What the engine's printed error for the nth failed `<Broken />` reads. */
 function broke(n: number): string {
   return `Function component Broken error: broken ${n}`;
 }
@@ -218,7 +218,7 @@ function broke(n: number): string {
 /**
  * Claims `<Stale />` and fails its expansion with the planted durability
  * failure. The journal no longer describes this run, so nothing between the
- * projection and the document may translate it into a diagnostic or present it
+ * projection and the document may translate it into a printed error or present it
  * as a content failure.
  */
 function useStale(planted: StaleInputError): Operation<void> {
@@ -229,7 +229,7 @@ function useStale(planted: StaleInputError): Operation<void> {
         return yield* next(name);
       }
       // Thrown from resolution: what reaches the caller must be the planted
-      // failure itself, not a diagnostic built from it.
+      // failure itself, not a printed error built from it.
       throw planted;
     },
   });
@@ -296,7 +296,7 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
         try {
           return yield* next(error);
         } catch (failure) {
-          // The chain constructs the DocumentationError a throwing policy
+          // The chain constructs the DocumentationError a throwing error mode
           // propagates; capturing it here is what lets a test assert the object
           // that leaves the boundary is that same one.
           if (failure instanceof DocumentationError) {
@@ -334,7 +334,7 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
     const values: Record<string, unknown> = opts.values ?? {};
     yield* Component.around({ env: () => ({ values }) }, { at: "min" });
     if (opts.throwing) {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* AmbientErrorMode.set("throw");
     }
     const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
     return { segments, output: renderSegments(segments), trace: log };
@@ -350,7 +350,7 @@ function errors(segments: Segment[]): ErrorSegment[] {
 }
 
 describe("capture error propagation", () => {
-  it("CE1: a captured <Each> preserves body errors under a collecting policy", function* () {
+  it("CE1: a captured <Each> preserves body errors under a printing error mode", function* () {
     const values: Record<string, unknown> = {};
     const result = yield* run(`<Each in={[1, 2]} let="n" as="cap">${BAD}</Each>`, { values });
 
@@ -359,7 +359,7 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE2: a throwing policy aborts a captured <Each> before storing the binding", function* () {
+  it("CE2: a throwing error mode aborts a captured <Each> before storing the binding", function* () {
     const values: Record<string, unknown> = {};
     let thrown: unknown;
     try {
@@ -383,7 +383,7 @@ describe("capture error propagation", () => {
     expect(errors(result.segments)).toHaveLength(0);
   });
 
-  it("CE4: a captured component preserves body errors under a collecting policy", function* () {
+  it("CE4: a captured component preserves body errors under a printing error mode", function* () {
     const values: Record<string, unknown> = {};
     const result = yield* run('<Bad as="cap" />', { components: { Bad: BAD }, values });
 
@@ -392,7 +392,7 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE5: a throwing policy aborts a captured component before storing the binding", function* () {
+  it("CE5: a throwing error mode aborts a captured component before storing the binding", function* () {
     const values: Record<string, unknown> = {};
     let thrown: unknown;
     try {
@@ -435,7 +435,7 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE8: a throwing policy aborts a captured function component with the original DocumentationError", function* () {
+  it("CE8: a throwing error mode aborts a captured function component with the original DocumentationError", function* () {
     const log = trace();
     const values: Record<string, unknown> = {};
     let thrown: unknown;
@@ -509,7 +509,7 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE12: a native <Capture> preserves child errors under a collecting policy", function* () {
+  it("CE12: a native <Capture> preserves child errors under a printing error mode", function* () {
     const values: Record<string, unknown> = {};
     const result = yield* run(`<Capture as="cap">${BAD}</Capture>AFTER`, { values });
 
@@ -519,7 +519,7 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE13: a throwing policy aborts a native <Capture> before storing the binding", function* () {
+  it("CE13: a throwing error mode aborts a native <Capture> before storing the binding", function* () {
     const values: Record<string, unknown> = {};
     let thrown: unknown;
     try {
@@ -541,7 +541,7 @@ describe("capture error propagation", () => {
     expect(errors(result.segments)).toHaveLength(0);
   });
 
-  it("CE15: a <Capture> validation diagnostic is still a single error", function* () {
+  it("CE15: a <Capture> validation printed error is still a single error", function* () {
     const values: Record<string, unknown> = {};
     const result = yield* run("<Capture>no binding</Capture>", { values });
 
@@ -549,7 +549,7 @@ describe("capture error propagation", () => {
     expect(result.output).toContain("requires an");
   });
 
-  it("CE16: a throwing policy aborts an uncaptured function component with the original DocumentationError", function* () {
+  it("CE16: a throwing error mode aborts an uncaptured function component with the original DocumentationError", function* () {
     const log = trace();
     let thrown: unknown;
     try {
@@ -589,7 +589,7 @@ describe("capture error propagation", () => {
     expect(result.output).toBe("fallback");
   });
 
-  it("CE18: recovery under a collecting policy returns fallback and reasserts nothing", function* () {
+  it("CE18: recovery under a printing error mode returns fallback and reasserts nothing", function* () {
     const log = trace();
     const result = yield* run("<Recover><Broken /><Broken /></Recover>TAIL", {
       functions: { Recover: recovering("Recover", log) },
@@ -613,7 +613,7 @@ describe("capture error propagation", () => {
     expect(caught.errors.map((error) => error.message)).toEqual([broke(1), broke(2)]);
   });
 
-  it("CE19: the same recovery source recovers identically under a throwing policy", function* () {
+  it("CE19: the same recovery source recovers identically under a throwing error mode", function* () {
     const log = trace();
     const values: Record<string, unknown> = {};
     const result = yield* run('<Recover as="cap"><Broken /><Broken /></Recover>TAIL', {
@@ -630,7 +630,7 @@ describe("capture error propagation", () => {
     expect(log.effects).toEqual([]);
 
     // Fail-fast inside the projection: the first error ends it, so recovery sees
-    // one segment where the collecting run saw both.
+    // one segment where the printing run saw both.
     expect(log.raised).toHaveLength(1);
     const caught = log.caught[0];
     if (!(caught instanceof ContentError)) {
@@ -747,7 +747,7 @@ describe("capture error propagation", () => {
     expect(reported[0].source).toBe("Forge");
     expect(reported[0].message).toBe("Function component Forge error: author fabricated");
     // The fabricated segment is reported by nothing and reaches nothing: the one
-    // observation is the engine's own diagnostic, and the document renders only
+    // observation is the engine's own printed error, and the document renders only
     // that, with the author's message quoted inside it.
     expect(log.raised).toHaveLength(1);
     expect(log.raised[0]).toBe(reported[0]);
@@ -758,7 +758,7 @@ describe("capture error propagation", () => {
     );
   });
 
-  it("CE26: a durability failure crossing content() is neither a ContentError nor a diagnostic", function* () {
+  it("CE26: a durability failure crossing content() is neither a ContentError nor a printed error", function* () {
     const log = trace();
     const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
     let thrown: unknown;
@@ -779,13 +779,13 @@ describe("capture error propagation", () => {
     expect(log.caught[0]).not.toBeInstanceOf(ContentError);
     expect(log.recoveries).toEqual([]);
     // It left expansion by identity rather than becoming an ErrorSegment: a
-    // collecting policy renders whatever was reported, and nothing was.
+    // printing error mode renders whatever was reported, and nothing was.
     expect(thrown).toBe(planted);
     expect(log.raised).toEqual([]);
     expect(log.failures).toEqual([]);
   });
 
-  it("CE27: a durability failure at the content boundary outranks the throwing policy", function* () {
+  it("CE27: a durability failure at the content boundary outranks the throwing error mode", function* () {
     const log = trace();
     const planted = new StaleInputError("PLANTED_DURABILITY_FAILURE");
     let thrown: unknown;
@@ -800,7 +800,7 @@ describe("capture error propagation", () => {
       thrown = error;
     }
 
-    // Same source, opposite policy: the object that escapes is still the planted
+    // Same source, opposite error mode: the object that escapes is still the planted
     // failure, and no DocumentationError was constructed for it to outrank.
     expect(thrown).toBe(planted);
     expect(thrown).not.toBeInstanceOf(DocumentationError);
