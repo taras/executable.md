@@ -326,12 +326,27 @@ remote effects.
 
     {verdict.review}
 
+    ## What approval performs
+
+    Revision prompt sent to the implementor when the verdict has not passed:
+
+    {verdict.revisionPrompt}
+
+    A finding whose disposition is `defer` becomes an issue, with the evidence
+    shown beneath it.
+
     <Each in={verdict.findings} let="finding">
     ### {finding.title}
 
     Disposition: {finding.disposition}
 
     {finding.description}
+
+    Evidence:
+
+    <Each in={finding.evidence} let="item">
+    - {item}
+    </Each>
     </Each>
   </Capture>
   <UserCheckpoint
@@ -410,6 +425,10 @@ including each review's body: a user approving the change reads the original
 objections rather than the planner's summary of them. The checkpoint omits only a
 check's link, which is a way to find evidence rather than evidence itself.
 
+The checkpoint additionally carries what the planner prompt has no reason to —
+the revision prompt and each finding's evidence — because those are what an
+approval performs rather than what the review consumed.
+
 The prompt names the revision under review: the planner reviews the diff at
 `headSha` against `baseSha`, and a verdict describes that head only. A moved head
 invalidates it and a fresh review is required — the same rule #295 states for a
@@ -455,12 +474,21 @@ would make the planner's classification take effect before anyone approved it,
 and an issue is not undone by a later decline.
 
 `proceed: true` authorizes the exact transition and the exact effects proposed
-in the material the checkpoint assessed — here, an `<Issue>` for every finding
-the verdict marked `defer`. It is not an invitation to amend them. The free-text
-`response` and `rationale` are a record of the user's reasoning, and nothing
-reads them to change which effects run: an effect that already executed cannot
-be silently amended by prose. A user who wants different effects declines, and
-`proceed: false` performs none of them — no issue, no revision turn, no
+in the material the checkpoint assessed. That rule only means something if the
+material actually shows them, so `checkpointMaterial` carries every value an
+approval sets in motion, unchanged and unsummarized:
+
+- the **revision prompt** that goes to the implementor when the verdict has not
+  passed — the literal `verdict.revisionPrompt`, not a description of it; and
+- each finding's **evidence**, because `<Issue>` receives the complete finding
+  and a `defer` disposition turns it into a durable GitHub object.
+
+Approving instructions or evidence the user never read would be the same
+authority leak as not asking at all. It is not an invitation to amend them
+either: the free-text `response` and `rationale` record the user's reasoning, and
+nothing reads them to change which effects run — an effect that already executed
+cannot be silently amended by prose. A user who wants different effects declines,
+and `proceed: false` performs none of them — no issue, no revision turn, no
 acceptance.
 
 `<Commit>` (#294), `<PullRequest>` (#295), and `<Issue>` (#296) do not exist,
