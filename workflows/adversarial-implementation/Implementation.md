@@ -17,12 +17,9 @@ props:
 
 returns:
   report: { type: string }
-  pullRequest: { type: string }
   verdictPassed: { type: boolean }
   review: { type: string }
   revisionPrompt: { type: string }
-  authorized: { type: boolean }
-  terminal: { type: string }
   findings:
     type: array
     items:
@@ -220,7 +217,8 @@ remote effects.
 
         Pull request:
 
-        {pullRequest}
+        #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
+        head {pullRequest.headSha} onto base {pullRequest.baseSha}
 
         Result contract:
 
@@ -277,7 +275,8 @@ remote effects.
 
     ## Pull request
 
-    {pullRequest}
+    #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
+    head {pullRequest.headSha} onto base {pullRequest.baseSha}
 
     ## Planner review
 
@@ -336,24 +335,31 @@ remote effects.
 
 <Return value={{
   report: checkpointMaterial,
-  pullRequest: pullRequest,
   verdictPassed: verdict.passed,
   review: verdict.review,
   revisionPrompt: verdict.revisionPrompt,
   findings: verdict.findings,
-  decision: reviewCheckpoint,
-  authorized: reviewCheckpoint.proceed && verdict.passed,
-  terminal: reviewCheckpoint.proceed ? (verdict.passed ? "converged" : "exhausted") : "declined"
+  decision: reviewCheckpoint
 }} />
 
 ## The stage returns its control state
 
 Like `Planning`, this is a **value component**: it resolves a user decision
-internally, so it returns that decision rather than a rendering of it.
-`authorized` is `reviewCheckpoint.proceed && verdict.passed`, and `terminal` is
-`converged`, `declined`, or `exhausted`. Final acceptance is reachable only when
-`authorized` is true, so a declined or exhausted review cannot be reported as an
-accepted change.
+internally, so it returns that decision rather than a rendering of it. It hands
+back the complete `reviewCheckpoint` decision and the parsed verdict's fields,
+and nothing derived from them. The caller reads
+`decision.proceed && verdictPassed` directly, so there is no second copy of that
+answer to disagree with the first.
+
+The pull-request handle is **not** returned. `<PullRequest>` (#295) resolves a
+structured handle carrying the number, URL, head and base identities, state,
+reviews, comments, and checks, and `start.md` consumes none of it — the artifact
+ledger (#291) records the effect and its handle independently. The `report`
+above renders the specific fields a reader needs. A return field typed `string`
+would be worse than useless here: a conforming `<PullRequest>` would perform its
+durable effects and only then fail this component's return validation. If a
+later caller genuinely needs the handle, it is added with #295's object schema,
+never a placeholder.
 
 The agent, parsing, and control-flow syntax runs today. A value component's body
 runs fail-fast, so the final `<Parse>` in each repair loop ends the stage rather
@@ -362,8 +368,14 @@ than passing malformed data to a durable effect.
 The user's decision outranks the verdict here too. `reviewCheckpoint.proceed` is
 read before `verdict.passed`, so a declined pull-request review leaves the loop
 without revising the implementation and without reporting it as reviewed. The
-stage is reached at all only because `start.md` gated it on both
-`planning.authorized` and `authorization.proceed`.
+stage is reached at all only because `start.md` gated it on
+`planning.decision.proceed && planning.verdictPassed` and then on
+`authorization.proceed`.
+
+After the loop, `decision.proceed` true with `verdictPassed` false is what
+exhaustion looks like: the user kept approving and the verdict never passed. The
+caller's gate rejects that pair, so an exhausted review cannot reach acceptance.
+What the workflow should ultimately do about it stays unresolved under #290.
 
 ## Approval precedes durable effects
 

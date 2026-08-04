@@ -50,12 +50,14 @@ review neither revises, nor creates the deferred issues it proposed, nor
 accepts; a declined acceptance finishes as rejected.
 
 A decision resolved inside a stage is gated the same way, because the stage
-returns it. `authorized` — the review's approval *and* a passing verdict —
-is what the caller reads, so a stage cannot approve its own advancement. An
-exhausted review loop reports `terminal: "exhausted"` with `authorized` false
-and therefore fails closed; what the workflow should ultimately do with an
-exhausted loop is an unresolved product decision under #290, and failing closed
-is not an answer to it.
+returns it. The caller reads the decision together with that stage's verdict —
+approval *and* a passing review — so a stage cannot approve its own advancement.
+A stage returns those two sources and nothing derived from them: a precomputed
+flag would be a second copy of the same answer that no schema could hold to
+agreement with its sources. The same pair distinguishes a decline from a review
+that reached its bound still failing, and neither advances; what the workflow
+should ultimately do with an exhausted loop is an unresolved product decision
+under #290, and refusing to advance is not an answer to it.
 
 `proceed: true` authorizes the exact transition and effects the checkpoint
 assessed, and nothing more. Free-text fields in a decision record the user's
@@ -306,7 +308,11 @@ Two are not implemented:
   its identity and state (#295).
 
 Each environmental operation declares its inputs and preconditions, reconciles
-existing state, returns a structured handle, and records its observed effects.
+existing state, returns a structured handle, and records its observed effects. A
+handle is a structure, never a string standing in for one: `<PullRequest>`
+resolves a number, URL, head and base identities, state, reviews, comments, and
+checks, and a stage that declared any of that as text would fail its own return
+validation after the effect had already happened.
 Rerunning a pull-request operation resolves the existing pull request rather
 than creating a duplicate (#297).
 
