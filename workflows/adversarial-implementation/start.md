@@ -66,7 +66,7 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
           planner={planner}
           implementor={implementor}
           as="planning" />
-        <If condition={planning.authorized}>
+        <If condition={planning.decision.proceed && planning.verdictPassed}>
           <Capture as="planReport">
             ## Implementation plan
 
@@ -89,7 +89,7 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
               planner={planner}
               implementor={implementor}
               as="implementation" />
-            <If condition={implementation.authorized}>
+            <If condition={implementation.decision.proceed && implementation.verdictPassed}>
               <UserCheckpoint
                 purpose="accept the completed change"
                 agent={planner}
@@ -102,9 +102,9 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
       </If>
       <Output>
         <If condition={handoffCheckpoint.proceed}>
-          <If condition={planning.authorized}>
+          <If condition={planning.decision.proceed && planning.verdictPassed}>
             <If condition={authorization.proceed}>
-              <If condition={implementation.authorized}>
+              <If condition={implementation.decision.proceed && implementation.verdictPassed}>
                 <If condition={acceptance.proceed}>
                   # Accepted
 
@@ -123,14 +123,23 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
                   </Else>
                 </If>
                 <Else>
-                # Stopped in implementation: {implementation.terminal}
+                <If condition={implementation.decision.proceed}>
+                # Stopped: the pull-request review never passed
 
-                The pull-request review ended `{implementation.terminal}`, so
-                the change was never offered for acceptance.
+                The user kept approving and the verdict never passed, so the
+                change was never offered for acceptance.
 
-                {implementation.decision.rationale}
+                {implementation.review}
 
                 {implementation.report}
+                  <Else>
+                  # Stopped: the pull-request review was declined
+
+                  {implementation.decision.rationale}
+
+                  {implementation.report}
+                  </Else>
+                </If>
                 </Else>
               </If>
               <Else>
@@ -142,14 +151,23 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
               </Else>
             </If>
             <Else>
-            # Stopped in planning: {planning.terminal}
+              <If condition={planning.decision.proceed}>
+              # Stopped: the plan review never passed
 
-            The plan review ended `{planning.terminal}`, so authorization was
-            never requested.
+              The user kept approving and the verdict never passed, so
+              authorization was never requested.
 
-            {planning.decision.rationale}
+              {planning.review}
 
-            {planning.plan}
+              {planning.plan}
+                <Else>
+                # Stopped: the plan review was declined
+
+                {planning.decision.rationale}
+
+                {planning.plan}
+                </Else>
+              </If>
             </Else>
           </If>
           <Else>
@@ -177,29 +195,41 @@ component boundary as prose.
 Two of the gates read a checkpoint this document invoked directly:
 `handoffCheckpoint.proceed` before `Planning`, and `authorization.proceed`
 before `Implementation`. The other two read a decision a stage resolved
-*internally* and returned: `planning.authorized` and
-`implementation.authorized`. Each is `proceed && verdict.passed` — a plan that
-was approved but never passed review cannot reach authorization, and one that
-passed review but was declined cannot either.
+*internally* and returned, together with that stage's verdict:
+
+```
+planning.decision.proceed && planning.verdictPassed
+implementation.decision.proceed && implementation.verdictPassed
+```
+
+A plan that was approved but never passed review cannot reach authorization, and
+one that passed review but was declined cannot either.
 
 That second pair is what keeps authority from leaking across a boundary. A stage
 that asks the user a question and then returns only a report leaves its caller
 guessing; the caller would ask the next question anyway and could accept a change
-whose review the user rejected. Returning `authorized` and `terminal` makes the
-internal decision the caller's gate.
+whose review the user rejected. Returning the decision itself makes it the
+caller's gate.
 
-An exhausted loop fails closed. `terminal` distinguishes `converged`, `declined`,
-and `exhausted`, and `authorized` is false for the last two, so neither advances.
-What an exhausted planning loop *should* do remains an unresolved product
-decision under #290 — failing closed is not an answer to it.
+The gate is computed here rather than returned by the stage, and that is
+deliberate. A returned `authorized` field would be a second copy of the same
+answer, and no return schema can require the copy to agree with its sources — a
+record pairing a declining decision with an approving flag would validate. One
+authoritative pair, read where it is used.
+
+The same pair distinguishes the failure modes without a separate label. After a
+loop, `decision.proceed` false means the user declined; `decision.proceed` true
+with `verdictPassed` false means the loop reached `max` still failing. Neither
+passes the gate. What an exhausted loop *should* do remains an unresolved
+product decision under #290 — refusing to advance is not an answer to it.
 
 A checkpoint that found no material choice still produces an explicit
 `proceed: true` with its reason, so nothing advances because a decision was
 absent.
 
-`<Output>` reports which gate the run reached, naming the stage's `terminal`
-where a stage stopped. A rejected acceptance finishes as rejected — the flow does
-not fall into the accepted branch — and a run stopped earlier renders the
+`<Output>` reports which gate the run reached, telling a decline apart from a
+review that never passed. A rejected acceptance finishes as rejected — the flow
+does not fall into the accepted branch — and a run stopped earlier renders the
 artifact it stopped on rather than a value it never produced.
 
 **Missing: stopping at the boundary.** Nesting expresses the gate, and it is
@@ -285,17 +315,23 @@ manual stages.
 | `instructions`         | `InstructionFiles` (text)  | every agent prompt                                  |
 | `handoff`              | `Discovery` (text)          | handoff `UserCheckpoint`, `Planning`                |
 | `handoffCheckpoint`    | handoff `UserCheckpoint` (decision) | the `Planning` gate, and `Planning`         |
-| `planning`             | `Planning` (structured)     | the authorization gate (`.authorized`), the authorization checkpoint (`.plan`, `.review`), and `Implementation` (`.plan`) |
+| `planning`             | `Planning` (structured)     | the authorization gate (`.decision.proceed`, `.verdictPassed`), the authorization checkpoint (`.plan`), and `Implementation` (`.plan`) |
 | `authorization`        | authorization checkpoint (decision) | the `Implementation` gate, and `Implementation` |
-| `implementation`       | `Implementation` (structured) | the acceptance gate (`.authorized`), the acceptance checkpoint (`.report`) |
+| `implementation`       | `Implementation` (structured) | the acceptance gate (`.decision.proceed`, `.verdictPassed`), the acceptance checkpoint (`.report`) |
 | `acceptance`           | acceptance checkpoint (decision) | workflow output, terminal record               |
 
 `instructions` and `handoff` are rendered text. `planning` and `implementation`
-are structured stage results carrying `authorized` and `terminal` alongside the
-plan or report, the parsed verdict's fields, and the complete `UserDecision`
-that stage resolved. The three checkpoints bind decisions. This document renders
-the human-readable reports from those returned fields rather than receiving them
-pre-rendered.
+are structured stage results: the plan or report, the parsed verdict's fields,
+and the complete `UserDecision` that stage resolved — the sources a gate reads,
+with nothing derived from them. The three checkpoints bind decisions. This
+document renders the human-readable reports from those returned fields rather
+than receiving them pre-rendered.
+
+Neither stage returns the pull-request handle. `<PullRequest>` (#295) resolves a
+structured handle with the number, URL, head and base identities, state, reviews,
+comments, and checks; nothing here consumes it, and the artifact ledger (#291)
+records it independently. `Implementation` renders the fields a reader needs into
+its `report`.
 
 ## Details
 
