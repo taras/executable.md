@@ -17,7 +17,7 @@ import type { ErrorSegment } from "./types.ts";
  * error crossing from a component's own error mode to its caller's does not emit a
  * second observation.
  */
-export type ErrorMode = "print" | "throw";
+export type ErrorMode = "print" | "output" | "throw";
 
 export const ErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
   "component.errorMode",
@@ -25,16 +25,27 @@ export const ErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
 );
 
 /**
- * Settle a segment under the ambient error mode: the default `Component.raise`
- * implementation calls this, and so does a consumer applying its own error mode to
- * an error that already crossed a nested one.
+ * Settle a segment under the ambient error mode — the decision an undecided
+ * error is raised into, made exactly once, where it is raised.
+ *
+ * The three modes differ over an error no middleware converted:
+ *
+ * - `print` prints it into the document and the run continues. This is the
+ *   root's mode, and what a printing boundary installs for its region.
+ * - `output` fails the run. Every `<Output>` region installs it: a region that
+ *   shows an operator what a stage produced must not also let a failed stage
+ *   reach the step after it. The failure that leaves the region propagates like
+ *   any other, so the nearest printing boundary may print it instead.
+ * - `throw` fails the run whatever a printing boundary says. Documentation and
+ *   value roots are hidden, so a printed error there gives an author nothing to
+ *   read.
  */
 export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
-  const mode = yield* ErrorMode.get();
-  if (mode === "throw") {
-    throw new DocumentationError(segment);
+  const mode = (yield* ErrorMode.get()) ?? "print";
+  if (mode === "print") {
+    return segment;
   }
-  return segment;
+  throw new DocumentationError(segment, mode);
 }
 
 /**
@@ -71,11 +82,19 @@ export function attributeCause(segment: ErrorSegment, from: unknown): void {
  */
 export class DocumentationError extends Error {
   readonly segment: ErrorSegment;
+  /**
+   * The error mode that decided this failure. Recorded because the two failing
+   * modes end differently at a printing boundary (`decidedByOutput`), and
+   * because the decision was already made: nothing reads the ambient mode again
+   * to work out what this failure means.
+   */
+  readonly mode: "output" | "throw";
 
-  constructor(segment: ErrorSegment) {
+  constructor(segment: ErrorSegment, mode: "output" | "throw") {
     super(segment.message);
     this.name = "DocumentationError";
     this.segment = segment;
+    this.mode = mode;
     // Membership, not value: a component can throw `undefined`, and that is
     // still the exact value this failure was translated from — the own `cause`
     // property records it. Only a segment with no attribution has none.
@@ -137,8 +156,10 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  * is right for anything the document itself got wrong. Two kinds are not that,
  * and every generic catch in the engine rethrows them:
  *
- * - `DocumentationError` — the ambient error mode has already decided this
- *   execution fails (§6.9); printing it would undo that decision.
+ * - `DocumentationError` — the error mode has already decided this execution
+ *   fails (§6.9); printing it here would undo that decision and resume work
+ *   the decision stopped. The one place that asks a narrower question is the
+ *   invocation boundary — see `decidedByOutput`.
  * - a `DurabilityFailure` — the journal no longer describes this run (§6.11).
  *   The document is not wrong and there is nothing useful to render: continuing
  *   would run later siblings on top of work that never happened, and rendering
@@ -170,7 +191,35 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  * `isRecoveredContent` for why the asymmetry is the point.
  */
 export function fatalCause(error: unknown): FatalFailure | undefined {
-  return durabilityFailure(error) ?? firstCause(error, asDocumentationError, isRecoveredContent);
+  return durabilityFailure(error) ?? documentationFailure(error);
+}
+
+/**
+ * The documentation failure this one carries, if any — the same search
+ * `fatalCause` runs, asked on its own by the execution boundary, which reports
+ * a document's failure as the document's own outcome and lets anything else
+ * escape as an infrastructure failure.
+ */
+export function documentationFailure(error: unknown): DocumentationError | undefined {
+  return firstCause(error, asDocumentationError, isRecoveredContent);
+}
+
+/**
+ * Whether a printing boundary is allowed to print this failure.
+ *
+ * Every generic catch in the engine asks `fatalCause` a broader question — "may
+ * I turn this into a printed error and carry on?" — and the answer there is no
+ * for both failing modes, because carrying on resumes work the decision
+ * stopped. A printing boundary asks a narrower one: the region is already torn
+ * down and nothing after the failure ran, so the only thing left to decide is
+ * whether the document gets to read what happened.
+ *
+ * An `output` decision says yes — that is the whole difference between the mode
+ * a region installs and the mode documentation installs. A `throw` decision and
+ * a durability failure say no.
+ */
+export function decidedByOutput(failure: FatalFailure): boolean {
+  return failure instanceof DocumentationError && failure.mode === "output";
 }
 
 /**

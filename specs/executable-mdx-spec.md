@@ -848,8 +848,8 @@ Multi-line code blocks are passed as a single string to the `-c` flag.
 
 Whether a block failed is a separate question from what it printed, and
 the exit code alone answers it. A non-zero exit produces an
-`ErrorSegment` — settled by the ambient error mode, so a comment under a
-printing error mode and a fail-fast throw in documentation (§6.9) —
+`ErrorSegment` — decided by the ambient error mode, so a comment under
+`print` and a failure under `output` or `throw` (§6.9) —
 whatever the command wrote. Output the command produced is kept as its
 `execOutput` segment and precedes that printed error, because a command
 that prints before it fails is usually explaining itself.
@@ -1455,7 +1455,7 @@ run but are absent from the diagnostic trace.
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
-| `src/errors.ts` | `ErrorMode`, `settle()`, `DocumentationError`, `ContentError` — error settlement (§6.9) and the function-content failure boundary (§5.1.2) |
+| `src/errors.ts` | `ErrorMode`, `settle()`, `DocumentationError`, `ContentError` — the error-mode decision (§6.9) and the function-content failure boundary (§5.1.2) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
@@ -1953,8 +1953,8 @@ expression:
   segments — the same objects, with their metadata and source order intact —
   and partial content plus any wrapper the function would have produced are
   discarded;
-- later document siblings continue under a printing error mode and abort under a
-  throwing one, as they do for any other first error.
+- later document siblings continue under `print` and stop under `output` or
+  `throw`, as they do for any other first error.
 
 One rule covers captured and uncaptured invocations, default content and named
 slots, and both text and declared-return components. For
@@ -2030,18 +2030,19 @@ is ordinary recovery:
 - durability failures (§6.11) and unrelated engine failures are never presented
   as `ContentError`; they keep their own identity and precedence.
 
-Left uncaught, the boundary hands the failure to the invocation's consumer: under
-`print` it transports the original error segments and settles them under the
-consumer's error mode, and under `throw` it restores and rethrows the original
-`DocumentationError`, so external fail-fast is unchanged (§6.9). The recovery
-type and the propagated type are deliberately two views of one boundary — a
-component catches `ContentError` at `content()`, and a caller the component did
-not recover for still observes `DocumentationError`.
+Left uncaught, the boundary hands the failure to the invocation's consumer:
+under `print` it transports the original error segments, already decided where
+they were raised, and under `output` or `throw` it restores the original
+`DocumentationError` — rethrown for a `throw` decision, and offered to the
+nearest printing boundary for an `output` one (§6.9). The recovery type and the
+propagated type are deliberately two views of one boundary — a component catches
+`ContentError` at `content()`, and a caller the component did not recover for
+still observes `DocumentationError`.
 
 **A reported failure carries what it was translated from.** A function component
 that throws anything else — an ordinary error, a failure of its own after
 recovering from content — is reported as a printed error naming the component, and
-that printed error is what the document says. Under fail-fast the
+that printed error is what the document says. Under `output` or `throw` the
 `DocumentationError` built for it keeps the thrown value itself as its `cause`,
 whatever kind of value it was, so a host inspecting what ended the execution
 reaches the component's own failure and everything beneath it. The link is in
@@ -2514,7 +2515,7 @@ interface, and each operation is also exported directly:
 |---|---|---|
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
-| `raise(error)` | Report an `ErrorSegment` under the ambient error mode (§6.9); whoever creates one calls this | settles it: printed, or thrown inside documentation |
+| `raise(error)` | Report an `ErrorSegment` under the ambient error mode (§6.9); whoever creates one calls this | decides it: printed under `print`, thrown under `output` or `throw` |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
@@ -3266,7 +3267,7 @@ content, so the invocation tracks those and refuses the capture with the recorde
 segments. A value component cannot reach a recorded projection error: `<Output>`
 and `returns` are exclusive, its eval-block projections are bound to the block's
 snapshot error mode — `throw` in value-body documentation — and that failure
-propagates as the body's fail-fast abort.
+stops the body.
 
 Uncaptured `<Each>` is unaffected: without `as` it keeps emitting its body
 segments structurally.
@@ -4011,16 +4012,23 @@ that handles a failure from the invocation tree beneath it, exactly once. The
 boundary sits outside the whole invocation, which is what lets it see a failure
 that happens while the invocation is being dismantled.
 
-Printing turns a failure into one printed error whose `cause` is the complete
-original failure. It does not decide what that printed error means: the caller's
-ambient error mode still settles it (§6.9), so under documentation a printed
-failure still stops the document.
+A boundary does two things, and they are the same decision: it sets `print` for
+its region (§6.9), and it turns a failure that reaches it into one printed error
+whose `cause` is the complete original failure. The mode is a context value, so
+it governs by lexical structure and nothing else — a region nested inside that
+chooses its own shadows it, and what happens in that nested region is the same
+whether or not a boundary is written around it.
+
+`throw` is the one mode a boundary does not replace. Documentation and value
+roots render nothing, so a printed error there is one nobody can read, and the
+failure stays a failure.
 
 Some failures are classified before any of this and are never printed: a
-durability failure, a `DocumentationError` the caller's error mode already selected,
-the content transport that restores already-reported segments, and a schema
-printed error that already has a structured representation. Cancellation is not a
-printed error either.
+durability failure, a failure a `throw` decision already selected, the content
+transport that restores already-reported segments, and a schema printed error
+that already has a structured representation. Cancellation is not a printed
+error either. A failure an `output` decision selected is not in that list: the
+region it left has already stopped, so printing it resumes nothing.
 
 ### 6.9 Component-declared output: `<Output>`
 
@@ -4098,72 +4106,112 @@ after a region still runs. The required sequencing:
 - Documentation and output regions execute in document order.
 - The first error produced while executing documentation stops that body's
   execution immediately and propagates to the caller.
-- An error produced while rendering an output region — or anywhere in a body
-  that declares no `<Output>` — retains normal `ErrorSegment` rendering (an
-  `<!-- ERROR -->` comment).
-- A root containing `<Output>` emits its selected output only after the whole
-  body completes successfully; a documentation failure yields no partial
-  output, and an empty selection emits nothing.
+- An error produced while rendering an output region fails the run. Nothing
+  after it begins: not the rest of the region, not a later region, not the
+  documentation between them. A body that declares no `<Output>` is unaffected —
+  it runs under whatever mode encloses it, and at a root that is `print`.
+- A root containing `<Output>` buffers its selection and emits it once. A run
+  that fails emits what its regions rendered before the failure, and an empty
+  selection emits nothing.
 
-An error a nested component renders inside its own output region is a normal
-comment when that component renders normally; but when that component is
-executed as a parent's documentation, the parent's documentation fail-fast
-applies and the error propagates rather than being hidden.
+Each construct installs one mode for its own region, and the nearest one governs
+(§6.9 Error modes):
 
-**Reporting and settling are separate.** `Component.raise` is where an error is
+| Region | Mode |
+| --- | --- |
+| the root, and any body with no `<Output>` | inherited; `print` at a root |
+| an `<Output>` region | `output` |
+| documentation, and a value root | `throw` |
+| a `<PrintErrors>` region, or a `printErrors(fn)` invocation | `print`, except over `throw` |
+
+Because a mode is read from the enclosing structure, wrapping a printing
+boundary around a component whose own body declares `<Output>` changes nothing
+inside that component: its region installs `output` for itself, stops at its
+failure, and the boundary prints the failure that left it rather than resuming
+it. A region's author gates what follows a failure behind it, and no caller
+undoes that gate.
+
+**Reporting and deciding are separate.** `Component.raise` is where an error is
 reported: its middleware chain observes each `ErrorSegment` once, where the
 segment is created, which is what lets instrumentation and `<Test>` count
-failures. Its default implementation then *settles* the segment under the
-ambient error mode — printed for rendering, or thrown as a documentation failure.
-A documentation chunk and an `<Output>` region select the error mode by value rather
-than by installing reporting middleware, so an error crossing from a component's
-own error mode into its caller's is settled again without being reported twice.
+failures. Its default implementation then *decides* the segment under the
+ambient error mode — printed into the document, or thrown as a failure.
+A documentation chunk and an `<Output>` region select the error mode by value
+rather than by installing reporting middleware, so what an error becomes depends
+only on where it was raised.
 
 **Whoever creates an `ErrorSegment` reports it.** `Component.raise` is called at
 the point the failure is decided, and a printed error that reaches the document
 without that call never passes the observation chain — middleware that counts,
 logs, or forwards failures never sees it.
 
-**Every path reports once.** The rule is the same wherever segments cross a
-construct: `<If>`, `<Else>`, `<Each>`, `<Capture>`, `<Loop>` and `<Break>` report
-the errors they create and hand a body's segments back untouched, because those
-ran under the same error mode. A component invocation is the one boundary that
-settles rather than appends — its body may have run under an error mode of its own —
-and settling applies the caller's error mode without a second observation. So a
-failing element reports exactly once wherever it is written: inline, in a
-selected branch, in an iteration, inside a capture, in a component body, or
-projected into a `<Content />`.
+**Every path reports once, and decides once.** The rule is the same wherever
+segments cross a construct: `<If>`, `<Else>`, `<Each>`, `<Capture>`, `<Loop>`,
+`<Break>` and a component invocation report the errors they create and hand a
+body's segments on untouched. So a failing element is reported exactly once
+wherever it is written: inline, in a selected branch, in an iteration, inside a
+capture, in a component body, or projected into a `<Content />`.
 
-**Appending and settling stay distinct.** The difference is not cosmetic.
-`<Each>` and `<Capture>` expand inside the caller's own error mode frame, so their
-transported errors have already settled there and are appended as they are. A
-component invocation settles instead, because its body may have run inside an
-inner `<Output>` printing frame or a documentation throw frame; appending at
-the caller would let a printed inner error slip past the caller's fail-fast
-error mode. `content()` adds an *inner* boundary to a function component's own
-control flow and does not replace that consumer boundary: the content provider
-projects structured segments, presents `ContentError` at the `content()` call,
-and — if the component does not recover — hands the original segments back as the
-invocation's result under `print` or restores the original `DocumentationError`
-under `throw`. The invocation's consumer then settles under its own ambient
-error mode, without reporting anything a second time.
+**A printed error crosses an invocation as data.** A printed error was decided
+where it was raised, under the mode governing that region, and nothing decides
+it again — including the consumer that reads it. A child that printed an error
+inside a `<PrintErrors>` region of its own hands its caller a document
+containing that error; a parent whose documentation reads it neither stops the
+rest of the child's rendering nor fails. A *failure* is the other half of the
+same rule: uncaptured, it propagates out of the child and the parent does stop.
+`content()` adds an inner boundary to a function component's own control flow —
+the content provider projects structured segments and presents `ContentError` at
+the `content()` call — and a component that does not recover is replaced by what
+the projection already reported, under `print`, or by the failure a `throw` or
+`output` decision already made.
 
-Observation counts cannot catch a regression here, because appending and
-settling can both observe exactly once. The guards are the consumer-boundary
-tests in `packages/core/tests/expand.test.ts`: a child's `<Output>` error
-consumed from parent documentation throws, the same error consumed inside a
-parent `<Output>` renders as one printed comment, and a captured child
-`<Output>` error throws before the `as` binding is stored. A function component
-whose content prints an error in one error mode frame and is consumed by a
-throwing parent frame belongs to that same set, and throws rather than appending.
+#### Partial output
+
+A failing region keeps what it rendered. Everything rendered before the failure
+stays in the document and reaches the output stream, not only the journal —
+including when an earlier segment already streamed, so a consumer reading chunks
+sees the prefix before it sees the failure.
+
+Only work the document was going to render can reach the output. Expansion
+writes into the accumulator its caller gave it, and a call site producing
+something other than document text passes none: a binding (`as=`, `<Capture as>`,
+`<Each as>`), a value component's return, a string projection
+(`renderChildren`, `render`, `useContent`), and documentation each keep a
+private buffer. A failure part-way through one of those adds nothing to the
+document.
 
 #### Root and component consistency
 
 A root document obeys exactly the same rules as an imported component (§5.4).
 Because selecting output requires the whole body, a root that declares
-`<Output>` is buffered — executed to completion, then emitted once on success —
-while a root without `<Output>` keeps per-segment streaming. Buffering defers
-only when output is emitted, not what executes, so replay is deterministic.
+`<Output>` is buffered — executed to completion, then emitted once — while a
+root without `<Output>` keeps per-segment streaming. Buffering defers only when
+output is emitted, not what executes, so replay is deterministic.
+
+#### Outcomes and the journal
+
+A run that fails is still a complete record. The document's workflow returns its
+outcome — the rendered output together with a description of the failure — and
+the root closes `ok` around it, so replaying restores both halves without
+re-entering the workflow and without re-executing anything.
+
+What crosses the journal is data, not objects. The record holds the failure's
+name and message, the message and source of the segment that failed, its own
+`cause` as text when it had one, and its aggregate members when it was an
+`AggregateError`. A field is absent when the failure had nothing to say there,
+which is what keeps a failure with no cause distinct from one whose cause was
+the value `undefined`. A live run therefore reports the error it actually
+caught, by identity; a replayed run reports the reconstruction its record
+describes.
+
+The record is parsed, never trusted. A shape this version cannot read — a name
+that is not text, a segment with no message, aggregate members that are not a
+list, a journal written before this contract — is refused with a message naming
+the situation, rather than coerced into a failure that quietly disagrees with
+the one recorded.
+
+Only a durability failure (§6.11) escapes this. It says the journal no longer
+describes the run, so it is never recorded as the run's own outcome.
 
 ### 6.10 Component return values: `returns` and `<Return>`
 
@@ -4349,7 +4397,7 @@ directory this run created and the reason, and that **ends the execution**: the
 `DocumentExecution` completes `Err`, nothing after the component runs, and the
 document must be re-run from the beginning.
 
-The refusal does not settle under the ambient error mode (§6.9). An error mode
+The refusal is not decided under the ambient error mode (§6.9). An error mode
 that prints would turn a durability failure into a comment and let later
 siblings run on top of work that never happened, so `StaleInputError` joins
 `DocumentationError` as an error the engine's generic catches rethrow rather
@@ -4572,8 +4620,9 @@ be written into the file instead. It therefore fails the invocation rather
 than writing, and carries the underlying messages in its own printed error —
 which is the only place a reader would otherwise learn what went wrong.
 
-Under fail-fast the reported failure is `<File>`'s as well: the write is what the
-document asked for, and that it did not happen is the fact a reader needs. The
+When the failure propagates, the reported failure is `<File>`'s as well: the
+write is what the document asked for, and that it did not happen is the fact a
+reader needs. The
 general rule then applies (§5.1.2) — the `DocumentationError` keeps `<File>`'s own
 error as its cause, and the content failure that error was translated from stays
 reachable beneath it, carrying the same error segments the document reported — so
@@ -5871,7 +5920,7 @@ visible warning blocks, gather into a separate error report).
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
 | C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate printed error and runs no body side effects |
 | C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's error mode |
-| C43 | Documentation fail-fast | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; errors inside `<Output>` or with no `<Output>` remain comments |
+| C43 | Documentation and region failures | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; an error inside `<Output>` fails the run, and one under `<PrintErrors>` or in a body with no `<Output>` stays a comment |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
 | C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
 | C46 | **Nested default filled** | A row omitting `line` (declared `{ type: number, default: 0 }`) resolves with `line` set to `0` |
@@ -5920,7 +5969,7 @@ visible warning blocks, gather into a separate error report).
 | E9 | `sample exec` in full document | Command + LLM both journaled, LLM response in output |
 | E10 | Unclosed bold across component boundary | `**text\n<Comp />\nmore` → healed bold in first segment, component expanded, `more` unaffected |
 | E11 | `<Output>` component vs. root consistency | An imported component and a root document apply `<Output>` identically; documentation is suppressed in both |
-| E12 | Root `<Output>` buffering | A root with `<Output>` emits once after success; a later documentation failure yields no partial output; an empty selection emits no event; replay reproduces the result |
+| E12 | Root `<Output>` buffering | A root with `<Output>` emits once; a later documentation failure still emits what the regions selected before it; an empty selection emits no event; replay reproduces the result |
 | E13 | `<If>` inside `<Output>` (smoke) | `smoke-test/OutputDemo.md` renders the conditionally-selected region (its `condition` binding computed by preceding documentation eval) while its documentation prose does not appear |
 
 ### Tier F — Markdown healing (remend)
@@ -6247,6 +6296,25 @@ visible warning blocks, gather into a separate error report).
 | FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
 | FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |
 | FA19 | Cycles through a content failure | A self-caused content failure and one whose cause points back at the wrapper holding it both terminate, and the durability failure is still found |
+
+### Tier OM — The `output` error mode
+
+| # | Test | Verify |
+|---|------|--------|
+| OM1–OM2 | A region fails the run | A root region and a component region each emit what they rendered first, fail, and start nothing after the failure |
+| OM3 | A command that printed before it failed | The stdout stays visible and the document stops there (#307/#310) |
+| OM4 | Later regions and documentation | Neither the documentation after a failing region nor the region after that begins |
+| OM5a–OM5f | `<PrintErrors>` | Prints once and the region continues; fails without the boundary; the same for `printErrors(fn)`; `throw` is not overridden; a root without `<Output>` still prints |
+| OM6–OM6c | The live failure | The original object, a settled printed error's `DocumentationError` with its mode, and a body-plus-teardown aggregate each reach the completion intact |
+| OM7 | Replay | The same partial output and failure, with no command run again |
+| OM8 | The close | The root closes `ok` around a recorded `err` outcome |
+| OM9/OM10 a–e | Every visible producer | `<If>`, `<Loop>`, `<Each>`, projected `<Content />` and an answered `<Answers>` body each keep their prefix on failure and render exactly once on success |
+| OM11a–OM11e | Private buffers | A `<Capture as>`, an `<Each as>`, a string projection, documentation, and a failing `as=` invocation each add nothing to the output |
+| OM12a–OM12j | A malformed record | Seven corrupted fields are each refused, the refusal names the situation, a pre-contract journal is named as such, and an intact record replays |
+| OM13a–OM13e | What crosses the journal | Absent fields stay absent, a `"undefined"` cause is a cause, and a replay reconstructs an `Error` or an `AggregateError` from the recorded fields |
+| OM14–OM16 | Transitivity | `<PrintErrors>`, `<File>`, and a printing component that does not recover each stop a callee's own region; each still prints what is raised under its own mode |
+| OM17 | Chunks, not the close value | A streamed prefix arrives before the failing region's output, and both reach the stream |
+| OM18–OM19 | A printed error is data | A child's printed error does not fail a parent's documentation; an uncaptured failure in the same position still propagates |
 
 ### Tier IM — Invocation metadata
 

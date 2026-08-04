@@ -211,7 +211,7 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
-| `<Output>` region `output` mode | an undecided error fails the run | defined, unbuilt — on main a region prints and continues |
+| `<Output>` region `output` mode | an undecided error fails the run | built on main |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |

@@ -145,6 +145,21 @@ function closeResults(events: DurableEvent[]): string[] {
   return events.filter((event) => event.type === "close").map((event) => event.result.status);
 }
 
+/** The outcome a closed document determined for itself: "ok" or "err". */
+function documentOutcome(event: DurableEvent | undefined): unknown {
+  if (event?.type !== "close" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value["status"]
+    : undefined;
+}
+
+function documentOutcomes(events: DurableEvent[]): unknown[] {
+  return events.filter((event) => event.type === "close").map(documentOutcome);
+}
+
 function outcomeRecords(events: DurableEvent[]): OutcomeEntry[] {
   return events
     .filter((event) => event.type === "yield" && event.description.type === "loop")
@@ -936,14 +951,16 @@ describe("Tier LOOP — execution records", () => {
       ["<Loop max={3}>", "<Missing />", "</Loop>", "", "<Output>", "done", "</Output>"].join("\n"),
     );
 
-    expect(run.failure).toBeInstanceOf(DocumentationError);
+    expect(run.failure).toBeInstanceOf(Error);
     expect(iterationRecords(run.events)).toHaveLength(1);
     expect(outcomeRecords(run.events)).toEqual([
       { name: "loop:0", status: "ok", iterations: 1, outcome: "error" },
     ]);
-    // The execution's own terminal record agrees.
+    // A document that failed is still a complete record: the root closes over
+    // the outcome it determined, and the outcome is what says it failed.
     const close = run.events.find((event) => event.type === "close");
-    expect(close?.result.status).toBe("err");
+    expect(close?.result.status).toBe("ok");
+    expect(documentOutcome(close)).toBe("err");
   });
 
   it("LOOP45: a printing error mode is not a loop failure", function* () {
@@ -1008,8 +1025,13 @@ describe("Tier LOOP — execution records", () => {
 
     expect(outcomeRecords(completed.events)[0]?.outcome).toBe("exhausted");
     expect(closeResults(completed.events)).toEqual(["ok"]);
+    expect(documentOutcomes(completed.events)).toEqual(["ok"]);
     expect(outcomeRecords(failed.events)[0]?.outcome).toBe("error");
-    expect(closeResults(failed.events)).toEqual(["err"]);
+    // Both finished runs close; what tells them apart is the outcome each one
+    // determined, which is why an interrupted run — no close at all — is a
+    // third state rather than the same one as a failure.
+    expect(closeResults(failed.events)).toEqual(["ok"]);
+    expect(documentOutcomes(failed.events)).toEqual(["err"]);
     expect(closeResults(events)).toEqual([]);
   });
 
@@ -1360,10 +1382,13 @@ describe("Tier LOOP — replay validates the terminal record", () => {
             fn: printErrors(function* () {
               throw new AggregateError(
                 [
-                  new DocumentationError({
-                    type: "error",
-                    message: "the document is wrong",
-                  }),
+                  new DocumentationError(
+                    {
+                      type: "error",
+                      message: "the document is wrong",
+                    },
+                    "throw",
+                  ),
                   planted,
                 ],
                 "carried together",
