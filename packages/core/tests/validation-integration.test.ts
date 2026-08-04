@@ -52,6 +52,16 @@ function expandRaw(
   });
 }
 
+/** The failure an operation raised, so an assertion can read it. */
+function* raised(operation: () => Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the operation to fail");
+}
+
 describe("prop-validation error segment", () => {
   it("carries a structured { componentName, errors } cause", function* () {
     const strict = markdownComponent("Strict", {
@@ -193,14 +203,14 @@ describe("definition-loading rejects invalid props schemas", () => {
 describe("the root-object contract applies to the normalized schema", () => {
   it("reports a non-object root type", function* () {
     const { props } = parseFrontmatter({ props: { type: "array", items: { type: "string" } } });
-    expect(() => compilePropsSchema(props)).toThrow('type: "object"');
+    expect(String(yield* raised(() => compilePropsSchema(props)))).toContain('type: "object"');
   });
 
   it("reports a missing root type behind a draft-07 dialect", function* () {
     const { props } = parseFrontmatter({
       props: { $schema: "http://json-schema.org/draft-07/schema#", properties: {} },
     });
-    expect(() => compilePropsSchema(props)).toThrow('type: "object"');
+    expect(String(yield* raised(() => compilePropsSchema(props)))).toContain('type: "object"');
   });
 
   it("compiles a normalized props map", function* () {
@@ -208,6 +218,6 @@ describe("the root-object contract applies to the normalized schema", () => {
       required: ["name"],
       props: { name: { type: "string" } },
     });
-    expect(() => compilePropsSchema(props)).not.toThrow();
+    yield* compilePropsSchema(props);
   });
 });

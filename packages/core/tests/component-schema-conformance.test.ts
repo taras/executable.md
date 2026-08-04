@@ -33,7 +33,7 @@ describe("component schema conformance", () => {
           checked++;
           try {
             const { props } = parseFrontmatter(parsed.data);
-            compilePropsSchema(props);
+            yield* compilePropsSchema(props);
           } catch (error) {
             failures.push(
               `${entry.path}: ${error instanceof Error ? error.message : String(error)}`,

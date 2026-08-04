@@ -201,9 +201,9 @@ export function* registerComponents(
         `the registration for "${name}" needs an origin naming where it came from`,
       );
     }
-    compilePropsSchema(props);
+    yield* compilePropsSchema(props);
     if (returns !== undefined) {
-      compileReturnsSchema(returns);
+      yield* compileReturnsSchema(returns);
     }
     assertUsableCaptures(name, registration.captures, props);
 

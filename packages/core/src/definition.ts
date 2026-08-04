@@ -1,3 +1,4 @@
+import type { Operation } from "effection";
 import type { ComponentDefinition } from "./types.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { compilePropsSchema, compileReturnsSchema } from "./validate.ts";
@@ -20,16 +21,16 @@ export function isFunctionComponentPath(path: string): boolean {
  * drift: both compile the props and return schemas, so a malformed schema
  * fails the same way whether the document runs or is only described.
  */
-export function parseMarkdownDefinition(
+export function* parseMarkdownDefinition(
   name: string,
   path: string,
   content: string,
-): ComponentDefinition {
+): Operation<ComponentDefinition> {
   const parsed = matter(content);
   const { meta, props, returns } = parseFrontmatter(parsed.data);
-  compilePropsSchema(props);
+  yield* compilePropsSchema(props);
   if (returns !== undefined) {
-    compileReturnsSchema(returns);
+    yield* compileReturnsSchema(returns);
   }
   // The markdown body is a verbatim suffix of the raw file, so the body start
   // is computed by length — never by content search, which could false-match

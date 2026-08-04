@@ -6,6 +6,7 @@ import {
   PropValidationError,
   validateProps,
 } from "../src/validate.ts";
+import type { Operation } from "effection";
 import type { Json } from "../src/types.ts";
 
 function closed(properties: Record<string, Json>, required?: string[]): Record<string, Json> {
@@ -17,59 +18,83 @@ function closed(properties: Record<string, Json>, required?: string[]): Record<s
   };
 }
 
+/** The failure an operation raised, so an assertion can read it. */
+function* raised(operation: () => Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the operation to fail");
+}
+
 describe("compilePropsSchema — root-props contract", () => {
   it("rejects a root schema that is not type: object", function* () {
-    expect(() => compilePropsSchema({})).toThrow(PropsSchemaError);
-    expect(() => compilePropsSchema({ type: "array" })).toThrow('type: "object"');
-  });
-
-  it("rejects reserved slot/as as declared properties", function* () {
-    expect(() => compilePropsSchema(closed({ slot: { type: "string" } }))).toThrow("reserved");
-    expect(() => compilePropsSchema(closed({ as: { type: "string" } }))).toThrow("reserved");
-  });
-
-  it("rejects a malformed schema via Ajv meta-validation", function* () {
-    expect(() => compilePropsSchema(closed({ n: { type: "not-a-type" } }))).toThrow(
-      PropsSchemaError,
+    expect(yield* raised(() => compilePropsSchema({}))).toBeInstanceOf(PropsSchemaError);
+    expect(String(yield* raised(() => compilePropsSchema({ type: "array" })))).toContain(
+      'type: "object"',
     );
   });
 
+  it("rejects reserved slot/as as declared properties", function* () {
+    expect(
+      String(yield* raised(() => compilePropsSchema(closed({ slot: { type: "string" } })))),
+    ).toContain("reserved");
+    expect(
+      String(yield* raised(() => compilePropsSchema(closed({ as: { type: "string" } })))),
+    ).toContain("reserved");
+  });
+
+  it("rejects a malformed schema via Ajv meta-validation", function* () {
+    expect(
+      yield* raised(() => compilePropsSchema(closed({ n: { type: "not-a-type" } }))),
+    ).toBeInstanceOf(PropsSchemaError);
+  });
+
   it("rejects an async schema before compiling", function* () {
-    expect(() =>
-      compilePropsSchema({
-        $async: true,
-        type: "object",
-        properties: {},
-        additionalProperties: false,
-      }),
-    ).toThrow("async");
+    expect(
+      String(
+        yield* raised(() =>
+          compilePropsSchema({
+            $async: true,
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          }),
+        ),
+      ),
+    ).toContain("async");
   });
 
   it("rejects a remote/unresolved $ref at compile time", function* () {
-    expect(() =>
-      compilePropsSchema(closed({ x: { $ref: "https://example.com/schema.json" } })),
-    ).toThrow(PropsSchemaError);
+    expect(
+      yield* raised(() =>
+        compilePropsSchema(closed({ x: { $ref: "https://example.com/schema.json" } })),
+      ),
+    ).toBeInstanceOf(PropsSchemaError);
   });
 
   it("compiles duplicate $id schemas independently (addUsedSchema: false)", function* () {
     const a = { $id: "https://example.com/dup", ...closed({ a: { type: "string" } }) };
     const b = { $id: "https://example.com/dup", ...closed({ b: { type: "number" } }) };
-    expect(() => compilePropsSchema(a)).not.toThrow();
-    expect(() => compilePropsSchema(b)).not.toThrow();
+    yield* compilePropsSchema(a);
+    yield* compilePropsSchema(b);
   });
 });
 
 describe("validateProps — canonical validation", () => {
   it("accepts required props and rejects when missing", function* () {
     const schema = closed({ files: { type: "array", items: { type: "string" } } }, ["files"]);
-    expect(validateProps("C", { files: ["a"] }, schema)).toEqual({ files: ["a"] });
-    expect(() => validateProps("C", {}, schema)).toThrow("must have required property");
+    expect(yield* validateProps("C", { files: ["a"] }, schema)).toEqual({ files: ["a"] });
+    expect(String(yield* raised(() => validateProps("C", {}, schema)))).toContain(
+      "must have required property",
+    );
   });
 
   it("validates a scalar array's element type", function* () {
     const schema = closed({ files: { type: "array", items: { type: "string" } } }, ["files"]);
     try {
-      validateProps("C", { files: ["a", 2] }, schema);
+      yield* validateProps("C", { files: ["a", 2] }, schema);
       throw new Error("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(PropValidationError);
@@ -88,26 +113,28 @@ describe("validateProps — canonical validation", () => {
       additionalProperties: false,
     };
     const schema = closed({ rows: { type: "array", items: row } }, ["rows"]);
-    expect(validateProps("C", { rows: [{ symbol: "x", line: 1 }] }, schema)).toEqual({
+    expect(yield* validateProps("C", { rows: [{ symbol: "x", line: 1 }] }, schema)).toEqual({
       rows: [{ symbol: "x", line: 1 }],
     });
-    expect(() => validateProps("C", { rows: [{ line: 1 }] }, schema)).toThrow(
-      "must have required property",
-    );
-    expect(() => validateProps("C", { rows: [{ symbol: "x", extra: 1 }] }, schema)).toThrow(
-      "must NOT have additional properties",
-    );
+    expect(
+      String(yield* raised(() => validateProps("C", { rows: [{ line: 1 }] }, schema))),
+    ).toContain("must have required property");
+    expect(
+      String(
+        yield* raised(() => validateProps("C", { rows: [{ symbol: "x", extra: 1 }] }, schema)),
+      ),
+    ).toContain("must NOT have additional properties");
   });
 
   it("rejects additional (undeclared) top-level props", function* () {
-    expect(() => validateProps("C", { nope: 1 }, closed({}))).toThrow(
+    expect(String(yield* raised(() => validateProps("C", { nope: 1 }, closed({}))))).toContain(
       "must NOT have additional properties",
     );
   });
 
   it("rejects an invalid enum value", function* () {
     const schema = closed({ level: { type: "string", enum: ["info", "warn"] } });
-    expect(() => validateProps("C", { level: "bad" }, schema)).toThrow(
+    expect(String(yield* raised(() => validateProps("C", { level: "bad" }, schema)))).toContain(
       "must be equal to one of the allowed values",
     );
   });
@@ -120,14 +147,14 @@ describe("validateProps — canonical validation", () => {
       additionalProperties: false,
     };
     const schema = closed({ rows: { type: "array", items: row } }, ["rows"]);
-    expect(() => validateProps("C", { rows: [{ level: "bad" }] }, schema)).toThrow(
-      "must be equal to one of the allowed values",
-    );
+    expect(
+      String(yield* raised(() => validateProps("C", { rows: [{ level: "bad" }] }, schema))),
+    ).toContain("must be equal to one of the allowed values");
   });
 
   it("allows unconstrained {} and true nested schemas", function* () {
     const schema = closed({ anything: {}, whatever: true });
-    expect(validateProps("C", { anything: [1, { a: 2 }], whatever: "x" }, schema)).toEqual({
+    expect(yield* validateProps("C", { anything: [1, { a: 2 }], whatever: "x" }, schema)).toEqual({
       anything: [1, { a: 2 }],
       whatever: "x",
     });
@@ -143,8 +170,8 @@ describe("validateProps — defaults", () => {
         additionalProperties: false,
       },
     });
-    expect(validateProps("C", { cfg: {} }, schema)).toEqual({ cfg: { x: 5 } });
-    expect(validateProps("C", {}, schema)).toEqual({});
+    expect(yield* validateProps("C", { cfg: {} }, schema)).toEqual({ cfg: { x: 5 } });
+    expect(yield* validateProps("C", {}, schema)).toEqual({});
   });
 
   it("extends an array from tuple-item defaults (Ajv behavior)", function* () {
@@ -159,11 +186,11 @@ describe("validateProps — defaults", () => {
         additionalItems: false,
       },
     });
-    expect(validateProps("C", { pair: [] }, schema)).toEqual({ pair: ["a", "b"] });
-    expect(validateProps("C", { pair: ["x"] }, schema)).toEqual({ pair: ["x", "b"] });
+    expect(yield* validateProps("C", { pair: [] }, schema)).toEqual({ pair: ["a", "b"] });
+    expect(yield* validateProps("C", { pair: ["x"] }, schema)).toEqual({ pair: ["x", "b"] });
 
     const caller: Record<string, Json> = { pair: [] };
-    expect(validateProps("C", caller, schema)).toEqual({ pair: ["a", "b"] });
+    expect(yield* validateProps("C", caller, schema)).toEqual({ pair: ["a", "b"] });
     expect(caller).toEqual({ pair: [] });
   });
 
@@ -178,7 +205,7 @@ describe("validateProps — defaults", () => {
       },
     });
     const caller: Record<string, Json> = {};
-    const result = validateProps("C", caller, schema);
+    const result = yield* validateProps("C", caller, schema);
     expect(result).toEqual({ greeting: "Hello", cfg: { x: 5 } });
     expect(caller).toEqual({});
   });
@@ -188,7 +215,7 @@ describe("validateProps — structured cause & error normalization", () => {
   it("exposes normalized, JSON-safe issues with precise instance paths", function* () {
     const schema = closed({ n: { type: "number" } }, ["n"]);
     try {
-      validateProps("Widget", { n: "no" }, schema);
+      yield* validateProps("Widget", { n: "no" }, schema);
       throw new Error("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(PropValidationError);
@@ -213,7 +240,7 @@ describe("validateProps — structured cause & error normalization", () => {
     const schema = closed({ rows: { type: "array", items: row } }, ["rows"]);
 
     try {
-      validateProps("C", { rows: [{}] }, schema);
+      yield* validateProps("C", { rows: [{}] }, schema);
       throw new Error("should have thrown");
     } catch (error) {
       if (!(error instanceof PropValidationError)) {
@@ -226,7 +253,7 @@ describe("validateProps — structured cause & error normalization", () => {
     }
 
     try {
-      validateProps("C", { rows: [{ symbol: "x", extra: 1 }] }, schema);
+      yield* validateProps("C", { rows: [{ symbol: "x", extra: 1 }] }, schema);
       throw new Error("should have thrown");
     } catch (error) {
       if (!(error instanceof PropValidationError)) {
@@ -243,7 +270,7 @@ describe("validateProps — structured cause & error normalization", () => {
 
   it("escapes JSON Pointer tokens (/ and ~) in required and additionalProperties paths", function* () {
     try {
-      validateProps("C", {}, closed({ "a/b~c": { type: "string" } }, ["a/b~c"]));
+      yield* validateProps("C", {}, closed({ "a/b~c": { type: "string" } }, ["a/b~c"]));
       throw new Error("should have thrown");
     } catch (error) {
       if (!(error instanceof PropValidationError)) {
@@ -256,7 +283,7 @@ describe("validateProps — structured cause & error normalization", () => {
     }
 
     try {
-      validateProps("C", { "a/b~c": 1 }, closed({}));
+      yield* validateProps("C", { "a/b~c": 1 }, closed({}));
       throw new Error("should have thrown");
     } catch (error) {
       if (!(error instanceof PropValidationError)) {
@@ -286,7 +313,7 @@ describe("validateProps — structured cause & error normalization", () => {
 
   it("treats format as an annotation, not an assertion", function* () {
     const schema = closed({ email: { type: "string", format: "email" } });
-    expect(validateProps("C", { email: "not-an-email" }, schema)).toEqual({
+    expect(yield* validateProps("C", { email: "not-an-email" }, schema)).toEqual({
       email: "not-an-email",
     });
   });
@@ -298,7 +325,9 @@ describe("validateProps — structured cause & error normalization", () => {
       definitions: { pos: { type: "number", minimum: 0 } },
       additionalProperties: false,
     };
-    expect(validateProps("C", { x: 5 }, schema)).toEqual({ x: 5 });
-    expect(() => validateProps("C", { x: -1 }, schema)).toThrow(PropValidationError);
+    expect(yield* validateProps("C", { x: 5 }, schema)).toEqual({ x: 5 });
+    expect(yield* raised(() => validateProps("C", { x: -1 }, schema))).toBeInstanceOf(
+      PropValidationError,
+    );
   });
 });

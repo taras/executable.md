@@ -71,7 +71,7 @@ export const returns = {
 };
 
 export default printErrors(function* (props: Record<string, Json>): Operation<Json> {
-  const validate = compileParseSchema("SafeParse", props.schema);
+  const validate = yield* compileParseSchema("SafeParse", props.schema);
 
   const text = yield* content();
 

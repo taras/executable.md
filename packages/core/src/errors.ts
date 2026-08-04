@@ -45,11 +45,11 @@ export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
   if (mode === "print") {
     return segment;
   }
-  throw new DocumentationError(segment, mode);
+  throw yield* documentationError(segment, mode);
 }
 
 /**
- * The failure a contextual ErrorSegment was translated from.
+ * What one execution learned about the failures its printed errors came from.
  *
  * The segment is what the document says; the failure is the structural account
  * of how expansion got there, and a component that recovered from failed content
@@ -59,16 +59,62 @@ export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
  * travels beside the chain instead of through it. Every `DocumentationError`
  * built for the segment therefore has its `cause` in place before any observer —
  * including middleware that catches what `raise` throws — can look at it.
+ *
+ * The table belongs to the run that fills it: created when a run installs it and
+ * reclaimed when its scope ends, so nothing one execution recorded is still
+ * answering questions during the next. Keyed by segment identity — the object a
+ * boundary handled is the object the document renders and an observer already
+ * saw, and copying it to record a decision would break both.
  */
-const segmentCauses = new WeakMap<ErrorSegment, unknown>();
+export type SegmentCauses = WeakMap<ErrorSegment, unknown>;
+
+export const SegmentCauses: Context<SegmentCauses | undefined> = createContext<
+  SegmentCauses | undefined
+>("component.segmentCauses", undefined);
+
+/**
+ * Open the table for one execution. Installed where the run begins, so
+ * everything it records lives exactly as long as the run does.
+ */
+export function* useSegmentCauses(): Operation<SegmentCauses> {
+  const causes: SegmentCauses = new WeakMap();
+  yield* SegmentCauses.set(causes);
+  return causes;
+}
 
 /**
  * Internal: record what expansion translated into this segment, before raising
  * it. Not part of the package surface — an author reports a failure by throwing
  * it, and the engine decides what a printed error is made from.
+ *
+ * With no run installed there is nothing to record into and nothing to leak:
+ * the attribution is simply not kept, and the failure built later carries no
+ * own cause.
  */
-export function attributeCause(segment: ErrorSegment, from: unknown): void {
-  segmentCauses.set(segment, from);
+export function* attributeCause(segment: ErrorSegment, from: unknown): Operation<void> {
+  (yield* SegmentCauses.get())?.set(segment, from);
+}
+
+/**
+ * Build the failure a decided segment travels as, with the account of how
+ * expansion got there already attached.
+ *
+ * The cause is read here rather than in the constructor: it lives in the run's
+ * table, which only an operation can reach, and every `DocumentationError` must
+ * carry it before any observer — including middleware that catches what `raise`
+ * throws — can look at it.
+ */
+export function* documentationError(
+  segment: ErrorSegment,
+  mode: "output" | "throw",
+): Operation<DocumentationError> {
+  const causes = yield* SegmentCauses.get();
+  // Membership, not value: a component can throw `undefined`, and that is still
+  // the exact value this failure was translated from. Only a segment with no
+  // attribution has no own cause at all.
+  return causes?.has(segment)
+    ? new DocumentationError(segment, mode, { cause: causes.get(segment) })
+    : new DocumentationError(segment, mode);
 }
 
 /**
@@ -90,16 +136,13 @@ export class DocumentationError extends Error {
    */
   readonly mode: "output" | "throw";
 
-  constructor(segment: ErrorSegment, mode: "output" | "throw") {
+  constructor(segment: ErrorSegment, mode: "output" | "throw", attributed?: { cause: unknown }) {
     super(segment.message);
     this.name = "DocumentationError";
     this.segment = segment;
     this.mode = mode;
-    // Membership, not value: a component can throw `undefined`, and that is
-    // still the exact value this failure was translated from — the own `cause`
-    // property records it. Only a segment with no attribution has none.
-    if (segmentCauses.has(segment)) {
-      this.cause = segmentCauses.get(segment);
+    if (attributed) {
+      this.cause = attributed.cause;
     }
   }
 }

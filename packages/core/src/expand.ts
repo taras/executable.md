@@ -50,6 +50,8 @@ import {
   durabilityFailure,
   ErrorMode,
   fatalCause,
+  SegmentCauses,
+  useSegmentCauses,
 } from "./errors.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { withInvocation } from "./invocation.ts";
@@ -492,6 +494,17 @@ export function* expandSegments(
    */
   owner?: Segment[],
 ): Operation<Segment[]> {
+  // An execution opens the table its printed errors record their causes in.
+  // Expansion driven directly — a test, a tool describing a document — has no
+  // execution around it, so the outermost call opens one for exactly its own
+  // lifetime rather than reaching for a table that outlives it.
+  if ((yield* SegmentCauses.get()) === undefined) {
+    return yield* scoped(function* () {
+      yield* useSegmentCauses();
+      return yield* expandSegments(segments, parentMeta, parentProps, hideSet, counter, owner);
+    });
+  }
+
   const result: Segment[] = owner ?? [];
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
@@ -1688,7 +1701,7 @@ function* expandComponent(
     asBinding = binding.value;
 
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
-    validatedProps = validateProps(name, propsForValidation, definition.props);
+    validatedProps = yield* validateProps(name, propsForValidation, definition.props);
   } catch (error) {
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
@@ -1973,9 +1986,9 @@ class ThrownValue extends Error {
  * this printed error exists without its account. The observation itself is still the
  * single `raise` of the segment.
  */
-function raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
-  attributeCause(segment, from);
-  return raise(segment);
+function* raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegment> {
+  yield* attributeCause(segment, from);
+  return yield* raise(segment);
 }
 
 /**
@@ -2064,7 +2077,7 @@ function* expandFunctionComponent(
   // Validate props
   let validatedProps: Record<string, Json>;
   try {
-    validatedProps = validateProps(name, propsForValidation, definition.props);
+    validatedProps = yield* validateProps(name, propsForValidation, definition.props);
   } catch (error) {
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
@@ -2245,7 +2258,9 @@ function* expandFunctionComponent(
         // returned. `returns` is the opt-in that says this one is a validated
         // JSON record, and it is checked before binding.
         parentEnv.values[asBinding] =
-          returns === undefined ? output : validateReturnValue(name, parseJson(output), returns);
+          returns === undefined
+            ? output
+            : yield* validateReturnValue(name, parseJson(output), returns);
         return [];
       }
       // Without `as` there is nowhere to bind, so only text can be observed:
@@ -3102,7 +3117,7 @@ export function* resolveReturnValue(
           segment.projectedEnv,
         )
       : segment.props.value;
-  return validateReturnValue(componentName, raw, returns);
+  return yield* validateReturnValue(componentName, raw, returns);
 }
 
 /**

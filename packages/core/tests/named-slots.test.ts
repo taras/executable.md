@@ -622,21 +622,24 @@ describe("Tier NS-C — Expansion integration", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-D — slot prop reservation", () => {
-  // deno-lint-ignore require-yield
   it("NS-D1: slot in props frontmatter → error", function* () {
-    expect(() => {
-      const { props } = parseFrontmatter({
-        props: {
-          type: "object",
-          properties: {
-            slot: { type: "string" },
-          },
-          required: ["slot"],
-          additionalProperties: false,
+    const { props } = parseFrontmatter({
+      props: {
+        type: "object",
+        properties: {
+          slot: { type: "string" },
         },
-      });
-      compilePropsSchema(props);
-    }).toThrow("reserved prop name");
+        required: ["slot"],
+        additionalProperties: false,
+      },
+    });
+    let raised: unknown;
+    try {
+      yield* compilePropsSchema(props);
+    } catch (error) {
+      raised = error;
+    }
+    expect(String(raised)).toContain("reserved prop name");
   });
 
   it("NS-D2: slot not in child's validatedProps", function* () {

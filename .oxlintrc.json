@@ -42,6 +42,7 @@
     "typescript/no-redundant-type-constituents": "warn",
     "typescript/no-unnecessary-boolean-literal-compare": "warn",
 
+    "local/no-module-scoped-registry": "error",
     "local/no-section-divider-comments": "error",
     "local/no-yield-in-finally": "error",
     "local/prefer-effection-result": "error"
