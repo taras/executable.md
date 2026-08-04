@@ -138,17 +138,12 @@ declares.
 `returns`, so their results are validated JSON values bound through `as` rather
 than text a caller would have to interpret.
 
-- `StageResult` — what `Planning` and `Implementation` return. Each carries its
-  prose (`plan` or `report`), the parsed verdict's fields, the complete
-  `UserDecision` that stage resolved internally, and two derived control fields:
-  `authorized` (`proceed && verdict.passed`) and `terminal` (`converged`,
-  `declined`, or `exhausted`). `start.md` gates the next transition on
-  `authorized` and reports `terminal`. A stage that resolved a user decision
-  cannot return prose alone — its caller has nothing to branch on, and the
-  authority the checkpoint exercised would be lost at the boundary.
-- `UserDecision` — the transition decision a caller gates on, returned directly
-  by `UserCheckpoint` and embedded in each `StageResult`. Two parts combine
-  into it. The **decision** is `proceed`, `response`, and `rationale`, validated
+- `UserDecision` — the transition decision a caller gates on. `UserCheckpoint`
+  returns it directly, and `Planning` and `Implementation` each return the one
+  they resolved internally, alongside their prose and their parsed verdict's
+  fields. A stage that resolved a user decision cannot return prose alone: its
+  caller has nothing to branch on, and the authority the checkpoint exercised
+  would be lost at the boundary. Two parts combine into it. The **decision** is `proceed`, `response`, and `rationale`, validated
   against one schema on both paths: `<Elicit>` binds it when the assessment
   reports a material choice, and an explicit `<Parse>` binds it when there is
   none. `UserCheckpoint` returns those alongside the assessment fields, so one
@@ -157,6 +152,25 @@ than text a caller would have to interpret.
   which actor answered, when, against which run and stage — belongs to the
   artifact ledger (#291) and does not exist. Nothing in the returned value
   identifies the person who answered.
+
+A stage returns those sources and nothing derived from them. `start.md` computes
+its gate as `decision.proceed && verdictPassed` where it uses it, rather than
+reading a field the stage precomputed: a return schema can require both fields to
+be present but cannot require a derived flag to agree with them, so a record
+pairing a declining decision with an approving flag would validate. The same two
+fields tell a decline (`proceed` false) from a review that never passed
+(`proceed` true, `verdictPassed` false), so no separate outcome label is needed
+either.
+
+Neither stage returns the pull-request handle. `<PullRequest>` (#295) resolves a
+structured handle carrying the number, URL, head and base identities, state,
+reviews, comments, and checks. Nothing in this workflow consumes it, and the
+artifact ledger records the effect and its handle independently, so
+`Implementation` renders the fields a reader needs into its `report` instead. A
+return field typed `string` would be actively harmful: a conforming
+`<PullRequest>` would perform its durable effects and only then fail the stage's
+return validation. If a later caller needs the handle, it is declared with #295's
+object schema.
 
 Prompt output used for control flow is JSON parsed against captured draft-07
 JSON Schema content. `<SafeParse>` exposes the candidate and normalized errors
