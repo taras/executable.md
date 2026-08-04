@@ -58,7 +58,7 @@ A component has one return path, defined by the
 [executable MDX specification](../../specs/executable-mdx-spec.md). A Markdown
 component that declares no `returns` is a **text component**: its rendered
 Markdown is its return value, `<Output>` selects which region renders, and `as`
-binds that text. Every stage component in this workflow is one. A component
+binds that text. `InstructionFiles` and `Discovery` are ones. A component
 that declares `returns` is a **value component**: it renders nothing, holds
 exactly one direct top-level `<Return value={…} />`, must be invoked with `as`,
 and binds one JSON value validated against its schema. The two are mutually
@@ -85,13 +85,15 @@ else renders nothing — not an error, a value with no destination.
 
 ### What a failing stage returns
 
-Nothing partial. A stage's `<Output>` region runs under the `output` error mode
-and everything outside it runs under `throw`, so an undecided error at either
-position fails the run rather than producing a result the caller would bind. A
-failing `<Output>` region keeps only the text it had already rendered, and that
-text reaches the output stream; nothing after the failure does. A failed run is
-still a complete record — replay restores its output and its failure without
-re-executing anything.
+Nothing partial. A text component's `<Output>` region runs under the `output`
+error mode and everything outside it under `throw`; a value component's whole
+body runs fail-fast. Either way an undecided error fails the run rather than
+producing a result the caller would bind, and a value component that fails binds
+nothing at all — there is no half-validated return. A failing `<Output>` region
+keeps only the text it had already rendered, and that text reaches the output
+stream; nothing after the failure does. A failed run is still a complete
+record — replay restores its output and its failure without re-executing
+anything.
 
 ### Logical result contracts
 
@@ -100,16 +102,18 @@ component return declarations and not entries in a schema registry, and the
 workflow does not assume a `<Prompt schema>` prop. They fall into three kinds,
 and the difference matters: only the parsed ones can be branched on.
 
-**Prose.** No schema, no parsing. The stage renders text and its caller binds
-that text, because nothing downstream reads an individual field.
+**Prose.** No schema, no parsing. Text a stage produces and a later prompt
+quotes, because nothing downstream reads an individual field.
 
-- `PlannerHandoff` — what `Discovery` returns. It separates user decisions from
+- `PlannerHandoff` — what `Discovery` returns, and the one result that is a
+  whole component's rendered output. It separates user decisions from
   implementation hypotheses in prose the implementor reads, and the sections it
   should contain are listed in [`Discovery`](./Discovery.md) rather than
   enforced by a schema.
-- `ImplementationPlan` — what `Planning` returns. Confirmed and refuted
-  assumptions, evidence, validation, environmental effects, and pull-request
-  boundaries appear inside `plan`, which is one `<Prompt>`'s rendered reply.
+- `ImplementationPlan` — the `plan` field inside `Planning`'s structured return.
+  Confirmed and refuted assumptions, evidence, validation, environmental
+  effects, and pull-request boundaries appear inside it, because it is one
+  `<Prompt>`'s rendered reply.
 
 Neither is validated, so neither can gate a transition. `Planning` branches on
 the separately parsed `PlannerVerdict`, not on the plan text.
@@ -130,11 +134,20 @@ declares.
 - `UserInvolvementAssessment` — `requiresUser`, `assessment`, `question`,
   `options`, `recommendation` ([`UserCheckpoint`](./UserCheckpoint.md)).
 
-**A declared return.** `UserCheckpoint` is the one value component here, so its
-result is a validated JSON value bound through `as` rather than parsed out of
-rendered text.
+**Declared returns.** `UserCheckpoint`, `Planning`, and `Implementation` declare
+`returns`, so their results are validated JSON values bound through `as` rather
+than text a caller would have to interpret.
 
-- `UserDecision` — the transition decision a caller gates on. Two parts combine
+- `StageResult` — what `Planning` and `Implementation` return. Each carries its
+  prose (`plan` or `report`), the parsed verdict's fields, the complete
+  `UserDecision` that stage resolved internally, and two derived control fields:
+  `authorized` (`proceed && verdict.passed`) and `terminal` (`converged`,
+  `declined`, or `exhausted`). `start.md` gates the next transition on
+  `authorized` and reports `terminal`. A stage that resolved a user decision
+  cannot return prose alone — its caller has nothing to branch on, and the
+  authority the checkpoint exercised would be lost at the boundary.
+- `UserDecision` — the transition decision a caller gates on, returned directly
+  by `UserCheckpoint` and embedded in each `StageResult`. Two parts combine
   into it. The **decision** is `proceed`, `response`, and `rationale`, validated
   against one schema on both paths: `<Elicit>` binds it when the assessment
   reports a material choice, and an explicit `<Parse>` binds it when there is
@@ -153,10 +166,11 @@ acceptable when no later transition depends on internal fields — which is
 exactly the line between the first group above and the second.
 
 Parsing content inside a document and declaring a component's return value are
-separate mechanisms, and both are shipped. The stages keep the text form because
-each stage's output is also material a user reads at a checkpoint.
-`UserCheckpoint` is the exception, and the reason is the distinction above: its
-result is not something a user reads, it is something the workflow branches on.
-A checkpoint that returned prose could not gate anything — a caller would have
-to guess consent from text — so it declares `returns` and hands back a validated
-decision instead.
+separate mechanisms, and both are shipped. Which one a component uses follows
+from what its caller does with the result. `InstructionFiles` and `Discovery`
+produce material a prompt quotes, so text is enough. `UserCheckpoint`,
+`Planning`, and `Implementation` each resolve a decision the caller must branch
+on, and a caller cannot branch on prose without guessing — so they declare
+`returns` and hand back validated values. The human-readable report is rendered
+by `start.md` from those fields, which is the same material, addressed rather
+than pre-flattened.
