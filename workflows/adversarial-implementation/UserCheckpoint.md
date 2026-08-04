@@ -218,11 +218,6 @@ from continuing after the bounded repair loop with malformed output. The schema
 is ordinary captured document content rather than a registry entry or
 `<Prompt schema>` prop.
 
-A value component's body is not documentation in the ordinary sense — a value
-root and a value component both run fail-fast, so the assessment, the repair
-loop, and the elicitation all end the stage rather than binding something a
-caller would mistake for a decision.
-
 `<Agent name={agent}>` reads the bare binding because that is the expression-
 prop spelling current main supports, while `{props.purpose}` in the prompt body
 is text interpolation; #305 unifies the two.
