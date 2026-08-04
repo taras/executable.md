@@ -163,12 +163,16 @@ fields tell a decline (`proceed` false) from a review that never passed
 (`proceed` true, `verdictPassed` false), so no separate outcome label is needed
 either.
 
-Neither stage returns the pull-request handle. `<PullRequest>` (#295) resolves a
-structured handle carrying the number, URL, head and base identities, state,
-reviews, comments, and checks. Nothing in this workflow consumes it, and the
-artifact ledger records the effect and its handle independently, so
-`Implementation` renders the fields a reader needs into its `report` instead. A
-return field typed `string` would be actively harmful: a conforming
+Neither stage *returns* the pull-request handle, and the boundary is worth
+stating exactly. `<PullRequest>` (#295) resolves a structured handle carrying the
+number, URL, head and base identities, state, reviews, comments, and checks.
+`Implementation` **consumes all of it**, internally: the planner has no network
+access, so the stage renders every category into the review prompt and the
+checkpoint material. `start.md` never receives it — what crosses the stage
+boundary is the verdict and the decision it gates on. The artifact ledger records
+the effect and its handle independently (#291).
+
+A return field typed `string` would be actively harmful: a conforming
 `<PullRequest>` would perform its durable effects and only then fail the stage's
 return validation. If a later caller needs the handle, it is declared with #295's
 object schema.
