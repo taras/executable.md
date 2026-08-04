@@ -194,6 +194,13 @@ The planner reviews the plan against the user intent, repository evidence,
 instructions, specifications, and observable validation. A failed review returns
 a focused prompt that the implementor can apply directly.
 
+A pull-request review needs the pull request's complete current state, and the
+planner cannot fetch it: the supervised exercise denies agent network access. So
+the review prompt renders every category the handle resolves — existing reviews,
+comments, and check results — rather than a subset, and names the revision under
+review: the diff at the head identity against the base. A verdict describes that
+head alone, and a moved head requires a fresh review.
+
 Factual disagreement calls for more evidence. When evidence leaves more than one
 viable choice, the agents present the options, consequences, and recommendations
 to the user. Convergence means that the final plan reflects a shared
@@ -244,9 +251,10 @@ A stage that only produces material for the next prompt is a text component:
 `InstructionFiles` and `Discovery` render their result and a caller's `as` binds
 that text. A stage that resolves a user decision inside itself declares
 `returns` instead. `Planning` and `Implementation` each run a review loop that
-asks the user a question, so each returns its prose, its parsed verdict, the
-complete `UserDecision` it resolved, and the derived `authorized` and `terminal`
-its caller gates on. `<UserCheckpoint>` does the same for a single decision.
+asks the user a question, so each returns its prose, its parsed verdict's fields,
+and the complete `UserDecision` it resolved — the sources its caller gates on,
+and nothing derived from them. `<UserCheckpoint>` does the same for a single
+decision.
 
 The rule is about where authority lives. A controller that resolves a decision
 and returns only a rendering of it has discarded the thing its caller needs: the
@@ -256,15 +264,27 @@ boundary as data or it does not cross at all.
 
 ### A stage fails rather than returning a half-record
 
-A stage's `<Output>` region runs under the `output` error mode; everything
-outside it is documentation and runs under `throw`. An undecided error at either
-position fails the run rather than producing a result a caller would bind. The
-two modes differ in what a printing boundary may do about it: a `<PrintErrors>`
-region can print an `output` decision instead of failing, and `throw` is the one
-mode it cannot replace — a printed error in documentation is one nobody can
-read. Neither rescues a stage here, because every stage's parsing sits in
-documentation. That is what makes each stage's final `<Parse>` a gate: malformed
-agent output cannot reach control flow or a deterministic effect.
+The two component kinds fail differently, and neither can hand a caller a
+half-record.
+
+A **text component** is split by its `<Output>` boundary: the region inside runs
+under the `output` error mode, everything outside is documentation and runs
+under `throw`. `InstructionFiles` and `Discovery` are the two here, and each
+puts its work in documentation, so an undecided error ends the run rather than
+printing into a region nobody reads.
+
+A **value component** declares `returns`, so it renders nothing and cannot
+contain `<Output>` at all — that would be a structural error. Its entire body
+runs fail-fast, and a failure binds nothing: there is no partially validated
+return for a caller to gate on. `Planning`, `Implementation`, and
+`UserCheckpoint` are value components.
+
+The two error modes differ in what a printing boundary may do about a failure: a
+`<PrintErrors>` region can print an `output` decision instead of failing, and
+`throw` is the one mode it cannot replace — a printed error in documentation is
+one nobody can read. Neither rescues a stage here. That is what makes each
+stage's final `<Parse>` a gate: malformed agent output cannot reach control flow
+or a deterministic effect.
 
 A failing region keeps only what it had already rendered. That partial text
 reaches the output stream; nothing after the failure does. Continuing after a
@@ -305,7 +325,8 @@ Two are not implemented:
   establish is itself shipped and already inherited by files, globs, processes,
   and agents.
 - `<PullRequest>` creates or resolves the pull request for a branch and returns
-  its identity and state (#295).
+  a structured handle: number, URL, head and base identities, state, reviews,
+  comments, and checks (#295).
 
 Each environmental operation declares its inputs and preconditions, reconciles
 existing state, returns a structured handle, and records its observed effects. A
