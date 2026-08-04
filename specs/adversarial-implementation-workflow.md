@@ -201,6 +201,11 @@ comments, and check results — rather than a subset, and names the revision und
 review: the diff at the head identity against the base. A verdict describes that
 head alone, and a moved head requires a fresh review.
 
+The user's checkpoint carries the same evidence. An existing objection reaches
+the person approving the change in its own words, not only as the planner
+summarized it — a reviewer's own text is what a later reader needs to judge
+whether the objection was answered.
+
 Factual disagreement calls for more evidence. When evidence leaves more than one
 viable choice, the agents present the options, consequences, and recommendations
 to the user. Convergence means that the final plan reflects a shared
@@ -269,9 +274,23 @@ half-record.
 
 A **text component** is split by its `<Output>` boundary: the region inside runs
 under the `output` error mode, everything outside is documentation and runs
-under `throw`. `InstructionFiles` and `Discovery` are the two here, and each
-puts its work in documentation, so an undecided error ends the run rather than
-printing into a region nobody reads.
+under `throw`. The two here sit on opposite sides of that line, and they fail
+differently as a result.
+
+`Discovery` runs its prompt in documentation and renders only the captured
+result. A failed prompt is raised there — `throwOnError` is what raises it — and
+`throw` ends the run.
+
+`InstructionFiles` is the other way round: its `<Each>` and `<File>` reads *are*
+its `<Output>` region. `<File>` prints its own failures rather than propagating
+them, so an unreadable instruction file becomes a printed error and the region's
+`output` mode never decides anything. The run continues, and what stops the
+caller from proceeding on nothing is the binding rule: `as` refuses a body
+holding a printed error, so `instructions` stays unbound and the error surfaces
+at the invocation rather than inside the text a prompt would quote.
+
+That difference is worth knowing before relying on either: a missing instruction
+file is visible and non-fatal, while a failed discovery prompt is fatal.
 
 A **value component** declares `returns`, so it renders nothing and cannot
 contain `<Output>` at all — that would be a structural error. Its entire body

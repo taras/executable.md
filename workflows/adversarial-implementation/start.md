@@ -265,19 +265,25 @@ A **text component** — `InstructionFiles` and `Discovery` — is split by its
 - Everything **outside** `<Output>` is documentation and runs under the `throw`
   error mode. The first error stops the body and fails the run, and no
   `<PrintErrors>` region can print it instead.
-- The **`<Output>` region** runs under the `output` error mode: an undecided
+- The **`<Output>` region** runs under the `output` error mode: an *undecided*
   error there fails the run too, though a `<PrintErrors>` region may print it
   instead. Either way the region keeps what it had already rendered — that
   partial text reaches the output stream, and nothing after the failure does.
   Printing an `output` decision is the contract; the engine does not do it yet
   (#327).
 
+"Undecided" is the operative word. `InstructionFiles` puts its `<File>` reads in
+its `<Output>` region, and `<File>` prints its own failures, so an unreadable
+instruction file is already decided as a printed error and the region's mode
+never sees it. The run continues; what stops the caller is that `as` refuses a
+body holding a printed error, so `instructions` stays unbound.
+
 A **value component** — `UserCheckpoint`, `Planning`, `Implementation` — has no
 such split. Declaring `returns` means it renders nothing, so `<Output>` inside
 one is a structural error; its whole body runs fail-fast and a failure binds
 nothing at all. There is no partially validated return for a caller to gate on.
 
-Either way a stage returns a complete, schema-validated result or it fails, and
+By one route or another a caller receives a complete result or nothing —
 never a half-record. The `throwOnError` on each `<Prompt>` is load-bearing for
 the same reason: a failed prompt without it records its failure and returns its
 text, raising nothing for the error mode to decide.
@@ -336,10 +342,11 @@ than receiving them pre-rendered.
 Neither stage returns the pull-request handle, but `Implementation` consumes it
 in full. `<PullRequest>` (#295) resolves the number, URL, head and base
 identities, state, reviews, comments, and checks; the planner has no network
-access, so `Implementation` renders every category explicitly into the review
-prompt and into the checkpoint material, and the artifact ledger (#291) records
-the effect independently. What `start.md` gates on is the verdict and the
-decision, so the handle itself never crosses the stage boundary.
+access, so `Implementation` renders every category — reviews with their bodies,
+comments, and checks — explicitly into the review prompt and into the checkpoint
+material, and the artifact ledger (#291) records the effect independently. What
+`start.md` gates on is the verdict and the decision, so the handle itself never
+crosses the stage boundary.
 
 ## Details
 

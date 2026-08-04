@@ -305,7 +305,7 @@ remote effects.
     ### Reviews
 
     <Each in={pullRequest.reviews} let="review">
-    - {review.author} ({review.state}) on {review.headSha}
+    - {review.author} ({review.state}) on {review.headSha}: {review.body}
     </Each>
 
     ### Comments
@@ -399,11 +399,16 @@ answer to disagree with the first.
 head and base identities, state, reviews, comments, and checks. This stage
 consumes all of it, because the planner cannot recover any of it itself: agent
 network access is denied for the supervised exercise, so whatever the prompt does
-not render is invisible to the review. Every category is rendered explicitly —
-each collection iterated with `<Each>`, never stringified as an object — into
-both the planner prompt and the checkpoint material the user reads. A review that
-cannot see a failing check or an existing objection is not adversarial, it is
-uninformed.
+not render is invisible to the review. Every category — reviews, comments, and
+checks — is rendered explicitly into both the planner prompt and the checkpoint
+material the user reads, each collection iterated with `<Each>` and never
+stringified as an object. A review that cannot see a failing check or an existing
+objection is not adversarial, it is uninformed.
+
+The two surfaces carry the same categories and the same consequential content,
+including each review's body: a user approving the change reads the original
+objections rather than the planner's summary of them. The checkpoint omits only a
+check's link, which is a way to find evidence rather than evidence itself.
 
 The prompt names the revision under review: the planner reviews the diff at
 `headSha` against `baseSha`, and a verdict describes that head only. A moved head
