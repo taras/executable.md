@@ -74,3 +74,34 @@ Without `as` the same form simply renders the path.
 <Capture as="rendered"><TempDir /></Capture>
 <AssertMatch actual={rendered} expected={/xmd-tempdir-/} />
 </Test>
+
+The directory belongs to the invocation, and so does everything the content
+starts inside it. A daemon written by the caller is stopped before the
+directory is removed, never after — a background process is never left
+reaching for a directory that is already gone. The daemon reports what it saw
+when it was signalled, into a second directory that outlives the first.
+
+<Test name="A daemon in the content stops before the directory is removed">
+<TempDir as="report" />
+<TempDir>
+```sh daemon exec
+directory="$(pwd)"
+trap 'if [ -d "$directory" ]; then echo ALIVE > {report}/observed; else echo GONE > {report}/observed; fi; exit 0' TERM
+echo "$directory" > {report}/directory
+while true; do sleep 0.1; done
+```
+```sh exec
+i=0
+while [ ! -s {report}/directory ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+echo watching
+```
+</TempDir>
+<Capture as="afterwards">
+```sh exec
+cat {report}/observed
+test -d "$(cat {report}/directory)" || echo REMOVED
+```
+</Capture>
+<AssertStringIncludes actual={afterwards} expected={"ALIVE"} />
+<AssertStringIncludes actual={afterwards} expected={"REMOVED"} />
+</Test>

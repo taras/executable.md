@@ -6135,6 +6135,7 @@ visible warning blocks, gather into a separate error report).
 | L5 | Multiple persist blocks in one component | Each retains its own resources independently |
 | L6 | Persist on repeated run | Resource is created and retained again for the current component lifetime |
 | L7 | Persist flag does not leak to sibling blocks | Non-persist block after persist block → flag is false |
+| L8 | Projected persist stops before the component's own | A projected `persist` resource stops ahead of one the component retained *after* projecting: `start:projected, start:own, stop:projected, stop:own` |
 
 ### Tier M — Timeout modifier
 
@@ -6438,6 +6439,7 @@ visible warning blocks, gather into a separate error report).
 | Q11 | Modifier chain: `bash daemon exec` | `daemon` is outermost terminal; `exec` present but never called |
 | Q12 | Repeated run: daemon starts and stops | Process is spawned and terminated again |
 | Q13 | Repeated run: current port used | Eval allocates a current port; daemon binds it |
+| Q14 | Projected daemon terminated with the invocation | A daemon the caller wrote and the component only projected is gone in a block after the component; inside `<TempDir>` it is signalled while the directory still exists |
 
 ### Tier R — VM globals
 
