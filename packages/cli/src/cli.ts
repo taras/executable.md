@@ -338,10 +338,10 @@ interface DocumentMode {
 /**
  * Run one document and report how it finished.
  *
- * The Result is this operation's only verdict: nothing here prints a final
- * diagnostic or exits, so a caller running several documents decides once, at
- * the end, what the process status is. Rendered output, the --verbose journal
- * echo, and a value root's JSON line are the document's own output and stay.
+ * The Result is this operation's only verdict: nothing here reports a failure
+ * or exits, so a caller running several documents decides once, at the end,
+ * what the process status is. Rendered output, the --verbose journal echo, and
+ * a value root's JSON line are the document's own output and stay.
  */
 function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
   const { root, componentDir, verbose, journal, raw } = config;
@@ -516,8 +516,8 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
  * `xmd test` — one document, or every document a directory holds.
  *
  * A directory keeps going after a failure and decides the status once at the
- * end. A single document behaves exactly as it always has: one diagnostic, no
- * heading, no summary.
+ * end. A single document behaves exactly as it always has: one reported
+ * failure, no heading, no summary.
  */
 function* test(config: TestConfig, args: string[]): Operation<void> {
   const patterns = readPatternFlags(args);
@@ -597,7 +597,7 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
 
 /**
  * A document that cannot be inspected — missing, malformed, or unreadable —
- * reports text, so execution produces the diagnostic rather than inspection.
+ * reports text, so execution produces the printed error rather than inspection.
  */
 function* readsValue(root: RootDocumentSource): Operation<boolean> {
   try {

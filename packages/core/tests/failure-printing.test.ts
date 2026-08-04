@@ -2,10 +2,10 @@
  * Tier CF — what a function component's failure means (spec §6.8.1).
  *
  * A component that fails fails the operation it is part of. Carrying on is a
- * decision: `collectFailures()` for a component that says so about itself,
- * `<CollectFailures>` for a document that says so about a region. These
+ * decision: `printErrors()` for a component that says so about itself,
+ * `<PrintErrors>` for a document that says so about a region. These
  * distinguish a *failed* operation from a completed one that happens to contain
- * a diagnostic — reading the output alone cannot tell those apart — so each case
+ * a printed error — reading the output alone cannot tell those apart — so each case
  * asserts the outcome, what was observed, and the identity of the failure that
  * survived, rather than searching a rendered message.
  */
@@ -20,11 +20,10 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Component, content } from "../src/component-api.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { printErrors } from "../src/component-failures.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
-import { AmbientErrorPolicy, ContentError, DocumentationError } from "../src/errors.ts";
-import type { ErrorPolicy } from "../src/errors.ts";
+import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import { execute } from "../src/execute.ts";
 import { expandSegments } from "../src/expand.ts";
 import { InvocationTeardownError } from "../src/invocation.ts";
@@ -55,10 +54,10 @@ function throwing(name: string, failure: unknown): FunctionComponentDefinition {
 }
 
 /** A marked component that throws `failure` from its body. */
-function collecting(name: string, failure: unknown): FunctionComponentDefinition {
+function printing(name: string, failure: unknown): FunctionComponentDefinition {
   return component(
     name,
-    collectFailures(
+    printErrors(
       // deno-lint-ignore require-yield
       function* (): Operation<Json> {
         throw failure;
@@ -110,7 +109,7 @@ interface Run {
 }
 
 interface RunOptions {
-  policy?: ErrorPolicy;
+  mode?: ErrorMode;
   /** Scanned as a document at this path, so invocations carry a position. */
   path?: string;
 }
@@ -124,8 +123,8 @@ function run(
   return scoped(function* () {
     const observed: ErrorSegment[] = [];
     const offered: ComponentFailure[] = [];
-    if (options.policy) {
-      yield* AmbientErrorPolicy.set(options.policy);
+    if (options.mode) {
+      yield* ErrorMode.set(options.mode);
     }
     yield* Component.around({
       *raise([segment], next) {
@@ -175,9 +174,9 @@ function failureOf(result: Run): Error {
 }
 
 /**
- * The `DocumentationError` a throwing policy settled a collected failure into.
+ * The `DocumentationError` a throwing error mode settled a printed failure into.
  *
- * Under a collecting policy the link between a diagnostic and the failure it was
+ * Under a printing error mode the link between a printed error and the failure it was
  * built from travels beside the observation chain rather than on the segment, so
  * this is where a test reads what a boundary actually converted.
  */
@@ -264,7 +263,7 @@ describe("Tier CF — failing is the default", () => {
     // registration alone does not make a component's failure into a note.
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toBe(boom);
-    // Nothing became a diagnostic, and nothing after the failure ran.
+    // Nothing became a printed error, and nothing after the failure ran.
     expect(observed).toEqual([]);
     expect(output).not.toContain("AFTER");
     expect(output).not.toContain("registered boom");
@@ -319,10 +318,10 @@ describe("Tier CF — failing is the default", () => {
   });
 });
 
-describe("Tier CF — collectFailures(fn)", () => {
+describe("Tier CF — printErrors(fn)", () => {
   it("CF5: a marked component reports once and lets later work run", function* () {
     const boom = new Error("boom");
-    const result = yield* run("<Boom />\n\nAFTER\n", { Boom: collecting("Boom", boom) });
+    const result = yield* run("<Boom />\n\nAFTER\n", { Boom: printing("Boom", boom) });
 
     expect(result.outcome.ok).toBe(true);
     expect(result.observed).toHaveLength(1);
@@ -333,7 +332,7 @@ describe("Tier CF — collectFailures(fn)", () => {
   it("CF6: the marker is function identity, not component name", function* () {
     const boom = new Error("boom");
     // Marked first, so the name really has been spoken for...
-    collecting("Boom", new Error("never invoked"));
+    printing("Boom", new Error("never invoked"));
     // ...and this is a different function object invoked under that same name.
     const result = yield* run("<Boom />\n\nAFTER\n", { Boom: throwing("Boom", boom) });
 
@@ -342,11 +341,11 @@ describe("Tier CF — collectFailures(fn)", () => {
     expect(result.output).toBe("");
   });
 
-  it("CF7: a marked component collects a teardown-only failure", function* () {
+  it("CF7: a marked component prints a teardown-only failure", function* () {
     const timeline: string[] = [];
     const marked = component(
       "T",
-      collectFailures(function* (): Operation<Json> {
+      printErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           timeline.push("cleanup");
         });
@@ -376,64 +375,64 @@ describe("Tier CF — collectFailures(fn)", () => {
     expect(result.output).toContain("AFTER");
   });
 
-  it("CF7b: a marked component collects an unmarked nested failure it projected", function* () {
+  it("CF7b: a marked component prints an unmarked nested failure it projected", function* () {
     const nested = new Error("nested");
     const outer = component(
       "Outer",
-      collectFailures(function* (): Operation<Json> {
+      printErrors(function* (): Operation<Json> {
         return yield* content();
       }),
     );
     const source = "<Outer>\n<Boom />\n</Outer>\n\nAFTER\n";
     const definitions = { Outer: outer, Boom: throwing("Boom", nested) };
 
-    const collected = yield* run(source, definitions);
-    expect(collected.outcome.ok).toBe(true);
-    expect(collected.observed).toHaveLength(1);
-    expect(collected.output).toContain("AFTER");
+    const printed = yield* run(source, definitions);
+    expect(printed.outcome.ok).toBe(true);
+    expect(printed.observed).toHaveLength(1);
+    expect(printed.output).toContain("AFTER");
     // The child's own invocation is what failed and what was handled — once.
     // The outer component's content transport is not offered as a failure of
     // its own, so this stays at one rather than becoming two.
-    expect(collected.offered).toHaveLength(1);
-    expect(collected.offered[0].name).toBe("Boom");
-    expect(collected.offered[0].error).toBe(nested);
+    expect(printed.offered).toHaveLength(1);
+    expect(printed.offered[0].name).toBe("Boom");
+    expect(printed.offered[0].error).toBe(nested);
 
     // The child's failure is what the boundary converted, by identity.
-    const thrown = yield* run(source, definitions, { policy: "throw" });
+    const thrown = yield* run(source, definitions, { mode: "throw" });
     expect(reachableFrom(documentationError(thrown).cause)).toContain(nested);
   });
 
-  it("CF7c: a marked component does not collect a durability failure", function* () {
+  it("CF7c: a marked component does not print a durability failure", function* () {
     const stale = new StaleInputError("the journal no longer describes this run");
-    const result = yield* run("<Boom />\n\nAFTER\n", { Boom: collecting("Boom", stale) });
+    const result = yield* run("<Boom />\n\nAFTER\n", { Boom: printing("Boom", stale) });
 
     expect(failureOf(result)).toBe(stale);
     expect(result.observed).toEqual([]);
   });
 
-  it("CF7d: under a throwing policy a marked component reports once and still stops", function* () {
+  it("CF7d: under a throwing error mode a marked component reports once and still stops", function* () {
     const boom = new Error("boom");
     const result = yield* run(
       "<Boom />\n\nAFTER\n",
-      { Boom: collecting("Boom", boom) },
+      { Boom: printing("Boom", boom) },
       {
-        policy: "throw",
+        mode: "throw",
       },
     );
 
     expect(result.observed).toHaveLength(1);
-    // The failure the boundary was handed and the diagnostic's cause are one
+    // The failure the boundary was handed and the printed error's cause are one
     // object — not two things that describe the same mishap.
     expect(result.offered).toHaveLength(1);
     expect(result.offered[0].error).toBe(boom);
     expect(documentationError(result).cause).toBe(result.offered[0].error);
   });
 
-  it("CF7e: a collected teardown-only failure keeps the original inside its cause", function* () {
+  it("CF7e: a printed teardown-only failure keeps the original inside its cause", function* () {
     const cleanup = new Error("cleanup");
     const marked = component(
       "T",
-      collectFailures(function* (): Operation<Json> {
+      printErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           throw cleanup;
         });
@@ -441,7 +440,7 @@ describe("Tier CF — collectFailures(fn)", () => {
       }),
     );
 
-    const result = yield* run("<T />\n", { T: marked }, { policy: "throw" });
+    const result = yield* run("<T />\n", { T: marked }, { mode: "throw" });
 
     // A teardown-only invocation hands over the boundary's account of teardown
     // rather than the raw cleanup error — which is a member of it.
@@ -456,13 +455,13 @@ describe("Tier CF — collectFailures(fn)", () => {
     expect(documentationError(result).cause).toBe(offered);
   });
 
-  it("CF7f: body and teardown both failing collect as one complete aggregate", function* () {
+  it("CF7f: body and teardown both failing print as one complete aggregate", function* () {
     const body = new Error("body");
     const teardown = new Error("teardown");
     const marked = () =>
       component(
         "T",
-        collectFailures(function* (): Operation<Json> {
+        printErrors(function* (): Operation<Json> {
           yield* ensure(function* () {
             throw teardown;
           });
@@ -491,15 +490,15 @@ describe("Tier CF — collectFailures(fn)", () => {
       return offered;
     }
 
-    const collected = yield* run("<T />\n\nAFTER\n", { T: marked() });
-    expect(collected.outcome.ok).toBe(true);
-    expect(collected.observed).toHaveLength(1);
-    expect(collected.output).toContain("AFTER");
-    aggregateOf(collected);
+    const printed = yield* run("<T />\n\nAFTER\n", { T: marked() });
+    expect(printed.outcome.ok).toBe(true);
+    expect(printed.observed).toHaveLength(1);
+    expect(printed.output).toContain("AFTER");
+    aggregateOf(printed);
 
-    // The same account under the other policy. Each invocation builds its own
+    // The same account under the other error mode. Each invocation builds its own
     // aggregate, so identity holds within a run rather than across two.
-    const thrown = yield* run("<T />\n\nAFTER\n", { T: marked() }, { policy: "throw" });
+    const thrown = yield* run("<T />\n\nAFTER\n", { T: marked() }, { mode: "throw" });
     expect(thrown.observed).toHaveLength(1);
     expect(documentationError(thrown).cause).toBe(aggregateOf(thrown));
   });
@@ -509,7 +508,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     let seen: ComponentFailure | undefined;
     const marked = component(
       "T",
-      collectFailures(function* (): Operation<Json> {
+      printErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           throw cleanup;
         });
@@ -548,7 +547,7 @@ describe("Tier CF — collectFailures(fn)", () => {
     const acquired = withResolvers<void>();
     const marked = component(
       "Hang",
-      collectFailures(function* (): Operation<Json> {
+      printErrors(function* (): Operation<Json> {
         yield* ensure(function* () {
           timeline.push("released");
         });
@@ -577,7 +576,7 @@ describe("Tier CF — collectFailures(fn)", () => {
       yield* task.halt();
     });
 
-    // Cancellation is not a diagnostic: cleanup completed before halt returned,
+    // Cancellation is not a printed error: cleanup completed before halt returned,
     // and nothing was converted into an ErrorSegment on the way out.
     expect(timeline).toEqual(["acquired", "released"]);
     expect(observed).toEqual([]);
@@ -585,12 +584,11 @@ describe("Tier CF — collectFailures(fn)", () => {
   });
 });
 
-describe("Tier CF — <CollectFailures>", () => {
+describe("Tier CF — <PrintErrors>", () => {
   it("CF8: it handles a child's failure and continues to the next child", function* () {
-    const result = yield* run(
-      "<CollectFailures>\n<Boom />\n\nSTILL RUNS\n</CollectFailures>\n\nAFTER\n",
-      { Boom: throwing("Boom", new Error("boom")) },
-    );
+    const result = yield* run("<PrintErrors>\n<Boom />\n\nSTILL RUNS\n</PrintErrors>\n\nAFTER\n", {
+      Boom: throwing("Boom", new Error("boom")),
+    });
 
     expect(result.outcome.ok).toBe(true);
     expect(result.observed).toHaveLength(1);
@@ -600,7 +598,7 @@ describe("Tier CF — <CollectFailures>", () => {
 
   it("CF9: it reaches a failure nested inside another component", function* () {
     const nested = new Error("nested");
-    const source = "<CollectFailures>\n<Outer>\n<Boom />\n</Outer>\n</CollectFailures>\n\nAFTER\n";
+    const source = "<PrintErrors>\n<Outer>\n<Boom />\n</Outer>\n</PrintErrors>\n\nAFTER\n";
     const definitions = { Outer: projecting("Outer"), Boom: throwing("Boom", nested) };
 
     const result = yield* run(source, definitions);
@@ -609,15 +607,15 @@ describe("Tier CF — <CollectFailures>", () => {
     expect(result.observed).toHaveLength(1);
     expect(result.output).toContain("AFTER");
 
-    const thrown = yield* run(source, definitions, { policy: "throw" });
+    const thrown = yield* run(source, definitions, { mode: "throw" });
     expect(reachableFrom(documentationError(thrown).cause)).toContain(nested);
   });
 
   it("CF9b: the nearest of two nested boundaries handles it, and only it", function* () {
     const boom = new Error("boom");
     const result = yield* run(
-      "<CollectFailures>\n<CollectFailures>\n<Boom />\n</CollectFailures>\n\nINNER DONE\n" +
-        "</CollectFailures>\n\nAFTER\n",
+      "<PrintErrors>\n<PrintErrors>\n<Boom />\n</PrintErrors>\n\nINNER DONE\n" +
+        "</PrintErrors>\n\nAFTER\n",
       { Boom: throwing("Boom", boom) },
     );
 
@@ -626,7 +624,7 @@ describe("Tier CF — <CollectFailures>", () => {
     expect(result.output).toContain("AFTER");
     // The inner boundary is terminal: it answers rather than delegating, so the
     // enclosing one never converts the same failure a second time. Two
-    // conversions would be two diagnostics, and a re-offer would be two entries.
+    // conversions would be two printed errors, and a re-offer would be two entries.
     expect(result.observed).toHaveLength(1);
     expect(result.offered).toHaveLength(1);
     expect(result.offered[0].error).toBe(boom);
@@ -634,10 +632,9 @@ describe("Tier CF — <CollectFailures>", () => {
 
   it("CF9c: a marked component inside the element is handled once, by itself", function* () {
     const boom = new Error("boom");
-    const result = yield* run(
-      "<CollectFailures>\n<Boom />\n\nSTILL RUNS\n</CollectFailures>\n\nAFTER\n",
-      { Boom: collecting("Boom", boom) },
-    );
+    const result = yield* run("<PrintErrors>\n<Boom />\n\nSTILL RUNS\n</PrintErrors>\n\nAFTER\n", {
+      Boom: printing("Boom", boom),
+    });
 
     expect(result.outcome.ok).toBe(true);
     expect(result.output).toContain("STILL RUNS");
@@ -648,32 +645,32 @@ describe("Tier CF — <CollectFailures>", () => {
     expect(result.offered[0].error).toBe(boom);
   });
 
-  it("CF10: it does not collect a durability failure", function* () {
+  it("CF10: it does not print a durability failure", function* () {
     const stale = new StaleInputError("the journal no longer describes this run");
-    const result = yield* run("<CollectFailures>\n<Boom />\n</CollectFailures>\n", {
+    const result = yield* run("<PrintErrors>\n<Boom />\n</PrintErrors>\n", {
       Boom: throwing("Boom", stale),
     });
 
     expect(failureOf(result)).toBe(stale);
   });
 
-  it("CF11: under a throwing policy it reports once and still stops", function* () {
+  it("CF11: under a throwing error mode it reports once and still stops", function* () {
     const boom = new Error("boom");
     const result = yield* run(
-      "<CollectFailures>\n<Boom />\n</CollectFailures>\n\nAFTER\n",
+      "<PrintErrors>\n<Boom />\n</PrintErrors>\n\nAFTER\n",
       { Boom: throwing("Boom", boom) },
-      { policy: "throw" },
+      { mode: "throw" },
     );
 
-    // Collection converts the failure into a diagnostic; the caller's policy
-    // still decides what a diagnostic means, and documentation stops. The
-    // diagnostic keeps the exact failure it was built from.
+    // Printing converts the failure into a printed error; the caller's error mode
+    // still decides what a printed error means, and documentation stops. The
+    // printed error keeps the exact failure it was built from.
     expect(documentationError(result).cause).toBe(boom);
     expect(result.observed).toHaveLength(1);
   });
 });
 
-describe("Tier CF — <CollectFailures> accepts no props", () => {
+describe("Tier CF — <PrintErrors> accepts no props", () => {
   /** A component that records having run, so a skipped body is observable. */
   function sentinel(ran: string[]): FunctionComponentDefinition {
     // deno-lint-ignore require-yield
@@ -685,14 +682,13 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
 
   it("CF12: a literal prop is a syntax error and the body does not run", function* () {
     const ran: string[] = [];
-    const result = yield* run(
-      '<CollectFailures unexpected="value">\n<Sentinel />\n</CollectFailures>\n',
-      { Sentinel: sentinel(ran) },
-    );
+    const result = yield* run('<PrintErrors unexpected="value">\n<Sentinel />\n</PrintErrors>\n', {
+      Sentinel: sentinel(ran),
+    });
 
     expect(result.outcome.ok).toBe(true);
     expect(result.observed).toHaveLength(1);
-    expect(result.observed[0].source).toBe("CollectFailures");
+    expect(result.observed[0].source).toBe("PrintErrors");
     expect(result.observed[0].message).toContain("accepts no props");
     expect(result.observed[0].message).toContain("unexpected");
     // No body effect runs after invalid syntax, and nothing of it is rendered.
@@ -703,14 +699,14 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
   it("CF13: an expression prop is rejected without ever being evaluated", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      "<CollectFailures when={missing.property}>\n<Sentinel />\n</CollectFailures>\n",
+      "<PrintErrors when={missing.property}>\n<Sentinel />\n</PrintErrors>\n",
       { Sentinel: sentinel(ran) },
     );
 
-    // The mistake is the prop being written at all, so the diagnostic names
+    // The mistake is the prop being written at all, so the printed error names
     // that rather than whatever evaluating it would have gone wrong with.
     expect(result.observed).toHaveLength(1);
-    expect(result.observed[0].source).toBe("CollectFailures");
+    expect(result.observed[0].source).toBe("PrintErrors");
     expect(result.observed[0].message).toContain("accepts no props");
     expect(result.observed[0].message).toContain("when");
     expect(result.observed[0].message).not.toContain("missing");
@@ -719,31 +715,25 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
 
   it("CF14: `as` and `slot` are props here, not fields of their own", function* () {
     const ran: string[] = [];
-    const bound = yield* run(
-      '<CollectFailures as="captured">\n<Sentinel />\n</CollectFailures>\n',
-      {
-        Sentinel: sentinel(ran),
-      },
-    );
+    const bound = yield* run('<PrintErrors as="captured">\n<Sentinel />\n</PrintErrors>\n', {
+      Sentinel: sentinel(ran),
+    });
     expect(bound.observed).toHaveLength(1);
     expect(bound.observed[0].message).toContain('Got: "as"');
 
-    const slotted = yield* run(
-      '<CollectFailures slot="body">\n<Sentinel />\n</CollectFailures>\n',
-      {
-        Sentinel: sentinel(ran),
-      },
-    );
+    const slotted = yield* run('<PrintErrors slot="body">\n<Sentinel />\n</PrintErrors>\n', {
+      Sentinel: sentinel(ran),
+    });
     expect(slotted.observed).toHaveLength(1);
     expect(slotted.observed[0].message).toContain('Got: "slot"');
 
     expect(ran).toEqual([]);
   });
 
-  it("CF15: the diagnostic is positioned, and reported exactly once", function* () {
+  it("CF15: the printed error is positioned, and reported exactly once", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      'intro\n\n<CollectFailures bad="1" worse="2">\n<Sentinel />\n</CollectFailures>\n',
+      'intro\n\n<PrintErrors bad="1" worse="2">\n<Sentinel />\n</PrintErrors>\n',
       { Sentinel: sentinel(ran) },
       { path: "doc.md" },
     );
@@ -755,10 +745,10 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
     expect(ran).toEqual([]);
   });
 
-  it("CF16: a valid no-props element still collects and expands its body", function* () {
+  it("CF16: a valid no-props element still prints and expands its body", function* () {
     const ran: string[] = [];
     const result = yield* run(
-      "<CollectFailures>\n<Sentinel />\n\n<Boom />\n\nSTILL RUNS\n</CollectFailures>\n\nAFTER\n",
+      "<PrintErrors>\n<Sentinel />\n\n<Boom />\n\nSTILL RUNS\n</PrintErrors>\n\nAFTER\n",
       { Sentinel: sentinel(ran), Boom: throwing("Boom", new Error("boom")) },
     );
 
@@ -767,14 +757,14 @@ describe("Tier CF — <CollectFailures> accepts no props", () => {
     expect(result.output).toContain("SENTINEL RAN");
     expect(result.output).toContain("STILL RUNS");
     expect(result.output).toContain("AFTER");
-    // One diagnostic: the child's failure, not a syntax complaint.
+    // One printed error: the child's failure, not a syntax complaint.
     expect(result.observed).toHaveLength(1);
     expect(result.observed[0].source).toBe("Boom");
   });
 });
 
-describe("Tier CF — what a collection boundary is never offered", () => {
-  it("CF17: a prop schema failure stays a structured diagnostic", function* () {
+describe("Tier CF — what a printing boundary is never offered", () => {
+  it("CF17: a prop schema failure stays a structured printed error", function* () {
     const strict: FunctionComponentDefinition = {
       kind: "function",
       name: "Strict",
@@ -800,7 +790,7 @@ describe("Tier CF — what a collection boundary is never offered", () => {
     expect(ordinary.offered[0].error).toBe(boom);
   });
 
-  it("CF18: a declared `returns` violation stays a structured diagnostic", function* () {
+  it("CF18: a declared `returns` violation stays a structured printed error", function* () {
     const valued: FunctionComponentDefinition = {
       kind: "function",
       name: "Valued",
@@ -826,16 +816,16 @@ describe("Tier CF — what a collection boundary is never offered", () => {
 
   it("CF19: an uncaught content failure restores its segments without a second report", function* () {
     const boom = new Error("boom");
-    const result = yield* run(
-      "<CollectFailures>\n<Outer>\n<Boom />\n</Outer>\n</CollectFailures>\n",
-      { Outer: projecting("Outer"), Boom: throwing("Boom", boom) },
-    );
+    const result = yield* run("<PrintErrors>\n<Outer>\n<Boom />\n</Outer>\n</PrintErrors>\n", {
+      Outer: projecting("Outer"),
+      Boom: throwing("Boom", boom),
+    });
 
     // One observation, for the child's failure — the boundary converted it, so
-    // the content the outer component asked for came back holding a diagnostic.
+    // the content the outer component asked for came back holding a printed error.
     // The transport that carries those already-reported segments back out is not
     // a failure of the component that projected them: it restores them instead,
-    // so there is no second diagnostic and nothing else is offered as a failure.
+    // so there is no second printed error and nothing else is offered as a failure.
     expect(result.outcome.ok).toBe(true);
     expect(result.observed).toHaveLength(1);
     expect(result.offered).toHaveLength(1);
@@ -886,14 +876,14 @@ describe("Tier CF — what a collection boundary is never offered", () => {
     expect(result.outcome.ok).toBe(true);
     expect(result.output).toContain("RECOVERED");
     expect(result.output).toContain("AFTER");
-    // The component decided what the document says instead, so the diagnostic it
+    // The component decided what the document says instead, so the printed error it
     // caught is not reported again — and what reached it is the same object the
     // document reported, not a copy that merely looks like one.
     expect(result.observed).toHaveLength(1);
     expect(caught?.errors).toHaveLength(1);
     expect(caught?.errors[0]).toBe(result.observed[0]);
     expect(result.output).not.toContain("not a number");
-    // A schema diagnostic is never a component failure, before or after recovery.
+    // A schema printed error is never a component failure, before or after recovery.
     expect(result.offered).toEqual([]);
   });
 });

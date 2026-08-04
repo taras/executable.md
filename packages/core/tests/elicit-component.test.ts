@@ -86,7 +86,7 @@ interface Run {
  * produced and what the provider saw.
  *
  * A failure is captured rather than raised so a test can assert on the
- * diagnostic and on how far the run got, which is most of what these cover.
+ * printed error and on how far the run got, which is most of what these cover.
  */
 function run(
   workspace: string,
@@ -357,14 +357,14 @@ describe("Elicit: judging the answer", () => {
     });
 
     // Every issue, not the first one: the validator collects them all, and a
-    // diagnostic that reported one at a time would send a person round twice.
+    // printed error that reported one at a time would send a person round twice.
     expect(readIssues(raised)).toEqual([
       { instancePath: "/decision", keyword: "type" },
       { instancePath: "/decision", keyword: "enum" },
     ]);
   });
 
-  it("renders those issues into the diagnostic a document sees", function* () {
+  it("renders those issues into the printed error a document sees", function* () {
     const workspace = yield* useWorkspace();
 
     const result = yield* run(workspace, document("Approve?"), constant({ decision: 7 }));

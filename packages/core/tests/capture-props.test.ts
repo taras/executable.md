@@ -185,7 +185,7 @@ describe("Tier CP — capture props", () => {
     });
 
     // The component owns the failure: it caught it, rather than the engine
-    // turning it into a prop diagnostic before the component ever ran. The
+    // turning it into a prop printed error before the component ever ran. The
     // wrapper names the operand, and the original is reachable by identity
     // through its cause.
     expect(caught).toBeInstanceOf(Error);

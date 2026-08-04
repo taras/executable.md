@@ -18,7 +18,7 @@ export default define.page(function Reference() {
           <code>--eval</code>, <code>-e</code>{" "}
           — execute the given markdown as the root document instead of a path.
           Exactly one of the two is required. Quote it so the shell passes one
-          argument; diagnostics report the source as{" "}
+          argument; printed errors report the source as{" "}
           <code>&lt;eval&gt;</code>, and relative paths resolve from the current
           directory.
         </li>

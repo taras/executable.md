@@ -62,7 +62,7 @@ export function* Testing(): Operation<Json> {
   // A body that stopped never finished being a boundary, so there is no outcome
   // to report and nothing to journal: the failure travels on untouched. Only a
   // projection that ran to the end has counted every test it contains — errors
-  // it *collected* are part of its text and leave it complete.
+  // it *printed* are part of its text and leave it complete.
   if (projected.failure !== undefined) {
     throw projected.failure;
   }

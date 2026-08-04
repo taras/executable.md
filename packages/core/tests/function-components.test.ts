@@ -60,8 +60,8 @@ interface ObservedRun {
  * One execution with counting `raise` middleware in scope.
  *
  * Content a function component never asks for is never expanded, so nothing in
- * it is ever reported. Output alone cannot show that: a collecting policy
- * renders a diagnostic it observed, but so does an expansion that discarded
+ * it is ever reported. Output alone cannot show that: a printing error mode
+ * renders a printed error it observed, but so does an expansion that discarded
  * one. The observation count is what distinguishes "not expanded" from
  * "expanded and swallowed".
  */
@@ -393,7 +393,7 @@ describe("Tier FC — Function components", () => {
       }
       const result = yield* execution;
 
-      // A failed operation, not a completed one holding a diagnostic.
+      // A failed operation, not a completed one holding a printed error.
       expect(result.ok).toBe(false);
       expect(result.ok === false && result.error.message).toContain("component error");
       // Nothing after it ran, and nothing was rendered in its place.
@@ -404,15 +404,15 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  // The explicit choice: `collectFailures` says this component reports rather
-  // than stops, so the failure becomes one diagnostic and the document goes on.
-  it("FC5b: a component marked with collectFailures reports and continues", function* () {
+  // The explicit choice: `printErrors` says this component reports rather
+  // than stops, so the failure becomes one printed error and the document goes on.
+  it("FC5b: a component marked with printErrors reports and continues", function* () {
     const tmpDir = makeTempDir();
     try {
       writeFiles(tmpDir, {
         "components/Broken.ts": [
-          'import { collectFailures } from "@executablemd/core";',
-          "export default collectFailures(function*() {",
+          'import { printErrors } from "@executablemd/core";',
+          "export default printErrors(function*() {",
           '  throw new Error("component error");',
           "});",
         ].join("\n"),
@@ -646,7 +646,7 @@ describe("Tier FC — Function components", () => {
       expect(run.observed[0]).toContain("Cannot resolve component: Missing");
       // The fallback quotes the message of that same segment, so the component
       // inspected the original error rather than a rendered summary of it — and
-      // the document shows the recovery instead of a diagnostic.
+      // the document shows the recovery instead of a printed error.
       expect(run.output).toContain(`recovered:${run.observed[0]}`);
       expect(run.output).not.toContain("ERROR");
     } finally {
@@ -786,7 +786,7 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
 
       const run = yield* runObserved(tmpDir);
 
-      // The original diagnostic replaces the whole invocation, once.
+      // The original printed error replaces the whole invocation, once.
       expect(run.observed).toHaveLength(1);
       expect(run.observed[0]).toContain("Cannot resolve component: Missing");
       expect(run.output.match(/Cannot resolve component: Missing/g)).toHaveLength(1);
@@ -794,7 +794,7 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
       expect(run.output).not.toContain("PARTIAL-BEFORE");
       expect(run.output).not.toContain("PARTIAL-AFTER");
       // Nothing validated the return, so `as` left the binding unmade — and the
-      // sibling that reads it still runs under the collecting policy.
+      // sibling that reads it still runs under the printing error mode.
       expect(run.output).toContain("captured: unbound");
       // The function ran and received its validated props; it stopped at
       // content() and never reached the effect after it.

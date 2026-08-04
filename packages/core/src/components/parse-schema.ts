@@ -40,7 +40,7 @@ export class ParseSchemaError extends Error {
 
 /**
  * Content a document produced that could not become a value: malformed JSON,
- * or JSON the schema rejected. A `SchemaValidationError`, so the diagnostic
+ * or JSON the schema rejected. A `SchemaValidationError`, so the printed error
  * names the component and carries its issues structurally rather than only in
  * prose — the same issues `<SafeParse>` hands to a document.
  */
@@ -178,7 +178,7 @@ function asSchemaObject(componentName: string, value: unknown): Record<string, J
 
 /**
  * Ajv reports an unreachable `$ref` the same way it reports a malformed
- * keyword, so the limit reads like a defect unless the diagnostic names it.
+ * keyword, so the limit reads like a defect unless the printed error names it.
  * Only a self-contained schema resolves today; #192 tracks file and HTTP(S)
  * references.
  */

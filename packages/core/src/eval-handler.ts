@@ -14,7 +14,7 @@ import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { Component, env, evalScope, persistent } from "./component-api.ts";
-import { AmbientErrorPolicy } from "./errors.ts";
+import { ErrorMode } from "./errors.ts";
 import { commitExports, evaluationEnv } from "./eval-env.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
@@ -71,9 +71,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     }
     const persist = yield* ephemeral(persistent);
     // Captured here, on the expansion frame, where the block's documentation or
-    // <Output> policy is ambient. A persist block runs on the invocation's
-    // eval-scope loop task, which predates that policy and cannot inherit it.
-    const policy = (yield* ephemeral(AmbientErrorPolicy.get())) ?? "collect";
+    // <Output> error mode is ambient. A persist block runs on the invocation's
+    // eval-scope loop task, which predates that error mode and cannot inherit it.
+    const mode = (yield* ephemeral(ErrorMode.get())) ?? "print";
 
     // Inject output() function into env so eval blocks can produce
     // rendered output. The function is a plain synchronous call:
@@ -102,9 +102,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
 
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
         // A snapshot of the bindings as they stand now, with this block's
-        // policy bound into its projection closures. The block writes its
+        // error mode bound into its projection closures. The block writes its
         // exports here; they are published below once it succeeds.
-        const blockEnv = evaluationEnv(evalEnv.values, policy);
+        const blockEnv = evaluationEnv(evalEnv.values, mode);
 
         if (persist) {
           // Persist mode: run the compiled block inside the eval scope

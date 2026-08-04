@@ -22,8 +22,8 @@ import type { ErrorSegment, EvalEnv, Segment } from "@executablemd/core";
 import { Test, boundary, inTest, record, testing, verbose } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import {
-  AssertionDiagnostic,
-  buildDiagnostic,
+  AssertionReport,
+  buildReport,
   failVisiblyThenThrow,
   validationError,
 } from "./assertions.ts";
@@ -114,7 +114,7 @@ function classify(
       message: `test timed out after ${timeoutMs / 1000} seconds`,
     });
   }
-  if (bodyError instanceof AssertionDiagnostic) {
+  if (bodyError instanceof AssertionReport) {
     return failResult(name, location, {
       kind: "assertion",
       message: bodyError.message,
@@ -132,7 +132,7 @@ function classify(
   return failResult(name, location, { kind: "error", message });
 }
 
-function failureDiagnostic(result: TestResult, options: { detail: boolean }): Segment {
+function failureReport(result: TestResult, options: { detail: boolean }): Segment {
   const title = result.name ? `**${result.name}**` : `test at ${result.location}`;
   const error = result.error;
   const lines = [`> ❌ Test ${title} failed (${error?.kind ?? "error"}): ${error?.message ?? ""}`];
@@ -160,9 +160,9 @@ export const ASSERT_THROWS_PROPS: PropsSchema = {
  * caught `ErrorSegment` is the return value, and a return binds by reference, so
  * `as` binds that very object rather than a description of it.
  *
- * It emits no pass diagnostic. The return channel carries the segment, and no
+ * It emits no pass report. The return channel carries the segment, and no
  * other channel preserves a durable rendered segment: `raise()` is the error
- * observation chain and would abort the document under a throwing policy, and
+ * observation chain and would abort the document under a throwing error mode, and
  * `DocumentOutput` is ephemeral, so a run and a replay would disagree.
  */
 export function* AssertThrows(_props: Record<string, Json>): Operation<unknown> {

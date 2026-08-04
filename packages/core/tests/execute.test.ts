@@ -335,7 +335,7 @@ describe("Tier D — code execution and modifiers", () => {
   // D3b: the same rule for a command that printed before it failed (#307), run
   // as a real subprocess so the exit code travels the whole way through
   // `execFactory` rather than a stub's return value.
-  it("D3b: non-zero exit with stdout → output, then the diagnostic", function* () {
+  it("D3b: non-zero exit with stdout → output, then the printed error", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": ["```bash exec", "echo partial; exit 1", "```"].join("\n"),

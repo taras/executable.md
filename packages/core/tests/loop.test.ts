@@ -6,7 +6,7 @@ import type { Operation } from "effection";
 import { expandSegments } from "../src/expand.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { Component } from "../src/component-api.ts";
-import { AmbientErrorPolicy, DocumentationError } from "../src/errors.ts";
+import { DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
@@ -15,7 +15,7 @@ import type { DurableEvent, Json, Result } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import { collectFailures } from "../src/component-failures.ts";
+import { printErrors } from "../src/component-failures.ts";
 import type { ComponentElement, FunctionComponent, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
@@ -34,7 +34,7 @@ const OBJECT_SCHEMA = { type: "object", properties: {} };
 
 /** Function components the harness serves instead of the filesystem. */
 // Ordinary components: indexing the definition union would widen these to the
-// live shape too, and then collectFailures could not infer a concrete arm.
+// live shape too, and then printErrors could not infer a concrete arm.
 type Stubs = Record<string, FunctionComponent>;
 
 function runLoop(
@@ -62,9 +62,9 @@ function runLoop(
             kind: "function",
             name,
             props: OBJECT_SCHEMA,
-            // What these assert is how a rendered diagnostic interacts with a
-            // loop and its policy, which needs the failure to become one.
-            fn: collectFailures(fn),
+            // What these assert is how a rendered printed error interacts with a
+            // loop and its error mode, which needs the failure to become one.
+            fn: printErrors(fn),
           };
         },
         // deno-lint-ignore require-yield
@@ -342,7 +342,7 @@ describe("Tier LOOP — the optional name", () => {
     expect(run.output).toBe("({name})({planning})");
   });
 
-  it("LOOP23: a name appears in the loop's own diagnostics", function* () {
+  it("LOOP23: a name appears in the loop's own printed errors", function* () {
     const run = yield* runLoop('<Loop name="planning">x</Loop>');
     expect(errorMessages(run.segments)[0]).toContain('<Loop name="planning">');
   });
@@ -499,10 +499,10 @@ describe("Tier BREAK — validation", () => {
     expect(run.output.match(/b/g)).toHaveLength(3);
   });
 
-  it("BREAK18b: a malformed <Break> aborts under a throwing policy", function* () {
+  it("BREAK18b: a malformed <Break> aborts under a throwing error mode", function* () {
     let thrown: unknown;
     yield* scoped(function* () {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* ErrorMode.set("throw");
       try {
         yield* runLoop("<Loop max={3}>a<Break>why</Break>b</Loop>");
       } catch (error) {
@@ -528,11 +528,11 @@ describe("Tier BREAK — validation", () => {
 });
 
 describe("Tier LOOP — errors and cancellation stop further iterations", () => {
-  it("LOOP26: a throwing policy aborts at the first failing iteration", function* () {
+  it("LOOP26: a throwing error mode aborts at the first failing iteration", function* () {
     let thrown: unknown;
     const started: string[] = [];
     yield* scoped(function* () {
-      yield* AmbientErrorPolicy.set("throw");
+      yield* ErrorMode.set("throw");
       try {
         yield* runLoop("<Loop max={5}><Boom /></Loop>", {
           // deno-lint-ignore require-yield
@@ -551,7 +551,7 @@ describe("Tier LOOP — errors and cancellation stop further iterations", () => 
     expect(started).toEqual(["ran"]);
   });
 
-  it("LOOP27: a collecting policy renders the diagnostic and keeps iterating", function* () {
+  it("LOOP27: a printing error mode renders the printed error and keeps iterating", function* () {
     const run = yield* runLoop("<Loop max={3}><Boom /></Loop>", {
       // deno-lint-ignore require-yield
       components: {
@@ -633,8 +633,8 @@ describe("Tier LOOP — resource teardown", () => {
   });
 });
 
-describe("Tier LOOP — diagnostics carry source positions", () => {
-  it("LOOP31: a local position anchors the loop diagnostic", function* () {
+describe("Tier LOOP — printed errors carry source positions", () => {
+  it("LOOP31: a local position anchors the loop printed error", function* () {
     const run = yield* runLoop("line one\n<Loop>body</Loop>\n");
     expect(errorMessages(run.segments)[0]).toContain("(2:1)");
   });
@@ -946,7 +946,7 @@ describe("Tier LOOP — execution records", () => {
     expect(close?.result.status).toBe("err");
   });
 
-  it("LOOP45: a collecting policy is not a loop failure", function* () {
+  it("LOOP45: a printing error mode is not a loop failure", function* () {
     const run = yield* runDoc(["<Loop max={3}>", "<Missing />", "</Loop>"].join("\n"));
 
     expect(iterationRecords(run.events)).toHaveLength(3);
@@ -1251,7 +1251,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
     expect(outcomeRecords(cut).map((entry) => entry.outcome)).toEqual(["exhausted"]);
 
     // A non-boolean condition makes the body fail under the documentation
-    // policy, so this run derives `error` where the journal holds `exhausted`.
+    // error mode, so this run derives `error` where the journal holds `exhausted`.
     const replayed = yield* resume(FAILING, cut, { condition: 1 });
 
     expect(replayed.failure).toBeInstanceOf(StaleInputError);
@@ -1357,7 +1357,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
             path: "Mixed.ts",
             props: OBJECT_SCHEMA,
             // deno-lint-ignore require-yield
-            fn: collectFailures(function* () {
+            fn: printErrors(function* () {
               throw new AggregateError(
                 [
                   new DocumentationError({
@@ -1434,7 +1434,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
     expect(failure.actual.name).toBe(bodyName);
     expect(failure.actual.type).toBe("eval");
     // Not the loop's terminal operation, which is where a divergence that had
-    // been collected as a diagnostic would have surfaced instead.
+    // been printed would have surfaced instead.
     expect(failure.actual.type).not.toBe("loop");
     expect(failure.expected.type).not.toBe("loop");
 
@@ -1444,7 +1444,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
     expect(outcomeRecords(replayed.events)).toEqual([
       { name: "loop:0", status: "ok", iterations: 2, outcome: "exhausted" },
     ]);
-    // Nor was it rendered: a collectable diagnostic is exactly what would have
+    // Nor was it rendered: a printed error is exactly what would have
     // let expansion carry on to a second, misleading mismatch.
     expect(replayed.output).not.toContain("Divergence");
     expect(replayed.output).not.toContain("ERROR");

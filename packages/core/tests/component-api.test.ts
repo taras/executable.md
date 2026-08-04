@@ -1,5 +1,5 @@
 /**
- * Component Api tests — default operations, missing-provider diagnostics,
+ * Component Api tests — default operations, missing-provider printed errors,
  * scoped middleware overrides, and nested provider precedence.
  */
 import { describe, it } from "@executablemd/test-support/bdd";

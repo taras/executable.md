@@ -96,7 +96,7 @@ describe("WebForm: nothing happens before the question is ready", () => {
    *
    * The document itself survives here, and that is the engine's doing rather than
    * this component's: an eval failure inside content is settled by the ambient
-   * collect policy into a diagnostic before `content()` returns, so `<WebForm>`
+   * `print` error mode into a printed error before `content()` returns, so `<WebForm>`
    * is handed a body that already failed and never reaches its live work. What
    * this asserts is the consequence — the diagnostic reached the document and
    * nothing was served.
@@ -163,14 +163,14 @@ describe("WebForm: nothing happens before the question is ready", () => {
   });
 
   /** Unmarked, so #251's default applies: the failure is the document's. */
-  it("fails the document rather than collecting", function* () {
+  it("fails the document rather than printing", function* () {
     const run = yield* runWebFormDoc(
       '<WebForm schema="[]" as="response">Decide.</WebForm>\n\nafter\n',
       { answer: { decision: "approve" } },
     );
 
     expect(run.completion.ok).toBe(false);
-    // Nothing after it ran, which a collected diagnostic would have allowed.
+    // Nothing after it ran, which a printed error would have allowed.
     expect(run.output.includes("after")).toBe(false);
   });
 });

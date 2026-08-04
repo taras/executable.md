@@ -1,5 +1,5 @@
 /**
- * A function component's diagnostic, observed and settled exactly once
+ * A function component's printed error, observed and settled exactly once
  * (spec §6.9).
  *
  * Rescued from the expansion-hook suite, which pinned this against a claiming
@@ -9,7 +9,7 @@
  * only `execute()` installs a provider that reads registrations.
  *
  * `raise()` is where settlement happens: it puts the segment through the
- * observation chain and applies the ambient policy. What the component returns
+ * observation chain and applies the ambient error mode. What the component returns
  * afterwards is ordinary output, not something settled a second time.
  *
  * The two other engine behaviors that suite pinned are covered elsewhere and
@@ -29,7 +29,7 @@ import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
 import type { EvalEnv } from "../src/types.ts";
 
-describe("a function component's diagnostic", () => {
+describe("a function component's printed error", () => {
   it("is observed once and settled by the engine", function* () {
     const raised: string[] = [];
     const output = yield* scoped(function* () {

@@ -87,7 +87,7 @@ export function assertNotMatch(actual: string, expected: RegExp, msg?: string): 
 
 /**
  * The rest have no `node:assert` equivalent. They name the operator and leave
- * the operands to the diagnostic, which renders them under its own guarded
+ * the operands to the report, which renders them under its own guarded
  * formatter — formatting here could run a hostile `toString` on a value whose
  * assertion has already passed.
  */

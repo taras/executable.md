@@ -54,7 +54,7 @@ export type FileSecretFinding =
  *
  * Carries no path, no link target, and no cause. The name of an offending
  * entry can itself be the credential, and a symlink target can point at one,
- * so the diagnostic says what happened and nothing about where.
+ * so the printed error says what happened and nothing about where.
  */
 export class CandidateRejectedError extends Error {
   constructor(reason: string) {

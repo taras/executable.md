@@ -218,7 +218,7 @@ export default define.page(function ControlFlow() {
       <h2>Exhaustion is not failure</h2>
       <p>
         Reaching <code>max</code>{" "}
-        completes the loop normally and produces no diagnostic. Whether five
+        completes the loop normally and produces no printed error. Whether five
         rejected plans mean the work failed is a decision only the surrounding
         document can make, so you write it as an <code>&lt;If&gt;</code>{" "}
         on whatever the body bound — as the review loop above does. A retry
@@ -265,9 +265,9 @@ export default define.page(function ControlFlow() {
         document failure produces the <code>error</code> outcome.
       </p>
       <p>
-        A stale-record diagnostic names the loop and the outcome the run
+        A stale-record printed error names the loop and the outcome the run
         derived. It never quotes what the journal held: that is external data,
-        and a diagnostic that reproduced it would carry whatever it contained
+        and a printed error that reproduced it would carry whatever it contained
         into your logs and output.
       </p>
 

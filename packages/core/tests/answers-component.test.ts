@@ -5,11 +5,11 @@
  * a document cannot construct or observe about itself: a component that elicits
  * internally, an outer provider watching what was delegated to it, a journal
  * whose recorded answer disagrees with the matcher, and the configuration
- * diagnostics.
+ * printed errors.
  *
  * Two failure shapes appear here and they are not interchangeable. A
  * configuration mistake is a raised `ErrorSegment`, settled under the ambient
- * policy — at a document root that means it lands in the rendered output. An
+ * error mode — at a document root that means it lands in the rendered output. An
  * unmatched elicitation is a thrown provider failure, which fails the run. The
  * helpers below keep both observable.
  */
@@ -154,8 +154,8 @@ function elicits(as: string, message: string): string {
   return `<Elicit schema={s} as="${as}">${message}</Elicit>`;
 }
 
-/** The document's own diagnostics, as the ambient policy rendered them. */
-function diagnostics(result: Run): string {
+/** The document's own printed errors, as the ambient error mode rendered them. */
+function printedErrors(result: Run): string {
   return result.output;
 }
 
@@ -666,7 +666,7 @@ describe("Answers: nesting", () => {
   });
 });
 
-describe("Answers: configuration diagnostics", () => {
+describe("Answers: configuration printed errors", () => {
   it("refuses an <Answer> outside an <Answers>", function* () {
     const workspace = yield* useWorkspace();
 
@@ -675,8 +675,8 @@ describe("Answers: configuration diagnostics", () => {
       '<Answer template="Approve?" value={{ decision: "a" }} />\n',
     );
 
-    expect(diagnostics(result)).toContain("<Answer> must be a direct child of <Answers>");
-    expect(diagnostics(result)).toContain("doc.md:1:1");
+    expect(printedErrors(result)).toContain("<Answer> must be a direct child of <Answers>");
+    expect(printedErrors(result)).toContain("doc.md:1:1");
   });
 
   it("refuses an <Answers> with nothing to answer for", function* () {
@@ -691,10 +691,10 @@ describe("Answers: configuration diagnostics", () => {
         "",
       ].join("\n"),
     );
-    expect(diagnostics(bodyless)).toContain("has no body to answer for");
+    expect(printedErrors(bodyless)).toContain("has no body to answer for");
 
     const selfClosing = yield* run(workspace, "<Answers />\n");
-    expect(diagnostics(selfClosing)).toContain("has no body to answer for");
+    expect(printedErrors(selfClosing)).toContain("has no body to answer for");
   });
 
   it("refuses both template forms at once", function* () {
@@ -712,7 +712,7 @@ describe("Answers: configuration diagnostics", () => {
       ].join("\n"),
     );
 
-    expect(diagnostics(result)).toContain(
+    expect(printedErrors(result)).toContain(
       "accepts either a template prop or template children, not both",
     );
   });
@@ -732,7 +732,7 @@ describe("Answers: configuration diagnostics", () => {
       ].join("\n"),
     );
 
-    expect(diagnostics(result)).toContain("adjacent capture holes");
+    expect(printedErrors(result)).toContain("adjacent capture holes");
   });
 
   it("refuses a matcher with no value", function* () {
@@ -743,7 +743,7 @@ describe("Answers: configuration diagnostics", () => {
       ["<Answers>", '<Answer template="Approve?" />', "", "body", "</Answers>", ""].join("\n"),
     );
 
-    expect(diagnostics(result)).toContain('requires a "value" prop');
+    expect(printedErrors(result)).toContain('requires a "value" prop');
   });
 
   /**
@@ -770,8 +770,8 @@ describe("Answers: configuration diagnostics", () => {
       ].join("\n"),
     );
 
-    expect(diagnostics(result)).toContain("template must be a literal string prop");
-    expect(diagnostics(result)).toContain("{binding} holes");
+    expect(printedErrors(result)).toContain("template must be a literal string prop");
+    expect(printedErrors(result)).toContain("{binding} holes");
   });
 
   it("refuses a value that is not JSON", function* () {
@@ -789,12 +789,12 @@ describe("Answers: configuration diagnostics", () => {
       ].join("\n"),
     );
 
-    expect(diagnostics(result)).toContain("value text is not JSON");
+    expect(printedErrors(result)).toContain("value text is not JSON");
   });
 
   /**
    * `value={"approve"}` and `value="approve"` both arrive as the prop string
-   * `approve`, which is not JSON. The diagnostic points at the spelling that
+   * `approve`, which is not JSON. The printed error points at the spelling that
    * works rather than only reporting the parse failure.
    */
   it("points a bare string value at the JSON-quoted spelling", function* () {
@@ -812,8 +812,8 @@ describe("Answers: configuration diagnostics", () => {
       ].join("\n"),
     );
 
-    expect(diagnostics(result)).toContain("captured JSON text");
-    expect(diagnostics(result)).toContain(`value='\"approve\"'`);
+    expect(printedErrors(result)).toContain("captured JSON text");
+    expect(printedErrors(result)).toContain(`value='\"approve\"'`);
   });
 
   /**
@@ -835,7 +835,7 @@ describe("Answers: configuration diagnostics", () => {
       ].join("\n"),
     );
 
-    expect(diagnostics(result)).not.toContain("a body nobody should see");
+    expect(printedErrors(result)).not.toContain("a body nobody should see");
   });
 });
 
@@ -923,8 +923,8 @@ describe("Answers: reservation", () => {
     );
 
     // A reserved name resolves to nothing else wherever it is written, so the
-    // misplacement is still a diagnostic rather than a component that renders.
-    expect(diagnostics(result)).toContain("<Answer> must be a direct child of <Answers>");
+    // misplacement is still a printed error rather than a component that renders.
+    expect(printedErrors(result)).toContain("<Answer> must be a direct child of <Answers>");
     expect(result.output).not.toContain("REPOSITORY_ANSWER");
   });
 });

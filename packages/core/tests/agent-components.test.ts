@@ -194,7 +194,7 @@ describe("Tier AC — agent components", () => {
     expect(output).toContain("[stub-agent:stub:default:hello]");
   });
 
-  // The diagnostic is the engine's own now that <Prompt> is an ordinary
+  // The printed error is the engine's own now that <Prompt> is an ordinary
   // function component: it names the component and lists the offending prop,
   // where the claimed handler built the same account behind a `<Prompt> `
   // prefix of its own.
@@ -208,7 +208,7 @@ describe("Tier AC — agent components", () => {
     expect(output).toContain("prompt");
   });
 
-  it("AC20: a component's own validation diagnostic is observed once", function* () {
+  it("AC20: a component's own validation printed error is observed once", function* () {
     const observed: string[] = [];
     const stub = createStubProvider();
     yield* installStub(stub);

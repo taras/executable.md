@@ -25,17 +25,17 @@
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
-import type { ErrorPolicy } from "./errors.ts";
+import type { ErrorMode } from "./errors.ts";
 import type { ComponentElement, Json, Segment } from "./types.ts";
 
 /**
  * What to project.
  *
- * `policy` is set only by a persistent evaluation's binding snapshot, which knows the
- * policy of the block that started it; every other caller leaves it unset and
- * the projection site's ambient policy applies.
+ * `mode` is set only by a persistent evaluation's binding snapshot, which knows the
+ * error mode of the block that started it; every other caller leaves it unset and
+ * the projection site's ambient error mode applies.
  */
-export type ProjectionRequest = { policy?: ErrorPolicy } & (
+export type ProjectionRequest = { mode?: ErrorMode } & (
   | { kind: "slot"; name?: string }
   | { kind: "children"; override?: Record<string, unknown> }
   | { kind: "markdown"; segments: Segment[] }
@@ -59,10 +59,10 @@ export interface ProjectionHandle {
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;
   /**
-   * `project`, recording any ErrorSegments where the invocation collects them
+   * `project`, recording any ErrorSegments where the invocation records them
    * before rendering, so a string result never hides a failure from `as=`.
    *
-   * Requires that collector, which only an invocation that string-projects
+   * Requires that buffer, which only an invocation that string-projects
    * installs — a Markdown body's `renderChildren()`, `render()` and `useContent()`
    * bindings. A handle without one fails the call rather than rendering errors
    * away silently; function components project structurally and install none.

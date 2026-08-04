@@ -8,7 +8,7 @@
  *
  * Registration describes a component; it does not run one. Names and schemas
  * are checked when they are installed, so a malformed registration is a mistake
- * in the host — an ordinary thrown error — rather than a diagnostic that
+ * in the host — an ordinary thrown error — rather than a printed error that
  * surfaces in a document the first time the name is written.
  */
 
@@ -32,7 +32,7 @@ import type {
  * competing for one name at the same scope.
  *
  * A plain `Error`, like `PropsSchemaError` — not a `DocumentationError`, which
- * means "the ambient policy has already failed this document" and is rethrown
+ * means "the ambient error mode has already failed this document" and is rethrown
  * by every generic catch.
  */
 export class ComponentRegistrationError extends Error {

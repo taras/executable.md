@@ -164,7 +164,7 @@ describe("Tier AF — the engine owns props", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("AF3: an expression resolving to the wrong type is a schema diagnostic, and nothing runs", function* () {
+  it("AF3: an expression resolving to the wrong type is a schema printed error, and nothing runs", function* () {
     const trace: Trace = { prompts: [], agentLookups: [] };
     const { output, result } = yield* runDoc(
       ["```js eval", "const who = 42;", "```", "", "<Prompt text={who} />", ""].join("\n"),

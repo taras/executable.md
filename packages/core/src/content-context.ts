@@ -10,7 +10,7 @@
  *
  * Both alias Component operations the expansion engine installs around each
  * function component invocation. The `useContent` binding injected into eval
- * blocks is a different, policy-carrying closure (spec §4.3), not this alias.
+ * blocks is a different, mode-carrying closure (spec §4.3), not this alias.
  */
 
 import type { Operation } from "effection";

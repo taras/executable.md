@@ -10,7 +10,7 @@
 
 import { ensure, resource } from "effection";
 import type { Operation } from "effection";
-import { collectFailures } from "../component-failures.ts";
+import { printErrors } from "../component-failures.ts";
 import { rm } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { ReplayGuard, StaleInputError } from "@executablemd/durable-streams";
@@ -75,7 +75,7 @@ function refuseReplayInside(directory: string): Operation<void> {
       return {
         outcome: "error",
         // A StaleInputError, so expansion propagates it instead of rendering
-        // it: the ambient error policy must not be able to downgrade a
+        // it: the ambient error mode must not be able to downgrade a
         // durability failure to a comment and let later siblings run.
         error: new StaleInputError(
           `<TempDir> cannot replay the recorded ${event.description.type} effect ` +
@@ -89,7 +89,7 @@ function refuseReplayInside(directory: string): Operation<void> {
   });
 }
 
-export default collectFailures(function* (): Operation<string> {
+export default printErrors(function* (): Operation<string> {
   if (yield* hasContent()) {
     const directory = yield* useTemporaryDirectory();
     yield* API.Env.around(

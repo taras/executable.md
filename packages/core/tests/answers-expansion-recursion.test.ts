@@ -221,7 +221,7 @@ describe("Answers: the recursion its body renders through", () => {
    *
    * A built template is never rendered, so it is read here through the one
    * channel that quotes it — a parse failure. The prop interpolates to a pair of
-   * adjacent capture holes, which is ambiguous and refused, and the diagnostic
+   * adjacent capture holes, which is ambiguous and refused, and the printed error
    * repeats the source it refused. An expansion that had not interpolated would
    * have handed `parseTemplate` the literal `{props.label}`, which parses
    * cleanly as a binding hole and reports nothing at all.

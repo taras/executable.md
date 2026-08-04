@@ -270,7 +270,7 @@ interface DocumentResult extends JsonObject {
 
 /**
  * Run a value root (spec §5.4). Its body executes completely under fail-fast,
- * so no diagnostic can pass for a result, while rendered text still reaches the
+ * so no printed error can pass for a result, while rendered text still reaches the
  * output stream as observability. `<Return>` selects the value at its position
  * and the body continues past it.
  */
@@ -350,8 +350,8 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
     // Structural preflight (spec §6.9, §6.10): a structurally invalid root
     // executes no body side effects. A text root renders the aggregate
-    // diagnostic as a comment (root policy is "collect"); a value root has no
-    // rendered result to fall back on, so the diagnostic fails the execution.
+    // printed error as a comment (root error mode is "print"); a value root has no
+    // rendered result to fall back on, so the printed error fails the execution.
     const structureError = validateBodyStructure(root.bodySegments, root.returns);
     if (structureError) {
       if (root.returns !== undefined) {
@@ -425,7 +425,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
  *
  * `yield* execution` waits for completion and returns a `Result<Json>`:
  * `Ok(value)` on success, `Err(error)` on document, infrastructure, or
- * policy failure. Completion never throws once the handle exists. The
+ * middleware failure. Completion never throws once the handle exists. The
  * successful value is the document's return value — its rendered Markdown for
  * a text root, the validated JSON for a root declaring `returns` (§5.4).
  *
@@ -445,7 +445,7 @@ export interface DocumentExecution extends Operation<Result<Json>> {
  * Returns a `DocumentExecution` — an operation you can `yield*` for the
  * completion `Result<Json>`, with a `.output` stream for chunk-by-chunk
  * consumption. Once the handle exists, completion never throws: every
- * later failure — document, infrastructure, or policy middleware — closes
+ * later failure — document, infrastructure, or middleware — closes
  * `output` (with the complete or partial rendered text) and resolves
  * `Err(error)`.
  *
@@ -572,7 +572,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       yield* channel.close(output);
       resolve(Ok(value));
     } catch (error) {
-      // Close with everything already emitted — diagnostics produced before
+      // Close with everything already emitted — printed errors produced before
       // an abort stay visible to consumers of the close value.
       yield* channel.close(emittedText);
       resolve(Err(error instanceof Error ? error : new Error(String(error))));
