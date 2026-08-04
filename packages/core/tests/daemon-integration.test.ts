@@ -121,6 +121,12 @@ describe("Tier Q — Daemon integration", () => {
   // Q14: the caller writes the daemon and the component only projects it, so
   // the process belongs to the content scope rather than to the component's
   // own. It still stops with the invocation that hosted the projection.
+  //
+  // Both markers are load-bearing and both fail closed. `RUNNING` is printed
+  // only once the process has been seen alive from inside the component, so a
+  // daemon that never started cannot satisfy the premise; `STOPPED` is chosen
+  // only against a pid that exists, so a missing pid file reports NOPID rather
+  // than passing for the absence of a process.
   it("Q14: a daemon in projected content is gone once the invocation completes", function* () {
     const tmpDir = makeTempDir();
 
@@ -136,13 +142,16 @@ describe("Tier Q — Daemon integration", () => {
           "```",
           "",
           "```bash exec",
-          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; echo ready`,
+          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done`,
+          `if [ -s ${pidFile} ] && kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo RUNNING; fi`,
           "```",
           "",
           "</Holder>",
           "",
           "```bash exec",
-          `if kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED; else echo STOPPED; fi`,
+          `if [ ! -s ${pidFile} ]; then echo NOPID;`,
+          `elif kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED;`,
+          "else echo STOPPED; fi",
           "```",
         ].join("\n"),
       });
@@ -156,7 +165,7 @@ describe("Tier Q — Daemon integration", () => {
         }),
       );
 
-      expect(output).toContain("ready");
+      expect(output).toContain("RUNNING");
       expect(output).toContain("STOPPED");
       expect(output).not.toContain("LEAKED");
     } finally {
