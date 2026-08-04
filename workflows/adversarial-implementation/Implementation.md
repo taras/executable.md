@@ -14,6 +14,46 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
+
+returns:
+  report: { type: string }
+  pullRequest: { type: string }
+  verdictPassed: { type: boolean }
+  review: { type: string }
+  revisionPrompt: { type: string }
+  authorized: { type: boolean }
+  terminal: { type: string }
+  findings:
+    type: array
+    items:
+      type: object
+      properties:
+        disposition: { type: string }
+        title: { type: string }
+        description: { type: string }
+        evidence:
+          type: array
+          items:
+            type: string
+      required: [disposition, title, description, evidence]
+      additionalProperties: false
+  decision:
+    type: object
+    properties:
+      requiresUser: { type: boolean }
+      proceed: { type: boolean }
+      assessment: { type: string }
+      recommendation: { type: string }
+      question: { type: string }
+      options:
+        type: array
+        items:
+          type: string
+      response: { type: string }
+      rationale: { type: string }
+    required:
+      [requiresUser, proceed, assessment, recommendation, question, options, response, rationale]
+    additionalProperties: false
 ---
 
 # Implementation
@@ -230,15 +270,6 @@ remote effects.
     </Session>
   </Agent>
 
-  <Each in={verdict.findings} let="finding">
-    <If condition={finding.disposition === "defer"}>
-      <Issue
-        pullRequest={pullRequest}
-        finding={finding}
-      />
-    </If>
-  </Each>
-
   <Capture as="checkpointMaterial">
     ## Authorized plan
 
@@ -269,6 +300,14 @@ remote effects.
     as="reviewCheckpoint"
   />
   <If condition={reviewCheckpoint.proceed}>
+    <Each in={verdict.findings} let="finding">
+      <If condition={finding.disposition === "defer"}>
+        <Issue
+          pullRequest={pullRequest}
+          finding={finding}
+        />
+      </If>
+    </Each>
     <If condition={verdict.passed}>
       <Break />
       <Else>
@@ -295,61 +334,53 @@ remote effects.
   </If>
 </Loop>
 
-<Output>
-  <If condition={reviewCheckpoint.proceed}>
-    # Implementation result
+<Return value={{
+  report: checkpointMaterial,
+  pullRequest: pullRequest,
+  verdictPassed: verdict.passed,
+  review: verdict.review,
+  revisionPrompt: verdict.revisionPrompt,
+  findings: verdict.findings,
+  decision: reviewCheckpoint,
+  authorized: reviewCheckpoint.proceed && verdict.passed,
+  terminal: reviewCheckpoint.proceed ? (verdict.passed ? "converged" : "exhausted") : "declined"
+}} />
 
-    ## Pull request
+## The stage returns its control state
 
-    {pullRequest}
+Like `Planning`, this is a **value component**: it resolves a user decision
+internally, so it returns that decision rather than a rendering of it.
+`authorized` is `reviewCheckpoint.proceed && verdict.passed`, and `terminal` is
+`converged`, `declined`, or `exhausted`. Final acceptance is reachable only when
+`authorized` is true, so a declined or exhausted review cannot be reported as an
+accepted change.
 
-    ## Planner review
-
-    Passed: {verdict.passed}
-
-    {verdict.review}
-
-    ## Findings
-
-    <Each in={verdict.findings} let="finding">
-    ### {finding.title}
-
-    Disposition: {finding.disposition}
-
-    {finding.description}
-    </Each>
-    <Else>
-    # Pull-request review rejected
-
-    The user declined to continue at the pull-request review checkpoint. The
-    implementation below was neither revised nor accepted.
-
-    {reviewCheckpoint.rationale}
-
-    ## Pull request
-
-    {pullRequest}
-
-    ## Planner review
-
-    Passed: {verdict.passed}
-
-    {verdict.review}
-    </Else>
-  </If>
-</Output>
-
-The agent, parsing, and control-flow syntax in this component runs today, on
-the same terms as `Planning`: the body outside `<Output>` runs under the
-`throw` error mode, so the final `<Parse>` in each repair loop ends the stage
-rather than passing malformed data to a durable effect.
+The agent, parsing, and control-flow syntax runs today. A value component's body
+runs fail-fast, so the final `<Parse>` in each repair loop ends the stage rather
+than passing malformed data to a durable effect.
 
 The user's decision outranks the verdict here too. `reviewCheckpoint.proceed` is
 read before `verdict.passed`, so a declined pull-request review leaves the loop
 without revising the implementation and without reporting it as reviewed. The
-stage is reached at all only because `start.md` gated it on
-`authorization.proceed`; a declined authorization means these prompts and the
-durable effects below them never run.
+stage is reached at all only because `start.md` gated it on both
+`planning.authorized` and `authorization.proceed`.
+
+## Approval precedes durable effects
+
+Deferred `<Issue>` creation sits **inside** the approved branch, after the
+checkpoint. The planner proposes a disposition; the user's approval is what
+turns that proposal into a durable GitHub object. Creating the issues first
+would make the planner's classification take effect before anyone approved it,
+and an issue is not undone by a later decline.
+
+`proceed: true` authorizes the exact transition and the exact effects proposed
+in the material the checkpoint assessed — here, an `<Issue>` for every finding
+the verdict marked `defer`. It is not an invitation to amend them. The free-text
+`response` and `rationale` are a record of the user's reasoning, and nothing
+reads them to change which effects run: an effect that already executed cannot
+be silently amended by prose. A user who wants different effects declines, and
+`proceed: false` performs none of them — no issue, no revision turn, no
+acceptance.
 
 `<Commit>` (#294), `<PullRequest>` (#295), and `<Issue>` (#296) do not exist,
 and reconciling those durable GitHub effects idempotently is #297. Until they
