@@ -42,6 +42,17 @@ exists or when the agent is unsure. The current workflow supplies the planner,
 but the component does not encode that role. It may determine that user
 involvement is unnecessary, but only the user resolves a material choice.
 
+That authority controls execution rather than describing it. A checkpoint binds
+a schema-validated decision, and every material transition is gated on its
+`proceed`: `proceed: false` never advances the workflow. A declined handoff does
+not start planning, a declined authorization does not start implementation, a
+declined review neither revises nor accepts, and a declined acceptance finishes
+as rejected. A checkpoint that found no material choice produces an explicit
+`proceed: true` recording why, so a transition never advances because a decision
+was missing. What remains missing is stopping *at* the boundary — halting
+cleanly where the user answered so a later invocation resumes there, with a
+recorded stop reason — which is `<Stage>` (#298) over `<Workflow>` (#289).
+
 ## Smallest complete path
 
 User and planner discuss the change
@@ -212,6 +223,9 @@ by-reference binding.
 
 Every stage component in this workflow is a text component, because each
 stage's output is also material a user reads at a checkpoint.
+`<UserCheckpoint>` is not a stage and is the one exception: it declares
+`returns` and binds a validated transition decision, because its result is
+branched on rather than read.
 
 ### A stage fails rather than returning a half-record
 

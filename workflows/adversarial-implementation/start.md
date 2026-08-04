@@ -20,11 +20,12 @@ Its component markup is the intended executable form. The three wrappers —
 that do not exist yet, and one of the stages they wrap is not expressible
 either. "What runs today" below says exactly which.
 
-Each stage component is a text component: it declares no `returns`, so its
-`<Output>` region is its return value and the caller's `as` binds that rendered
-text. `<Glob>` is the exception: it declares `returns`, so it renders nothing,
-requires `as`, and binds a `string[]` validated against a clone of what it
-produced. The [executable MDX
+Each of the four *stage* components is a text component: it declares no
+`returns`, so its `<Output>` region is its return value and the caller's `as`
+binds that rendered text. Two things here declare `returns` instead, render
+nothing, require `as`, and bind a JSON value validated against a clone of what
+they produced: `<Glob>`, which binds a `string[]`, and `<UserCheckpoint>`, which
+binds the transition decision the flow gates on. The [executable MDX
 specification](../../specs/executable-mdx-spec.md) is the authority for both.
 `<Workflow>` will create a run identity, record those captured results as
 artifact versions, and restore them when a later stage resumes (#289, #291);
@@ -46,44 +47,79 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
       <Discovery
         instructions={instructions}
         planner={planner}
+        request={request}
         as="handoff"
-      >
-        {props.request}
-      </Discovery>
+      />
       <UserCheckpoint
         purpose="validate the planner handoff"
         agent={planner}
+        material={handoff}
         as="handoffCheckpoint"
-      >
-        {handoff}
-      </UserCheckpoint>
-      <Planning handoff={handoff}
-        handoffCheckpoint={handoffCheckpoint}
-        instructions={instructions}
-        planner={planner}
-        implementor={implementor}
-        as="plan" />
-      <UserCheckpoint
-        purpose="authorize implementation"
-        agent={planner}
-        as="authorization"
-      >
-        {plan}
-      </UserCheckpoint>
-      <Implementation plan={plan}
-        authorization={authorization}
-        instructions={instructions}
-        planner={planner}
-        implementor={implementor}
-        as="implementationResult" />
-      <UserCheckpoint
-        purpose="accept the completed change"
-        agent={planner}
-        as="acceptance"
-      >
-        {implementationResult}
-      </UserCheckpoint>
-      <Output>{acceptance}</Output>
+      />
+      <If condition={handoffCheckpoint.proceed}>
+        <Planning handoff={handoff}
+          handoffCheckpoint={handoffCheckpoint}
+          instructions={instructions}
+          planner={planner}
+          implementor={implementor}
+          as="plan" />
+        <UserCheckpoint
+          purpose="authorize implementation"
+          agent={planner}
+          material={plan}
+          as="authorization"
+        />
+        <If condition={authorization.proceed}>
+          <Implementation plan={plan}
+            authorization={authorization}
+            instructions={instructions}
+            planner={planner}
+            implementor={implementor}
+            as="implementationResult" />
+          <UserCheckpoint
+            purpose="accept the completed change"
+            agent={planner}
+            material={implementationResult}
+            as="acceptance"
+          />
+        </If>
+      </If>
+      <Output>
+        <If condition={handoffCheckpoint.proceed}>
+          <If condition={authorization.proceed}>
+            <If condition={acceptance.proceed}>
+              # Accepted
+
+              {acceptance.rationale}
+
+              {implementationResult}
+              <Else>
+              # Rejected at acceptance
+
+              The change was completed but the user did not accept it.
+
+              {acceptance.rationale}
+
+              {implementationResult}
+              </Else>
+            </If>
+            <Else>
+            # Stopped: implementation was not authorized
+
+            {authorization.rationale}
+
+            {plan}
+            </Else>
+          </If>
+          <Else>
+          # Stopped: the handoff was not validated
+
+          {handoffCheckpoint.rationale}
+
+          {handoff}
+          </Else>
+        </If>
+      </Output>
     </Worktree>
   </Sandbox>
 </Workflow>
@@ -92,15 +128,37 @@ supplies `request`, `base`, `planner`, and `implementor` (#179).
 worktree. Its run identity keeps discovery through implementation on that
 pinned filesystem even if the branch moves while execution is in progress.
 
+## User authority is a gate, not a report
+
+Every material transition is gated on a checkpoint's `proceed`. `UserCheckpoint`
+declares `returns`, so what a caller binds is a schema-validated decision rather
+than prose to be read: a declined handoff never starts `Planning`, and a declined
+authorization never starts `Implementation`. A checkpoint that found no material
+choice still produces an explicit `proceed: true` with its reason, so nothing
+advances because a decision was absent.
+
+`<Output>` reports which gate the run reached. A rejected acceptance finishes as
+rejected — the flow does not fall into the accepted branch — and a run stopped
+earlier renders the artifact it stopped on rather than a value it never
+produced.
+
+**Missing: stopping at the boundary.** Nesting expresses the gate, and it is
+what the language supports today, but it is not the same as *stopping*. The run
+still expands to `<Output>` and completes; there is no clean halt at a stage
+boundary that a later invocation resumes from, and no stop reason recorded for
+one. That is `<Stage>` (#298) over `<Workflow>`'s run identity (#289). Until
+they exist, a declined checkpoint means the remaining stages do not run and the
+outcome says so — not that the process stopped where the user answered.
+
 ## How props are read
 
 Two spellings, and they are not interchangeable today:
 
-- **Text and content** read the namespace: `{props.request}` above, and
-  `{props.instructions}` inside every stage's prompt.
-- **Expression props** read the **bare** binding: `planner={planner}`, not
-  `planner={props.planner}`. A `props.` reference in an expression prop fails
-  with `props is not defined`.
+- **Text and content** read the namespace: `{props.instructions}` and
+  `{props.material}` inside a stage's prompt body.
+- **Expression props** read the **bare** binding: `planner={planner}` and
+  `request={request}`, not `planner={props.planner}`. A `props.` reference in an
+  expression prop fails with `props is not defined`.
 
 Removing that asymmetry is [issue
 #305](https://github.com/taras/executable.md/issues/305), whose acceptance
@@ -164,13 +222,17 @@ manual stages.
 | Captured value         | Produced by                | Consumed by                                         |
 | ---------------------- | -------------------------- | --------------------------------------------------- |
 | `instructionPaths`     | `Glob` (`string[]`)         | `InstructionFiles`                                  |
-| `instructions`         | `InstructionFiles`         | every agent prompt                                  |
-| `handoff`              | `Discovery`                 | handoff `UserCheckpoint`, `Planning`                |
-| `handoffCheckpoint`    | handoff `UserCheckpoint`    | `Planning`                                          |
-| `plan`                 | `Planning`                  | authorization `UserCheckpoint`, `Implementation` |
-| `authorization`        | authorization checkpoint   | `Implementation`                                   |
-| `implementationResult` | `Implementation`            | acceptance `UserCheckpoint`                         |
-| `acceptance`           | acceptance checkpoint      | workflow output, terminal record                    |
+| `instructions`         | `InstructionFiles` (text)  | every agent prompt                                  |
+| `handoff`              | `Discovery` (text)          | handoff `UserCheckpoint`, `Planning`                |
+| `handoffCheckpoint`    | handoff `UserCheckpoint` (decision) | the `Planning` gate, and `Planning`         |
+| `plan`                 | `Planning` (text)           | authorization `UserCheckpoint`, `Implementation` |
+| `authorization`        | authorization checkpoint (decision) | the `Implementation` gate, and `Implementation` |
+| `implementationResult` | `Implementation` (text)     | acceptance `UserCheckpoint`                         |
+| `acceptance`           | acceptance checkpoint (decision) | workflow output, terminal record               |
+
+A stage binds rendered text; a checkpoint binds a decision object. The four
+`UserCheckpoint` invocations are the only value components here — everything
+else declares no `returns`, so `as` binds what it rendered.
 
 ## Details
 
