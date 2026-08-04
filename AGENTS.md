@@ -97,6 +97,8 @@ here:
 ## MUST READ
 
 - https://github.com/thefrontside/effection/blob/v4/AGENTS.md
+- `architecture.md` — read fully
+- `specs/executable-mdx-spec.md` — read the sections your change touches
 
 ## Code Rules
 
