@@ -117,9 +117,11 @@ fail differently:
   `<PrintErrors>` region can print it instead — which is what makes each
   stage's final `<Parse>` a real gate rather than a formality.
 - The **`<Output>` region** runs under the `output` error mode: an undecided
-  error there fails the run too, and the region keeps what it had already
-  rendered. That partial text reaches the output stream; nothing after the
-  failure does.
+  error there fails the run too, though a `<PrintErrors>` region may print it
+  instead. Either way the region keeps what it had already rendered — that
+  partial text reaches the output stream, and nothing after the failure does.
+  Printing an `output` decision is the contract; the engine does not do it yet
+  (#327).
 
 So a stage either returns a complete, schema-validated result or it fails. It
 never returns a half-record. The `throwOnError` on each `<Prompt>` is

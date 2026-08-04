@@ -217,15 +217,22 @@ stage's output is also material a user reads at a checkpoint.
 
 A stage's `<Output>` region runs under the `output` error mode; everything
 outside it is documentation and runs under `throw`. An undecided error at either
-position fails the run rather than producing a result a caller would bind, and
-no `<PrintErrors>` region can convert a documentation failure into a printed
-error. That is what makes each stage's final `<Parse>` a gate: malformed agent
-output cannot reach control flow or a deterministic effect.
+position fails the run rather than producing a result a caller would bind. The
+two modes differ in what a printing boundary may do about it: a `<PrintErrors>`
+region can print an `output` decision instead of failing, and `throw` is the one
+mode it cannot replace — a printed error in documentation is one nobody can
+read. Neither rescues a stage here, because every stage's parsing sits in
+documentation. That is what makes each stage's final `<Parse>` a gate: malformed
+agent output cannot reach control flow or a deterministic effect.
 
 A failing region keeps only what it had already rendered. That partial text
 reaches the output stream; nothing after the failure does. Continuing after a
 failure is always explicit — a bounded repair turn the document shows, not
 recovery the engine performs on the author's behalf.
+
+Printing an `output` decision is settled contract that the engine has not built
+yet: an outer `<PrintErrors>` currently ends the run instead (#327). No stage
+depends on it today.
 
 `throwOnError` on a `<Prompt>` is required for the same reason: without it a
 failed prompt records its failure and returns its text, raising nothing for the
@@ -373,6 +380,15 @@ stop; it does not preserve running effects or broaden their permissions.
 Resources clean up with their execution by default. Agent sessions, processes,
 streams, and other ongoing effects always stop before their enclosing scope
 closes.
+
+Ownership follows the invocation, not the author. Content a caller writes and a
+component only projects keeps the caller's bindings, but its live effects belong
+to the component invocation and stop before that invocation cleans up its own
+(#203). A daemon or a `persist` resource started inside projected content is
+signalled while the component's directory still exists, and is gone once the
+invocation returns. That ordering is what makes `<Worktree>` safe to build: a
+process a stage starts stops before the workspace it ran in is removed, so
+cleanup cannot pull the ground out from under a running effect.
 
 An execution may explicitly retain its workspace for inspection. A failed or
 cancelled execution also retains a worktree when removing it would discard

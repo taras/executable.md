@@ -4,7 +4,11 @@
 
 XMD already supplies component expansion, root document props, prompt capture,
 agent selection, named sessions, collection iteration, scoped permission
-policies, and scope-owned process and agent teardown. Its durable execution
+policies, and scope-owned process and agent teardown. Every component invocation
+owns a resource scope: projected content keeps its caller's bindings but its
+live effects — daemons, `persist` resources, watchers — belong to the invocation
+and stop before it cleans up its own, on success, failure, and cancellation
+alike (#203). Its durable execution
 layer also assigns deterministic execution identities, journals effects, and
 observes completion, failure, or cancellation. Replay restores a recorded
 outcome without re-executing it, and a run that failed is still a complete
@@ -57,8 +61,11 @@ structure and read where an error is raised:
 | Mode | An undecided error… | Installed by |
 | --- | --- | --- |
 | `print` | is printed into the document; the run continues | the root; `<PrintErrors>` |
-| `output` | fails the run; the region keeps what it already rendered | every `<Output>` region |
+| `output` | fails the run; `<PrintErrors>` can print instead | every `<Output>` region |
 | `throw` | fails the run, and no printing boundary replaces it | documentation; value roots |
+
+A failing region keeps what it had already rendered: that text reaches the
+output stream, and nothing after the failure does.
 
 A component body is split by its `<Output>` boundary: the region inside runs
 under `output`, everything outside is documentation and runs under `throw`.
@@ -66,6 +73,15 @@ Every stage in this workflow puts its prompts, parsing, and control flow outside
 `<Output>`, so a stage returns a complete validated result or it fails — it
 never returns a half-record. `<Retry>` and `<Result as>` would let a document
 handle a failure instead of ending on it; both are defined and unbuilt.
+
+**Missing: printing an `output` decision.** The `output` row above is the
+settled contract, and the engine does not meet it yet — an outer
+`<PrintErrors>` around a region that failed under `output` ends the run instead
+of printing, whether the failure arose in the region itself or in content
+projected into it ([issue
+#327](https://github.com/taras/executable.md/issues/327)). Nothing in this
+workflow writes `<PrintErrors>`, so no stage depends on it today; a stage that
+wanted to survive a failed region would.
 
 ## What the workflow already writes
 
@@ -208,8 +224,10 @@ The remaining contracts are missing on the same terms:
    sets `Env.cwd` while rendering its children, and cleans up safely
    ([#293](https://github.com/taras/executable.md/issues/293)). This workflow
    keeps discovery, implementor planning, implementation, and review in that
-   same workspace. `Env.cwd` itself is implemented; what is missing is the
-   workspace that establishes it and the retention rules that survive failure.
+   same workspace. `Env.cwd` itself is implemented, and so is the lifetime rule
+   it composes with: a process a stage starts stops before the invocation that
+   established the directory cleans up (#203). What is missing is the workspace
+   that establishes it and the retention rules that survive failure.
 4. `<Commit>` validates exact changes and owns Git metadata writes
    ([#294](https://github.com/taras/executable.md/issues/294)).
 5. `<PullRequest>` ([#295](https://github.com/taras/executable.md/issues/295))
