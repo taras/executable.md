@@ -76,8 +76,12 @@ import {
   stat as fsStat,
   writeTextFile as fsWriteTextFile,
 } from "@effectionx/fs";
-import { exec as processExec } from "@effectionx/process";
-import { race, sleep, until } from "effection";
+import { exec as processExec, Stdio } from "@effectionx/process";
+import { spawn as spawnOsProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { once } from "@effectionx/node/events";
+import { fromReadable } from "@effectionx/node/stream";
+import { ensure, race, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { timeout as contextualTimeout } from "./config.ts";
 
@@ -160,6 +164,126 @@ interface ProcessHandler {
     env?: Record<string, string>;
     timeout?: number;
   }): Operation<{ exitCode: number; stdout: string; stderr: string }>;
+}
+
+/**
+ * How long a finished command's pipes get to deliver EOF after its process
+ * group has been reaped. Data already written is read as soon as the pumps
+ * run; only a straggler that survives the group SIGTERM can hold EOF open
+ * past this, and it forfeits the wait.
+ */
+const DRAIN_GRACE_MS = 1_000;
+
+function killProcessGroup(child: ChildProcess): void {
+  if (typeof child.pid !== "number") {
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // the group is already gone
+  }
+}
+
+/**
+ * Run a finite command, settling on the child's exit instead of on the close
+ * of its stdio pipes.
+ *
+ * Close-settled execution (`@effectionx/process` `join()`) resolves only
+ * after exit AND stdio EOF. A pipe fd inherited by a straggling grandchild,
+ * or stream delivery lagging on a loaded host, then defers the result past
+ * any fixed deadline even though the command finished within it — the
+ * timeout fires and discards output the command already produced (#343).
+ * Exit is the ground truth for "the command finished": the deadline bounds
+ * spawn→exit, the command's process group is reaped the moment it exits, and
+ * the output its pipes delivered is returned.
+ *
+ * The child runs `detached` as its own process-group leader for the same
+ * reason `@effectionx/process` runs commands that way: signalling `-pid`
+ * reaches every process the command started, not just the immediate child.
+ */
+function* execSettledOnExit(
+  cmd: string,
+  args: string[],
+  options: { cwd?: string; env?: Record<string, string>; timeout: number },
+): Operation<{ exitCode: number; stdout: string; stderr: string }> {
+  const { cwd, env, timeout } = options;
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error(`exec(${cmd}): timeout must be a non-negative finite number`);
+  }
+
+  return yield* scoped(function* () {
+    const child = spawnOsProcess(cmd, args, { detached: true, cwd, env, stdio: "pipe" });
+    yield* ensure(() => killProcessGroup(child));
+
+    if (!child.stdout || !child.stderr) {
+      throw new Error("exec: stdout and stderr must be available with stdio: pipe");
+    }
+
+    const stdoutText = { value: "" };
+    const stderrText = { value: "" };
+    const drained = withResolvers<void>();
+    let pumping = 2;
+
+    function* pump(
+      readable: NonNullable<ChildProcess["stdout"]>,
+      forward: (chunk: Uint8Array) => Operation<unknown>,
+      sink: { value: string },
+    ): Operation<void> {
+      const decoder = new TextDecoder();
+      const chunks = yield* fromReadable(readable);
+      let next = yield* chunks.next();
+      while (!next.done) {
+        const chunk = next.value;
+        yield* forward(chunk);
+        sink.value += decoder.decode(chunk, { stream: true });
+        next = yield* chunks.next();
+      }
+      sink.value += decoder.decode();
+      pumping -= 1;
+      if (pumping === 0) {
+        drained.resolve();
+      }
+    }
+
+    const out = child.stdout;
+    const err = child.stderr;
+    yield* spawn(function* () {
+      yield* pump(out, (chunk) => Stdio.operations.stdout(chunk), stdoutText);
+    });
+    yield* spawn(function* () {
+      yield* pump(err, (chunk) => Stdio.operations.stderr(chunk), stderrText);
+    });
+
+    type Settled = { kind: "exit"; code: number | null } | { kind: "timeout" };
+    const settled: Settled = yield* race([
+      (function* (): Operation<Settled> {
+        const [code] = yield* once<[number | null, string | null]>(child, "exit");
+        return { kind: "exit", code };
+      })(),
+      (function* (): Operation<Settled> {
+        const [error] = yield* once<[Error]>(child, "error");
+        throw error;
+      })(),
+      (function* (): Operation<Settled> {
+        yield* sleep(timeout);
+        return { kind: "timeout" };
+      })(),
+    ]);
+
+    if (settled.kind === "timeout") {
+      // ensure() reaps the group on the way out of this scope.
+      throw new Error(`exec(${cmd}) timed out after ${timeout}ms`);
+    }
+
+    // Reap stragglers still holding the pipes, then let the pumps read what
+    // was delivered; EOF follows promptly unless a straggler survives the
+    // SIGTERM, and such a straggler forfeits the wait.
+    killProcessGroup(child);
+    yield* race([drained.operation, sleep(DRAIN_GRACE_MS)]);
+
+    return { exitCode: settled.code ?? 1, stdout: stdoutText.value, stderr: stderrText.value };
+  });
 }
 
 /**
@@ -361,21 +485,20 @@ export const API: {
       }
 
       const effectiveTimeout = timeout ?? (yield* contextualTimeout);
-      const result = yield* withTimeout(
-        `exec(${cmd})`,
-        effectiveTimeout,
-        processExec(cmd, {
-          arguments: args,
-          cwd,
-          env,
-        }).join(),
-      );
 
-      return {
-        exitCode: result.code ?? 1,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
+      // Process groups and `kill(-pid)` do not exist on Windows, so the
+      // exit-settled path below cannot reap stragglers there; Windows keeps
+      // the close-settled `@effectionx/process` path.
+      if (process.platform === "win32") {
+        const result = yield* withTimeout(
+          `exec(${cmd})`,
+          effectiveTimeout,
+          processExec(cmd, { arguments: args, cwd, env }).join(),
+        );
+        return { exitCode: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
+      }
+
+      return yield* execSettledOnExit(cmd, args, { cwd, env, timeout: effectiveTimeout });
     },
   }),
 
