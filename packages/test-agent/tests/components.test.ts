@@ -292,6 +292,10 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
   });
 
   it("TV6: default and named mappings resolve; the agent prop registers additional agents", function* () {
+    // One <Test> per mapping: each prompt spawns a worker, and under Node a
+    // spawn costs enough that three inside one <Test> brush the fixed
+    // 20-second test timeout on a loaded runner (#332). Splitting keeps every
+    // test far from the deadline and names the mapping that failed.
     const run = yield* runDoc({
       "agents/default.md": '<WhenPrompt template="d" />\n\ndefault-reply\n',
       "agents/named.md": '<WhenPrompt template="n" />\n\nnamed-reply\n',
@@ -301,19 +305,23 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
         '  <TestAgent.Scenario src="./agents/default.md" />',
         '  <TestAgent.Scenario session="named" src="./agents/named.md" />',
         '  <TestAgent.Scenario agent="extra" src="./agents/extra.md" />',
-        '  <Test name="mappings">',
+        '  <Test name="default mapping">',
         '    <Prompt text="d" as="d" />',
-        '    <Prompt text="n" session="named" as="n" />',
-        '    <Prompt text="x" agent="extra" as="x" />',
         '    <AssertStringIncludes actual={d} expected="default-reply" />',
+        "  </Test>",
+        '  <Test name="named mapping">',
+        '    <Prompt text="n" session="named" as="n" />',
         '    <AssertStringIncludes actual={n} expected="named-reply" />',
+        "  </Test>",
+        '  <Test name="agent prop mapping">',
+        '    <Prompt text="x" agent="extra" as="x" />',
         '    <AssertStringIncludes actual={x} expected="extra-reply" />',
         "  </Test>",
         "</TestAgent>",
         "",
       ].join("\n"),
     });
-    expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
+    expect(run.results.map((entry) => entry.status)).toEqual(["pass", "pass", "pass"]);
   });
 
   it("TV7: different working directories get independent scenario scenarios", function* () {
