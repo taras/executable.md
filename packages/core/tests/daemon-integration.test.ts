@@ -77,6 +77,11 @@ describe("Tier Q — Daemon integration", () => {
   // Q5: the daemon dies with the component invocation, not with the document.
   // A probe placed after the component — still inside the same run — is the
   // only way to tell those two apart.
+  //
+  // The probe tests liveness, not existence: process teardown resumes at pipe
+  // EOF, which precedes reaping, so the dead daemon can still be a zombie —
+  // one that answers `kill -0` — at the moment the probe runs (#338). A pid
+  // that ps reports as Z, or not at all, is a stopped daemon.
   it("Q5: a daemon in a component is gone once the invocation completes", function* () {
     const tmpDir = makeTempDir();
 
@@ -96,7 +101,7 @@ describe("Tier Q — Daemon integration", () => {
           "<Holder />",
           "",
           "```bash exec",
-          `if kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED; else echo STOPPED; fi`,
+          `case "$(ps -o stat= -p "$(cat ${pidFile})" 2>/dev/null)" in ""|*Z*) echo STOPPED;; *) echo LEAKED;; esac`,
           "```",
         ].join("\n"),
       });
@@ -125,8 +130,9 @@ describe("Tier Q — Daemon integration", () => {
   // Both markers are load-bearing and both fail closed. `RUNNING` is printed
   // only once the process has been seen alive from inside the component, so a
   // daemon that never started cannot satisfy the premise; `STOPPED` is chosen
-  // only against a pid that exists, so a missing pid file reports NOPID rather
-  // than passing for the absence of a process.
+  // only against a pid file that exists, so a missing pid file reports NOPID
+  // rather than passing for the absence of a process. The final probe shares
+  // Q5's liveness rule: a zombie in the reap window is a stopped daemon.
   it("Q14: a daemon in projected content is gone once the invocation completes", function* () {
     const tmpDir = makeTempDir();
 
@@ -150,8 +156,7 @@ describe("Tier Q — Daemon integration", () => {
           "",
           "```bash exec",
           `if [ ! -s ${pidFile} ]; then echo NOPID;`,
-          `elif kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo LEAKED;`,
-          "else echo STOPPED; fi",
+          `else case "$(ps -o stat= -p "$(cat ${pidFile})" 2>/dev/null)" in ""|*Z*) echo STOPPED;; *) echo LEAKED;; esac; fi`,
           "```",
         ].join("\n"),
       });
