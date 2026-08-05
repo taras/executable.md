@@ -99,6 +99,12 @@ jobs:
             --component-dir packages/core/components \
             --raw
 
+      # The script installs a second copy of core beside a repository component.
+      # The declaration must cross into the bundled engine so the failure prints
+      # and execution continues.
+      - name: Smoke test metadata from a separately loaded core
+        run: deno run --allow-all --frozen scripts/smoke-loaded-copy.ts
+
       # A built-in resolves from the module graph rather than a search path.
       # Only the compiled binary proves it survives `deno compile`. The
       # directory target discovers every colocated document beneath core's

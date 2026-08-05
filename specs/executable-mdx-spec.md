@@ -3992,7 +3992,9 @@ not run.
 Continuing instead is an explicit, scope-local choice. `printErrors(fn)`
 says it about one component, keyed by the exact function object — a repository
 component that shares a registered component's name is a different function and
-inherits nothing. `<PrintErrors>` says it about a region of a document:
+inherits nothing. The declaration uses a stable string property, so another
+loaded copy of Executable.md that receives the function recognises it.
+`<PrintErrors>` says it about a region of a document:
 
 ```md
 <PrintErrors>

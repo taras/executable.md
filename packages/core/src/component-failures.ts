@@ -27,14 +27,14 @@ import type { Operation } from "effection";
  * declared about a function the author owns. So it lives on that function, which
  * is where its lifetime already is.
  *
- * Module-private rather than `Symbol.for`, so nothing outside this module can
- * forge the declaration, and non-enumerable, so a component that is copied,
- * wrapped, or inspected does not carry it along by accident. Identity is what
- * carries it either way: a repository component that happens to share a
- * registered component's name is a different function object and inherits
- * nothing.
+ * The stable string key lets another loaded copy recognise the declaration when
+ * a bundled core receives a function marked by an installed core, or vice
+ * versa. It is non-enumerable, so a component that is copied, wrapped, or
+ * inspected does not carry it along by accident. Identity still carries the
+ * declaration: a repository component that happens to share a registered
+ * component's name is a different function object and inherits nothing.
  */
-const PRINTS_ERRORS = Symbol("executablemd.core.printsErrors");
+const PRINTS_ERRORS = "executablemd.core.printsErrors";
 
 /**
  * Continue after this component fails, reporting the failure as a printed error.
@@ -58,7 +58,7 @@ export function printErrors<T extends FunctionComponent>(component: T): T {
 }
 
 export function printsErrors(component: FunctionComponent): boolean {
-  return Object.hasOwn(component, PRINTS_ERRORS);
+  return Object.getOwnPropertyDescriptor(component, PRINTS_ERRORS)?.value === true;
 }
 
 /**
