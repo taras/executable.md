@@ -13,7 +13,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, race, scoped, sleep, spawn, suspend } from "effection";
+import { createContext, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -484,6 +484,10 @@ describe("Tier WR — workflow runs", () => {
 
   it("WR16: cancelling a document execution does not erase a recorded run", function* () {
     const stream = new InMemoryStream();
+    // The component says when it has observed the recorded run, so the
+    // cancellation lands after that point by construction rather than by
+    // winning a race against a timer.
+    const observed = withResolvers<void>();
 
     yield* scoped(function* () {
       yield* useGit(COMMIT, []);
@@ -493,16 +497,21 @@ describe("Tier WR — workflow runs", () => {
           origin: "tier-wr",
           props: { type: "object", properties: {}, additionalProperties: false },
           *fn() {
-            // The run is recorded by now; the execution never gets to finish.
             yield* getWorkflowRun();
+            observed.resolve();
+            // Held open, so the execution is still running when it is cancelled.
             yield* suspend();
             return "";
           },
         },
       ]);
       yield* useWorkflow({ base: "main" });
-      // Halting the scope that owns the execution is the cancellation.
-      yield* race([collect(yield* execute({ ...inlineSource("<Probe />\n"), stream })), sleep(60)]);
+
+      const execution = yield* spawn(function* () {
+        yield* collect(yield* execute({ ...inlineSource("<Probe />\n"), stream }));
+      });
+      yield* observed.operation;
+      yield* execution.halt();
     });
 
     expect(recordedRun(stream)).toEqual({

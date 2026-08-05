@@ -45,10 +45,8 @@ export interface Expansion {
  * copy — reads the expansion the engine published. Branding the value with
  * anything instance-local would reject exactly those genuine reads.
  *
- * Portability and lexical replacement are the same mechanism, so this is a
- * composition boundary and not an authority boundary: a descendant may bind the
- * same name for its own descendants. Nothing that must be authoritative may
- * depend on this value being unforgeable.
+ * The same property means a descendant may bind this name for its own
+ * descendants, so nothing that must be authoritative may depend on this value.
  */
 const CurrentExpansion: Context<Expansion | undefined> = createContext<Expansion | undefined>(
   "expand.current",

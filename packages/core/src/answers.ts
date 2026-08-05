@@ -67,6 +67,8 @@ import type { Operation } from "effection";
 import { env, raise } from "./component-api.ts";
 import { renderSegments } from "./render.ts";
 import { evaluateExpression } from "./expand.ts";
+import { elementFrame, elementSite } from "./expansion.ts";
+import type { ExpansionFrame } from "./expansion.ts";
 import { Elicitation } from "./elicitation-api.ts";
 import type { ElicitationRequest } from "./elicitation-api.ts";
 import { JsonParseError, parseJson } from "./json.ts";
@@ -89,7 +91,17 @@ import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
  * body writes there as it goes, while a matcher's template produces a value and
  * keeps its own buffer.
  */
-type ExpandSegments = (segments: Segment[], owner?: Segment[]) => Operation<Segment[]>;
+type ExpandSegments = (
+  segments: Segment[],
+  owner?: Segment[],
+  /**
+   * The frame this sub-list belongs under. `<Answer>` is consumed here and
+   * never reaches expansion's dispatch, so its template children would
+   * otherwise expand under the `<Answers>` path alongside every other
+   * answer's (§5.6).
+   */
+  frame?: ExpansionFrame,
+) => Operation<Segment[]>;
 
 const ANSWERS = "Answers";
 const ANSWER = "Answer";
@@ -154,9 +166,9 @@ export function* expandAnswers(
 
   const body: Segment[] = [];
   const matchers: Matcher[] = [];
-  for (const child of element.children) {
+  for (const [index, child] of element.children.entries()) {
     if (isAnswer(child)) {
-      const parsed = yield* readAnswer(child, expand);
+      const parsed = yield* readAnswer(child, expand, index);
       if (isErrorSegment(parsed)) {
         // The region cannot be trusted to answer anything, so it does not
         // expand a body that would ask. The printed error is returned rather than
@@ -207,7 +219,8 @@ export function* expandAnswers(
       { at: "min" },
     );
 
-    yield* expand(body, owner);
+    // The region's own body, told apart from any answer's template children.
+    yield* expand(body, owner, { f: "answers-body" });
     return [];
   });
 }
@@ -257,6 +270,7 @@ function isErrorSegment(value: Matcher | ErrorSegment): value is ErrorSegment {
 function* readAnswer(
   element: ComponentElement,
   expand: ExpandSegments,
+  index: number,
 ): Operation<Matcher | ErrorSegment> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "template" && name !== "value") {
@@ -287,7 +301,13 @@ function* readAnswer(
     typeof templateProp === "string"
       ? templateProp
       : hasChildren
-        ? renderSegments(yield* expand(element.children)).trim()
+        ? renderSegments(
+            yield* expand(
+              element.children,
+              undefined,
+              elementFrame(element.name, elementSite(element.position, index)),
+            ),
+          ).trim()
         : undefined;
   if (source !== undefined) {
     const parsed = parseTemplate(source);

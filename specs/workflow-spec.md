@@ -46,11 +46,10 @@ equality only. `base` is the revision expression the host supplied.
 `pinnedCommit` is the full object id that base resolved to.
 
 `getWorkflowRun()` answers with the frozen value for the document execution
-running now. It is a contextual observation under a stable name, so another
-loaded copy of the package reads the same binding through its own descriptor —
-and, by the same mechanism, a descendant may bind that name for its own
-descendants. It is a composition boundary, not an authority boundary: durable
-enforcement never depends on the contextual value being unforgeable. Every call in one live execution answers with the same object; a
+running now. It is a context value under a stable name, so a descriptor built
+independently — as a separately loaded copy of the package builds one — reads
+the same binding, and by the same property a descendant may bind that name for
+its own descendants. Durable enforcement never depends on it. Every call in one live execution answers with the same object; a
 replay preserves the field values, never JavaScript object identity. It throws
 outside a document execution associated with a run, and exposes no journal, Git,
 workspace or continuation capability.

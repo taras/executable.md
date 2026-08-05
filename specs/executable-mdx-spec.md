@@ -2612,18 +2612,16 @@ or any live scope.
 
 Calling it where nothing has published an expansion throws.
 
-It is delivered as a contextual observation under a stable name, which makes it
-**portable**: a second loaded copy of core — a repository `.ts` component
-importing it from disk while the compiled binary carries its own — reads the
-same expansion through its own descriptor. An Effection context is identified by
-its name, so that portability and lexical replacement are the same mechanism. A
-descendant may bind the same name and its own descendants will read what it
-bound, exactly as with any context value.
+It is delivered as a context value under a stable name. An Effection context is
+identified by its name, so a descriptor built independently — as a separately
+loaded copy of core builds one, when a repository `.ts` component imports it
+from disk while the compiled binary carries its own — reads the same expansion.
+The same property means a descendant may bind that name, and its own
+descendants read what it bound, exactly as with any context value.
 
-That makes `getExpansion()` a composition boundary, not an authority boundary.
-Security-sensitive or authoritative durable enforcement must not depend on the
-contextual value being unforgeable; it is established independently of anything
-a document can rebind.
+Nothing that must be authoritative may therefore depend on this value: what a
+document can rebind, it can rebind. Durable enforcement is established
+independently of it.
 
 **The identifier.** `id` is derived from the root document and the structural
 path that reached the element. Each step contributes a frame — an authored

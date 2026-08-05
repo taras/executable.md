@@ -541,6 +541,13 @@ export function* expandSegments(
    * path, so identity works with no execution and no journal around it.
    */
   path: string = "",
+  /**
+   * Where `segments` starts in the list it was taken from. A caller that
+   * expands one segment at a time — body chunking — would otherwise hand every
+   * one of them index 0, and the positionless fallback would stop telling them
+   * apart (§5.6).
+   */
+  indexBase: number = 0,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -557,6 +564,7 @@ export function* expandSegments(
         counter,
         owner,
         path,
+        indexBase,
       );
     });
   }
@@ -593,7 +601,7 @@ export function* expandSegments(
         // cannot arrive at the same path.
         const elementPath = extendPath(
           path,
-          elementFrame(segment.name, elementSite(segment.position, index)),
+          elementFrame(segment.name, elementSite(segment.position, indexBase + index)),
         );
 
         if (segment.name === "Content") {
@@ -724,8 +732,16 @@ export function* expandSegments(
           result.push(
             ...(yield* expandAnswers(
               segment,
-              (inner, into) =>
-                expandSegments(inner, parentMeta, parentProps, hideSet, counter, into, elementPath),
+              (inner, into, frame) =>
+                expandSegments(
+                  inner,
+                  parentMeta,
+                  parentProps,
+                  hideSet,
+                  counter,
+                  into,
+                  frame === undefined ? elementPath : extendPath(elementPath, frame),
+                ),
               result,
             )),
           );
@@ -2877,6 +2893,13 @@ interface BodyChunk {
   output: boolean;
   segments: Segment[];
   /**
+   * The path this chunk expands under. An `<Output>` region is consumed here and
+   * never reaches dispatch, so its frame is added when the chunk is built (§5.6).
+   */
+  path?: string;
+  /** Where this chunk's segments start in the body they were taken from. */
+  indexBase?: number;
+  /**
    * An error about the region declaration itself rather than about work inside
    * one. The region never opened, so the mode it would have installed has
    * nothing to say about it: the enclosing mode decides, which is how a
@@ -3135,13 +3158,14 @@ function buildBody(
   props: Record<string, Json>,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn,
+  path: string,
 ): BodyChunk[] {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);
   const chunks: BodyChunk[] = [];
 
-  for (const segment of bodySegments) {
+  for (const [index, segment] of bodySegments.entries()) {
     if (segment.type === "component" && segment.name === "Output") {
       const propsError = validateOutputProps(segment);
       if (propsError) {
@@ -3157,12 +3181,16 @@ function buildBody(
         state,
         claim,
       );
-      chunks.push({ output: true, segments: outputSegments });
+      chunks.push({
+        output: true,
+        segments: outputSegments,
+        path: extendPath(path, elementFrame(segment.name, elementSite(segment.position, index))),
+      });
       continue;
     }
 
     const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
-    chunks.push({ output: false, segments: docSegments });
+    chunks.push({ output: false, segments: docSegments, indexBase: index });
   }
 
   return chunks;
@@ -3205,16 +3233,26 @@ export function* expandBody(
     return yield* expandSegments(substituted, meta, props, hideSet, counter, owner, path);
   }
 
-  const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim);
+  const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim, path);
   const output: Segment[] = owner ?? [];
 
   for (const chunk of chunks) {
+    const chunkPath = chunk.path ?? path;
+    const chunkBase = chunk.indexBase ?? 0;
     if (chunk.declaration) {
-      yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output, path);
+      yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output, chunkPath);
     } else if (chunk.output) {
       yield* scoped(function* () {
         yield* ErrorMode.set("output");
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output, path);
+        return yield* expandSegments(
+          chunk.segments,
+          meta,
+          props,
+          hideSet,
+          counter,
+          output,
+          chunkPath,
+        );
       });
     } else {
       // Documentation: execute for side effects, discard rendered output.
@@ -3227,7 +3265,8 @@ export function* expandBody(
           hideSet,
           counter,
           undefined,
-          path,
+          chunkPath,
+          chunkBase,
         );
       });
     }
@@ -3251,10 +3290,20 @@ function runDocumentation(
   hideSet: Set<string>,
   counter: BlockCounter,
   path: string,
+  indexBase: number,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
-    return yield* expandSegments(segments, meta, props, hideSet, counter, undefined, path);
+    return yield* expandSegments(
+      segments,
+      meta,
+      props,
+      hideSet,
+      counter,
+      undefined,
+      path,
+      indexBase,
+    );
   });
 }
 
@@ -3308,13 +3357,13 @@ function* expandValueBody(
   const project = makeProjectFn(callerEnv);
   let produced: { value: Json } | undefined;
 
-  for (const segment of bodySegments) {
+  for (const [index, segment] of bodySegments.entries()) {
     if (isTopLevelReturn(segment)) {
       produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
       continue;
     }
     const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
-    yield* runDocumentation(docSegments, meta, props, hideSet, counter, path);
+    yield* runDocumentation(docSegments, meta, props, hideSet, counter, path, index);
   }
 
   if (!produced) {
