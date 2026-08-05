@@ -6537,6 +6537,37 @@ Each row names the derivation it kills.
 | CR32 | Registration replay | A reserved registration records its origin and replays |
 | CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
 
+### Tier GT — The Git capability
+
+Defined in [Workflow runs](./workflow-spec.md) §7.
+
+| # | Test | Verify |
+|---|------|--------|
+| GT1 | The command | `git rev-parse --verify --end-of-options <revision>` in the contextual working directory |
+| GT2 | A non-zero exit | Fails, reporting what Git said |
+| GT3 | A clean exit naming nothing | Fails rather than pinning a run to an empty object id |
+| GT4 | Replacement | A nested provider reaches `revParse()` rather than being shadowed by an outer handler |
+
+### Tier WR — Workflow runs
+
+Defined in [Workflow runs](./workflow-spec.md).
+
+| # | Test | Verify |
+|---|------|--------|
+| WR1 | Lifetime | Unreadable before the execution, readable inside it, unreadable after — while the installing scope is still alive |
+| WR2 | One value | Every read in one execution answers with the same frozen object |
+| WR3 | Isolation | Concurrent executions each read their own run |
+| WR4 | Completed journal | The run is restored and Git is never consulted; the replayed output's middleware reads it |
+| WR5 | A different base | Refused, naming both bases, before the recorded result reaches the caller |
+| WR6 | A moving base | A branch that moved cannot change the recorded pinned commit |
+| WR7 | Git fails | No run recorded, and the root document never expands |
+| WR8 | A later failure | A document that fails after the run was recorded does not erase it |
+| WR9 | No workflow | An execution without `useWorkflow()` invokes no process at all |
+| WR10 | No workflow, inside | `getWorkflowRun()` throws inside an execution that installed none |
+| WR11 | A malformed record | Refused, and the refusal never quotes what the journal held |
+| WR12 | A slow base | Resolving one run's base does not stall a sibling execution |
+| WR13/WR14 | Seeded journals | A completed and a truncated journal written by hand restore without any live run having happened |
+
 ### Tier SL — Own-scope context updates
 
 | # | Test | Verify |

@@ -1,0 +1,14 @@
+{
+  "name": "@executablemd/workflow",
+  "version": "0.7.0",
+  "description": "Workflow runs for executable.md: one pinned starting commit per run, recorded durably.",
+  "type": "module",
+  "exports": "./mod.ts",
+  "dependencies": {
+    "@effectionx/context-api": "0.6.0",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "effection": "4.1.0"
+  }
+}

@@ -360,8 +360,8 @@ Status is measured against main.
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
-| `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | defined, unbuilt |
-| `Git.revParse()` | verifies and resolves one Git revision expression contextually | defined, unbuilt |
+| `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
+| `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | `xmd workflow run` / `xmd workflow continue` | starts or continues a workflow run from the CLI | defined, unbuilt; ships with durable lookup |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
