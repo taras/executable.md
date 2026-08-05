@@ -74,7 +74,7 @@ describe("a stale lockfile stops every dependency-loading task", () => {
    * `Failed loading https://registry.npmjs.org/…` — and a test that accepted any
    * failure would pass while the lockfile guarantee was gone.
    */
-  for (const task of ["deps", "setup", "verify:clean", "deps:target"]) {
+  for (const task of ["deps", "setup", "verify", "verify:clean", "deps:target"]) {
     it(`${task} refuses, names the lockfile, and leaves it byte-identical`, function* () {
       const clone = yield* staleClone();
 

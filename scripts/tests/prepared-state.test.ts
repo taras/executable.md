@@ -14,6 +14,8 @@ import {
   contains,
   digest,
   FileReads,
+  hostState,
+  hostStateChanges,
   stateOf,
   YIELD_EVERY,
 } from "../lib/prepared-state.ts";
@@ -326,5 +328,58 @@ describe("cancelling a fingerprint", () => {
 
     expect(bytes).toBeInstanceOf(Uint8Array);
     expect(bytes).not.toBeInstanceOf(Promise);
+  });
+});
+
+/**
+ * The host-only snapshot, and the property that matters about it.
+ *
+ * #279 does not say "ignore cache differences" — it says verification must not
+ * fingerprint the cache at all. A snapshot that walked the cache and discarded
+ * the result would satisfy every assertion about its *return value*, so the
+ * reader it is given fails on anything outside the two paths it may read.
+ */
+describe("hostState", () => {
+  it("reads node_modules and the lockfile, and nothing else", function* () {
+    const { root } = yield* prepared();
+    const state = yield* hostState(root);
+
+    expect(state.lock.length).toBe(64);
+    expect(state.tree.entries.length).toBeGreaterThan(0);
+    expect(state.tree.roots).toEqual(["node_modules"]);
+  });
+
+  it("cannot reach the cache: a reader that refuses it still succeeds", function* () {
+    const { root, denoDir } = yield* prepared();
+    const permitted = [path.join(root, "node_modules"), path.join(root, "deno.lock")];
+    const refused: string[] = [];
+
+    const guarded: ReadFile = (target) => {
+      if (!permitted.some((allowed) => contains(allowed, target))) {
+        refused.push(target);
+        throw new Error(`read outside the host's own state: ${target}`);
+      }
+      return Deno.readFileSync(target);
+    };
+
+    // The fixture's cache is populated, so a snapshot that walked it would read
+    // a file and be refused. Succeeding is the assertion.
+    expect((yield* cacheRoots(denoDir)).npmCache.length).toBeGreaterThan(0);
+
+    yield* FileReads.set(guarded);
+    const state = yield* hostState(root);
+
+    expect(refused).toEqual([]);
+    expect(state.tree.entries.length).toBeGreaterThan(0);
+  });
+
+  it("names what moved in the tree and the lock", function* () {
+    const { root } = yield* prepared();
+    const before = yield* hostState(root);
+
+    yield* writeTextFile(path.join(root, "deno.lock"), `{"version":"5","specifiers":{"a":"1"}}\n`);
+    const moved = hostStateChanges(before, yield* hostState(root));
+
+    expect(moved.join("\n")).toContain("deno.lock changed");
   });
 });

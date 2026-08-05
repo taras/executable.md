@@ -2,5 +2,7 @@
   // Markdown is source code here: oxfmt reindents fenced blocks and rewrites
   // `yield*` as `yield *`, which changes what a document does. Fixtures carry
   // the exact indentation the rule tests assert on.
-  "ignorePatterns": ["**/*.md", "scripts/tests/fixtures/**"]
+  // `packages/*/npm` is generated dnt output, written by a test while the
+  // battery runs; format-checking it fails on a file nobody wrote by hand.
+  "ignorePatterns": ["**/*.md", "scripts/tests/fixtures/**", "**/npm/**"]
 }

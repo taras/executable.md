@@ -55,6 +55,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/verify-clean.test.ts",
+    reason:
+      "imports scripts/verify-clean.ts for the site proof's ordering, and that module reaches for Deno.env and Deno.execPath at import time; the ordering it asserts is host-neutral but the module carrying it is not",
+    issue: "https://github.com/taras/executable.md/issues/279",
+  },
+  {
+    path: "scripts/tests/verify-adapter.test.ts",
+    reason:
+      "drives the Deno half of `deno task verify` — spool handles through Deno.openSync, real child processes through Deno.execPath(), and a fingerprint built on Deno.lstatSync/readLinkSync; the coordinator it serves is covered portably by verify-coordinator.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/279",
+  },
+  {
     path: "scripts/tests/frozen-entry.test.ts",
     reason:
       "runs `deno task` against a copy of the working tree with Deno.execPath(); the tasks under test are Deno's",
