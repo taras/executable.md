@@ -13,9 +13,19 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, createContext, scoped, sleep } from "effection";
+import { all, createContext, ensure, scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
+import { rm, writeTextFile } from "@effectionx/fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { Component, content } from "../src/component-api.ts";
+import { collect } from "../src/collect.ts";
+import { execute } from "../src/execute.ts";
+import { inlineSource } from "../src/root-source.ts";
+import { registerComponents } from "../src/components/registration.ts";
 import { getExpansion } from "../src/expansion.ts";
 import type { Expansion } from "../src/expansion.ts";
 import { expandSegments } from "../src/expand.ts";
@@ -100,6 +110,42 @@ function* identifiers(
 ): Operation<string[]> {
   const seen: string[] = [];
   yield* expand(source, { Probe: probe(seen), ...extra }, path, values);
+  return seen;
+}
+
+/**
+ * Two documents on disk with the same body, so a root identity is the only
+ * thing that differs between them.
+ */
+function* useDocuments(names: string[], body: string): Operation<string[]> {
+  const root = yield* until(mkdtemp(join(tmpdir(), "xmd-xp-")));
+  yield* ensure(() => rm(root, { recursive: true, force: true }));
+  const paths: string[] = [];
+  for (const name of names) {
+    const target = join(root, name);
+    yield* writeTextFile(target, body);
+    paths.push(target);
+  }
+  return paths;
+}
+
+/** Execute one document, collecting the identifiers `<Probe />` saw. */
+function* executed(path: string, stream = new InMemoryStream()): Operation<string[]> {
+  const seen: string[] = [];
+  yield* scoped(function* () {
+    yield* registerComponents([
+      {
+        name: "Probe",
+        origin: "tier-xp",
+        props: NO_PROPS,
+        *fn() {
+          seen.push((yield* getExpansion()).id);
+          return "";
+        },
+      },
+    ]);
+    yield* collect(yield* execute({ path, stream }));
+  });
   return seen;
 }
 
@@ -393,5 +439,87 @@ describe("Tier XP — expansion identity", () => {
     );
 
     expect(afterDeadCode).toEqual(plain);
+  });
+  // A structural construct expands descendants without being one itself. If it
+  // contributes no frame, `@index` separates siblings in one list but not
+  // children at the same local index under different parents — which is a
+  // collision, not a near miss.
+  it("XP18: elements at the same index under different structural parents differ", function* () {
+    const probeElement = (): Segment => ({
+      type: "component",
+      name: "Probe",
+      props: {},
+      expressions: {},
+      children: [],
+      selfClosing: true,
+    });
+    const branch = (): Segment => ({
+      type: "component",
+      name: "If",
+      props: { condition: true },
+      expressions: {},
+      children: [probeElement()],
+      selfClosing: false,
+    });
+
+    function* run(): Operation<string[]> {
+      const seen: string[] = [];
+      yield* scoped(function* () {
+        const env: EvalEnv = { values: {} };
+        yield* Component.around({ env: () => env }, { at: "min" });
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *importComponent() {
+              return probe(seen);
+            },
+          },
+          { at: "min" },
+        );
+        return yield* expandSegments([branch(), branch()], {}, {}, new Set());
+      });
+      return seen;
+    }
+
+    const first = yield* run();
+    expect(first).toHaveLength(2);
+    expect(first[0]).not.toBe(first[1]);
+
+    // ...and the derivation is still structural, not a counter that happens to
+    // separate them.
+    const second = yield* run();
+    expect(second).toEqual(first);
+  });
+
+  // The root document seeds the path, and only `execute()` supplies that seed —
+  // the cases above drive `expandSegments` directly and cannot see it.
+  it("XP19: the same element structure under two root documents differs", function* () {
+    const [here, there] = yield* useDocuments(["a.md", "b.md"], "<Probe />\n");
+    const first = yield* executed(here!);
+    const second = yield* executed(there!);
+
+    expect(first).toHaveLength(1);
+    expect(first[0]).not.toBe(second[0]);
+  });
+
+  it("XP20: one root document reproduces its identifiers", function* () {
+    const [only] = yield* useDocuments(["a.md"], "<Probe />\n\n<Probe />\n");
+
+    expect(yield* executed(only!)).toEqual(yield* executed(only!));
+  });
+
+  it("XP21: a truncated replay derives the identifiers already recorded", function* () {
+    const [only] = yield* useDocuments(["a.md"], "<Probe />\n\n<Probe />\n");
+    const stream = new InMemoryStream();
+    const live = yield* executed(only!, stream);
+
+    // Everything the live run journaled except the root close, so the document
+    // expands again against its own record rather than from nothing.
+    const truncated = new InMemoryStream(
+      stream.snapshot().filter((event: DurableEvent) => event.type !== "close"),
+    );
+
+    expect(live).toHaveLength(2);
+    expect(yield* executed(only!, truncated)).toEqual(live);
   });
 });

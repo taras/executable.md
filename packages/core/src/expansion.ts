@@ -40,10 +40,15 @@ export interface Expansion {
  *
  * An Effection context is identified by its name, and two descriptors built with
  * the same name address the same context. That is the portability mechanism, not
- * a hole to plug: a second instance of this module — a repository `.ts`
+ * a hole to plug: a second loaded copy of this module — a repository `.ts`
  * component importing core from disk while the compiled binary carries its own
  * copy — reads the expansion the engine published. Branding the value with
  * anything instance-local would reject exactly those genuine reads.
+ *
+ * Portability and lexical replacement are the same mechanism, so this is a
+ * composition boundary and not an authority boundary: a descendant may bind the
+ * same name for its own descendants. Nothing that must be authoritative may
+ * depend on this value being unforgeable.
  */
 const CurrentExpansion: Context<Expansion | undefined> = createContext<Expansion | undefined>(
   "expand.current",

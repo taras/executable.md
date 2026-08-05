@@ -2610,19 +2610,29 @@ one again. Nothing else about the expansion is reachable — not the element, it
 props, its bindings, its projected content, the definition resolution selected,
 or any live scope.
 
-Calling it outside an executable element expansion throws. It is delivered as a
-context value rather than as a Component Api operation, so nothing intercepts
-what durable identities are derived from. An Effection context is identified by
-its name, and the engine relies on that: a second instance of core — a
-repository `.ts` component importing it from disk while the compiled binary
-carries its own copy — reads the same expansion.
+Calling it where nothing has published an expansion throws.
+
+It is delivered as a contextual observation under a stable name, which makes it
+**portable**: a second loaded copy of core — a repository `.ts` component
+importing it from disk while the compiled binary carries its own — reads the
+same expansion through its own descriptor. An Effection context is identified by
+its name, so that portability and lexical replacement are the same mechanism. A
+descendant may bind the same name and its own descendants will read what it
+bound, exactly as with any context value.
+
+That makes `getExpansion()` a composition boundary, not an authority boundary.
+Security-sensitive or authoritative durable enforcement must not depend on the
+contextual value being unforgeable; it is established independently of anything
+a document can rebind.
 
 **The identifier.** `id` is derived from the root document and the structural
-path that reached the element. Each step contributes a frame — the root
-document, an authored element and where it sits in its own file, a `<Loop>`
-iteration, an `<Each>` item, and a projection — and the path is carried as the
-digest so far, so extending it costs one hash. The identifier is opaque and
-supports equality only.
+path that reached the element. Each step contributes a frame — an authored
+element and where it sits in its own file, a `<Loop>` iteration, an `<Each>`
+item, and a projection — and the path is carried as the digest so far, so
+extending it costs one hash. Every element that expands descendants contributes
+its frame exactly once, so two elements at the same local index under different
+parents cannot arrive at the same path. The identifier is opaque and supports
+equality only.
 
 It uses no process-global counter, no clock, no randomness and no scheduling
 order. Replay, retry attempts and restoration of the same loop iteration
@@ -2631,7 +2641,10 @@ elements, loop iterations, projections, component expansions and root documents
 each receive their own.
 
 An authored element is placed by its source path and offset, which is what makes
-the derivation independent of how much ran before it. An element carrying no
+the derivation independent of how much ran before it — and what carries the root
+document's identity, since every element in a root's body reports that
+document's path. The root contributes no frame of its own; one would add nothing
+an assertion could observe. An element carrying no
 position at all — one built rather than scanned — falls back to its index in the
 list being expanded.
 
@@ -6483,6 +6496,8 @@ Each row names the derivation it kills.
 | # | Test | Verify |
 |---|------|--------|
 | XP1 | Two elements | Different offsets, different identifiers — not keyed by name |
+| XP18 | Nested, positionless | Two elements at the same index under different structural parents differ, and repeat reproducibly |
+| XP19–XP21 | Through `execute()` | Two root documents differ; one root reproduces its identifiers; a truncated replay derives the ones recorded |
 | XP2 | Twice in one process | The same source reproduces its identifiers — no clock, no randomness, no per-process seed |
 | XP3 | An unrelated branch | One source and two runtime values: what ran before an element does not move it — a counter would |
 | XP4/XP5 | `<Loop>` and `<Each>` | Iterations differ, and re-expansion reproduces the same ordered pair |
@@ -6491,7 +6506,8 @@ Each row names the derivation it kills.
 | XP8 | Opaque | Neither the name nor the path is recoverable from the identifier |
 | XP9 | Authored name | The tag as written, not the name of the definition that resolved it |
 | XP10 | One object | Two calls in one expansion answer with the same frozen snapshot, keyed `id`, `name`, `position` |
-| XP11/XP12 | The boundary | Asking outside an expansion throws, and a context forged under the same name is refused rather than answered |
+| XP11 | The boundary | Asking where nothing has published an expansion throws |
+| XP12 | Portability | A descriptor of the same name built independently reads the engine-published expansion |
 | XP13/XP14 | Repeated projections | Two `<Content />` elements, and one slot projected twice, each give two identifiers |
 | XP15 | Whose projection | The same content through two components differs; two probes inside one component differ by their own positions |
 | XP16 | Concurrent projections | Reversing which projection completes first does not move either identifier |

@@ -49,7 +49,10 @@ export type { WorkflowRun } from "./journal.ts";
  * The workflow run of the document execution running now.
  *
  * A stable, namespaced name and a plain value: another loaded copy of this
- * package reads the same binding through its own descriptor.
+ * package reads the same binding through its own descriptor. That portability
+ * is ordinary lexical context, so a descendant may bind the same name for its
+ * own descendants — this is a composition boundary, not an authority one, and
+ * durable enforcement never depends on it.
  */
 const CurrentWorkflowRun: Context<WorkflowRun | undefined> = createContext<WorkflowRun | undefined>(
   "executablemd.workflow.run",

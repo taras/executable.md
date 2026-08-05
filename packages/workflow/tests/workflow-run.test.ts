@@ -13,7 +13,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, sleep } from "effection";
+import { createContext, race, scoped, sleep, spawn, suspend } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -22,6 +22,7 @@ import {
   collect,
   DocumentOutput,
   execute,
+  getExpansion,
   inlineSource,
   registerComponents,
 } from "@executablemd/core";
@@ -442,6 +443,104 @@ describe("Tier WR — workflow runs", () => {
     expect(seen[0]).toEqual({ runId: "seeded-run", base: "main", pinnedCommit: COMMIT });
     // The record was replayed, not written a second time.
     expect(workflowEvents(stream)).toHaveLength(1);
+  });
+
+  // The expansion identifier is derived from the document alone. A workflow run
+  // pairs with it for workflow-wide identity; it never enters the derivation.
+  it("WR15: expansion identifiers do not move with the workflow run", function* () {
+    function* ids(base?: string): Operation<string[]> {
+      const seen: string[] = [];
+      yield* scoped(function* () {
+        yield* useGit(base === "release" ? OTHER_COMMIT : COMMIT, []);
+        yield* registerComponents([
+          {
+            name: "Probe",
+            origin: "tier-wr",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn() {
+              seen.push((yield* getExpansion()).id);
+              return "";
+            },
+          },
+        ]);
+        if (base !== undefined) {
+          yield* useWorkflow({ base });
+        }
+        yield* collect(
+          yield* execute({ ...inlineSource("<Probe />\n"), stream: new InMemoryStream() }),
+        );
+      });
+      return seen;
+    }
+
+    const withoutWorkflow = yield* ids();
+    const firstRun = yield* ids("main");
+    const secondRun = yield* ids("release");
+
+    expect(withoutWorkflow).toHaveLength(1);
+    expect(firstRun).toEqual(withoutWorkflow);
+    expect(secondRun).toEqual(withoutWorkflow);
+  });
+
+  it("WR16: cancelling a document execution does not erase a recorded run", function* () {
+    const stream = new InMemoryStream();
+
+    yield* scoped(function* () {
+      yield* useGit(COMMIT, []);
+      yield* registerComponents([
+        {
+          name: "Probe",
+          origin: "tier-wr",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            // The run is recorded by now; the execution never gets to finish.
+            yield* getWorkflowRun();
+            yield* suspend();
+            return "";
+          },
+        },
+      ]);
+      yield* useWorkflow({ base: "main" });
+      // Halting the scope that owns the execution is the cancellation.
+      yield* race([collect(yield* execute({ ...inlineSource("<Probe />\n"), stream })), sleep(60)]);
+    });
+
+    expect(recordedRun(stream)).toEqual({
+      runId: expect.any(String),
+      base: "main",
+      pinnedCommit: COMMIT,
+    });
+  });
+
+  // `run.ts` makes the same loaded-copy claim core does: a second copy of this
+  // package reads the run through its own descriptor of the same context name.
+  it("WR17: a descriptor of the same name built elsewhere reads the run", function* () {
+    let own: WorkflowRun | undefined;
+    let observed: unknown;
+    const elsewhere = createContext<unknown>("executablemd.workflow.run", undefined);
+
+    yield* scoped(function* () {
+      yield* useGit(COMMIT, []);
+      yield* registerComponents([
+        {
+          name: "Probe",
+          origin: "tier-wr",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            own = yield* getWorkflowRun();
+            observed = yield* elsewhere.get();
+            return "";
+          },
+        },
+      ]);
+      yield* useWorkflow({ base: "main" });
+      yield* collect(
+        yield* execute({ ...inlineSource("<Probe />\n"), stream: new InMemoryStream() }),
+      );
+    });
+
+    expect(own).toBeDefined();
+    expect(observed).toBe(own);
   });
 
   it("WR12: a slow Git does not stall a sibling execution", function* () {

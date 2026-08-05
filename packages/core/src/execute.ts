@@ -55,7 +55,6 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import type { BlockCounter } from "./expand.ts";
-import { extendPath } from "./expansion.ts";
 import {
   DocumentationError,
   documentationError,
@@ -583,9 +582,11 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
   // around the entire loop so all segments share it. Resources spawned by
   // `persist` blocks are retained in the eval scope until expansion
   // completes, then torn down.
-  // The root document seeds the structural path, so the same authored element
-  // in two different root documents is two different expansions (§5.6).
-  const rootPath = extendPath("", { f: "doc", path: root.path });
+  // No frame for the root document itself: every element the root's body holds
+  // carries that document's path in its own source position, so two roots are
+  // already two identities. A frame here would add nothing an assertion could
+  // ever observe (§5.6).
+  const rootPath = "";
 
   const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
