@@ -137,6 +137,8 @@ here:
     than rebuilding it with `Err(result.error)`. Enforced by the
     `local/prefer-effection-result` Oxlint rule (`scripts/oxlint-rules/`),
     which autofixes the rebuild with `oxlint --fix`.
+14. Keep `main` green. Whoever breaks it gets a self-closing `ci-main-red`
+    issue; do not merge other work while one is open.
 
 ## Writing Guide
 

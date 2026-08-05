@@ -467,3 +467,86 @@ errors that identify the missing installation.
 
 Durable-streams' own contexts (e.g. `DurableCtx`) are unchanged: they
 store durable runtime state, not overridable core operations.
+
+---
+
+## DEC-013: A red `main` is reported as an issue; no required checks, no merge queue
+
+**Status:** Decided
+**Date:** 2026-08-05
+
+### Context
+
+The `main` ruleset (id `13643935`) carries `deletion`, `non_fast_forward`, and
+`pull_request`, and **no required status checks**. A failed CI run on `main`
+therefore blocks nothing, notifies nobody, and sits until someone opens the
+Actions tab.
+
+The cost of that is not hypothetical. `main` was red for two consecutive runs
+on 2026-08-04 with nothing said, and it was found by someone reading the Actions
+tab for an unrelated reason (#332).
+
+Three mechanisms could close the gap, in ascending strength: notify on the
+failed `main` run, require status checks on pull requests, or run the checks
+against `main` + the pull request in a merge queue before landing.
+
+### Decision
+
+**Notify, by opening an issue.** `.github/workflows/main-health.yml` keeps one
+`ci-main-red` issue in step with `main`: opened on red, commented on repeated
+red, commented and closed on recovery. It is assigned to the pusher, falling
+back to `taras` when that actor cannot be assigned, so the report always
+reaches a person.
+
+An issue rather than a chat message or an email: it has an owner, a thread, and
+a state that a later green run can clear. It also needs no secret, so it works
+from a fresh clone of this repository.
+
+**It reconciles; it does not react.** Every completed CI run wakes it and none
+of the delivery's verdict is read. `workflow_run` delivery is unordered, a
+re-run delivers an old conclusion, and a delivery filtered on its own conclusion
+would still consume the workflow's one pending concurrency slot and then
+reconcile nothing — so a `cancelled` delivery could evict the only pending
+failure. The report is decided from the run the workflow selects instead:
+current head, `push` to `main`, highest run number, then highest attempt.
+
+Three properties follow, and each is the answer to a way the first design broke:
+
+- **Markers are trusted by author.** The run and attempt a report covers is
+  written into the artifact that reports it, and read back only from artifacts
+  the workflow itself wrote. Issue comments are public, so trusting a marker by
+  content would let any commenter name the current run and suppress a real
+  report. An unreadable marker comments rather than staying silent.
+- **Assignment reconciles on its own terms.** Tying it to report content leaves
+  a failed assignment permanently unretried, because the marker written by the
+  same action then says there is nothing to do.
+- **A failed read fails the run.** Reading "no authoritative run" out of a query
+  that failed would make an outage indistinguishable from a green `main`.
+
+**Required status checks: one, not eight — and separately.** GitHub's rule
+matches check-run names, and every job is its own check run; there is no
+built-in check meaning "the CI workflow passed". Listing the eight jobs would
+put a hand-maintained copy of `ci.yml`'s job list in repository settings, where
+a job added and not listed is silently ungated and nothing reports it. The
+decision is therefore to require **one** aggregate check that fails unless every
+job succeeded or was deliberately skipped.
+
+It is tracked as #336, not built here. Gating pull
+requests does not reach a push to `main`, which is the gap this decision exists
+for, so the two are complementary and neither waits on the other.
+
+**Merge queue: not now.** It is the only mechanism that makes "every commit
+provides a clean slate" a guarantee rather than a practice, and it costs a full
+serialized run per merge. That tax scales with the slowest job, and #313 puts
+`composability` at roughly eleven minutes on its own (#331). The condition that
+would change this is evidence: if the `ci-main-red` issues show `main` breaking
+often enough that the tax is cheaper than the breakage, adopt it. Until those
+issues exist there is no base rate to decide against — which is itself the
+argument for doing the cheap mechanism first.
+
+### What this does not depend on
+
+The gap is not contingent on `composability` moving to `main` only. That move is
+what would make `main` the *sole* place the concurrency and cache-purity
+invariants ever execute, and it is not in #313 as it stands — but a red `main`
+is already invisible today, and the notification is correct either way.
