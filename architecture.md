@@ -18,12 +18,21 @@ Existing documents and code get aligned to this section retroactively.
 | Term | Meaning |
 | --- | --- |
 | behavioral predictability | a plan as a program: ~80% deterministic, ~20% probabilistic |
-| replay determinism | the journal doesn't lose the execution chain: replaying arrives at the same state, where execution can resume |
+| replay determinism | the journal doesn't lose the execution chain: replaying arrives at the same state, where execution can continue |
+| replay | using the durable journal to restore the recorded portion of a document execution without repeating durable effects; after the recorded entries are consumed, execution may continue live |
 | divergence | reserved for replay: a replay that departs from the recorded journal |
 | middleware | applied by the lexical structure, used by runtime execution |
+| workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run |
+| document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs |
+| run ID | an opaque stable identifier assigned to a workflow run; it associates the run's durable records and effects, remains unchanged for the life of the run, and supports equality only |
+| base | the Git revision supplied to choose a workflow run's starting repository state |
+| pinned commit | the commit obtained by resolving a base once; it remains the workflow run's starting repository state even as the run creates descendant commits |
+| expansion | one logical evaluation of an authored executable element within a document execution |
+| expansion ID | a deterministic identifier for one logical expansion; restoring or retrying that expansion preserves the ID, while a distinct evaluation requested by the document receives another |
+| Git capability | the contextual interface through which workflow infrastructure queries the Git repository associated with the current working directory |
 | printed error | an error printed into the document (`ErrorSegment`); data, not control flow |
 | failure | an error that propagates (`ComponentFailure`, `DocumentationError`) |
-| error mode | what an undecided error in a region becomes: `print` (printed into the document), `output` (fails the run; `<PrintErrors>` can print instead), `throw` (fails the run) |
+| error mode | what an undecided error in a region becomes: `print` (printed into the document), `output` (fails the document execution; `<PrintErrors>` can print instead), `throw` (fails the document execution) |
 | attempt | one execution of a retried operation or region |
 | raise | where an error no middleware converted is decided: printed or failed, per the error mode; observed exactly once, where raised |
 | blocker | execution needs input (auth, a human answer); not a failure |
@@ -42,7 +51,108 @@ Determinism is two properties:
   program where ~80% is deterministic and ~20% is probabilistic.
 - **Replay determinism** — the journal doesn't lose the execution chain:
   replaying the journal arrives at the same state, where execution can
-  resume.
+  continue.
+
+## Workflow runs
+
+Core retains one document-execution entry point: `execute()`. A host that needs
+workflow-run metadata installs `useWorkflow({ base })` in the child scope that
+owns one document execution. The installation applies ordinary
+`Execution.document` middleware, so the durable journal is active before the
+workflow run is created or restored and before the root document is imported.
+A later document execution, including one that continues the same workflow
+run, gets a new child scope and a new middleware installation. Workflow
+metadata is durable; the middleware and every ongoing effect remain
+scope-owned.
+
+Installing the middleware alone creates no workflow run. On the first live
+document execution, the first durable operation installed by the middleware
+allocates an opaque run ID using cryptographic randomness, resolves the supplied
+base to a commit, and durably records one value:
+
+```ts
+interface WorkflowRun {
+  readonly runId: string;
+  readonly base: string;
+  readonly pinnedCommit: string;
+}
+```
+
+The workflow run exists once that value is durably recorded. A document failure
+or cancellation after that point does not erase it. Failure before that point
+creates no workflow run and the root document does not expand.
+
+Base resolution goes through the contextual Git capability:
+
+```ts
+interface GitApi {
+  revParse(revision: string): Operation<string>;
+}
+```
+
+`Git.revParse(revision)` has the semantics of
+`git rev-parse --verify --end-of-options <revision>` in the contextual working
+directory. Its default provider invokes the Git CLI; another provider may
+replace it lexically. Workflow initialization calls it with
+`${base}^{commit}`, which verifies that the result is a commit and returns its
+full object ID. Starting a workflow run fails before root expansion when Git
+cannot be invoked, the working directory is not a Git repository, or the base
+does not resolve to a commit. Ordinary `execute()` remains Git-independent.
+
+Replay restores the recorded `WorkflowRun` without allocating another run ID
+or invoking Git. The supplied base must equal the recorded base. Git is not
+consulted to compare the current value of a moving branch with the pinned
+commit.
+
+`getWorkflowRun()` returns the frozen `WorkflowRun` for the current document
+execution. Every call in one live execution returns the same object. It throws
+outside a document execution associated with `useWorkflow()`, and it exposes no
+journal, Git, workspace or continuation capability. Replay preserves the field
+values, not JavaScript object identity.
+
+The `@executablemd/workflow` package owns `WorkflowRun`, `useWorkflow()`,
+`getWorkflowRun()` and the Git capability. It depends on `@executablemd/core`,
+`@executablemd/durable-streams` and `@executablemd/runtime`, whose contextual
+`exec()` and `cwd()` the Git provider invokes; core never imports workflow or
+Git. The CLI adds the `xmd workflow run` and `xmd workflow continue` lifecycle
+together with the durable lookup that continuation requires. Ordinary `xmd run`
+remains unchanged.
+
+## Expansion identity
+
+Core describes the executable element currently being expanded:
+
+```ts
+interface Expansion {
+  readonly id: string;
+  readonly name: string;
+  readonly position?: Readonly<SourcePosition>;
+}
+```
+
+`getExpansion()` returns the same frozen snapshot throughout one live
+expansion. `name` is the authored tag name, independent of which repository,
+registered or built-in component resolves it. `position` is the opening tag's
+source position, including its workspace-relative path when known; dynamically
+rendered markup may have no position. A nested expansion temporarily replaces
+the contextual expansion and returning restores the enclosing one. Calling the
+operation outside an executable element expansion throws. The snapshot exposes
+no props, bindings, projected content, selected component definition or live
+scope.
+
+An expansion ID is derived from the root document and structural expansion
+path. It uses no process-global counter, time, randomness or scheduling order.
+Replay, continuation, retry attempts and restoration of the same loop
+iteration preserve it. Different authored elements, loop iterations,
+projections, component expansions and root documents receive different IDs.
+The ID is opaque and supports equality only. Two workflow runs may contain the
+same expansion ID; a durable effect that needs workflow-wide identity uses the
+run ID and expansion ID together. Replay preserves the snapshot's fields, not
+JavaScript object identity.
+
+`Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
+document execution receives expansion identity without installing workflow
+middleware.
 
 ## Two layers
 
@@ -73,7 +183,8 @@ network directly.
 An error, once decided, is one of two things:
 
 - **printed error** — printed into the document; data
-- **failure** — propagates until middleware handles it or the run fails
+- **failure** — propagates until middleware handles it or the document
+  execution fails
 
 ### 1. Middleware wraps the work
 
@@ -107,14 +218,14 @@ An error no middleware handles is decided exactly once, where it is raised,
 by the region's error mode — and the two outcomes move differently:
 
 - A failure propagates by throwing up the scope tree, tearing down as it
-  goes, until middleware handles it or the run fails.
+  goes, until middleware handles it or the document execution fails.
 - A printed error does not propagate. It is printed into the document — data.
 
 A decision is final in both directions: nothing turns a printed error back
-into a failure, and nothing resumes past a stop — re-executing a whole region
-as a new attempt is not a resume. Reacting is allowed: anything that can see
-a printed error may raise a new failure in response, decided once at its own
-raise point.
+into a failure, and execution does not continue past a stop — re-executing a
+whole region starts a new attempt. Reacting is allowed: anything that can see a
+printed error may raise a new failure in response, decided once at its own raise
+point.
 
 ### 3. Error mode is lexical
 
@@ -124,9 +235,9 @@ layers).
 
 | Mode | An undecided error… | Installed by |
 | --- | --- | --- |
-| `print` | is printed; the run continues | the root; `<PrintErrors>`; `printErrors(fn)` |
-| `output` | fails the run; `<PrintErrors>` can print instead | every `<Output>` region |
-| `throw` | fails the run, even inside `<PrintErrors>` | documentation; value roots |
+| `print` | is printed; the document execution continues | the root; `<PrintErrors>`; `printErrors(fn)` |
+| `output` | fails the document execution; `<PrintErrors>` can print instead | every `<Output>` region |
+| `throw` | fails the document execution, even inside `<PrintErrors>` | documentation; value roots |
 
 Projections carry the caller's error mode; they never set their own.
 
@@ -136,8 +247,8 @@ The nearest `<PrintErrors>` or `printErrors(fn)` turns a propagating
 failure into exactly one printed error whose `cause` is the complete original
 failure, and sets `print` for its region. `printErrors(fn)` is keyed to the
 exact function object — nothing is shared by name. Inside documentation a
-failure still ends the run — a hidden region gives the author nothing to
-read.
+failure still ends the document execution — a hidden region gives the author
+nothing to read.
 
 ### 5. Raise decides by value
 
@@ -160,16 +271,16 @@ before any raise. Private buffers never merge into document output.
 
 ### 7. A blocker is not a failure
 
-A run waiting for input — auth, a human answer, days if needed — has not
-failed. Suspension is a durable effect: the journal records up to the wait,
-the process may terminate, restart arrives back at the same wait. An error
-that reveals a blocker (an expired login) reaches suspension through
-middleware; waiting itself is never raised.
+A workflow run waiting for input — auth, a human answer, days if needed — has
+not failed. Suspension is a durable effect: the journal records up to the wait,
+the process may terminate, and a later document execution arrives back at the
+same wait. An error that reveals a blocker (an expired login) reaches suspension
+through middleware; waiting itself is never raised.
 
 ### 8. Durability failures are outside the model
 
-A durability failure (§6.11) says the journal no longer describes the run. No
-middleware sees it; it is never the document's own outcome.
+A durability failure (§6.11) says the journal no longer describes the document
+execution. No middleware sees it; it is never the document's own outcome.
 
 ## Attempts
 
@@ -177,8 +288,8 @@ middleware sees it; it is never the document's own outcome.
   without re-executing.
 - Rendered output shows the winning attempt plus a brief summary of failed
   ones; verbose rendering expands the detail.
-- On final failure, the last attempt's partial output renders, then the run
-  fails.
+- On final failure, the last attempt's partial output renders, then the document
+  execution fails.
 
 ## Partial output
 
@@ -190,20 +301,23 @@ middleware sees it; it is never the document's own outcome.
 
 ## Outcomes and the journal
 
-- A run that fails is still a complete record: replaying it restores the
-  output and the failure without re-executing anything. Only a durability
-  failure means the journal no longer describes the run.
-- Object identity never crosses the journal: a live run reports the failure
-  it caught; a replay reports what the record describes. The journal is
-  parsed, never trusted — an unreadable record is refused, not coerced.
+- A document execution that fails is still a complete record: replaying it
+  restores the output and the failure without re-executing anything. Only a
+  durability failure means the journal no longer describes the document
+  execution.
+- Object identity never crosses the journal: a live document execution reports
+  the failure it caught; a replay reports what the record describes. The
+  journal is parsed, never trusted — an unreadable record is refused, not
+  coerced.
 
 ## State ownership
 
 All state is scoped to the operation that owns it, so it is torn down when
-the operation is torn down: created inside the run it describes, provided via
-context. No module-scoped registries — not as collections, not hidden inside
-library objects that accumulate. One exception: metadata an author declares
-at module evaluation, about a value the author owns, may live on that value.
+the operation is torn down: created inside the operation it describes,
+provided via context. No module-scoped registries — not as collections, not
+hidden inside library objects that accumulate. One exception: metadata an
+author declares at module evaluation, about a value the author owns, may live
+on that value.
 
 ## State across loaded copies
 
@@ -244,7 +358,11 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
-| `<Output>` region `output` mode | an undecided error fails the run | built on main |
+| `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
+| `Expansion` / `getExpansion()` | describes the current logical element expansion | defined, unbuilt |
+| `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | defined, unbuilt |
+| `Git.revParse()` | verifies and resolves one Git revision expression contextually | defined, unbuilt |
+| `xmd workflow run` / `xmd workflow continue` | starts or continues a workflow run from the CLI | defined, unbuilt; ships with durable lookup |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
