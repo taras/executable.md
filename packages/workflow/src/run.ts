@@ -109,9 +109,8 @@ function* establish(base: string): Operation<void> {
   const description = describeWorkflowRun(base);
   const run = held(description, yield* record(description, base), base);
   const restored = yield* CurrentWorkflowRun.get();
-  // A truncated replay restored the value in the check phase; the durable
-  // operation above still had to run so the cursor advanced past its own entry.
-  // Keeping that object is what makes every read in one execution the same one.
+  // A truncated replay already restored this value in the check phase; keeping
+  // that object is what makes every read in one execution the same one.
   if (restored !== undefined && same(restored, run)) {
     return;
   }

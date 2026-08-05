@@ -53,7 +53,7 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
-import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
+import { elementSite, enterElement, extendPath, publishExpansion } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -1878,11 +1878,7 @@ function* expandComponent(
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
 
-  // This element's own place in the structural path, and the snapshot its body
-  // reads (§5.6). Derived before the body runs and unchanged by anything it
-  // does, so re-expanding the same element arrives at the same identifier.
-  const expansionPath = extendPath(path, elementFrame(name, site));
-  const expansion = snapshot(expansionPath, name, position);
+  const { path: expansionPath, expansion } = enterElement(path, name, site, position);
 
   // Both bodies run inside one invocation, so a value component owns its
   // resources exactly like a rendered one.
@@ -2235,11 +2231,7 @@ function* expandFunctionComponent(
     ...(siteEnv?.values ?? {}),
   };
 
-  // This element's own place in the structural path, and the snapshot its body
-  // reads (§5.6). Derived before the component runs and unchanged by anything it
-  // does, so re-expanding the same element arrives at the same identifier.
-  const expansionPath = extendPath(path, elementFrame(name, site));
-  const expansion = snapshot(expansionPath, name, position);
+  const { path: expansionPath, expansion } = enterElement(path, name, site, position);
 
   /** The invocation itself, and what a failure of it means. */
   const invoke = function* (): Operation<Segment[]> {

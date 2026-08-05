@@ -112,6 +112,22 @@ export function snapshot(
 }
 
 /**
+ * The path and the snapshot one authored element's expansion runs under.
+ *
+ * Derived before the element's body runs and unchanged by anything it does, so
+ * re-expanding the same element arrives at the same identifier.
+ */
+export function enterElement(
+  parent: string,
+  name: string,
+  site: string,
+  position: SourcePosition | undefined,
+): { path: string; expansion: Expansion } {
+  const path = extendPath(parent, elementFrame(name, site));
+  return { path, expansion: snapshot(path, name, position) };
+}
+
+/**
  * Publish an expansion for the operation that runs the element's body.
  *
  * Nesting needs no save and restore: the value belongs to the scope it is set
