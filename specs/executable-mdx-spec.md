@@ -5225,14 +5225,57 @@ workflow and returns a `DocumentExecution` handle. Options:
   `["components", "."]`)
 - `modifiers?` — custom modifier factories registered alongside the
   built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
+- `secretDetection?` — detect credentials before durable events persist
+  (default: enabled)
 
-Journal policy lives outside `execute`. A host that must inspect or refuse
-events before they persist passes a stream it has already wrapped with
-`guardDurableStream(stream, gate)` from `@executablemd/durable-streams`.
-Wrapping before `execute` is what covers the complete live journal, starting
-with the root component import. The gate cannot rewrite an event, and a
-rejection stops that one event — the run may still journal the failure it
-causes. See the durable-streams README for the full contract.
+#### Secret detection
+
+Every execution refuses to persist a durable event that carries a credential.
+`execute` selects its journal before the durable run starts, so the root
+component import is already covered, and the same policy holds for every later
+yield and close.
+
+Detection is on unless the host supplies `secretDetection: false`. That request
+belongs to the host alone: root props, frontmatter, component props, eval
+bindings, and registered components named `secretDetection` mean nothing to it,
+and a document has no way to reach the value the host passed.
+
+A finding rejects that one append before the backend is invoked, and the failure
+reaches the durable effect that produced the event. What happens next is
+ordinary error handling: an effect inside the document prints the rejection
+where it stands and the run continues, while a rejection during the root import
+fails the run. Either way the offending event is absent, and a later close is a
+separate append that crosses the policy on its own — so a rejection never
+implies an empty journal. There is no allowlist, sanitization, repair, or
+approval: a finding is a code or data-flow defect to fix.
+
+Findings and scanner failures carry positions and rule identities, never the
+matched value, the scanned content, or the detector's own error.
+
+A host may still wrap its stream with `guardDurableStream(stream, gate)` from
+`@executablemd/durable-streams` — that decorator stays generic and knows nothing
+about credentials; it runs whatever gate it is given. XMD's policy is one such
+gate, installed by default. See the durable-streams README for the decorator's
+contract.
+
+##### Reading the policy
+
+Two operations report what the running execution is doing, for trusted runtime
+packages that must hold their own work to the same rules:
+
+- `secretPolicy()` answers `{ enabled: true }` or `{ enabled: false }` — a
+  detached description of the normalized request, carrying nothing else.
+- `scanSecrets(content)` scans with the running execution's scanner and returns
+  its findings.
+
+Neither returns the scanner or anything bound to it, and `scanSecrets` resolves
+the execution's policy each time it runs — an operation built during a run and
+performed after it has ended finds no policy and fails. Outside an execution,
+and where the policy cannot be authenticated, both fail rather than reporting
+that detection is off; `scanSecrets` on a disabled execution fails for the same
+reason, so a caller branches on `secretPolicy()` first. The journal never
+consults either one, so what these report cannot change what the journal is held
+to.
 
 #### The root document source
 

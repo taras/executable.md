@@ -20,6 +20,7 @@
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "@secretlint/core": "13.0.4",
+    "@secretlint/profiler": "13.0.4",
     "@secretlint/secretlint-rule-preset-recommend": "13.0.4",
     "@secretlint/types": "13.0.4",
     "acorn": "^8.16.0",

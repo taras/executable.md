@@ -66,6 +66,7 @@
     "npm:@rjsf/utils@6.7.1": "6.7.1_react@19.2.0",
     "npm:@rjsf/validator-ajv8@6.7.1": "6.7.1_@rjsf+utils@6.7.1__react@19.2.0_react@19.2.0",
     "npm:@secretlint/core@13.0.4": "13.0.4",
+    "npm:@secretlint/profiler@13.0.4": "13.0.4",
     "npm:@secretlint/secretlint-rule-preset-recommend@13.0.4": "13.0.4",
     "npm:@secretlint/types@13.0.4": "13.0.4",
     "npm:@standard-schema/spec@1": "1.1.0",
@@ -4042,6 +4043,7 @@
         "dependencies": [
           "npm:@effectionx/context-api@0.6.0",
           "npm:@secretlint/core@13.0.4",
+          "npm:@secretlint/profiler@13.0.4",
           "npm:@secretlint/secretlint-rule-preset-recommend@13.0.4",
           "npm:@secretlint/types@13.0.4",
           "npm:acorn@^8.16.0",
@@ -4069,6 +4071,7 @@
             "npm:@effectionx/stream-helpers@0.8.3",
             "npm:@effectionx/timebox@0.4.3",
             "npm:@secretlint/core@13.0.4",
+            "npm:@secretlint/profiler@13.0.4",
             "npm:@secretlint/secretlint-rule-preset-recommend@13.0.4",
             "npm:@secretlint/types@13.0.4",
             "npm:acorn@^8.16.0",

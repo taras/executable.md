@@ -87,6 +87,7 @@ import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
+import { useSecretDetection } from "./secrets/policy.ts";
 
 export interface ExecuteSettings {
   /** Durable stream for journaling. */
@@ -100,6 +101,12 @@ export interface ExecuteSettings {
 
   /** Custom modifier factories to register */
   modifiers?: Record<string, ModifierFactory>;
+
+  /**
+   * Detect credentials before durable events persist.
+   * Enabled unless the trusted host explicitly supplies `false`.
+   */
+  secretDetection?: boolean;
 }
 
 /**
@@ -732,6 +739,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
     props = {},
     componentDirs = [...DEFAULT_COMPONENT_DIRS],
     modifiers: customModifiers = {},
+    secretDetection,
   } = options;
 
   // Carried through exactly as supplied. Rewriting an identity here would let
@@ -825,7 +833,16 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      const returned = yield* durableRun(() => Execution.operations.document(props), { stream });
+      // The policy is selected here — before the durable run and before any
+      // document, frontmatter, prop, component, or eval code exists — so the
+      // root component import is already behind the gate. What comes back is
+      // the stream to journal through; the policy itself stays inside the
+      // execution that owns it.
+      const journal = yield* useSecretDetection(secretDetection, stream);
+
+      const returned = yield* durableRun(() => Execution.operations.document(props), {
+        stream: journal,
+      });
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);
       const result = parseDocumentResult(returned);
