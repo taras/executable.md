@@ -1,0 +1,48 @@
+name: Main Health
+
+# CI on `main` is where some invariants are executed, and a red `main` blocks
+# nothing: the branch ruleset carries no required status checks. This turns that
+# silence into an issue with an owner, and closes it again when `main` recovers.
+#
+# Every completed CI run wakes a reconciliation, and none of them is filtered on
+# its own conclusion — see the job below for why that matters.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# One lane, repository-wide. `cancel-in-progress` is deliberately absent:
+# dropping a *pending* wake-up is safe, because the run that does execute
+# rereads authoritative state and reaches the same answer, while interrupting a
+# run mid-mutation can leave an issue opened and unassigned.
+concurrency:
+  group: main-health
+
+jobs:
+  # No `if` on this job. Filtering deliveries by conclusion looks like a saving
+  # and is a hole: a filtered delivery still replaces the group's one pending
+  # wake-up, and then reconciles nothing — so a cancelled run could evict the
+  # only pending failure and report it nowhere.
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # list main's CI runs
+      contents: read
+      issues: write
+    steps:
+      # `main`, never the ref that woke this job: it holds `issues: write`, so
+      # everything it executes has to be trusted code.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: main
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.1
+
+      - name: Reconcile the report against main's authoritative CI state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: deno run --frozen --allow-env --allow-run=gh scripts/main-health.ts
