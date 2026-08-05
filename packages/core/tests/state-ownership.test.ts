@@ -57,11 +57,11 @@ describe("Tier SO — a declaration lives on the function it describes", () => {
       return "";
     }, marked);
 
-    // Copying own properties is how a wrapper is usually built, and it copies
-    // enumerable symbol keys too. Non-enumerable is what keeps a component that
-    // was wrapped from inheriting a decision its author never made about it.
+    // Copying own properties is how a wrapper is usually built.
+    // Non-enumerable is what keeps a component that was wrapped from inheriting
+    // a decision its author never made about it.
     expect(printsErrors(copy)).toBe(false);
-    expect(Object.getOwnPropertySymbols({ ...marked })).toHaveLength(0);
+    expect(Object.keys({ ...marked })).toHaveLength(0);
   });
 
   it("SO3: keys the declaration to the function object, never to its name", function* () {
@@ -76,15 +76,16 @@ describe("Tier SO — a declaration lives on the function it describes", () => {
     expect(printsErrors(sameName)).toBe(false);
   });
 
-  it("SO4: cannot be forged from outside the module", function* () {
-    const forged: FunctionComponent = function* () {
+  it("SO4: recognises a declaration written by another loaded copy", function* () {
+    const markedElsewhere: FunctionComponent = function* () {
       return "";
     };
-    // A registry key anyone can reach is a key anyone can write. The declaration
-    // is a module-private symbol, so this is not the one it reads.
-    Object.defineProperty(forged, Symbol.for("executablemd.core.printsErrors"), { value: true });
+    Object.defineProperty(markedElsewhere, "executablemd.core.printsErrors", {
+      value: true,
+      enumerable: false,
+    });
 
-    expect(printsErrors(forged)).toBe(false);
+    expect(printsErrors(markedElsewhere)).toBe(true);
   });
 });
 

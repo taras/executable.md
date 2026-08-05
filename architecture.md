@@ -28,6 +28,7 @@ Existing documents and code get aligned to this section retroactively.
 | raise | where an error no middleware converted is decided: printed or failed, per the error mode; observed exactly once, where raised |
 | blocker | execution needs input (auth, a human answer); not a failure |
 | suspension | a durable wait: a crash restarts into the same wait |
+| loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
 
 ## Three axes
 
@@ -203,6 +204,38 @@ the operation is torn down: created inside the run it describes, provided via
 context. No module-scoped registries — not as collections, not hidden inside
 library objects that accumulate. One exception: metadata an author declares
 at module evaluation, about a value the author owns, may live on that value.
+
+## State across loaded copies
+
+The binary bundles its own package code while components and integrations may
+load another copy of the same package. Those loaded copies must be able to
+compose: one can provide shared state that another reads.
+
+Shared composition has two replaceable forms:
+
+- Composition data uses an Effection Context with a stable, namespaced string
+  name and a plain structural value. Independently constructed descriptors with
+  the same name intentionally address the same binding.
+- Contextual operations use a contextual Api with stable, namespaced operation
+  names. Lexical middleware replacement is part of their contract.
+
+Neither form is an authority boundary. Security enforcement, durable-effect
+identity, and reconciliation never trust a same-named binding merely because
+its value has the expected structure. They derive from execution-owned state
+established before untrusted work begins or from parsed durable records. A
+contextual observation may describe an execution; it cannot authorize it or
+name its durable effects.
+
+Metadata covered by State ownership's module-evaluation exception uses a
+stable, namespaced string property when another loaded copy must read it. A
+module-local symbol is unreachable to another loaded copy. A registry symbol is
+reachable but unowned, and offers nothing a namespaced string does not.
+
+A descendant may replace a same-named Context binding for its own descendants
+under ordinary lexical rules. Private fields, constructors, symbols,
+module-local identity, and private sentinels remain valid when no second loaded
+copy needs to read the value. String names and metadata keys that cross loaded
+copies are compatibility contracts; changing one is a breaking change.
 
 ## Construct inventory
 

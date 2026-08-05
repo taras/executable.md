@@ -139,6 +139,10 @@ here:
     which autofixes the rebuild with `oxlint --fix`.
 14. Keep `main` green. Whoever breaks it gets a self-closing `ci-main-red`
     issue; do not merge other work while one is open.
+15. State shared across loaded copies uses stable, namespaced names: plain
+    structural values for composition data and a contextual Api for operations.
+    Security enforcement, durable identity, and reconciliation never trust
+    replaceable context state.
 
 ## Writing Guide
 
