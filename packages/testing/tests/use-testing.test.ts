@@ -206,9 +206,17 @@ describe("useTesting composition", () => {
           yield* drain(yield* execution.output);
         });
       });
-      // Give the document time to start the test and spawn its effect,
-      // then leave the scope — halting everything mid-test.
-      yield* sleep(200);
+      // Wait until the document has run the eval block and spawned its
+      // effect, then leave the scope — halting everything mid-test. A fixed
+      // sleep races variable startup cost (#335); the bound only turns a
+      // document that never starts into an `undefined` assertion failure
+      // below instead of a hang.
+      for (let waited = 0; waited < 10_000; waited += 10) {
+        if (Reflect.get(globalThis, "__useTestingHaltMarker") === true) {
+          break;
+        }
+        yield* sleep(10);
+      }
     });
 
     expect(Reflect.get(globalThis, "__useTestingHaltMarker")).toBe(false);
