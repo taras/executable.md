@@ -17,7 +17,10 @@
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
-import { race, sleep } from "effection";
+import { ensure, race, sleep } from "effection";
+import type { Operation } from "effection";
+import { ProcessApi } from "@effectionx/process";
+import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -40,6 +43,40 @@ function writeFiles(dir: string, files: Record<string, string>): void {
     fs.mkdirSync(fileDir, { recursive: true });
     fs.writeFileSync(fullPath, content);
   }
+}
+
+/**
+ * Records daemon lifetime against block execution at the process API
+ * boundary, while the real work still happens: `daemon` delegates to the
+ * real implementation, so a real subprocess spawns and is torn down.
+ *
+ * The ensure registers on the scope the daemon runs in — the invocation's
+ * eval scope, the lifetime under test — before `next` acquires the daemon
+ * resource, so LIFO fires `daemon:stop` only after the real process
+ * teardown has completed. `probe` records when a `probe`-marked exec block
+ * ran, which is how the timeline places invocation teardown relative to
+ * the block after the component.
+ */
+function* useDaemonTimeline(): Operation<string[]> {
+  const timeline: string[] = [];
+  yield* ProcessApi.around({
+    *daemon([command, options], next) {
+      timeline.push("daemon:start");
+      yield* ensure(() => {
+        timeline.push("daemon:stop");
+      });
+      return yield* next(command, options);
+    },
+  });
+  yield* API.Process.around({
+    *exec([options], next) {
+      if (options.command.some((part) => part.includes("probe"))) {
+        timeline.push("probe");
+      }
+      return yield* next(options);
+    },
+  });
+  return timeline;
 }
 
 describe("Tier Q — Daemon integration", () => {
@@ -75,35 +112,20 @@ describe("Tier Q — Daemon integration", () => {
   });
 
   // Q5: the daemon dies with the component invocation, not with the document.
-  // A probe placed after the component — still inside the same run — is the
-  // only way to tell those two apart.
-  //
-  // The probe tests liveness, not existence: process teardown resumes at pipe
-  // EOF, which precedes reaping, so the dead daemon can still be a zombie —
-  // one that answers `kill -0` — at the moment the probe runs (#338). A pid
-  // that ps reports as Z, or not at all, is a stopped daemon.
+  // Observed at the process API boundary rather than through the OS process
+  // table: a shell probe of the daemon's pid raced the reap window — process
+  // teardown resumes at pipe EOF, which precedes reaping, so a dead daemon
+  // still answered `kill -0` as a zombie (#338). The timeline has no such
+  // window: `daemon:stop` records the completed teardown itself, and `probe`
+  // records the block after the component.
   it("Q5: a daemon in a component is gone once the invocation completes", function* () {
     const tmpDir = makeTempDir();
 
     try {
-      const pidFile = path.join(tmpDir, "daemon.pid");
+      const timeline = yield* useDaemonTimeline();
       writeFiles(tmpDir, {
-        "components/Holder.md": [
-          "```bash daemon exec",
-          `sh -c 'echo $$ > ${pidFile}; while true; do sleep 1; done'`,
-          "```",
-          "",
-          "```bash exec",
-          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; echo ready`,
-          "```",
-        ].join("\n"),
-        "doc.md": [
-          "<Holder />",
-          "",
-          "```bash exec",
-          `case "$(ps -o stat= -p "$(cat ${pidFile})" 2>/dev/null)" in ""|*Z*) echo STOPPED;; *) echo LEAKED;; esac`,
-          "```",
-        ].join("\n"),
+        "components/Holder.md": ["```bash daemon exec", "sleep 300", "```"].join("\n"),
+        "doc.md": ["<Holder />", "", "```bash exec", "echo probe", "```"].join("\n"),
       });
 
       const stream = new InMemoryStream();
@@ -115,9 +137,8 @@ describe("Tier Q — Daemon integration", () => {
         }),
       );
 
-      expect(output).toContain("ready");
-      expect(output).toContain("STOPPED");
-      expect(output).not.toContain("LEAKED");
+      expect(output).toContain("probe");
+      expect(timeline).toEqual(["daemon:start", "daemon:stop", "probe"]);
     } finally {
       cleanup(tmpDir);
     }
@@ -127,36 +148,27 @@ describe("Tier Q — Daemon integration", () => {
   // the process belongs to the content scope rather than to the component's
   // own. It still stops with the invocation that hosted the projection.
   //
-  // Both markers are load-bearing and both fail closed. `RUNNING` is printed
-  // only once the process has been seen alive from inside the component, so a
-  // daemon that never started cannot satisfy the premise; `STOPPED` is chosen
-  // only against a pid file that exists, so a missing pid file reports NOPID
-  // rather than passing for the absence of a process. The final probe shares
-  // Q5's liveness rule: a zombie in the reap window is a stopped daemon.
+  // The markers fail closed: a daemon the projection never launched records
+  // no `daemon:start`, so the ordering cannot pass vacuously. Shares Q5's
+  // boundary observation (#338).
   it("Q14: a daemon in projected content is gone once the invocation completes", function* () {
     const tmpDir = makeTempDir();
 
     try {
-      const pidFile = path.join(tmpDir, "daemon.pid");
+      const timeline = yield* useDaemonTimeline();
       writeFiles(tmpDir, {
         "components/Holder.md": "<Content />\n",
         "doc.md": [
           "<Holder>",
           "",
           "```bash daemon exec",
-          `sh -c 'echo $$ > ${pidFile}; while true; do sleep 1; done'`,
-          "```",
-          "",
-          "```bash exec",
-          `i=0; while [ ! -s ${pidFile} ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done`,
-          `if [ -s ${pidFile} ] && kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo RUNNING; fi`,
+          "sleep 300",
           "```",
           "",
           "</Holder>",
           "",
           "```bash exec",
-          `if [ ! -s ${pidFile} ]; then echo NOPID;`,
-          `else case "$(ps -o stat= -p "$(cat ${pidFile})" 2>/dev/null)" in ""|*Z*) echo STOPPED;; *) echo LEAKED;; esac; fi`,
+          "echo probe",
           "```",
         ].join("\n"),
       });
@@ -170,9 +182,8 @@ describe("Tier Q — Daemon integration", () => {
         }),
       );
 
-      expect(output).toContain("RUNNING");
-      expect(output).toContain("STOPPED");
-      expect(output).not.toContain("LEAKED");
+      expect(output).toContain("probe");
+      expect(timeline).toEqual(["daemon:start", "daemon:stop", "probe"]);
     } finally {
       cleanup(tmpDir);
     }
