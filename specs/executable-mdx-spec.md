@@ -2619,9 +2619,9 @@ from disk while the compiled binary carries its own — reads the same expansion
 The same property means a descendant may bind that name, and its own
 descendants read what it bound, exactly as with any context value.
 
-Nothing that must be authoritative may therefore depend on this value: what a
-document can rebind, it can rebind. Durable enforcement is established
-independently of it.
+It is therefore not an authority boundary: security enforcement and durable
+identity never trust replaceable context state (architecture.md, *State across
+loaded copies*). What a document can rebind, it can rebind.
 
 **The identifier.** `id` is derived from the root document and the structural
 path that reached the element. Each step contributes a frame — an authored

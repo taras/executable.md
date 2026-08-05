@@ -149,6 +149,73 @@ function* executed(path: string, stream = new InMemoryStream()): Operation<strin
   return seen;
 }
 
+/** A positionless element, the shape nothing scanned ever produces. */
+function element(name: string, children: Segment[] = []): Segment {
+  return {
+    type: "component",
+    name,
+    props: {},
+    expressions: {},
+    children,
+    selfClosing: children.length === 0,
+  };
+}
+
+/** An `<Output>` region holding one positionless `<Probe />`. */
+function outputRegion(): Segment {
+  return element("Output", [element("Probe")]);
+}
+
+/** Expand hand-built segments, collecting what `<Probe />` saw. */
+function* collectFrom(segments: Segment[]): Operation<string[]> {
+  const seen: string[] = [];
+  yield* scoped(function* () {
+    const env: EvalEnv = { values: {} };
+    yield* Component.around({ env: () => env }, { at: "min" });
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *importComponent() {
+          return probe(seen);
+        },
+      },
+      { at: "min" },
+    );
+    return yield* expandSegments(segments, {}, {}, new Set());
+  });
+  return seen;
+}
+
+/** The same, through a component body so `buildBody()` chunking runs. */
+function* expandedBody(bodySegments: Segment[]): Operation<string[]> {
+  const seen: string[] = [];
+  yield* scoped(function* () {
+    const env: EvalEnv = { values: {} };
+    yield* Component.around({ env: () => env }, { at: "min" });
+    yield* Component.around(
+      {
+        // deno-lint-ignore require-yield
+        *importComponent([name]) {
+          if (name === "Host") {
+            return {
+              kind: "markdown" as const,
+              name,
+              path: "Host.md",
+              meta: {},
+              props: NO_PROPS,
+              bodySegments,
+            };
+          }
+          return probe(seen);
+        },
+      },
+      { at: "min" },
+    );
+    return yield* expandSegments([element("Host")], {}, {}, new Set());
+  });
+  return seen;
+}
+
 describe("Tier XP — expansion identity", () => {
   it("XP1: two elements written at different offsets get different identifiers", function* () {
     const seen = yield* identifiers("<Probe />\n\n<Probe />\n");
@@ -553,6 +620,33 @@ describe("Tier XP — expansion identity", () => {
     // Structural, not incidental: each arm reproduces its own identifier.
     expect(yield* taken(true)).toEqual(whenTrue);
     expect(yield* taken(false)).toEqual(whenFalse);
+  });
+
+  // `<Answer>` is consumed by `<Answers>` and now expands beneath its own
+  // element's frame, but no test here proves it: a hand-built region needs a
+  // parseable template per answer, and the fixture kept collapsing to one
+  // matcher. The boundary is repaired and unproven — see the PR description.
+  it("XP24: positionless elements in different body chunks differ", function* () {
+    // Two documentation segments: each becomes its own chunk, and each holds a
+    // positionless element that is index 0 of that chunk.
+    // The `<Output>` is what makes the body chunk at all; it carries a probe of
+    // its own, so three fire and all three must be told apart.
+    const body = [element("Probe"), element("Probe"), outputRegion()];
+    const first = yield* expandedBody(body);
+
+    expect(first).toHaveLength(3);
+    expect(new Set(first).size).toBe(3);
+    expect(yield* expandedBody(body)).toEqual(first);
+  });
+
+  it("XP25: an <Output> region and documentation at the same index differ", function* () {
+    // The `<Output>` element is consumed by chunking, so without its frame its
+    // first child collides with the documentation segment at index 0.
+    const first = yield* expandedBody([element("Probe"), outputRegion()]);
+
+    expect(first).toHaveLength(2);
+    expect(first[0]).not.toBe(first[1]);
+    expect(yield* expandedBody([element("Probe"), outputRegion()])).toEqual(first);
   });
 
   it("XP19: the same element structure under two root documents differs", function* () {
