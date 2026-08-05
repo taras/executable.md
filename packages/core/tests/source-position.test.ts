@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { scanSegments } from "../src/scanner.ts";
-import { invocation } from "../src/component-api.ts";
+import { getExpansion } from "../src/expansion.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -69,14 +69,14 @@ describe("source positions", () => {
     yield* useStubFs({ "README.md": doc });
     // Registered rather than a repository file, so the probe can record what
     // the engine tells a component about its own call site. That is the public
-    // guarantee now — `invocation()` — rather than what a claim was offered.
+    // guarantee now — `getExpansion()` — rather than what a claim was offered.
     yield* registerComponents([
       {
         name: "Probe",
         origin: "test",
         props: { type: "object", properties: {}, additionalProperties: false },
         *fn() {
-          const position = (yield* invocation()).position;
+          const position = (yield* getExpansion()).position;
           if (position) {
             positions.push(position);
           }
@@ -115,7 +115,7 @@ describe("source positions", () => {
         origin: "test",
         props: { type: "object", properties: {}, additionalProperties: false },
         *fn() {
-          const metadata = yield* invocation();
+          const metadata = yield* getExpansion();
           positions.push({
             name: metadata.name,
             ...(metadata.position ? { position: metadata.position } : {}),

@@ -14,19 +14,14 @@ import type { Json, Workflow } from "@executablemd/durable-streams";
 import {
   env,
   hasContent,
-  invocation,
+  getExpansion,
   matchPrompt,
   parseTemplate,
   raise,
   registerComponents,
   tryContent,
 } from "@executablemd/core";
-import type {
-  ComponentInvocationMetadata,
-  ErrorSegment,
-  ParsedTemplate,
-  PropsSchema,
-} from "@executablemd/core";
+import type { Expansion, ErrorSegment, ParsedTemplate, PropsSchema } from "@executablemd/core";
 
 import type { TurnBridge } from "./bridge.ts";
 
@@ -65,7 +60,7 @@ function configError(message: string): ErrorSegment {
   return { type: "error", message: `<WhenPrompt> ${message}`, source: "WhenPrompt" };
 }
 
-function formatLocation(metadata: ComponentInvocationMetadata): string {
+function formatLocation(metadata: Expansion): string {
   const position = metadata.position;
   if (!position) {
     return "unknown";
@@ -153,7 +148,7 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
       return reported.message;
     }
 
-    const location = formatLocation(yield* invocation());
+    const location = formatLocation(yield* getExpansion());
     const ordinal = ordinals.get(location) ?? 0;
     ordinals.set(location, ordinal + 1);
 

@@ -60,6 +60,8 @@ export interface ProjectionHandle {
     props: Record<string, Json>,
     hideSet: Set<string>,
     owner: Segment[],
+    /** Where this `<Content />` was written, so repeated projections differ (§5.6). */
+    site: string,
   ): Operation<Segment[]>;
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;

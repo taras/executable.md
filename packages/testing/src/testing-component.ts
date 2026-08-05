@@ -11,8 +11,8 @@
  * and lose the report with it.
  */
 
-import { hasContent, invocation, tryContent } from "@executablemd/core";
-import type { ComponentInvocationMetadata, Json, PropsSchema } from "@executablemd/core";
+import { hasContent, getExpansion, tryContent } from "@executablemd/core";
+import type { Expansion, Json, PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import { Test, boundary } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
@@ -26,7 +26,7 @@ export const TESTING_PROPS: PropsSchema = {
 };
 
 /** `path:line:column`, `line:column`, or `unknown` — the durable boundary key. */
-function formatLocation(metadata: ComponentInvocationMetadata): string {
+function formatLocation(metadata: Expansion): string {
   const position = metadata.position;
   if (!position) {
     return "unknown";
@@ -74,7 +74,7 @@ export function* Testing(): Operation<Json> {
       tests: local.length,
       failed: local.filter((result) => result.status === "fail").length,
     },
-    formatLocation(yield* invocation()),
+    formatLocation(yield* getExpansion()),
   );
   yield* boundary(outcome);
 

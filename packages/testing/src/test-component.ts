@@ -24,17 +24,11 @@ import {
   env,
   evalScope,
   hasContent,
-  invocation,
+  getExpansion,
   raise,
   tryContent,
 } from "@executablemd/core";
-import type {
-  ComponentInvocationMetadata,
-  ErrorSegment,
-  EvalEnv,
-  Json,
-  PropsSchema,
-} from "@executablemd/core";
+import type { SourcePosition, ErrorSegment, EvalEnv, Json, PropsSchema } from "@executablemd/core";
 import { AssertionError } from "./assert.ts";
 import { AssertionReport } from "./assertions.ts";
 import { persistTestResult } from "./journal.ts";
@@ -172,8 +166,14 @@ export function* absorbTestFailure(location: string, error: unknown): Operation<
   return staged.result;
 }
 
-export function formatLocation(metadata: ComponentInvocationMetadata): string {
-  const position = metadata.position;
+/**
+ * `path:line:column`, `line:column`, or `unknown` — the durable identity.
+ *
+ * Typed on the one field it reads, so an `Expansion` and a `ComponentFailure`
+ * both format the same way and a test keeps one identity however it ended.
+ */
+export function formatLocation(located: { readonly position?: Readonly<SourcePosition> }): string {
+  const position = located.position;
   if (!position) {
     return "unknown";
   }
@@ -254,7 +254,7 @@ export function createTest(timeoutMs: number) {
     }
 
     const name = typeof props.name === "string" ? props.name : undefined;
-    const location = formatLocation(yield* invocation());
+    const location = formatLocation(yield* getExpansion());
     const parentEnv = yield* env;
     // The invocation's own scope, read before any nested invocation can shadow
     // it, and published as `testScope` so anything however deeply nested still

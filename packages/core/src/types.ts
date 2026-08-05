@@ -232,19 +232,6 @@ export interface PartialContent {
 }
 
 /**
- * Where a function component was invoked (spec §5.5).
- *
- * A detached snapshot, not the element the parser built: a component learns
- * where it was written without reaching anything else about the invocation —
- * no props, no `as`, no content, no element.
- */
-export interface ComponentInvocationMetadata {
-  readonly name: string;
-  /** Absent for markdown scanned at runtime, which has no source of its own. */
-  readonly position?: Readonly<SourcePosition>;
-}
-
-/**
  * Where a selected implementation came from (spec §5.3).
  *
  * A registration names itself with a stable human-readable `origin` rather than

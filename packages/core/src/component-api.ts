@@ -24,7 +24,6 @@ import type {
   ComponentDefinition,
   ComponentElement,
   ComponentFailure,
-  ComponentInvocationMetadata,
   ComponentRegistry,
   PartialContent,
   ErrorSegment,
@@ -105,14 +104,6 @@ export interface ComponentApi {
    * provider that rejects the call rather than letting it succeed.
    */
   retain<T>(resource: () => Operation<T>): Operation<T>;
-  /**
-   * Where this function component was invoked (spec §5.5).
-   *
-   * Available only while the component runs. A nested invocation shadows it and
-   * the enclosing one is restored on the way out, so what a component reads is
-   * always its own call site.
-   */
-  invocation(): Operation<ComponentInvocationMetadata>;
   /**
    * Render the invoking component's content, reporting a failure instead of
    * replacing the invocation with it.
@@ -210,12 +201,6 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
     throw new Error("Component.retain() has no provider: not inside a component invocation.");
   },
   // deno-lint-ignore require-yield
-  *invocation(): Operation<ComponentInvocationMetadata> {
-    throw new Error(
-      "Component.invocation() has no provider: not inside a function component invocation.",
-    );
-  },
-  // deno-lint-ignore require-yield
   *tryContent(_slot?: string): Operation<PartialContent> {
     throw new Error(
       "Component.tryContent() has no provider: not inside a function component invocation.",
@@ -241,7 +226,6 @@ export const content: Operations<ComponentApi>["content"] = Component.operations
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
 export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
-export const invocation: Operations<ComponentApi>["invocation"] = Component.operations.invocation;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;
 export const hasCapture: Operations<ComponentApi>["hasCapture"] = Component.operations.hasCapture;
 export const capture: Operations<ComponentApi>["capture"] = Component.operations.capture;

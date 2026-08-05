@@ -55,6 +55,7 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import type { BlockCounter } from "./expand.ts";
+import { extendPath } from "./expansion.ts";
 import {
   DocumentationError,
   documentationError,
@@ -506,6 +507,7 @@ function* runValueRoot(
   counter: BlockCounter,
   /** What this root emitted, held by the caller so a failure still finds it. */
   chunks: string[],
+  path: string,
 ): Operation<DocumentResult> {
   let produced: { value: Json } | undefined;
 
@@ -530,6 +532,8 @@ function* runValueRoot(
         validatedProps,
         new Set(),
         counter,
+        undefined,
+        path,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -579,6 +583,10 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
   // around the entire loop so all segments share it. Resources spawned by
   // `persist` blocks are retained in the eval scope until expansion
   // completes, then torn down.
+  // The root document seeds the structural path, so the same authored element
+  // in two different root documents is two different expansions (§5.6).
+  const rootPath = extendPath("", { f: "doc", path: root.path });
+
   const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
     // Structural preflight (spec §6.9, §6.10): a structurally invalid root
@@ -597,7 +605,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     if (root.returns !== undefined) {
-      return yield* runValueRoot(root, root.returns, validatedProps, counter, streamed);
+      return yield* runValueRoot(root, root.returns, validatedProps, counter, streamed, rootPath);
     }
 
     // A root declaring top-level <Output> buffers completely (spec §5.4):
@@ -615,6 +623,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         undefined,
         undefined,
         selected,
+        rootPath,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
@@ -629,7 +638,15 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     // has still handed over what it rendered — the root emits that before the
     // failure is reported, exactly as a buffered root does.
     for (const segment of root.bodySegments) {
-      yield* expandSegments([segment], root.meta, validatedProps, new Set(), counter, produced);
+      yield* expandSegments(
+        [segment],
+        root.meta,
+        validatedProps,
+        new Set(),
+        counter,
+        produced,
+        rootPath,
+      );
 
       while (emittedThrough < produced.length) {
         const resolved = produced[emittedThrough];

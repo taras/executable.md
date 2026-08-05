@@ -23,7 +23,6 @@ import type {
   ComponentElement,
   ComponentDefinition,
   ComponentFailure,
-  ComponentInvocationMetadata,
   EvalEnv,
   FunctionComponentDefinition,
   Json,
@@ -54,6 +53,7 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
+import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -163,13 +163,14 @@ function expandChildrenScoped(
   counter: BlockCounter,
   /** Where this expansion accumulates — its caller's region, or a private buffer. */
   owner: Segment[],
+  path: string,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* provideEnv({ values: { ...(callerEnv?.values ?? {}), ...(override ?? {}) } });
     if (scope) {
       yield* provideEvalScope(scope);
     }
-    return yield* expandSegments(segments, meta, props, hideSet, counter, owner);
+    return yield* expandSegments(segments, meta, props, hideSet, counter, owner, path);
   });
 }
 
@@ -194,6 +195,14 @@ interface ProjectionState {
    * loop the author could see.
    */
   callerLoop: LoopFrame | undefined;
+  /**
+   * This invocation's own structural path (§5.6). A projection is identified by
+   * the invocation that performed it, so the same authored content projected
+   * through two different components is two expansions. What the content is
+   * made of still comes from where the caller wrote it: every element inside
+   * carries its own source position.
+   */
+  ownPath: string;
   /**
    * Where a string projection records the errors it renders away. A handle that
    * only projects structured segments needs none — its caller sees the errors.
@@ -237,6 +246,30 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   const claimed = new WeakSet<ComponentElement>();
 
   /**
+   * How many times this invocation has already projected the same request.
+   *
+   * An authored `<Content />` is told apart by where it was written; a
+   * programmatic projection has no source of its own, so repeated calls are told
+   * apart by the order the component made them in. Read when the projection
+   * operation is interpreted and before it suspends, so it follows the
+   * component's own program order rather than the order projections finish in.
+   * Owned by this invocation and gone with it.
+   */
+  const repeats = new Map<string, number>();
+
+  function projectionPath(request: ProjectionRequest): string {
+    const req =
+      request.kind === "slot"
+        ? `slot:${request.name ?? ""}`
+        : request.kind === "children"
+          ? "children"
+          : "markdown";
+    const n = repeats.get(req) ?? 0;
+    repeats.set(req, n + 1);
+    return extendPath(state.ownPath, { f: "proj", req, n });
+  }
+
+  /**
    * Run already-selected segments inside the content scope. Shared by every
    * projection so none of them depends on eval-scope acquisition order.
    */
@@ -257,6 +290,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
      * and a value is not output until it is complete.
      */
     owner?: Segment[];
+    path: string;
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       const contentScope = yield* state.invocation.useContentScope();
@@ -289,6 +323,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             options.hideSet,
             state.counter,
             rendered,
+            options.path,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -324,6 +359,10 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   function* runProjectionOutcome(
     request: ProjectionRequest,
   ): Operation<{ segments: Segment[]; failure?: unknown }> {
+    // First statement of the body, so the ordinal is taken when this operation
+    // is interpreted and before anything it does can suspend. An operation that
+    // is constructed and never yielded takes none.
+    const path = projectionPath(request);
     const segments = select(request);
     const mode = request.mode ?? (yield* ErrorMode.get()) ?? "print";
     const contentScope = yield* state.invocation.useContentScope();
@@ -374,6 +413,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             state.hideSet,
             state.counter,
             rendered,
+            path,
           );
           outcome.resolve({ segments: [...errors, ...rendered] });
         } catch (error) {
@@ -399,6 +439,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       props: Record<string, Json>,
       hideSet: Set<string>,
       owner: Segment[],
+      site: string,
     ): Operation<Segment[]> {
       // Slots were resolved during substitution, so the environment, meta,
       // props and hide set are the body's own — only the resource scope moves.
@@ -416,6 +457,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         loop: state.callerLoop,
         errors: [],
         owner,
+        path: extendPath(state.ownPath, { f: "proj", req: `content:${site}` }),
       });
     },
     project: runProjection,
@@ -493,6 +535,12 @@ export function* expandSegments(
    * promote content the document was not going to render (§6.9).
    */
   owner?: Segment[],
+  /**
+   * The structural path that reached these segments (§5.6). Expansion driven
+   * directly — a test, a tool describing a document — starts from the empty
+   * path, so identity works with no execution and no journal around it.
+   */
+  path: string = "",
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -501,7 +549,15 @@ export function* expandSegments(
   if ((yield* SegmentCauses.get()) === undefined) {
     return yield* scoped(function* () {
       yield* useSegmentCauses();
-      return yield* expandSegments(segments, parentMeta, parentProps, hideSet, counter, owner);
+      return yield* expandSegments(
+        segments,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        owner,
+        path,
+      );
     });
   }
 
@@ -510,7 +566,7 @@ export function* expandSegments(
   // its body, so the frame ambient here cannot change while this list runs.
   const loop = yield* ActiveLoop.get();
 
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     switch (segment.type) {
       case "text": {
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
@@ -530,6 +586,10 @@ export function* expandSegments(
       }
 
       case "component": {
+        // Where this element sits inside its own file (§5.6). Read once here so
+        // every construct below derives identity from the same string.
+        const site = elementSite(segment.position, index);
+
         if (segment.name === "Content") {
           // A `<Content />` the invocation claimed carries its resolved
           // projection; expanding it here runs that content in the
@@ -538,7 +598,14 @@ export function* expandSegments(
           // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
-            yield* projection.expandClaimed(segment, parentMeta, parentProps, hideSet, result);
+            yield* projection.expandClaimed(
+              segment,
+              parentMeta,
+              parentProps,
+              hideSet,
+              result,
+              site,
+            );
             break;
           }
         }
@@ -565,7 +632,7 @@ export function* expandSegments(
           // No raise() here: expandCapture reports the errors it creates, and
           // its body settled its own (§6.9).
           result.push(
-            ...(yield* expandCapture(segment, parentMeta, parentProps, hideSet, counter)),
+            ...(yield* expandCapture(segment, parentMeta, parentProps, hideSet, counter, path)),
           );
           break;
         }
@@ -574,7 +641,16 @@ export function* expandSegments(
           // Same as <Capture>: expandEach reports its own errors and hands the
           // body's back untouched (§6.9).
           result.push(
-            ...(yield* expandEach(segment, parentMeta, parentProps, hideSet, counter, result)),
+            ...(yield* expandEach(
+              segment,
+              parentMeta,
+              parentProps,
+              hideSet,
+              counter,
+              result,
+              path,
+              site,
+            )),
           );
           break;
         }
@@ -584,7 +660,7 @@ export function* expandSegments(
           // errors it creates, and the selected branch settled its own (§6.9).
           // It renders into this expansion's output, so it writes into the owner
           // rather than handing segments back to be appended.
-          yield* expandIf(segment, parentMeta, parentProps, hideSet, counter, result);
+          yield* expandIf(segment, parentMeta, parentProps, hideSet, counter, result, path);
           break;
         }
 
@@ -600,14 +676,22 @@ export function* expandSegments(
         if (segment.name === "Loop") {
           // No raise() here, for the same reason as <If>: expandLoop reports
           // the errors it creates, and the body settled its own (§6.9).
-          yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter, result);
+          yield* expandLoop(segment, parentMeta, parentProps, hideSet, counter, result, path, site);
           break;
         }
 
         if (segment.name === "PrintErrors") {
           // No raise() here, like the branches above: expandPrintErrors
           // reports the errors it creates, and the body settled its own (§6.9).
-          yield* expandPrintErrors(segment, parentMeta, parentProps, hideSet, counter, result);
+          yield* expandPrintErrors(
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            result,
+            path,
+          );
           break;
         }
 
@@ -621,7 +705,7 @@ export function* expandSegments(
             ...(yield* expandAnswers(
               segment,
               (inner, into) =>
-                expandSegments(inner, parentMeta, parentProps, hideSet, counter, into),
+                expandSegments(inner, parentMeta, parentProps, hideSet, counter, into, path),
               result,
             )),
           );
@@ -663,6 +747,8 @@ export function* expandSegments(
           parentMeta,
           parentProps,
           result,
+          path,
+          site,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -789,6 +875,7 @@ function* expandCapture(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  path: string,
 ): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
     return [
@@ -832,6 +919,8 @@ function* expandCapture(
     parentProps,
     hideSet,
     counter,
+    undefined,
+    path,
   );
 
   // The body reported these where they were created (§6.9). They are returned
@@ -894,6 +983,8 @@ function* expandEach(
   counter: BlockCounter,
   /** The region a rendering iteration writes into; a captured one keeps its own. */
   owner: Segment[],
+  path: string,
+  site: string,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -966,7 +1057,7 @@ function* expandEach(
   // failure partway leaves the items it already produced behind. A captured one
   // builds a value instead: its buffer is private and never becomes output.
   const out: Segment[] = asBinding === undefined ? owner : [];
-  for (const item of items) {
+  for (const [iteration, item] of items.entries()) {
     yield* expandChildrenScoped(
       segment.children,
       callerEnv ?? undefined,
@@ -977,6 +1068,7 @@ function* expandEach(
       hideSet,
       counter,
       out,
+      extendPath(path, { f: "each", at: site, i: iteration }),
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
@@ -1217,6 +1309,7 @@ function* expandIf(
   counter: BlockCounter,
   /** The region this renders into: the selected branch writes there directly. */
   owner: Segment[],
+  path: string,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1281,6 +1374,7 @@ function* expandIf(
     hideSet,
     counter,
     owner,
+    path,
   );
 }
 
@@ -1378,6 +1472,8 @@ function* expandLoop(
   counter: BlockCounter,
   /** The region this renders into: each iteration writes there as it runs. */
   owner: Segment[],
+  path: string,
+  site: string,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -1425,7 +1521,15 @@ function* expandLoop(
       for (let iteration = 0; iteration < bound.value; iteration++) {
         yield* recordIteration(identity, iteration);
         started = iteration + 1;
-        yield* expandSegments(segment.children, parentMeta, parentProps, hideSet, counter, owner);
+        yield* expandSegments(
+          segment.children,
+          parentMeta,
+          parentProps,
+          hideSet,
+          counter,
+          owner,
+          extendPath(path, { f: "loop", at: site, i: iteration }),
+        );
         if (frame.broken) {
           break;
         }
@@ -1545,6 +1649,7 @@ function* expandPrintErrors(
   counter: BlockCounter,
   /** The region this renders into: it writes there rather than returning. */
   owner: Segment[],
+  path: string,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -1565,6 +1670,7 @@ function* expandPrintErrors(
       hideSet,
       counter,
       owner,
+      path,
     );
   });
 }
@@ -1589,6 +1695,8 @@ function* expandComponent(
    * document (§6.9).
    */
   owner?: Segment[],
+  path: string = "",
+  site: string = "",
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -1648,6 +1756,8 @@ function* expandComponent(
       position,
       callerMeta,
       callerProps,
+      path,
+      site,
     );
   }
 
@@ -1768,6 +1878,12 @@ function* expandComponent(
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
 
+  // This element's own place in the structural path, and the snapshot its body
+  // reads (§5.6). Derived before the body runs and unchanged by anything it
+  // does, so re-expanding the same element arrives at the same identifier.
+  const expansionPath = extendPath(path, elementFrame(name, site));
+  const expansion = snapshot(expansionPath, name, position);
+
   // Both bodies run inside one invocation, so a value component owns its
   // resources exactly like a rendered one.
   let claimProjection: ClaimFn = passthroughClaim;
@@ -1784,6 +1900,7 @@ function* expandComponent(
       hideSet,
       counter,
       callerLoop: siteLoop,
+      ownPath: expansionPath,
       printedErrors: bodyContentErrors,
     });
     // Published on the eval scope, which every task the invocation owns
@@ -1797,6 +1914,11 @@ function* expandComponent(
     // the caller's frame for the caller's own text (createProjectionHandle),
     // and anything the body does outside a projection finds none.
     yield* ActiveLoop.set(undefined);
+
+    // Published on the body task, so the component's own body and everything it
+    // owns read this expansion, and a nested one uncovers it again on the way
+    // out (§5.6).
+    yield* publishExpansion(expansion);
 
     // Installed on the invocation's own body task rather than a nested
     // scoped(): anything the body acquires must still be alive when teardown
@@ -1847,6 +1969,7 @@ function* expandComponent(
           counter,
           callerEvalEnv ?? undefined,
           claimProjection,
+          expansionPath,
         );
       });
     } catch (error) {
@@ -1888,6 +2011,7 @@ function* expandComponent(
       callerEvalEnv ?? undefined,
       claimProjection,
       bodyOwner,
+      expansionPath,
     );
   });
 
@@ -2012,6 +2136,8 @@ function* expandFunctionComponent(
   /** The invoking frame's meta and props, for content this component projects. */
   callerMeta: Record<string, unknown> = {},
   callerProps: Record<string, Json> = {},
+  path: string = "",
+  site: string = "",
 ): Operation<Segment[]> {
   if ("as" in expressions) {
     return [
@@ -2109,24 +2235,14 @@ function* expandFunctionComponent(
     ...(siteEnv?.values ?? {}),
   };
 
+  // This element's own place in the structural path, and the snapshot its body
+  // reads (§5.6). Derived before the component runs and unchanged by anything it
+  // does, so re-expanding the same element arrives at the same identifier.
+  const expansionPath = extendPath(path, elementFrame(name, site));
+  const expansion = snapshot(expansionPath, name, position);
+
   /** The invocation itself, and what a failure of it means. */
   const invoke = function* (): Operation<Segment[]> {
-    // Detached and frozen: what a component reads about its call site is a copy,
-    // so nothing it does can reach the element the parser built.
-    const metadata: ComponentInvocationMetadata = Object.freeze(
-      position === undefined
-        ? { name }
-        : {
-            name,
-            position: Object.freeze({
-              ...(position.path === undefined ? {} : { path: position.path }),
-              offset: position.offset,
-              line: position.line,
-              column: position.column,
-            }),
-          },
-    );
-
     // Call the function component inside its invocation, with content middleware
     // in scope so it can render its invocation content through `yield* content()`.
     try {
@@ -2147,10 +2263,12 @@ function* expandFunctionComponent(
           hideSet,
           counter,
           callerLoop: siteLoop,
+          ownPath: expansionPath,
         });
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
         yield* ActiveLoop.set(undefined);
+        yield* publishExpansion(expansion);
         yield* provideEvalScope(invocation.evalScope);
         yield* provideRetain(siteEvalScope);
         yield* Component.around(
@@ -2179,10 +2297,6 @@ function* expandFunctionComponent(
             // deno-lint-ignore require-yield
             *hasContent(_args, _next) {
               return !selfClosing;
-            },
-            // deno-lint-ignore require-yield
-            *invocation(_args, _next) {
-              return metadata;
             },
             // deno-lint-ignore require-yield
             *hasCapture([captureName], _next) {
@@ -2295,7 +2409,7 @@ function* expandFunctionComponent(
           return [
             yield* handleFailure({
               name,
-              ...(metadata.position === undefined ? {} : { position: metadata.position }),
+              ...(expansion.position === undefined ? {} : { position: expansion.position }),
               error: error.cause,
             }),
           ];
@@ -2313,7 +2427,7 @@ function* expandFunctionComponent(
       return [
         yield* handleFailure({
           name,
-          ...(metadata.position === undefined ? {} : { position: metadata.position }),
+          ...(expansion.position === undefined ? {} : { position: expansion.position }),
           error: asFailure(thrown),
         }),
       ];
@@ -3048,10 +3162,11 @@ export function* expandBody(
    * than output and passes none.
    */
   owner?: Segment[],
+  path: string = "",
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, meta, props, callerEnv, claim);
-    return yield* expandSegments(substituted, meta, props, hideSet, counter, owner);
+    return yield* expandSegments(substituted, meta, props, hideSet, counter, owner, path);
   }
 
   const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim);
@@ -3059,17 +3174,25 @@ export function* expandBody(
 
   for (const chunk of chunks) {
     if (chunk.declaration) {
-      yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
+      yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output, path);
     } else if (chunk.output) {
       yield* scoped(function* () {
         yield* ErrorMode.set("output");
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output);
+        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter, output, path);
       });
     } else {
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
         yield* ErrorMode.set("throw");
-        return yield* expandSegments(chunk.segments, meta, props, hideSet, counter);
+        return yield* expandSegments(
+          chunk.segments,
+          meta,
+          props,
+          hideSet,
+          counter,
+          undefined,
+          path,
+        );
       });
     }
   }
@@ -3091,10 +3214,11 @@ function runDocumentation(
   props: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  path: string,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
-    return yield* expandSegments(segments, meta, props, hideSet, counter);
+    return yield* expandSegments(segments, meta, props, hideSet, counter, undefined, path);
   });
 }
 
@@ -3141,6 +3265,7 @@ function* expandValueBody(
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn = passthroughClaim,
+  path: string = "",
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -3153,7 +3278,7 @@ function* expandValueBody(
       continue;
     }
     const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
-    yield* runDocumentation(docSegments, meta, props, hideSet, counter);
+    yield* runDocumentation(docSegments, meta, props, hideSet, counter, path);
   }
 
   if (!produced) {
