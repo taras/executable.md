@@ -622,10 +622,75 @@ describe("Tier XP — expansion identity", () => {
     expect(yield* taken(false)).toEqual(whenFalse);
   });
 
-  // `<Answer>` is consumed by `<Answers>` and now expands beneath its own
-  // element's frame, but no test here proves it: a hand-built region needs a
-  // parseable template per answer, and the fixture kept collapsing to one
-  // matcher. The boundary is repaired and unproven — see the PR description.
+  // `<Answer>` is consumed by `<Answers>` and never reaches expansion's
+  // dispatch, so without its own frame both answers' template children expand
+  // under one path. Hand-built and positionless throughout: scanned markup would
+  // carry source offsets that hide the missing frame.
+  it("XP23: template children under different <Answer> elements differ", function* () {
+    const seen: string[] = [];
+    const answer = (value: string, template: string): Segment => ({
+      type: "component",
+      name: "Answer",
+      props: { value },
+      expressions: {},
+      children: [element("Template")],
+      selfClosing: false,
+    });
+    const region = (): Segment => ({
+      type: "component",
+      name: "Answers",
+      props: {},
+      expressions: {},
+      children: [
+        answer('"approve"', "Approve?"),
+        answer('"reject"', "Reject?"),
+        { type: "text", content: "body" },
+      ],
+      selfClosing: false,
+    });
+
+    // Each template child records where it expanded and renders the text that
+    // makes its answer parse.
+    let rendered = 0;
+    const templates = ["Approve?", "Reject?"];
+    function* run(): Operation<string[]> {
+      const ids: string[] = [];
+      rendered = 0;
+      yield* scoped(function* () {
+        const env: EvalEnv = { values: {} };
+        yield* Component.around({ env: () => env }, { at: "min" });
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *importComponent() {
+              return {
+                kind: "function" as const,
+                name: "Template",
+                props: NO_PROPS,
+                *fn() {
+                  ids.push((yield* getExpansion()).id);
+                  const text = templates[rendered] ?? "Other?";
+                  rendered += 1;
+                  return text;
+                },
+              };
+            },
+          },
+          { at: "min" },
+        );
+        return yield* expandSegments([region()], {}, {}, new Set());
+      });
+      return ids;
+    }
+
+    const first = yield* run();
+
+    expect(first).toHaveLength(2);
+    expect(first[0]).not.toBe(first[1]);
+    expect(yield* run()).toEqual(first);
+    expect(seen).toHaveLength(0);
+  });
+
   it("XP24: positionless elements in different body chunks differ", function* () {
     // Two documentation segments: each becomes its own chunk, and each holds a
     // positionless element that is index 0 of that chunk.
