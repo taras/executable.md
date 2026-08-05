@@ -130,6 +130,40 @@ jobs:
           ./dist/xmd -e '# Hello' --raw > /dev/null
           test "$(ls -A)" = "$before"
 
+      # Secret detection is on by default and `--no-secret-detection` is the
+      # only way off, so both directions belong to the binary rather than only
+      # to the source runner. The credential is assembled here, so no
+      # usable-looking literal is committed.
+      - name: Smoke test the secret-detection opt-out
+        run: |
+          set -eu
+          canary="ghp_$(printf 'abcdefghijklmnopqrstuvwxyz0123456789')"
+          document="# Smoke
+
+          token $canary
+          "
+
+          # Default-on: the run fails, and the credential reaches no output.
+          if ./dist/xmd -e "$document" --raw > /tmp/on.out 2> /tmp/on.err; then
+            echo "::error::the compiled binary persisted a credential by default"
+            exit 1
+          fi
+          grep -q 'secret detection rejected content' /tmp/on.err
+          ! grep -q "$canary" /tmp/on.out
+
+          # Opted out: the run succeeds, renders the document, and says so once.
+          ./dist/xmd -e "$document" --raw --no-secret-detection \
+            > /tmp/off.out 2> /tmp/off.err
+          grep -q "$canary" /tmp/off.out
+          test "$(grep -cx 'WARNING: secret detection is disabled; credentials may be persisted.' /tmp/off.err)" = "1"
+
+          # The value form is refused rather than read as enabled.
+          if ./dist/xmd -e "$document" --raw --secret-detection=false 2> /tmp/bad.err; then
+            echo "::error::the compiled binary accepted --secret-detection=false"
+            exit 1
+          fi
+          grep -q 'does not take a value' /tmp/bad.err
+
       # The guide documents this command and its output; running it keeps the
       # value-root contract executable rather than described.
       - name: Smoke test a value root's JSON result

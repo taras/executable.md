@@ -75,6 +75,32 @@ import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval
 import type { EvalFlags } from "./eval-source.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
+const SECRET_DETECTION_OPTION = "--secret-detection";
+const NEGATED_SECRET_DETECTION = "--no-secret-detection";
+
+/** Written once per invocation when the host turned detection off. */
+const SECRET_DETECTION_WARNING =
+  "WARNING: secret detection is disabled; credentials may be persisted.";
+
+/**
+ * `--no-secret-detection` — the host's opt-out, on both commands.
+ *
+ * Declared as an ordinary boolean switch because that is what configliere
+ * negates: a `secretDetection` field makes `--no-secret-detection` resolve to
+ * `false` with no argv reading of our own. It takes no aliases — adding
+ * `--no-secret-detection` as one makes the parser read it as the positive
+ * switch, and the opt-out silently stops working.
+ *
+ * Help lists the positive spelling only, so the description carries the one a
+ * caller actually writes.
+ */
+const SECRET_DETECTION_FIELD = {
+  description:
+    "scan durable events for credentials before they persist; " +
+    `disable with ${NEGATED_SECRET_DETECTION}`,
+  ...field(z.boolean(), field.default(true)),
+};
+
 const runConfig = object({
   path: {
     description: "markdown document to execute",
@@ -130,6 +156,7 @@ const runConfig = object({
     description: "deny every agent permission request",
     ...field(z.boolean(), field.default(false)),
   },
+  secretDetection: SECRET_DETECTION_FIELD,
 });
 
 const testConfig = object({
@@ -159,6 +186,7 @@ const testConfig = object({
     description: "output raw markdown without normalization or terminal formatting",
     ...field(z.boolean(), field.default(false)),
   },
+  secretDetection: SECRET_DETECTION_FIELD,
 });
 
 const testAgentConfig = object({
@@ -239,6 +267,48 @@ function* createJournalFile(filePath: string): Operation<void> {
   }
 
   yield* until(handle.close());
+}
+
+/**
+ * Refuse `--secret-detection=<value>` and `--no-secret-detection=<value>`.
+ *
+ * Both spellings are switches, and configliere resolves an `=` form on either
+ * of them to the default — so `--secret-detection=false` reads as *enabled*,
+ * and `--no-secret-detection=true` does too. Silence is the wrong answer for a
+ * safety option: a caller who wrote one of these is telling us what they want
+ * detection to do, and would otherwise be told nothing while it did the
+ * opposite. There is one spelling that turns detection off, and this names it.
+ *
+ * Tokens after `--` belong to the document, not to xmd.
+ */
+function secretDetectionGrammarError(args: string[]): string | undefined {
+  for (const arg of args) {
+    if (arg === "--") {
+      return undefined;
+    }
+    if (
+      arg.startsWith(`${SECRET_DETECTION_OPTION}=`) ||
+      arg.startsWith(`${NEGATED_SECRET_DETECTION}=`)
+    ) {
+      return (
+        `${arg.split("=")[0]} does not take a value — secret detection is on by default, ` +
+        `and \`${NEGATED_SECRET_DETECTION}\` is what turns it off`
+      );
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Say once that this invocation will not be scanning.
+ *
+ * Written at the command boundary rather than per document, so testing a
+ * directory warns once for the run rather than once for every document in it.
+ */
+function announceSecretDetection(secretDetection: boolean): void {
+  if (!secretDetection) {
+    console.error(SECRET_DETECTION_WARNING);
+  }
 }
 
 const AGENT_ONLY_FLAGS = [
@@ -327,6 +397,8 @@ interface DocumentConfig {
   verbose: boolean;
   journal: string | undefined;
   raw: boolean;
+  /** Whether this document's durable events are scanned before they persist. */
+  secretDetection: boolean;
 }
 
 interface DocumentMode {
@@ -344,7 +416,7 @@ interface DocumentMode {
  * a value root's JSON line are the document's own output and stay.
  */
 function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
-  const { root, componentDir, verbose, journal, raw } = config;
+  const { root, componentDir, verbose, journal, raw, secretDetection } = config;
 
   // Every CLI invocation starts from an empty stream. --journal writes
   // current-run diagnostics only; existing traces are never loaded.
@@ -430,6 +502,7 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
     stream,
     props: mode.props,
     componentDirs: componentDir,
+    secretDetection,
   });
 
   // Consume the output stream with forEach.
@@ -547,6 +620,7 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
       yield* exit(1);
       return;
     }
+    announceSecretDetection(config.secretDetection);
     const result = yield* runScopedDocument({ ...config, root: { path } }, { testing: true });
     if (!result.ok) {
       reportFailure(result.error);
@@ -570,6 +644,10 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
     yield* exit(1);
     return;
   }
+
+  // Once for the run, not once per document: the option is the invocation's,
+  // and a directory of fifty documents would otherwise say so fifty times.
+  announceSecretDetection(config.secretDetection);
 
   const failures: string[] = [];
 
@@ -905,6 +983,13 @@ export function* runXmd(args: string[]): Operation<void> {
     return;
   }
 
+  const secretDetectionError = secretDetectionGrammarError(evalFlags.rest);
+  if (secretDetectionError) {
+    console.error(secretDetectionError);
+    yield* exit(1);
+    return;
+  }
+
   switch (command.name) {
     case "run": {
       const config = command.config;
@@ -925,6 +1010,7 @@ export function* runXmd(args: string[]): Operation<void> {
         yield* exit(1);
         break;
       }
+      announceSecretDetection(config.secretDetection);
       const result = yield* runScopedDocument(
         { ...config, root: propsPhase.root },
         {

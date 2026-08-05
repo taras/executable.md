@@ -5258,6 +5258,40 @@ about credentials; it runs whatever gate it is given. XMD's policy is one such
 gate, installed by default. See the durable-streams README for the decorator's
 contract.
 
+##### At the command line
+
+`xmd` is a host, so the same policy reaches every document it runs. Detection is
+on for `xmd run`, for the default form that omits `run`, for an inline `-e`
+document, and for `xmd test` against a file or a directory.
+
+```sh
+xmd run workflow.md
+xmd test workflows/adversarial-implementation
+```
+
+`--no-secret-detection` turns it off for the whole invocation:
+
+```sh
+xmd run workflow.md --no-secret-detection
+xmd test workflows/adversarial-implementation --no-secret-detection
+```
+
+The option is a switch, and it is the only spelling that disables detection.
+`--secret-detection=false` is refused rather than read: an option that decides
+whether credentials may be persisted should not be quietly interpreted, and
+that form would otherwise resolve to *enabled*.
+
+A disabled invocation writes one line to standard error before the first
+document runs:
+
+```
+WARNING: secret detection is disabled; credentials may be persisted.
+```
+
+Once per invocation, not once per document — testing a directory of fifty
+documents warns once. Requests that execute nothing, `--help` and `--version`,
+warn not at all.
+
 ##### Reading the policy
 
 Two operations report what the running execution is doing, for trusted runtime
