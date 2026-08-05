@@ -1,6 +1,7 @@
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
+import { when } from "@effectionx/converge";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation, Subscription } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -206,9 +207,15 @@ describe("useTesting composition", () => {
           yield* drain(yield* execution.output);
         });
       });
-      // Give the document time to start the test and spawn its effect,
-      // then leave the scope — halting everything mid-test.
-      yield* sleep(200);
+      // Converge on the document having run the eval block and spawned its
+      // effect, then leave the scope — halting everything mid-test. A fixed
+      // sleep races variable startup cost (#335).
+      yield* when(
+        function* () {
+          return Reflect.get(globalThis, "__useTestingHaltMarker") === true;
+        },
+        { timeout: 10_000 },
+      );
     });
 
     expect(Reflect.get(globalThis, "__useTestingHaltMarker")).toBe(false);
