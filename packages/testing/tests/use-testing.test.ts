@@ -1,6 +1,7 @@
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
+import { when } from "@effectionx/converge";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation, Subscription } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -206,17 +207,15 @@ describe("useTesting composition", () => {
           yield* drain(yield* execution.output);
         });
       });
-      // Wait until the document has run the eval block and spawned its
+      // Converge on the document having run the eval block and spawned its
       // effect, then leave the scope — halting everything mid-test. A fixed
-      // sleep races variable startup cost (#335); the bound only turns a
-      // document that never starts into an `undefined` assertion failure
-      // below instead of a hang.
-      for (let waited = 0; waited < 10_000; waited += 10) {
-        if (Reflect.get(globalThis, "__useTestingHaltMarker") === true) {
-          break;
-        }
-        yield* sleep(10);
-      }
+      // sleep races variable startup cost (#335).
+      yield* when(
+        function* () {
+          return Reflect.get(globalThis, "__useTestingHaltMarker") === true;
+        },
+        { timeout: 10_000 },
+      );
     });
 
     expect(Reflect.get(globalThis, "__useTestingHaltMarker")).toBe(false);
