@@ -12,7 +12,7 @@
 
 import { until } from "effection";
 import type { Operation } from "effection";
-import { lintSource } from "@secretlint/core";
+import { lintSource } from "./secretlint.ts";
 import { creator as recommended } from "@secretlint/secretlint-rule-preset-recommend";
 import { createFingerprinter, SecretScannerError, toSecretFinding } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";

@@ -37,7 +37,7 @@ import { createScannerWith, createSecretScanner } from "../src/secrets/scanner.t
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
 import { scanSecrets, secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
-import { profilerIsSilenced } from "../src/secrets/profiler.ts";
+import { secretLintProfiler } from "@secretlint/profiler";
 import type { SecretPolicy } from "../src/secrets/policy.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -618,50 +618,56 @@ describe("default-on secret detection", () => {
       expect(error.name).toBe("SecretPolicyUnavailableError");
     });
 
-    it("silences the profiler for the run and leaves it as it was found", function* () {
-      expect(profilerIsSilenced()).toBe(false);
-
-      const during = yield* runObserving(
-        CLEAN,
-        new InMemoryStream(),
-        undefined,
-        // deno-lint-ignore require-yield
-        function* () {
-          return profilerIsSilenced();
-        },
-      );
-
-      expect(during).toBe(true);
-      expect(profilerIsSilenced()).toBe(false);
-    });
-
-    it("hands the profiler back however overlapping runs interleave", function* () {
+    it("never changes the shared profiler while executions overlap", function* () {
+      // The profiler is stubbed once, where this package imports Secretlint, and
+      // never touched again. Executing must therefore leave `mark` identical by
+      // reference throughout: an execution that switched it per run would
+      // differ at one of these readings, and an unrelated Secretlint user in the
+      // process would see profiling come and go.
+      const before = secretLintProfiler.mark;
+      const during: unknown[] = [];
       const first = withResolvers<void>();
       const second = withResolvers<void>();
 
       yield* scoped(function* () {
-        // Two runs whose lifetimes cross rather than nest: the second starts
-        // while the first is live, and the first ends first. Only one of them
-        // holds the real `mark`, so the process ends as noisy as it started
-        // without the two of them sharing any bookkeeping.
+        // Lifetimes that cross rather than nest: the second run starts while the
+        // first is live, and the first ends first.
         yield* spawn(function* () {
           yield* runObserving(CLEAN, new InMemoryStream(), undefined, function* () {
+            during.push(secretLintProfiler.mark);
             first.resolve();
             yield* second.operation;
+            during.push(secretLintProfiler.mark);
           });
         });
         yield* first.operation;
 
         yield* spawn(function* () {
           yield* runObserving(CLEAN, new InMemoryStream(), undefined, function* () {
+            during.push(secretLintProfiler.mark);
             second.resolve();
             yield* sleep(50);
+            during.push(secretLintProfiler.mark);
           });
         });
         yield* sleep(120);
       });
 
-      expect(profilerIsSilenced()).toBe(false);
+      expect(during).toHaveLength(4);
+      for (const mark of during) {
+        expect(mark).toBe(before);
+      }
+      expect(secretLintProfiler.mark).toBe(before);
+    });
+
+    it("scans without emitting profiler marks", function* () {
+      const marksBefore = performance.getEntriesByType("mark").length;
+
+      yield* yield* execute({ ...inlineSource(CLEAN), stream: new InMemoryStream() });
+
+      // The stub is what keeps the profiler's unbounded entry array — and the
+      // linear scan it runs per mark — out of every append.
+      expect(performance.getEntriesByType("mark").length).toBe(marksBefore);
     });
 
     it("does not rescan a journal it replays", function* () {

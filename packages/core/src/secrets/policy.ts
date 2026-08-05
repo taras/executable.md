@@ -39,7 +39,6 @@ import { SecretDetectedError } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
 import { createSecretScanner } from "./scanner.ts";
 import type { SecretScanner } from "./scanner.ts";
-import { useSilentSecretProfiler } from "./profiler.ts";
 
 /**
  * What secret detection an execution is running under.
@@ -230,11 +229,6 @@ export function* useSecretDetection(
     yield* CurrentDetection.set(new DisabledDetection());
     return stream;
   }
-
-  // Held for the execution's lifetime rather than switched off for the process:
-  // what it quiets is a global, so it is restored when the last run using it
-  // ends. See profiler.ts for what the noise costs.
-  yield* useSilentSecretProfiler();
 
   const create = (yield* CurrentScannerFactory.get()) ?? createSecretScanner;
   const scanner = create();
