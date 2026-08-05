@@ -1261,6 +1261,15 @@ interface IfStructure {
   violations: ErrorSegment[];
   whenTrue: Segment[];
   whenFalse: Segment[];
+  /**
+   * The `<Else>` element, and where it sat among the `<If>`'s children.
+   *
+   * `<Else>` is consumed here and never reaches expansion's dispatch, so it
+   * would contribute no frame of its own — and the two arms of one `<If>` would
+   * expand under the same path (§5.6).
+   */
+  elseElement?: ComponentElement;
+  elseIndex?: number;
 }
 
 /**
@@ -1278,7 +1287,9 @@ function ifStructure(segment: ComponentElement): IfStructure {
   let whenFalse: Segment[] | undefined;
   let elseElement: ComponentElement | undefined;
 
-  for (const child of segment.children) {
+  let elseIndex: number | undefined;
+
+  for (const [index, child] of segment.children.entries()) {
     if (isElse(child)) {
       if (elseElement) {
         violations.push(elseError(child, "<If> accepts at most one <Else> branch."));
@@ -1286,6 +1297,7 @@ function ifStructure(segment: ComponentElement): IfStructure {
       }
       violations.push(...elseElementViolations(child));
       elseElement = child;
+      elseIndex = index;
       whenFalse = child.children;
       continue;
     }
@@ -1299,7 +1311,12 @@ function ifStructure(segment: ComponentElement): IfStructure {
   }
 
   violations.push(...misplacedElseViolations(segment.children));
-  return { violations, whenTrue, whenFalse: whenFalse ?? [] };
+  return {
+    violations,
+    whenTrue,
+    whenFalse: whenFalse ?? [],
+    ...(elseElement === undefined ? {} : { elseElement, elseIndex }),
+  };
 }
 
 const IF_PROPS = new Set(["condition"]);
@@ -1385,6 +1402,19 @@ function* expandIf(
     return;
   }
 
+  // The false arm belongs to `<Else>`, which is consumed above, so its frame is
+  // added here — otherwise both arms of one `<If>` expand under one path.
+  const branchPath =
+    condition || structure.elseElement === undefined
+      ? path
+      : extendPath(
+          path,
+          elementFrame(
+            structure.elseElement.name,
+            elementSite(structure.elseElement.position, structure.elseIndex ?? 0),
+          ),
+        );
+
   yield* expandSegments(
     condition ? structure.whenTrue : structure.whenFalse,
     parentMeta,
@@ -1392,7 +1422,7 @@ function* expandIf(
     hideSet,
     counter,
     owner,
-    path,
+    branchPath,
   );
 }
 

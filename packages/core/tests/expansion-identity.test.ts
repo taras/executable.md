@@ -493,6 +493,68 @@ describe("Tier XP — expansion identity", () => {
 
   // The root document seeds the path, and only `execute()` supplies that seed —
   // the cases above drive `expandSegments` directly and cannot see it.
+  // `<Else>` is consumed by `<If>` and never reaches expansion's dispatch, so it
+  // contributes no frame unless `<If>` adds it — and both arms of one `<If>`
+  // expand under one path.
+  it("XP22: the two arms of one <If> expand under different identities", function* () {
+    const probeElement = (): Segment => ({
+      type: "component",
+      name: "Probe",
+      props: {},
+      expressions: {},
+      children: [],
+      selfClosing: true,
+    });
+    const branch = (condition: boolean): Segment => ({
+      type: "component",
+      name: "If",
+      props: { condition },
+      expressions: {},
+      children: [
+        probeElement(),
+        {
+          type: "component",
+          name: "Else",
+          props: {},
+          expressions: {},
+          children: [probeElement()],
+          selfClosing: false,
+        },
+      ],
+      selfClosing: false,
+    });
+
+    function* taken(condition: boolean): Operation<string[]> {
+      const seen: string[] = [];
+      yield* scoped(function* () {
+        const env: EvalEnv = { values: {} };
+        yield* Component.around({ env: () => env }, { at: "min" });
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *importComponent() {
+              return probe(seen);
+            },
+          },
+          { at: "min" },
+        );
+        return yield* expandSegments([branch(condition)], {}, {}, new Set());
+      });
+      return seen;
+    }
+
+    const whenTrue = yield* taken(true);
+    const whenFalse = yield* taken(false);
+
+    expect(whenTrue).toHaveLength(1);
+    expect(whenFalse).toHaveLength(1);
+    expect(whenTrue[0]).not.toBe(whenFalse[0]);
+
+    // Structural, not incidental: each arm reproduces its own identifier.
+    expect(yield* taken(true)).toEqual(whenTrue);
+    expect(yield* taken(false)).toEqual(whenFalse);
+  });
+
   it("XP19: the same element structure under two root documents differs", function* () {
     const [here, there] = yield* useDocuments(["a.md", "b.md"], "<Probe />\n");
     const first = yield* executed(here!);
