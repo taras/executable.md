@@ -88,7 +88,7 @@ exercised on every step. **[test]**
 | --- | --- | --- |
 | worker shell | **works** | `echo hello` → `status: "completed"`, exit 0, stdout captured **[test]** |
 | isolated JavaScript Worker | **works** | module executes, returns a value, and its `/workspace` writes land in the durable Workspace **[test]** |
-| Cloudflare Container | see below | |
+| Cloudflare Container | **works** (local Docker daemon required) | `echo` in the container → completed, exit 0, stdout captured; bidirectional `/workspace` sync; frontier restored into a brand-new container after restart **[measured]** |
 
 Both worker backends require, beyond the base slice: a `workerLoader`
 binding in the workerd config (`config-backends.capnp`), the
@@ -104,11 +104,38 @@ I/O at module top level — the module must export a default function) and
 confines paths to `/workspace`, which must exist in the Workspace
 filesystem first.
 
-Container backend: evidence pending in this revision — workerd's schema
-supports DO-attached containers only through
+The container backend works through workerd's
 `containerEngine = (localDocker = ...)` ("local development and testing
-purposes"), which requires a running Docker daemon and a `computerd`-PID-1
-image. Result recorded below when the probe completes.
+purposes" per the schema) with a running Docker daemon. workerd itself
+creates two containers per Durable Object: the workload (computerd as
+PID 1) and an egress-interceptor sidecar. The exact artifacts that ran are
+committed under [container/](container/) (Dockerfile, workerd config,
+Worker wiring); they are not part of the default test suite because they
+require Docker. Requirements discovered:
+
+- `socketPath` must be a kj address string
+  (`unix:/abs/path/docker.sock`); a bare path is DNS-resolved and fails.
+- `containerEgressInterceptorImage` is mandatory and must already exist
+  locally; Docker Hub's `cloudflare/proxy-everything` has no `latest` tag —
+  pull `:main`.
+- The `computerd` binary's release artifact is the GHCR scratch image
+  `ghcr.io/cloudflare/computer-computerd-linux-x64:0.1.0-alpha.1`
+  (x64 only — runs under Rosetta on Apple Silicon); the guessed npm
+  packages do not exist.
+- The Worker must export `WorkspaceProxy` (the egress interceptor calls
+  `ctx.exports.WorkspaceProxy`), hold a `CloudflareContainerBackend` on a
+  `withWorkspaceContainer` base, and forward its DO `fetch` to
+  `backend.handleFetch` — computerd dials back into the DO over a
+  WebSocket the library never routes on its own.
+- Exec selects this backend by **id** (default `container-shell`), not by
+  its type string.
+- computerd fell back to userspace-shim mode (no `/dev/fuse` in the
+  container as configured); all operations worked regardless.
+- Timings **[measured]**: image build 35 s (74.8 MB); cold container exec
+  2.07 s; sub-second warm; restart-into-fresh-container 1.58 s with the
+  full frontier restored from DO SQLite (`pushed: 3`).
+- **Leak**: workerd leaked both containers on SIGTERM in every observed
+  run — a host must reap `docker rm -f` its containers itself.
 
 ## 6. What is absent or different vs. deployed Cloudflare?
 
