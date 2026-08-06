@@ -21,14 +21,16 @@ export default function CopyCommand({ lines }: { lines: string[] }) {
           </div>
         ))}
       </code>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label="Copy to clipboard"
-        class="copy-btn"
-      >
-        {copied ? "copied ✓" : "copy"}
-      </button>
+      <div class="command-bar">
+        <button
+          type="button"
+          onClick={copy}
+          aria-label="Copy to clipboard"
+          class="copy-btn"
+        >
+          {copied ? "copied ✓" : "copy"}
+        </button>
+      </div>
     </div>
   );
 }
