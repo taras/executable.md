@@ -7,15 +7,18 @@ const THEME_SCRIPT =
 
 const FAVICON = "data:image/svg+xml," +
   encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2f9e63"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">.md</text></svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#0f914b"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="15" font-weight="700" fill="#fffdf5" text-anchor="middle">.md</text></svg>`,
   );
 
+const DEFAULT_TITLE =
+  "executable.md — turn documentation into repeatable workflows";
+
 const DEFAULT_DESC =
-  "executable.md treats plain markdown documents as executable workflows: expand components, run code blocks, and evaluate in-process operations — in a file that still renders as normal markdown anywhere.";
+  "executable.md keeps procedures readable as Markdown, then gives them reusable components, typed inputs, and executable steps so the same process can run consistently.";
 
 // Per-route metadata so each page has a distinct title and its own canonical URL.
 const META: Record<string, { title: string; desc: string }> = {
-  "/": { title: "executable.md — markdown that runs", desc: DEFAULT_DESC },
+  "/": { title: DEFAULT_TITLE, desc: DEFAULT_DESC },
   "/docs": {
     title: "Getting started · executable.md docs",
     desc:
@@ -50,10 +53,7 @@ const META: Record<string, { title: string; desc: string }> = {
 
 export default define.page(function App({ Component, url }) {
   const path = url.pathname.replace(/\/+$/, "") || "/";
-  const meta = META[path] ?? {
-    title: "executable.md — markdown that runs",
-    desc: DEFAULT_DESC,
-  };
+  const meta = META[path] ?? { title: DEFAULT_TITLE, desc: DEFAULT_DESC };
   const canonical = SITE + (path === "/" ? "/" : path);
 
   return (
@@ -69,12 +69,12 @@ export default define.page(function App({ Component, url }) {
         <link rel="canonical" href={canonical} />
         <meta
           name="theme-color"
-          content="#ffffff"
+          content="#fffdf5"
           media="(prefers-color-scheme: light)"
         />
         <meta
           name="theme-color"
-          content="#0d1117"
+          content="#0f0f0d"
           media="(prefers-color-scheme: dark)"
         />
 

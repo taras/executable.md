@@ -19,7 +19,7 @@ const REJECT = `const stream = guardDurableStream(backend, function* (event) {
 export default define.page(function Journal() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">Journal gates</h1>
+      <h1>Journal gates</h1>
       <p class="muted">
         A gate is a check that runs before a durable event reaches its
         persistence backend. Wrap the stream you already pass to{" "}

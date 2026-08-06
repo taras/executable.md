@@ -27,7 +27,7 @@ const ASK = `<AskPermission>
 export default define.page(function Agents() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">Coding agents</h1>
+      <h1>Coding agents</h1>
 
       <h2>Why put a coding agent in a document?</h2>
       <p>
@@ -78,7 +78,7 @@ export default define.page(function Agents() {
         only when this document needs to override that choice.
       </p>
       <p>Run the workflow with an agent your ACPX setup can run:</p>
-      <CodeBlock>{"xmd run review.md --default-agent codex"}</CodeBlock>
+      <CodeBlock command>{"xmd run review.md --default-agent codex"}</CodeBlock>
       <p>
         The rendered document contains the review checklist followed by the next
         actions. If you omit{" "}

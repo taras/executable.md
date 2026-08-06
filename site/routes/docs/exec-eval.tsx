@@ -1,5 +1,6 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
+import { NextCard } from "../../components/NextCard.tsx";
 
 const CHAIN = "```bash silent timeout=30s exec\ngit diff --stat\n```";
 
@@ -15,7 +16,7 @@ const baseUrl = \`http://127.0.0.1:\${port}\`;
 export default define.page(function ExecEval() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">Exec &amp; Eval</h1>
+      <h1>Exec &amp; Eval</h1>
       <p class="muted">
         The first word in a fence info string is the language. The remaining
         words form a middleware chain read left-to-right. Standard renderers
@@ -89,9 +90,7 @@ export default define.page(function ExecEval() {
         components run local model servers.
       </p>
 
-      <p style="margin-top:2rem;">
-        Next: <a href="/docs/providers">LLM providers →</a>
-      </p>
+      <NextCard href="/docs/providers" label="LLM providers" />
     </>
   );
 });

@@ -2,31 +2,45 @@ import { Wordmark } from "./Wordmark.tsx";
 
 const GITHUB = "https://github.com/taras/executable.md";
 
+const LINK =
+  "color:var(--fg);border-bottom:var(--rule) solid var(--ink);padding-bottom:1px;";
+
 export function Footer() {
   return (
-    <footer class="band" style="margin-top:4rem;">
+    <footer style="margin-top:4rem;border-top:var(--rule) solid var(--ink);background:var(--bg);">
       <div
         class="container"
-        style="padding-block:2.5rem;display:flex;flex-wrap:wrap;gap:1.5rem;justify-content:space-between;align-items:center;"
+        style="padding-block:2.25rem;display:flex;flex-wrap:wrap;gap:1.5rem;justify-content:space-between;align-items:center;"
       >
-        <div>
-          <Wordmark size="1rem" />
-          <p class="muted" style="font-size:0.85rem;margin-top:0.4rem;">
-            Markdown that runs — executable workflows.
+        <div style="display:flex;flex-direction:column;gap:0.375rem;">
+          <Wordmark size="0.9375rem" />
+          <p class="muted" style="font-size:0.8125rem;margin:0;">
+            Turn documentation into repeatable workflows.
           </p>
         </div>
-        <div style="display:flex;gap:1.4rem;font-size:0.9rem;flex-wrap:wrap;">
-          <a href={GITHUB} rel="noopener">GitHub</a>
+        <div style="display:flex;gap:1.375rem;font-size:0.8125rem;font-weight:700;flex-wrap:wrap;">
+          <a href={GITHUB} style={LINK} rel="noopener">GitHub</a>
           <a
             href={`${GITHUB}/blob/main/specs/executable-mdx-spec.md`}
+            style={LINK}
             rel="noopener"
           >
             Spec
           </a>
-          <a href="https://frontside.com/effection" rel="noopener">Effection</a>
-          <a href={`${GITHUB}/blob/main/LICENSE`} rel="noopener">MIT License</a>
+          <a href="https://frontside.com/effection" style={LINK} rel="noopener">
+            Effection
+          </a>
+          <a href={`${GITHUB}/blob/main/LICENSE`} style={LINK} rel="noopener">
+            MIT License
+          </a>
         </div>
       </div>
+      <style
+        dangerouslySetInnerHTML={{
+          __html:
+            "footer a:hover{color:var(--accent-strong);border-bottom-color:var(--accent-strong);}",
+        }}
+      />
     </footer>
   );
 }

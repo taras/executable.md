@@ -98,7 +98,7 @@ const LOOP_BINDING = `<Capture as="log">attempts:</Capture>
 export default define.page(function ControlFlow() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">Control flow</h1>
+      <h1>Control flow</h1>
       <p class="muted">
         <code>&lt;If&gt;</code> chooses one branch of a document, and{" "}
         <code>&lt;Loop&gt;</code>{" "}
