@@ -16,5 +16,17 @@ main(function* () {
     ],
     cwd: here,
   }).expect();
-  console.log("built dist/proof");
+  yield* exec(Deno.execPath(), {
+    arguments: [
+      "compile",
+      "--allow-all",
+      "--frozen",
+      "--node-modules-dir=manual",
+      "--output",
+      "dist/proof-shim",
+      "host/shim-main.ts",
+    ],
+    cwd: here,
+  }).expect();
+  console.log("built dist/proof and dist/proof-shim");
 });

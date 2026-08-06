@@ -1,0 +1,21 @@
+{
+  "name": "@xmd-spike/computerd-shim",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./dist/shim/shim.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@types/node": "^24"
+  },
+  "peerDependencies": {
+    "@platformatic/vfs": "^0.4.0"
+  }
+}

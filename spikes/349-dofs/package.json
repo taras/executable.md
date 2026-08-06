@@ -6,6 +6,8 @@
     "@cloudflare/dofs": "file:./vendor/dofs",
     "effection": "4.1.0",
     "@effectionx/process": "0.8.1",
-    "@effectionx/converge": "0.1.4"
+    "@effectionx/converge": "0.1.4",
+    "@xmd-spike/computerd-shim": "file:./vendor/computerd-shim",
+    "@platformatic/vfs": "0.4.0"
   }
 }

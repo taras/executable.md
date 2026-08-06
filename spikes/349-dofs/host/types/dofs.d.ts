@@ -34,6 +34,16 @@ export declare function initializeSchema(
 
 export declare const SCHEMA_VERSION: number;
 
+export interface SQLiteWorkspaceProviderOptions {
+  now?: () => number;
+  watchIntervalMs?: number;
+}
+
+export declare class SQLiteWorkspaceProvider {
+  readonly db: Database;
+  constructor(db: Database, options?: SQLiteWorkspaceProviderOptions);
+}
+
 export interface WorkspaceDirentResult {
   name: string;
 }
