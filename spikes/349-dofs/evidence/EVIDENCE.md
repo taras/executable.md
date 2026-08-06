@@ -97,10 +97,74 @@ durability, symlink/metadata fidelity, and large-file costs disqualify it
 as a supported production path. On darwin-arm64 it is currently the *only*
 path (see §4/§5 platform record).
 
-## 3.-6. FUSE bridge, packaging, durability
+## 3.-6. Real FUSE — verdict: works, but not in-process under Deno today
 
-Pending in this revision — recorded when the corresponding slices land.
-Blueprint facts already established from source
+Measured in a Linux/amd64 container with `/dev/fuse` (the same environment
+upstream's own FUSE tests use); full ledger
+`probes/slice3-5-fuse-linux.md`, key artifacts (container recipe, minimal
+Deno repro, mount harness) in `fuse-linux/`. **[probe]**
+
+**The gating fact.** Deno 2.9.1/2.9.4 loads the fuse-native N-API addon
+cleanly (both `import` through node-gyp-build and raw `process.dlopen`),
+but any actual `fuse.mount()` aborts the whole Deno process uncatchably:
+`bad result in uv polyfill: 1` (SIGABRT, exit 134) — Deno's
+`uv_default_loop` polyfill returns null and fuse-native's mount path
+exercises it. Reproduced under `deno run` and `deno compile`, under both
+Rosetta and qemu; Node 22 mounts the identical script in 27 ms. A minimal
+upstream-issue-ready repro is committed (`fuse-linux/g2-min.mjs`). Until
+that Deno gap closes, real FUSE requires a **Node sidecar process**.
+
+**The stack itself is sound.** Under a Node sidecar, the full chain —
+file-backed SQLite → dofs → spliced provider → `@platformatic/vfs` →
+upstream `driver.ts` compiled verbatim — mounts in 118-133 ms cold, and a
+second process (Deno) reads **and writes** the same WAL database with
+changes visible through the mount immediately: the
+Deno-main + Node-FUSE-sidecar topology over one shared database is proven
+live, not hypothesized. All exercised ops pass: create, overwrite,
+positional write (`dd seek`), truncate, rename, symlink, delete,
+traversal, concurrent readers. Two semantic caveats: API-side overwrites
+of kernel-cached files can read stale through the mount for ≤1 s
+(`auto_cache` + `attr_timeout=1`), and `writeFileRangesSync` is confirmed
+unreachable (probed by the driver, never forwarded by upstream's wiring —
+dead code by omission).
+
+**Durability (slice 5 matrix).** The write-commit boundary is *release*,
+observed strictly:
+
+| Scenario | Result |
+| --- | --- |
+| write + close, then read from a separate process | committed |
+| write + `fsync`, no close, SIGKILL | **lost — the inode never reaches the database before release** |
+| write + close, SIGKILL immediately after | **lost** (RELEASE is async; +500 ms → committed) |
+| SIGTERM / SIGKILL of the mount host | `auto_unmount` clears the mount; no ENOTCONN hang; WAL recovers on next open |
+| second process opens the live database | reads and writes concurrently (WAL); visible through the mount |
+
+`close()` is not a durability barrier and `fsync` is a durability no-op:
+a host needs release-observed barriers (or explicit provider-level flush)
+before treating a file as persisted.
+
+**The forbidden-spawn hazard, demonstrated.** Spawning with `cwd` inside
+the mount from the process serving FUSE deadlocked the mount on the first
+try — parent blocked in `pipe_read`, forked child in
+`request_wait_answer`, readers unkillable in D state — and SIGKILL of the
+host does **not** recover it (the forked child inherits the `/dev/fuse`
+fd); recovery required `fusermount -z` plus a fusectl connection abort.
+Upstream's `cd`-prefix technique works and is mandatory.
+
+**Packaging (slice 4).** `deno compile` can carry and load the addon both
+ways (static import of the embedded npm graph, and `--include` →
+materialize → `process.dlopen`), 142 MB binary — the packaging story is
+proven even though the in-process mount then hits the same uv-polyfill
+abort. Platform matrix, tested rather than inferred: linux-x64 works (via
+sidecar); darwin-arm64 is a dead end at this pin (no prebuild; a source
+build loads but SIGSEGVs on mount — no arm64 slice in the bundled
+osxfuse-era dylib; macFUSE absent and would need kernel approval);
+darwin-x64 has a prebuild but was not tested on real hardware; linux-arm64
+has no addon prebuild; Windows has no fuse-native support at all. One
+tooling landmine recorded: Docker's Rosetta runner cannot execute
+deno-compiled amd64 binaries (ld.so assert) — qemu-user was required.
+
+Blueprint facts established from source and confirmed by the probes
 (cloudflare/computer@v0.1.1):
 
 - The FUSE adapter is `makeFUSEOps(vfs, mountPoint)` — one 1092-line file
@@ -125,9 +189,5 @@ Blueprint facts already established from source
 
 ## 8. Comparison with #347
 
-Recorded in `COMPARISON.md` when slices 3-7 land. Already firm from slices
-1-2: 110 MB vs 191 MB artifacts; 0.08 s vs 0.27 s warm op cycles; no
-materialization step vs a 109 MB binary cache; no process supervision at
-all for the filesystem-only path vs workerd child management; schema
-ownership identical (same DOFS schema, same versions) — which is also the
-future migration path claim to examine.
+Recorded in [COMPARISON.md](COMPARISON.md), including the
+select/reject/limit recommendation for #346.
