@@ -6,11 +6,11 @@ const GITHUB = "https://github.com/taras/executable.md";
 export default define.page(function Reference() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">Reference</h1>
+      <h1>Reference</h1>
       <p class="muted">CLI usage and pointers to the full specification.</p>
 
       <h2>CLI</h2>
-      <CodeBlock>
+      <CodeBlock command>
         {"xmd run <document.md> [options]\nxmd <document.md> [options]   # run is the default command\nxmd -e '<markdown>' [options]  # an inline document, no file needed"}
       </CodeBlock>
       <ul>

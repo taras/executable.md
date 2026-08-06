@@ -1,5 +1,6 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
+import { NextCard } from "../../components/NextCard.tsx";
 
 const COMPONENT = `---
 emoji: Hello
@@ -248,7 +249,7 @@ Review passed: {verdict.passed}
 export default define.page(function Components() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">Components</h1>
+      <h1>Components</h1>
       <p class="muted">
         A component is a markdown file with frontmatter and declared props,
         invoked with a JSX-style tag. Documents stay valid, readable markdown
@@ -304,7 +305,7 @@ export default define.page(function Components() {
         prints only its validated value as JSON; body output moves to stderr
         under <code>--verbose</code>.
       </p>
-      <CodeBlock>{VALUE_ROOT}</CodeBlock>
+      <CodeBlock command>{VALUE_ROOT}</CodeBlock>
 
       <h2>TypeScript components</h2>
       <p>
@@ -899,9 +900,7 @@ export default define.page(function Components() {
         </li>
       </ul>
 
-      <p style="margin-top:2rem;">
-        Next: <a href="/docs/exec-eval">Exec &amp; Eval →</a>
-      </p>
+      <NextCard href="/docs/exec-eval" label="Exec & Eval" />
     </>
   );
 });

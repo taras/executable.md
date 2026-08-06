@@ -28,7 +28,7 @@ export default function ThemeToggle() {
       onClick={toggle}
       aria-label="Toggle color theme"
       title="Toggle theme"
-      style="background:none;border:1px solid var(--border);border-radius:0.5rem;width:2rem;height:2rem;cursor:pointer;color:var(--fg);display:inline-flex;align-items:center;justify-content:center;font-size:0.95rem;"
+      class="icon-btn"
     >
       {dark === null ? "◐" : dark ? "☀" : "☾"}
     </button>

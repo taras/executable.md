@@ -7,7 +7,7 @@ const THEME_SCRIPT =
 
 const FAVICON = "data:image/svg+xml," +
   encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2f9e63"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">.md</text></svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#0f914b"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="15" font-weight="700" fill="#fffdf5" text-anchor="middle">.md</text></svg>`,
   );
 
 const DEFAULT_DESC =
@@ -69,12 +69,12 @@ export default define.page(function App({ Component, url }) {
         <link rel="canonical" href={canonical} />
         <meta
           name="theme-color"
-          content="#ffffff"
+          content="#fffdf5"
           media="(prefers-color-scheme: light)"
         />
         <meta
           name="theme-color"
-          content="#0d1117"
+          content="#0f0f0d"
           media="(prefers-color-scheme: dark)"
         />
 

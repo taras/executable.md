@@ -249,14 +249,14 @@ export default define.page(function Home({ url }) {
             <p class="muted" style="font-size:0.9rem;margin-bottom:0.75rem;">
               Standalone binary, no runtime required.
             </p>
-            <CodeBlock>{installCmd}</CodeBlock>
+            <CodeBlock command>{installCmd}</CodeBlock>
           </div>
           <div class="card">
             <h3 style="font-weight:700;margin-bottom:0.5rem;">Deno users</h3>
             <p class="muted" style="font-size:0.9rem;margin-bottom:0.75rem;">
               Run from source (a JSR package is coming soon).
             </p>
-            <CodeBlock>
+            <CodeBlock command>
               {"git clone https://github.com/taras/executable.md\ncd executable.md && deno task xmd run doc.md"}
             </CodeBlock>
           </div>
@@ -268,7 +268,7 @@ export default define.page(function Home({ url }) {
               Download for your platform from{" "}
               <a href={`${GITHUB}/releases`} rel="noopener">GitHub Releases</a>.
             </p>
-            <CodeBlock>{"xmd run path/to/doc.md"}</CodeBlock>
+            <CodeBlock command>{"xmd run path/to/doc.md"}</CodeBlock>
           </div>
         </div>
       </section>
