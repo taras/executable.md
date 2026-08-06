@@ -1453,6 +1453,7 @@ run but are absent from the diagnostic trace.
 | `src/components/select.ts` | `selectComponent()`, `DEFAULT_COMPONENT_DIRS` — the resolver execution and inspection share (§5.3) |
 | `src/components/registry.ts` | `CORE_REGISTRY` — the components core supplies, as non-reserved defaults (§5.3) |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
+| `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/errors.ts` | `ErrorMode`, `settle()`, `DocumentationError`, `ContentError` — the error-mode decision (§6.9) and the function-content failure boundary (§5.1.2) |
@@ -2524,15 +2525,10 @@ interface, and each operation is also exported directly:
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
-| `invocation()` | Where this function component was invoked — its name, and the call site's position when the source has one | throws a missing-provider error |
 
-`invocation()` answers with a detached, frozen snapshot: the component's name,
-and a `position` carrying `path`, `offset`, `line` and `column`. `path` is absent
-for markdown scanned at runtime, which belongs to no file, and `position` itself
-is absent for an element that carries none. It is available only while the
-component runs; a nested invocation shadows it and the enclosing one is restored.
-Nothing else about the invocation is reachable through it — not the element, its
-props, its expressions, its `as`, or its content.
+What an element can learn about its own expansion is not a Component Api
+operation, because there is no legitimate reason to intercept it: durable
+identities are derived from it. See §5.6.
 
 **There is no operation for claiming a name.** A component name means what §5.3
 says it means — a structural construct, a reserved registration, a repository
@@ -2587,6 +2583,88 @@ returning without calling it.
   calls from `Operation` code yield the operations directly.
 
 ---
+
+### 5.6 Expansion identity
+
+An **expansion** is one logical evaluation of an authored executable element.
+Core describes the one being evaluated:
+
+```ts
+interface Expansion {
+  readonly id: string;
+  readonly name: string;
+  readonly position?: Readonly<SourcePosition>;
+}
+
+function* getExpansion(): Operation<Expansion>;
+```
+
+`getExpansion()` answers with a detached, frozen snapshot, and answers with the
+same object throughout one live expansion. `name` is the authored tag name,
+independent of which repository, registered or built-in component resolved it.
+`position` is the opening tag's source position, carrying `path`, `offset`,
+`line` and `column`; `path` is absent for markdown scanned at runtime, which
+belongs to no file, and `position` itself is absent for an element that carries
+none. A nested expansion covers the enclosing one, and leaving it uncovers that
+one again. Nothing else about the expansion is reachable — not the element, its
+props, its bindings, its projected content, the definition resolution selected,
+or any live scope.
+
+Calling it where nothing has published an expansion throws.
+
+It is delivered as a context value under a stable name. An Effection context is
+identified by its name, so a descriptor built independently — as a separately
+loaded copy of core builds one, when a repository `.ts` component imports it
+from disk while the compiled binary carries its own — reads the same expansion.
+The same property means a descendant may bind that name, and its own
+descendants read what it bound, exactly as with any context value.
+
+It is therefore not an authority boundary: security enforcement and durable
+identity never trust replaceable context state (architecture.md, *State across
+loaded copies*). What a document can rebind, it can rebind.
+
+**The identifier.** `id` is derived from the root document and the structural
+path that reached the element. Each step contributes a frame — an authored
+element and where it sits in its own file, a `<Loop>` iteration, an `<Each>`
+item, and a projection — and the path is carried as the digest so far, so
+extending it costs one hash. Every element that expands descendants contributes
+its frame exactly once, so two elements at the same local index under different
+parents cannot arrive at the same path. The identifier is opaque and supports
+equality only.
+
+It uses no process-global counter, no clock, no randomness and no scheduling
+order. Replay, retry attempts and restoration of the same loop iteration
+therefore arrive at the identifier already recorded, while different authored
+elements, loop iterations, projections, component expansions and root documents
+each receive their own.
+
+An authored element is placed by its source path and offset, which is what makes
+the derivation independent of how much ran before it — and what carries the root
+document's identity, since every element in a root's body reports that
+document's path. The root contributes no frame of its own; one would add nothing
+an assertion could observe. An element carrying no
+position at all — one built rather than scanned — falls back to its index in the
+list being expanded.
+
+A projection is identified by the invocation that performed it, so the same
+authored content projected through two different components is two expansions.
+What that content is made of still comes from where the caller wrote it: every
+element inside carries its own source position. An authored `<Content />` is
+placed by where *it* was written; a programmatic projection — `content(slot)`,
+`renderChildren()`, `render()`, `useContent()` — has no source of its own, so
+repeated calls are told apart by the order the component made them in. That
+ordinal is taken when the projection operation is interpreted and before it
+suspends, so it follows the component's own program order rather than the order
+projections finish in, and an operation that is constructed and never yielded
+takes none.
+
+Supplied text reports the stable root identity `<eval>` (§8.1), so two inline
+runs of the same text derive the same identifiers. That is what `<eval>` means
+everywhere else, and workflow-wide identity is a run identifier together with an
+expansion identifier, never the expansion identifier alone.
+
+`Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
+document execution receives expansion identity with no extension installed.
 
 ## 6. Expansion
 
@@ -6396,18 +6474,42 @@ visible warning blocks, gather into a separate error report).
 | OM17 | Chunks, not the close value | A streamed prefix arrives before the failing region's output, and both reach the stream |
 | OM18–OM19 | A printed error is data | A child's printed error does not fail a parent's documentation; an uncaptured failure in the same position still propagates |
 
-### Tier IM — Invocation metadata
+### Tier IM — Expansion metadata
 
 | # | Test | Verify |
 |---|------|--------|
 | IM1 | Call site | The name, and the path, offset, line and column it was written at |
 | IM2 | Runtime-scanned markdown | A position with no path, so a location is still `line:column` |
 | IM2b | No position at all | An element carrying none reports none |
-| IM3 | Nesting | A nested invocation shadows, and the enclosing value is restored |
+| IM3 | Nesting | A nested expansion covers, and the enclosing value is uncovered again |
 | IM4 | Two invocations | Each reports its own site |
-| IM5/IM6 | Outside an invocation | Asking before or after one is a misuse error |
+| IM5/IM6 | Outside an expansion | Asking before or after one is a misuse error |
 | IM7 | Detached | The snapshot and its position are frozen, and reading one changes nothing |
-| IM8 | Shape | Exactly `name` and `position`; the position exactly `path`, `offset`, `line`, `column` |
+| IM8 | Shape | Exactly `id`, `name` and `position`; the position exactly `path`, `offset`, `line`, `column` |
+
+### Tier XP — Expansion identity
+
+Each row names the derivation it kills.
+
+| # | Test | Verify |
+|---|------|--------|
+| XP1 | Two elements | Different offsets, different identifiers — not keyed by name |
+| XP18 | Nested, positionless | Two elements at the same index under different structural parents differ, and repeat reproducibly |
+| XP19–XP21 | Through `execute()` | Two root documents differ; one root reproduces its identifiers; a truncated replay derives the ones recorded |
+| XP2 | Twice in one process | The same source reproduces its identifiers — no clock, no randomness, no per-process seed |
+| XP3 | An unrelated branch | One source and two runtime values: what ran before an element does not move it — a counter would |
+| XP4/XP5 | `<Loop>` and `<Each>` | Iterations differ, and re-expansion reproduces the same ordered pair |
+| XP6 | Two call sites | One component's body gets one identifier per invocation |
+| XP7 | No position | Built elements are told apart by their index |
+| XP8 | Opaque | Neither the name nor the path is recoverable from the identifier |
+| XP9 | Authored name | The tag as written, not the name of the definition that resolved it |
+| XP10 | One object | Two calls in one expansion answer with the same frozen snapshot, keyed `id`, `name`, `position` |
+| XP11 | The boundary | Asking where nothing has published an expansion throws |
+| XP12 | Portability | A descriptor of the same name built independently reads the engine-published expansion |
+| XP13/XP14 | Repeated projections | Two `<Content />` elements, and one slot projected twice, each give two identifiers |
+| XP15 | Whose projection | The same content through two components differs; two probes inside one component differ by their own positions |
+| XP16 | Concurrent projections | Reversing which projection completes first does not move either identifier |
+| XP17 | Lazy | A projection operation constructed and never interpreted consumes no ordinal |
 
 ### Tier AF — Agent components as function components
 
@@ -6448,6 +6550,37 @@ visible warning blocks, gather into a separate error report).
 | CR31 | Repository replay | The entry holds path and content, and a replay never probes the filesystem |
 | CR32 | Registration replay | A reserved registration records its origin and replays |
 | CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
+
+### Tier GT — The Git capability
+
+Defined in [Workflow runs](./workflow-spec.md) §7.
+
+| # | Test | Verify |
+|---|------|--------|
+| GT1 | The command | `git rev-parse --verify --end-of-options <revision>` in the contextual working directory |
+| GT2 | A non-zero exit | Fails, reporting what Git said |
+| GT3 | A clean exit naming nothing | Fails rather than pinning a run to an empty object id |
+| GT4 | Replacement | A nested provider reaches `revParse()` rather than being shadowed by an outer handler |
+
+### Tier WR — Workflow runs
+
+Defined in [Workflow runs](./workflow-spec.md).
+
+| # | Test | Verify |
+|---|------|--------|
+| WR1 | Lifetime | Unreadable before the execution, readable inside it, unreadable after — while the installing scope is still alive |
+| WR2 | One value | Every read in one execution answers with the same frozen object |
+| WR3 | Isolation | Concurrent executions each read their own run |
+| WR4 | Completed journal | The run is restored and Git is never consulted; the replayed output's middleware reads it |
+| WR5 | A different base | Refused, naming both bases, before the recorded result reaches the caller |
+| WR6 | A moving base | A branch that moved cannot change the recorded pinned commit |
+| WR7 | Git fails | No run recorded, and the root document never expands |
+| WR8 | A later failure | A document that fails after the run was recorded does not erase it |
+| WR9 | No workflow | An execution without `useWorkflow()` invokes no process at all |
+| WR10 | No workflow, inside | `getWorkflowRun()` throws inside an execution that installed none |
+| WR11 | A malformed record | Refused, and the refusal never quotes what the journal held |
+| WR12 | A slow base | Resolving one run's base does not stall a sibling execution |
+| WR13/WR14 | Seeded journals | A completed and a truncated journal written by hand restore without any live run having happened |
 
 ### Tier SL — Own-scope context updates
 

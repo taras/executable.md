@@ -25,7 +25,6 @@ export type {
   ReturnsSchema,
   ComponentDefinition,
   ComponentFailure,
-  ComponentInvocationMetadata,
   ComponentOrigin,
   PartialContent,
   ComponentRegistry,
@@ -61,7 +60,6 @@ export {
   persistent,
   content,
   retain,
-  invocation,
   tryContent,
   hasCapture,
   capture,
@@ -97,6 +95,8 @@ export type { NameKind, SchemaVisitor } from "./src/schema-walk.ts";
 
 export { hasContent, useContent } from "./src/content-context.ts";
 export { ContentError } from "./src/errors.ts";
+export { getExpansion } from "./src/expansion.ts";
+export type { Expansion } from "./src/expansion.ts";
 export { InvocationTeardownError, withInvocation } from "./src/invocation.ts";
 export type { Invocation } from "./src/invocation.ts";
 export { Sample } from "./src/sample-api.ts";

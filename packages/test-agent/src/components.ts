@@ -29,7 +29,7 @@ import {
   Agent,
   Component,
   installPromptFailurePolicy,
-  invocation,
+  getExpansion,
   raise,
   registerComponents,
   tryContent,
@@ -354,7 +354,7 @@ export function* installTestAgentComponents(): Operation<void> {
       return reported.message;
     }
 
-    const declaredIn = (yield* invocation()).position?.path;
+    const declaredIn = (yield* getExpansion()).position?.path;
     const baseDir = declaredIn ? dirname(declaredIn) : ".";
     const srcPath = isAbsolute(src) ? src : resolve(baseDir, src);
     const source = yield* readTextFile(srcPath);

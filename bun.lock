@@ -40,6 +40,7 @@
         "@executablemd/test-agent": "workspace:*",
         "@executablemd/test-support": "workspace:*",
         "@executablemd/testing": "workspace:*",
+        "@executablemd/workflow": "workspace:*",
         "@types/node": "^22.0.0",
         "expect": "^30.0.0",
         "oxfmt": "^0.41.0",
@@ -204,6 +205,17 @@
         "react-dom": "19.2.0",
       },
     },
+    "packages/workflow": {
+      "name": "@executablemd/workflow",
+      "version": "0.7.0",
+      "dependencies": {
+        "@effectionx/context-api": "0.6.0",
+        "@executablemd/core": "workspace:*",
+        "@executablemd/durable-streams": "workspace:*",
+        "@executablemd/runtime": "workspace:*",
+        "effection": "4.1.0",
+      },
+    },
   },
   "packages": {
     "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.3.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-i3h/efaeuMUFAO1HSfo97QZQnnvMd7wWBYtBsdL6UMZg3a78sk3Ffya5Xu7C7tYsXomXoDXJBAzQF2PcFKAhIQ=="],
@@ -319,6 +331,8 @@
     "@executablemd/testing": ["@executablemd/testing@workspace:packages/testing"],
 
     "@executablemd/web": ["@executablemd/web@workspace:packages/web"],
+
+    "@executablemd/workflow": ["@executablemd/workflow@workspace:packages/workflow"],
 
     "@floating-ui/core": ["@floating-ui/core@1.8.0", "", { "dependencies": { "@floating-ui/utils": "^0.2.12" } }, "sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ=="],
 

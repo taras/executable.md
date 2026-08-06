@@ -39,14 +39,16 @@
 
 import type { Operation } from "effection";
 
-import { content, invocation } from "../component-api.ts";
+import { content } from "../component-api.ts";
+import { getExpansion } from "../expansion.ts";
 import {
   persistElicitation,
   questionFingerprint,
   refuseChangedQuestion,
 } from "../elicit-journal.ts";
 import { prepareElicitation, runPreparedElicitation } from "../elicit.ts";
-import type { ComponentInvocationMetadata, Json } from "../types.ts";
+import type { Json } from "../types.ts";
+import type { Expansion } from "../expansion.ts";
 
 export const props = {
   type: "object",
@@ -76,7 +78,7 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
   const message = yield* content();
 
   const identity = {
-    location: formatLocation(yield* invocation()),
+    location: formatLocation(yield* getExpansion()),
     fingerprint: questionFingerprint({ schema: prepared.schema, message }),
   };
 
@@ -88,7 +90,7 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
 }
 
 /** `path:line:column`, `line:column`, or `unknown` — the durable identity. */
-function formatLocation(metadata: ComponentInvocationMetadata): string {
+function formatLocation(metadata: Expansion): string {
   const position = metadata.position;
   if (!position) {
     return "unknown";

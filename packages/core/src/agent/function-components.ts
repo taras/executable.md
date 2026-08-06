@@ -17,9 +17,11 @@
 import { Config } from "@executablemd/runtime";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { content, hasContent, invocation } from "../component-api.ts";
+import { content, hasContent } from "../component-api.ts";
+import { getExpansion } from "../expansion.ts";
 import { parseDuration } from "../modifiers/timeout.ts";
-import type { ComponentInvocationMetadata, Json, PropsSchema } from "../types.ts";
+import type { Json, PropsSchema } from "../types.ts";
+import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
 import type { PromptOptions, Session } from "./agent-api.ts";
 import { AgentProviders } from "./provider-api.ts";
@@ -76,7 +78,7 @@ function asString(value: Json | undefined): string | undefined {
 }
 
 /** `path:line:column`, `line:column`, or `unknown` — the durable prompt key. */
-function formatLocation(metadata: ComponentInvocationMetadata): string {
+function formatLocation(metadata: Expansion): string {
   const position = metadata.position;
   if (!position) {
     return "unknown";
@@ -86,7 +88,7 @@ function formatLocation(metadata: ComponentInvocationMetadata): string {
 }
 
 /**
- * Everything this component installs belongs to its own invocation, so the
+ * Everything this component installs belongs to its own getExpansion, so the
  * engine dismantles content before the provider's resources. A failure from the
  * factory and a failure from the cleanup it installed are the same kind of
  * problem, and both stop the document — which is what an ordinary failure does.
@@ -200,7 +202,7 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const throwOnError =
     props.throwOnError === true || (yield* AgentInternal.operations.promptFailurePolicy());
 
-  const location = formatLocation(yield* invocation());
+  const location = formatLocation(yield* getExpansion());
   const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
   const sequence = yield* AgentInternal.operations.nextPromptSequence();
 

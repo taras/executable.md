@@ -59,6 +59,7 @@
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/test-support": "workspace:*",
     "@executablemd/testing": "workspace:*",
+    "@executablemd/workflow": "workspace:*",
     "@types/node": "^22.0.0",
     "expect": "^30.0.0",
     "oxfmt": "^0.41.0",

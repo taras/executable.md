@@ -1,26 +1,24 @@
 /**
- * Tier IM — invocation metadata (spec §5.5).
+ * Tier IM — expansion metadata (spec §5.6).
  *
- * `invocation()` tells a function component where it was written and nothing
+ * `getExpansion()` tells an executable element where it was written and nothing
  * else. These drive `expandSegments` directly, so what they assert is the
- * engine's own answer rather than a component's report of it.
+ * engine's own answer rather than a component's report of it. What the
+ * identifier is derived from is Tier XP's subject; this tier is the name, the
+ * position, and the boundary.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { Component, invocation } from "../src/component-api.ts";
+import { Component } from "../src/component-api.ts";
+import { getExpansion } from "../src/expansion.ts";
+import type { Expansion } from "../src/expansion.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
-import type {
-  ComponentInvocationMetadata,
-  EvalEnv,
-  FunctionComponentDefinition,
-  Json,
-  Segment,
-} from "../src/types.ts";
+import type { EvalEnv, FunctionComponentDefinition, Json, Segment } from "../src/types.ts";
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
@@ -59,12 +57,12 @@ function run(
   });
 }
 
-describe("Tier IM — where a component was invoked", () => {
+describe("Tier IM — what an expanding element knows about itself", () => {
   it("IM1: reports the name and the call site's path, offset, line and column", function* () {
-    let seen: ComponentInvocationMetadata | undefined;
+    let seen: Expansion | undefined;
     const definitions = {
       Probe: component("Probe", function* () {
-        seen = yield* invocation();
+        seen = yield* getExpansion();
         return "";
       }),
     };
@@ -82,10 +80,10 @@ describe("Tier IM — where a component was invoked", () => {
   // the string it was scanned from — which is why a location can still be
   // written `line:column`.
   it("IM2: markdown scanned without a source reports a position with no path", function* () {
-    let seen: ComponentInvocationMetadata | undefined;
+    let seen: Expansion | undefined;
     const definitions = {
       Probe: component("Probe", function* () {
-        seen = yield* invocation();
+        seen = yield* getExpansion();
         return "";
       }),
     };
@@ -98,9 +96,9 @@ describe("Tier IM — where a component was invoked", () => {
   });
 
   it("IM2b: an element carrying no position at all reports none", function* () {
-    let seen: ComponentInvocationMetadata | undefined;
+    let seen: Expansion | undefined;
     const definition = component("Probe", function* () {
-      seen = yield* invocation();
+      seen = yield* getExpansion();
       return "";
     });
 
@@ -129,22 +127,22 @@ describe("Tier IM — where a component was invoked", () => {
 
     expect(seen?.name).toBe("Probe");
     expect(seen?.position).toBeUndefined();
-    expect(Object.keys(seen ?? {})).toEqual(["name"]);
+    expect([...Object.keys(seen ?? {})].sort()).toEqual(["id", "name"]);
   });
 
   it("IM3: a nested invocation shadows, and the enclosing one is restored", function* () {
     const seen: string[] = [];
     const definitions = {
       Outer: component("Outer", function* () {
-        const before = yield* invocation();
+        const before = yield* getExpansion();
         seen.push(`${before.name}:${before.position?.line}`);
         const rendered = yield* Component.operations.content();
-        const after = yield* invocation();
+        const after = yield* getExpansion();
         seen.push(`${after.name}:${after.position?.line}`);
         return rendered;
       }),
       Inner: component("Inner", function* () {
-        const inner = yield* invocation();
+        const inner = yield* getExpansion();
         seen.push(`${inner.name}:${inner.position?.line}`);
         return "";
       }),
@@ -161,7 +159,7 @@ describe("Tier IM — where a component was invoked", () => {
     const lines: (number | undefined)[] = [];
     const definitions = {
       Probe: component("Probe", function* () {
-        lines.push((yield* invocation()).position?.line);
+        lines.push((yield* getExpansion()).position?.line);
         return "";
       }),
     };
@@ -175,19 +173,19 @@ describe("Tier IM — where a component was invoked", () => {
     let message = "";
     yield* scoped(function* () {
       try {
-        yield* invocation();
+        yield* getExpansion();
       } catch (error) {
         message = error instanceof Error ? error.message : String(error);
       }
     });
 
-    expect(message).toContain("not inside a function component invocation");
+    expect(message).toContain("getExpansion()");
   });
 
   it("IM6: it is gone again once the invocation returns", function* () {
     const definitions = {
       Probe: component("Probe", function* () {
-        yield* invocation();
+        yield* getExpansion();
         return "";
       }),
     };
@@ -196,18 +194,18 @@ describe("Tier IM — where a component was invoked", () => {
 
     let message = "";
     try {
-      yield* invocation();
+      yield* getExpansion();
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
-    expect(message).toContain("not inside a function component invocation");
+    expect(message).toContain("getExpansion()");
   });
 
   it("IM7: the snapshot is frozen, and detached from the element", function* () {
-    let seen: ComponentInvocationMetadata | undefined;
+    let seen: Expansion | undefined;
     const definitions = {
       Probe: component("Probe", function* () {
-        seen = yield* invocation();
+        seen = yield* getExpansion();
         return "";
       }),
     };
@@ -220,12 +218,12 @@ describe("Tier IM — where a component was invoked", () => {
 
     // Expanding the same source again reports the same values: nothing the
     // first invocation was handed could have changed what the parser holds.
-    let second: ComponentInvocationMetadata | undefined;
+    let second: Expansion | undefined;
     yield* run(
       source,
       {
         Probe: component("Probe", function* () {
-          second = yield* invocation();
+          second = yield* getExpansion();
           return "";
         }),
       },
@@ -234,12 +232,12 @@ describe("Tier IM — where a component was invoked", () => {
     expect(second?.position?.line).toBe(seen?.position?.line);
   });
 
-  it("IM8: it carries the name and position, and nothing else", function* () {
+  it("IM8: it carries the identifier, name and position, and nothing else", function* () {
     let keys: string[] = [];
     let positionKeys: string[] = [];
     const definitions = {
       Probe: component("Probe", function* () {
-        const metadata = yield* invocation();
+        const metadata = yield* getExpansion();
         keys = Object.keys(metadata);
         positionKeys = Object.keys(metadata.position ?? {});
         return "";
@@ -248,14 +246,14 @@ describe("Tier IM — where a component was invoked", () => {
 
     yield* run("<Probe />\n", definitions, "doc.md");
 
-    expect([...keys].sort()).toEqual(["name", "position"]);
+    expect([...keys].sort()).toEqual(["id", "name", "position"]);
     expect([...positionKeys].sort()).toEqual(["column", "line", "offset", "path"]);
   });
 
   it("IM9: the rendered document is unaffected by asking", function* () {
     const definitions = {
       Probe: component("Probe", function* () {
-        yield* invocation();
+        yield* getExpansion();
         return "probed";
       }),
     };
