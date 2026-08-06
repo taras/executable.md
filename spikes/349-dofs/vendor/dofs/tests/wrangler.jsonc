@@ -1,0 +1,20 @@
+{
+  // Test-only worker. Not deployed.
+  "name": "dofs-tests",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-05-26",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TestStorage",
+        "class_name": "TestStorage"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TestStorage"]
+    }
+  ]
+}

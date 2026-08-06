@@ -1,0 +1,11 @@
+{
+  "name": "spike-349-dofs",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/dofs": "file:./vendor/dofs",
+    "effection": "4.1.0",
+    "@effectionx/process": "0.8.1",
+    "@effectionx/converge": "0.1.4"
+  }
+}

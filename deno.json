@@ -1,6 +1,6 @@
 {
   "workspace": ["packages/*", "site"],
-  "exclude": ["scripts/tests/fixtures"],
+  "exclude": ["scripts/tests/fixtures", "spikes"],
   "nodeModulesDir": "auto",
   "lock": {
     "frozen": true
@@ -57,6 +57,9 @@
     "review:local": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.jsonl",
     "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.ci.jsonl",
-    "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl"
+    "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl",
+    "spike:349": "deno task --cwd spikes/349-dofs all",
+    "spike:349:build": "deno task --cwd spikes/349-dofs build",
+    "spike:349:test": "deno task --cwd spikes/349-dofs test"
   }
 }

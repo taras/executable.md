@@ -1,0 +1,33 @@
+{
+  "name": "@cloudflare/dofs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./fs/rename": {
+      "types": "./dist/fs/rename.d.ts",
+      "default": "./dist/fs/rename.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "vitest run",
+    "test:workers": "vitest run --config vitest.config.workers.ts",
+    "bench": "vitest run --config vitest.config.bench.ts"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@cloudflare/workers-types": "^4.20260616.1",
+    "@types/node": "^24"
+  }
+}
