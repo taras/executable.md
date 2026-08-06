@@ -21,6 +21,9 @@
   --warn: #9a4a1e;
   --term-bg: #0a0a0a;
   --term-fg: #fffdf5;
+  --term-accent: #2fbe76;
+  --term-rule: #3a3a35;
+  --term-warn: #e0a878;
   --tok-str: #a8460f;
   --tok-comment: #8a8880;
   --tok-mod: #9a4a1e;
@@ -44,6 +47,9 @@
   --warn: #e0925f;
   --term-bg: #fffdf5;
   --term-fg: #0a0a0a;
+  --term-accent: #0a6b37;
+  --term-rule: #c9c5b4;
+  --term-warn: #9a4a1e;
   --tok-str: #e0a878;
   --tok-comment: #8a8880;
   --tok-mod: #e0925f;
@@ -66,6 +72,9 @@
     --warn: #e0925f;
     --term-bg: #fffdf5;
     --term-fg: #0a0a0a;
+    --term-accent: #0a6b37;
+    --term-rule: #c9c5b4;
+    --term-warn: #9a4a1e;
     --tok-str: #e0a878;
     --tok-comment: #8a8880;
     --tok-mod: #e0925f;
@@ -207,11 +216,171 @@ a:hover {
   transform: translate(var(--shadow-offset), var(--shadow-offset));
 }
 
+/* a large uppercase call to action */
+.btn-lg {
+  padding: 0.8125rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+/* the accent fill needs an ink border so the hard shadow reads as its own edge */
+.btn-primary.btn-lg {
+  border-color: var(--ink);
+}
+
+/* a text link carrying the system's rule instead of an underline */
+.link-rule {
+  font-size: 0.8125rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg);
+  border-bottom: var(--rule) solid var(--ink);
+  padding-bottom: 2px;
+}
+.link-rule:hover {
+  color: var(--accent-strong);
+  border-bottom-color: var(--accent-strong);
+}
+
 /* cards */
 .card {
   background: var(--bg);
   border: var(--rule) solid var(--ink);
   padding: 1.1rem 1.15rem;
+}
+
+/* ------------------------------------------------------------------ *
+ * page sections
+ * ------------------------------------------------------------------ */
+.section {
+  border-top: var(--rule) solid var(--ink);
+  padding-block: 3.5rem 4.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+.section > h2,
+.section-head h2 {
+  margin: 0;
+  font-size: clamp(1.7rem, 3.4vw, 2.6rem);
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+/* heading and its standfirst sit on one baseline until the column splits */
+.section-head {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 2.5rem;
+  align-items: end;
+}
+.section-head p {
+  margin: 0;
+  max-width: 58ch;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--fg-body);
+  text-wrap: pretty;
+}
+
+.grid {
+  display: grid;
+  gap: 1.25rem;
+  align-items: stretch;
+}
+.grid-2 {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.grid-3 {
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+}
+/* 230px, not the mock's 250px: four stages fit across the 1080px container */
+.grid-4 {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+/* an eyebrow led by a solid accent square */
+.eyebrow-mark {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.eyebrow-mark::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+}
+
+/* a bordered mono tag */
+.chip {
+  border: var(--rule) solid var(--ink);
+  padding: 4px 9px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+/* a titled prose panel — the code panel's sibling */
+.panel {
+  border: var(--rule) solid var(--ink);
+  background: var(--bg);
+  min-width: 0;
+}
+.panel-head {
+  border-bottom: var(--rule) solid var(--ink);
+  padding: 0.625rem 0.875rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.panel-body {
+  padding: 1rem 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8125rem;
+}
+
+/* dashed callouts mark what is not shipped yet */
+.dashed {
+  border: var(--rule) dashed var(--ink);
+}
+.dashed-warn {
+  border: var(--rule) dashed var(--warn);
+}
+
+/* square-marker list outside .doc prose */
+.marks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5625rem;
+}
+.marks > li {
+  position: relative;
+  padding-left: 1.125rem;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--fg-body);
+  text-wrap: pretty;
+}
+.marks > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  background: var(--ink);
 }
 
 /* ------------------------------------------------------------------ *
@@ -272,30 +441,35 @@ code {
   color: var(--fg-muted);
 }
 
-/* command block (copyable) */
+/* copyable command card: the slab, then a rule, then the copy action */
 .command {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
   background: var(--term-bg);
   color: var(--term-fg);
   border: var(--rule) solid var(--ink);
-  padding: 0.7rem 0.9rem;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
+  min-width: 0;
 }
 .command code {
+  display: block;
+  padding: 0.9375rem 1rem 0.8125rem;
   color: inherit;
-  white-space: pre;
-  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-/* the slab inverts per theme, so tint the prompt from the slab's own ink */
+/* the gap lives here, not in the markup — deno fmt strips a trailing space */
 .command .prompt {
-  color: var(--term-fg);
-  opacity: 0.55;
+  color: var(--term-accent);
+  font-weight: 700;
   user-select: none;
-  margin-right: 0.5em;
+  padding-right: 0.6ch;
+}
+.command-bar {
+  border-top: var(--rule) solid var(--term-rule);
+  padding: 0.5rem 1rem;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .muted {

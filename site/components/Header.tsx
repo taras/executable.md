@@ -20,8 +20,9 @@ export function Header({ active }: { active?: "docs" } = {}) {
           <Wordmark size="1rem" />
         </a>
         <nav style="display:flex;align-items:center;gap:1.125rem;font-size:0.8125rem;">
-          <a href="/#features" class="nav-hide" style={LINK}>Features</a>
+          <a href="/#how" class="nav-hide" style={LINK}>How it works</a>
           <a href="/#example" class="nav-hide" style={LINK}>Example</a>
+          <a href="/#economics" class="nav-hide" style={LINK}>Economics</a>
           <a href="/docs" style={active === "docs" ? LINK_ACTIVE : LINK}>
             Docs
           </a>
@@ -32,7 +33,7 @@ export function Header({ active }: { active?: "docs" } = {}) {
       <style
         dangerouslySetInnerHTML={{
           __html:
-            "@media (max-width:640px){.nav-hide{display:none;}} header nav a:hover{color:var(--accent-strong);}",
+            "@media (max-width:900px){.nav-hide{display:none;}} header nav a:hover{color:var(--accent-strong);}",
         }}
       />
     </header>
