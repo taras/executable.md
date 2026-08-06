@@ -60,7 +60,44 @@ code-reuse mechanism is demonstrated": vendoring is the only mechanism that
 works today, and its obligations are notice retention plus a
 three-edit-manifest upgrade procedure.
 
-## 3.-7. FUSE bridge, packaging, durability, shim
+## 7. Userspace shim — verdict: development-only fallback
+
+Separate from the real-FUSE verdict (§3-6), per the spike's terms. Upstream's
+`shim.ts` runs under Deno **byte-identical, zero runtime failures** — it is
+vendored as a subset package (`vendor/computerd-shim/`, provenance +
+sha1), and a compiled `proof-shim` executes a native subprocess that reads
+an API-written file through the mount and writes back into SQLite, and
+rematerializes an emptied mount directory from the persisted frontier.
+**[test]** Full ledger: `probes/slice6-shim.md`.
+
+Measured (medians over 10 rounds, default 100 ms provider watch / 250 ms
+shim poll) **[probe]**:
+
+| Direction | Median |
+| --- | --- |
+| VFS API write → visible on disk | 80.8 ms |
+| external disk write → visible via API | 108.3 ms (worst 205.7 ms) |
+| external disk write → committed in SQLite | 109.4 ms |
+| rematerialize 100 files / 10 MB | 78.9 ms |
+| 50 MB file, 1-byte change, reconcile | ~600 ms each way (full re-read) |
+
+Demonstrated losses: conflicts within a poll window resolve **VFS-wins**
+(3/3 both orders); symlinks degrade to content copies on both sides
+(dangling links dropped); chmod is invisible; after SIGKILL the WAL
+recovers and convergence completes in ~1 s, but up to one poll window
+(250 ms) of external disk writes is silently clobbered by the VFS copy.
+Two integration facts a host must honor: the mount path is embedded in the
+workspace namespace (the same database mounted at a different absolute path
+materializes nothing), and `@platformatic/vfs`'s `create()` silently falls
+back to a MemoryProvider unless the prototype splice is verified
+(`host/vfs-wiring.ts` guards this explicitly).
+
+Verdict: viable as a **development-only fallback** — sub-poll-window
+durability, symlink/metadata fidelity, and large-file costs disqualify it
+as a supported production path. On darwin-arm64 it is currently the *only*
+path (see §4/§5 platform record).
+
+## 3.-6. FUSE bridge, packaging, durability
 
 Pending in this revision — recorded when the corresponding slices land.
 Blueprint facts already established from source
@@ -77,8 +114,14 @@ Blueprint facts already established from source
 - The FUSE write-commit boundary is **release-only**: dofs's write buffer
   commits when the open count reaches zero; `flush` and `fsync` are
   durability no-ops in the production configuration.
-- The userspace shim is documented dev-only: 250 ms reconcile poll, VFS wins
-  ties, no symlinks/xattrs/chmod/watch fan-out, full re-read of large files.
+- The darwin-arm64 platform record **[probe: probes/slice6-shim.md]**:
+  `fuse-native@2.2.6` ships no darwin-arm64 prebuild; a manual source build
+  produces an arm64 addon that loads under Deno and Node, but its bundled
+  `libosxfuse.dylib` carries no arm64 slice (kext-era osxfuse 3.x) and an
+  actual mount SIGSEGVs under both runtimes; macFUSE is not installed on
+  this host (`/Library/Filesystems/macfuse.fs` absent). Real FUSE on Apple
+  Silicon is a dead end at this pinned version even before the
+  macFUSE-install/kernel-approval prerequisite.
 
 ## 8. Comparison with #347
 
