@@ -21,3 +21,6 @@ npm/
 # deno task build:web output — built into the package at release time,
 # never a repository source file (specs/release-process-spec.md)
 packages/web/generated/
+
+# spike #347 fetched workerd binary — pinned by digest in spikes/347-workerd/manifest.ts
+spikes/347-workerd/vendor/

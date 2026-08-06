@@ -1,0 +1,22 @@
+{
+  "exclude": ["vendor", "dist", "worker"],
+  "nodeModulesDir": "auto",
+  "lock": {
+    "frozen": true
+  },
+  "tasks": {
+    "all": "deno task fetch && deno task build && deno task test",
+    "fetch": "deno run --allow-read --allow-write --allow-net=registry.npmjs.org --allow-run=tar --allow-env fetch-workerd.ts",
+    "build": "deno run --allow-all build.ts",
+    "test": "deno test --allow-all tests/",
+    "check": "deno check ."
+  },
+  "imports": {
+    "effection": "npm:effection@4.1.0",
+    "@effectionx/process": "npm:@effectionx/process@0.8.1",
+    "@effectionx/converge": "npm:@effectionx/converge@0.1.4",
+    "@cloudflare/computer": "npm:@cloudflare/computer@0.1.1",
+    "@platformatic/vfs": "npm:@platformatic/vfs@0.4.0",
+    "esbuild": "npm:esbuild@0.28.1"
+  }
+}
