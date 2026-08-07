@@ -74,10 +74,12 @@
     "packages/workflow/**/*.ts",
     "scripts/runtime-tests.ts",
     "scripts/runtime-test-exclusions.ts",
+    "scripts/lib/changed-paths.ts",
     "scripts/lib/github.ts",
     "scripts/lib/main-health.ts",
     "scripts/lib/runtime-tests.ts",
     "scripts/lib/test-files.ts",
+    "scripts/lib/tracked.ts",
     "scripts/lib/verify.ts",
     "scripts/lib/web-client-module.ts",
     "scripts/lib/workspace.ts"

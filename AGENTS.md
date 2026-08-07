@@ -48,13 +48,67 @@ representative release target and proves the host tree and lock survived it,
 then runs every build phase offline — including a release compile for
 `x86_64-unknown-linux-gnu`, the same shape `release.yml` uses — fingerprinting
 the content and modes of `node_modules`, the cache's dependency roots, and
-`deno.lock` after each one. It verifies the commit, so commit before running it.
-CI runs the same harness in its `composability` job.
+`deno.lock` after each one. It then changes `site/` in that clone on purpose,
+takes the changed tree as its baseline, and runs the battery once with the site
+pair applying — all ten commands together, selected by a real change rather
+than by a fixture.
+
+Builds and checks are held to different claims there. A build is cache-pure:
+nothing it does may move `node_modules`, the cache's dependency content, or the
+lockfile, and the comparison around a build walks all three. Verification is
+not, and does not pretend to be — the battery resolves modules no build walks,
+so it adds to the Deno cache, which the runtime owns. Its comparison therefore
+reads only what this repository owns, `node_modules` and `deno.lock`, and never
+looks at the cache at all: not filtered out afterwards, never asked for. What
+verification may never move is tracked files, `node_modules`, `deno.lock`, and
+another invocation's temporary state.
+
+It verifies the commit, so commit before running it. CI runs the same harness in
+its `composability` job — **on `main` only**. The battery it runs spends most of
+its time on the three runtime suites, which `test-deno`, `test-node`, and
+`test-bun` already run in parallel on their own runners, so putting it on every
+pull request bought a 50% longer critical path and no new information. Run it
+locally before you push anything that could move dependency state; on `main` it
+is the post-merge proof, and a failure there opens a `ci-main-red` issue.
 
 ## Verification
 
-After making any changes to source files (`src/`) or test files (`tests/`),
-always run all four checks before committing:
+One command runs everything that applies, concurrently:
+
+```bash
+deno task verify          # add --no-site to skip the site pair
+```
+
+**The whole applicable battery is designed to run at once, after one setup.**
+That is a repository rule, not a convenience, and it has two halves:
+
+**Builds are cache-pure.** `deno task build:web`, `deno task build`, and the
+release compile must leave `node_modules`, the Deno cache's dependency content,
+and `deno.lock` byte-identical.
+
+**Verification may populate the runtime cache** — the battery resolves module
+graphs no build walks, and that cache belongs to the runtime. What no check may
+do is modify tracked files, `node_modules`, `deno.lock`, or another
+invocation's temporary state. Temporary state a check needs belongs to that
+invocation alone.
+
+A helper that reaches for repository-owned mutable state breaks every other
+check running beside it, which is how a `deno task build` came to break the Node
+typecheck (#279).
+
+`verify` reports every command in a fixed order however they finish, prints the
+first failure's output complete and names the rest, and fails if the battery
+moved any tracked file's content, mode, symlink target, or presence — including
+when a command failed, because that is when a dirtied tree would otherwise go
+unnoticed. **Capture a failure's first output before re-running anything**: the
+report is what you paste, and a second run can hide the first.
+
+The site pair applies when `site/` changed, judged from the branch and the
+worktree, both sides of a rename included.
+
+Running the checks individually is still fine, and is what `verify` does for
+you. After making any changes to source files (`src/`) or test files (`tests/`),
+always run all four before committing:
 
 1. **Lint + Format**: `deno task lint` (runs `oxlint` + `oxfmt --check`) — must
    produce 0 errors. Run `deno task fmt` to auto-fix formatting.
@@ -71,7 +125,13 @@ here:
 
 - `check`, `test`, and `check:jsr` follow the `packages/*` workspace glob in the
   root `deno.json`. Its `exclude` list holds the paths that must stay
-  unchecked — currently the deliberately-malformed `scripts/tests/fixtures`.
+  unchecked: the deliberately-malformed `scripts/tests/fixtures`; `.xmd-eval`,
+  where a running document writes the `.ts` files its eval blocks compile to;
+  and `**/npm`, the dnt build's output, which a test rewrites while the battery
+  runs. All three are generated and belong to whichever command is producing
+  them — type-checking one mid-write fails on a partial file, and fails the
+  whole workspace check for a file nobody committed. The same output is skipped
+  by `lint` and `fmt`, for the same reason.
 - `test:node` and `test:bun` derive the same corpus through
   `scripts/lib/test-files.ts`, which walks `tests/` beneath each workspace
   member plus `scripts/tests/` — that boundary, and nothing else. A new
@@ -89,10 +149,14 @@ here:
 - `lint` and `fmt` are defined once, as `package.json` scripts that `deno task`
   also exposes, and cover `packages` and `scripts`. Oxfmt skips Markdown
   (`.oxfmtrc.json`): these documents are executable, and reformatting a fenced
-  block changes what they do. The fixtures stay out of both, on the lint task's
-  command line rather than in `.oxlintrc.json` — the rule tests in
-  `scripts/tests/` lint those same files through the repository config and need
-  it to keep reporting on them.
+  block changes what they do. `packages/*/npm` — the dnt build's output, which
+  a test writes while the battery runs — is skipped by both: it is generated,
+  gitignored, and carries a `node_modules` of its own that oxlint's `import`
+  plugin resolves through, so linting it reports on half-written files nobody
+  committed. The fixtures and that output stay out of `.oxlintrc.json`, on the
+  lint task's command line instead — the rule tests in `scripts/tests/` lint
+  through the repository config, and an `ignorePatterns` entry there stops them
+  seeing their own fixtures.
 
 ## MUST READ
 

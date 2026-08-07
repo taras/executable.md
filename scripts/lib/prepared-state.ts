@@ -85,6 +85,12 @@ export interface PreparedState {
   lock: string;
 }
 
+/** The repository-owned half, with no cache in it to begin with. */
+export interface HostState {
+  tree: Fingerprint;
+  lock: string;
+}
+
 const FINGERPRINTED: ("tree" | "cache")[] = ["tree", "cache"];
 
 /** How many entries the walk covers before giving the scheduler a chance to halt it. */
@@ -221,6 +227,34 @@ export function* stateOf(root: string, roots: Record<string, string>): Operation
 export function* preparedState(root: string, denoDir: string): Operation<PreparedState> {
   return yield* stateOf(root, yield* cacheRoots(denoDir));
 }
+
+/**
+ * What this repository owns: the installed tree and the lockfile. No cache.
+ *
+ * Not "the prepared state with the cache filtered out afterwards" — this takes
+ * no `denoDir`, never calls `cacheRoots`, and so has nothing to discover, walk,
+ * or hash beyond `node_modules` and `deno.lock`. That is the difference the
+ * #279 contract turns on: verification may populate the runtime-owned cache, so
+ * a comparison that walked it would be measuring state its subject is allowed
+ * to change — and paying to hash tens of thousands of files to discard the
+ * result.
+ */
+export function* hostState(root: string): Operation<HostState> {
+  const read = yield* FileReads.expect();
+  return {
+    tree: yield* fingerprint({ node_modules: `${root}/node_modules` }, read),
+    lock: digest(read(`${root}/deno.lock`)),
+  };
+}
+
+/** What moved between two host snapshots, named part by part. */
+export function hostStateChanges(before: HostState, after: HostState): string[] {
+  return describe({ ...before, cache: EMPTY_FINGERPRINT }, { ...after, cache: EMPTY_FINGERPRINT }, [
+    "tree",
+  ]);
+}
+
+const EMPTY_FINGERPRINT: Fingerprint = { entries: [], roots: [] };
 
 /**
  * What moved in the host's own state: the installed tree and the lock, ignoring

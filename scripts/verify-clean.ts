@@ -7,7 +7,20 @@
  * The chain is the claim this repository makes:
  *
  *     deno task setup → deps:target → build:web → build → the release compile
- *                     → resolution probe → tsc
+ *                     → resolution probe → verify --no-site
+ *
+ * Two claims, because a build and a check are different things.
+ *
+ * **A build is cache-pure.** `build:web`, `build`, and the release compile run
+ * offline and must leave `node_modules`, the Deno cache's dependency content,
+ * and `deno.lock` byte-identical — a build that fetches has installed
+ * something.
+ *
+ * **Verification is not, and does not claim to be.** The battery resolves
+ * modules no build walks — the dnt graph behind `scripts/build-npm.ts`, which
+ * only a test executes — so it adds to the Deno cache, which the runtime owns.
+ * What it may never move is what this repository owns: `node_modules` and
+ * `deno.lock`. That is the comparison its phases make.
  *
  * `deno task setup` owns the clone's `node_modules`, its lockfile, and the
  * scratch cache. `deps:target` adds one release target's npm graph to that
@@ -40,8 +53,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { changes, hostChanges, POPULATED_ROOTS, preparedState } from "./lib/prepared-state.ts";
-import type { PreparedState } from "./lib/prepared-state.ts";
+import {
+  changes,
+  hostChanges,
+  hostState,
+  hostStateChanges,
+  POPULATED_ROOTS,
+  preparedState,
+} from "./lib/prepared-state.ts";
+import type { HostState, PreparedState } from "./lib/prepared-state.ts";
+import { writeTextFile } from "@effectionx/fs";
 import { RELEASE_TARGET } from "./lib/release-targets.ts";
 
 const repoRoot = new URL("../", import.meta.url);
@@ -64,6 +85,31 @@ const OFFLINE = {
 export interface Phase {
   label: string;
   arguments: string[];
+}
+
+/**
+ * The four acts of the site proof, in the only order that proves anything.
+ *
+ * They are parameters rather than statements so a regression can record the
+ * order they happen in. The one that matters is `changeSite` before `baseline`:
+ * reversed, the edit lands after the battery's opening snapshot and reads as a
+ * dirtied tree instead of the state the battery was asked to preserve.
+ */
+export interface SiteProof {
+  changeSite(): Operation<void>;
+  baseline(): Operation<HostState>;
+  battery(): Operation<boolean>;
+  after(): Operation<HostState>;
+}
+
+/** The site-enabled battery, and what it moved. `false` when the battery failed. */
+export function* siteEnabledBattery(proof: SiteProof): Operation<string[] | false> {
+  yield* proof.changeSite();
+  const before = yield* proof.baseline();
+  if (!(yield* proof.battery())) {
+    return false;
+  }
+  return hostStateChanges(before, yield* proof.after());
 }
 
 /** The build phases, each exactly as a task or a workflow invokes it. */
@@ -128,6 +174,20 @@ function* step(run: Run): Operation<boolean> {
   const ok = status.code === 0;
   console.log(`${ok ? "✓" : "✗"} ${run.label} (${seconds}s)`);
   return ok;
+}
+
+/**
+ * The repository-owned snapshot, timed like the full one so the two are
+ * comparable in the log — and visibly cheaper, because it walks no cache.
+ */
+function* hostStateOf(target: string, label: string): Operation<HostState> {
+  const started = performance.now();
+  const state = yield* hostState(target);
+  const seconds = ((performance.now() - started) / 1000).toFixed(1);
+  console.log(
+    `  host state after ${label}: ${state.tree.entries.length} tree entries (${seconds}s)`,
+  );
+  return state;
 }
 
 function* fingerprintOf(target: string, denoDir: string, label: string): Operation<PreparedState> {
@@ -242,18 +302,63 @@ main(function* () {
       }
     }
 
-    for (const check of [
-      { label: "resolution probe", command: "node", arguments: ["scripts/probe-resolution.mjs"] },
-      {
-        label: "tsc",
-        command: "pnpm",
-        arguments: ["exec", "tsc", "--project", "tsconfig.node.json", "--noEmit"],
-      },
-    ]) {
-      if (!(yield* step({ ...check, cwd: target, env: { DENO_DIR: denoDir } }))) {
-        return true;
-      }
+    if (
+      !(yield* step({
+        label: "resolution probe",
+        command: "node",
+        arguments: ["scripts/probe-resolution.mjs"],
+        cwd: target,
+        env: { DENO_DIR: denoDir },
+      }))
+    ) {
+      return true;
     }
+
+    /**
+     * The battery itself, which subsumes the `tsc` that used to run here:
+     * `deno task verify` runs every applicable check beside every other one,
+     * concurrently, and fails if any of them dirties the clone's tracked tree.
+     *
+     * Site-enabled, and once. The clone gets a real `site/` change first, so
+     * applicability selects the pair from a change rather than from a fixture
+     * and all ten commands run together. `siteEnabledBattery` fixes the order:
+     * the edit lands before the baseline snapshot, which is what makes it the
+     * state the battery must preserve rather than a dirty tree it would report.
+     * Running a second `--no-site` battery to cover the other branch would
+     * double the longest job in CI to prove what focused tests already cover.
+     *
+     * The comparison afterwards reads only what this repository owns. The
+     * battery resolves module graphs no build walks — the dnt graph behind
+     * `scripts/build-npm.ts` among them — so it legitimately adds to the
+     * runtime-owned cache, and `hostState` never asks where that cache is.
+     */
+    const moved = yield* siteEnabledBattery({
+      *changeSite() {
+        yield* writeTextFile(
+          path.join(target, "site", "verify-clean.probe.md"),
+          "Written by `deno task verify:clean` so the site pair applies.\n",
+        );
+      },
+      baseline: () => hostStateOf(target, "the site change"),
+      battery: () =>
+        step({
+          label: "verify (site pair included)",
+          command: deno,
+          arguments: ["task", "verify"],
+          cwd: target,
+          env: { DENO_DIR: denoDir },
+        }),
+      after: () => hostStateOf(target, "the battery"),
+    });
+
+    if (moved === false) {
+      return true;
+    }
+    if (moved.length > 0) {
+      console.error(`\n✗ the battery changed node_modules or the lockfile:\n${moved.join("\n")}`);
+      return true;
+    }
+
     return false;
   });
 

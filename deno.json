@@ -1,6 +1,6 @@
 {
   "workspace": ["packages/*", "site"],
-  "exclude": ["scripts/tests/fixtures"],
+  "exclude": ["scripts/tests/fixtures", ".xmd-eval", "**/npm"],
   "nodeModulesDir": "auto",
   "lock": {
     "frozen": true
@@ -51,6 +51,7 @@
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
     "test": "deno test --allow-all --frozen",
+    "verify": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/verify.ts",
     "check": "deno check --frozen",
     "check:jsr": "deno publish --dry-run --allow-dirty",
     "review": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.jsonl",

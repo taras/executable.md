@@ -116,6 +116,13 @@ function* run(command: string, args: string[]): Operation<void> {
   yield* exec(command, { arguments: args, cwd: new URL(repoRoot).pathname }).expect();
 }
 
+/**
+ * This bundle can stop making progress under concurrent load, along with the
+ * esbuild service it spawns — see denoland/deno#36417. Nothing here retries:
+ * the battery's own per-command deadline settles a wedged command once and
+ * reports it, so a worsening upstream defect stays visible instead of being
+ * absorbed by an attempt count.
+ */
 function* bundleClient(scratch?: string): Operation<string> {
   return yield* scoped(function* () {
     const output = yield* until(Deno.makeTempFile({ dir: scratch, suffix: ".js" }));

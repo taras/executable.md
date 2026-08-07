@@ -242,12 +242,17 @@ deno task build                                  # compile the standalone xmd bi
 deno task lint                                   # oxlint + oxfmt
 deno task check                                  # typecheck
 deno task test                                   # run the test suite
+deno task verify                                 # the whole applicable battery, concurrently
 ```
 
 `deno task setup` is the only thing that installs. Builds and checks read what
-it prepared and write nothing back, so they compose instead of undoing one
-another — `deno task verify:clean` runs that claim end to end against a clean
-clone (AGENTS.md).
+it prepared and leave what this repository owns — tracked files, `node_modules`,
+`deno.lock` — exactly as they found it, so they compose instead of undoing one
+another. A build is cache-pure on top of that; verification may add to the
+runtime's own module cache, which is why it resolves graphs no build walks.
+`deno task verify` starts the entire applicable battery at once and fails if any
+of it leaves a tracked file changed, and `deno task verify:clean` runs that
+claim end to end against a clean clone (AGENTS.md).
 
 ## Status
 
