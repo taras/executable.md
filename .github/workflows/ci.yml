@@ -375,3 +375,23 @@ jobs:
       # exercises that relaunch.
       - name: Bun entrypoint smoke
         run: bun run packages/cli/src/bun.ts test smoke-test/test-agent/README.md --raw
+
+  green:
+    needs: [lint, test-deno, jsr, smoke, composability, site, test-node, test-bun]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every CI job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' | sort
+          unproven=$(echo "$RESULTS" | jq -r '
+            to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | .key')
+          if [ -n "$unproven" ]; then
+            echo "::error::CI is not green: $(echo "$unproven" | tr '\n' ' ')"
+            exit 1
+          fi
