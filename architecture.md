@@ -325,6 +325,13 @@ before their parent's effect begins. Declarative Git operations, including
 staging, switching and committing, operate on the same transactional Workspace
 rather than invoking an untracked native Git side effect.
 
+The retained-filesystem foundation supplies this boundary to provider-level
+Workspace effects. A live durable-effect coordinator lets the provider run the
+mutation in an operation savepoint, publish or reuse an immutable root, and
+invoke the existing filtered-event continuation while the caller-owned outer
+transaction remains active. The default coordinator keeps ordinary durable
+effects unchanged, and replay does not invoke either coordinator.
+
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the
 provider to perform or reconcile that identity, then append one local result
@@ -370,6 +377,34 @@ authoritative host-owned DOFS connection serves each workflow database, and the
 host serializes its Workspace-local effect transactions. A second long-lived
 DOFS connection is not a coherent reader because provider caches may retain
 negative entries across another connection's commit.
+
+Each provider registry entry owns the physical connection, the single DOFS
+database wrapper, the Workspace filesystem, the cooperative turn queue and the
+savepoint allocator. Scope-owned database handles are leases over that entry.
+DOFS synchronous transactions are nested savepoints on the caller-owned outer
+transaction; they never open a second connection or a top-level transaction.
+
+Schema version 1 is the complete pre-release schema. Its exact structural
+manifest freezes the workflow tables together with the pinned DOFS
+schema-version-5 objects and the Workspace root tables. Initialization happens
+only for an empty database, creates the canonical empty root and current-root
+pointer in the same immediate transaction, and never repairs an existing file.
+The earlier metadata-only version-1 shape is unsupported and is refused
+unchanged.
+
+Workspace root format 1 is fixed-key-order canonical UTF-8 JSON over the root
+directory and every reachable canonical absolute POSIX path. UTF-8 byte order
+defines path ordering without Unicode normalization. Entries retain topology,
+kind, mode, observable mtime, symlink target, file size and immutable DOFS
+manifest identity; deterministic path-order groups represent hardlinks without
+hashing mutable inode identity. The root ID is lowercase SHA-256 over the
+domain-separated canonical bytes.
+
+Root rows retain exact normalized references to their transitive DOFS manifests
+and blobs. Foreign keys keep that content alive, and this foundation neither
+exposes nor invokes DOFS garbage collection. An adapter-private materializer
+rebuilds a complete live DOFS frontier from a retained root inside the caller's
+transaction and verifies that resnapshotting produces the same root ID.
 
 The initial topology requires neither writable FUSE nor native subprocess
 access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed
@@ -638,11 +673,12 @@ Status is measured against main.
 | workflow run storage | creates or compatibly finds one run by public run ID, and retains its identity, state, document executions and filtered journal | built on main |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI | defined in `specs/workflow-workspace-spec.md`, unbuilt; the lookup it resumes through is built |
-| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | defined in `specs/workflow-workspace-spec.md`, unbuilt (#218) |
+| retained Workspace filesystem foundation | retains immutable, restorable filesystem roots and publishes provider-level mutations with filtered journal results | built by #365; no public workflow or `<File>` surface |
+| implicit workflow Workspace | retains provider-neutral repository, process and attachment state by run ID | filesystem foundation built by #365; public composition remains unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | stores the authoritative local Workspace in SQLite | persistence POC complete; effect-transaction integration unbuilt |
+| Deno-local DOFS provider | stores the authoritative local Workspace in SQLite | retained filesystem and atomic transaction foundation built by #365 |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |

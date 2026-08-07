@@ -260,7 +260,8 @@ describe("verify", () => {
 
 describe("line", () => {
   it("writes a root command as a reader would type it", function* () {
-    expect(line(BATTERY[0]!)).toEqual("deno task lint");
+    const lint = BATTERY.find((command) => command.id === "lint")!;
+    expect(line(lint)).toEqual("deno task lint");
   });
 
   it("writes a site command with its directory", function* () {

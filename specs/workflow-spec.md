@@ -178,8 +178,10 @@ after an interruption. The Deno host installs its own with
 entrypoint is the only place SQLite, run-id hashing, filesystem paths and host
 behavior appear. Shared modules import none of them and detect no runtime.
 
-A handle belongs to the scope that asked for it. Its connection closes through
-ordinary teardown, and every later call answers with a closed-handle failure
+A handle belongs to the scope that asked for it. It is a lease over the
+provider's authoritative per-path connection and becomes unusable through
+ordinary teardown. The provider closes that connection with its own scope; a
+later call through the expired lease answers with a closed-handle failure
 rather than reopening the file.
 
 ### 9.1 What identifies a run
@@ -263,6 +265,8 @@ collision or tampering, reported as its own failure and left unchanged.
 - Replaceable retrieval metadata, with a revision counting replacements since
   it was last cleared.
 - The filtered journal.
+- The retained Workspace roots, current-root pointer, and DOFS filesystem
+  content described by the Workspace specification.
 
 ### 9.5 The journal
 
@@ -285,6 +289,14 @@ DurableEvent → secret gate → journal append
 Storage performs no filtering of its own — a second policy in a second place is
 a second thing to keep in agreement with the first — and a gate that rejects or
 is cancelled leaves no row at all.
+
+Every version-1 event row names a retained Workspace root. Ordinary
+non-Workspace appends use the current root. A Workspace mutation binds an
+adapter-private destination only while its already-filtered Yield is being
+published; that destination validates the database path, connection generation,
+transaction identity and open state before it delegates to the caller-owned
+transaction journal. Missing, foreign, completed, fabricated and stale
+destinations cannot enlist.
 
 ### 9.6 One connection, one operation
 
@@ -316,6 +328,14 @@ Turns are taken per database rather than per handle. Two handles on one run
 share them, so a second handle waits while the first holds the database instead
 of entering SQLite and stopping the host. Contention between processes remains
 SQLite's own.
+
+The Deno provider registry owns one physical connection, one DOFS database
+wrapper, one Workspace filesystem, one cooperative connection queue and one
+savepoint-name allocator for each run path. DOFS uses the same physical
+connection and caller-owned transaction as the journal. Its synchronous nested
+transactions are savepoints; a Workspace mutation also owns one
+operation-spanning savepoint whose child scope tears down before release or
+rollback.
 
 A transaction opened inside another on the same database is refused rather than
 nested, and so is an ordinary operation called from inside a body — that call
@@ -351,6 +371,15 @@ A database is initialized only when it is pristine — no application id, no
 schema version and not one object anybody created. A file carrying a version
 but no tables, or tables belonging to something else, is not empty.
 
+Version 1 has one frozen structural manifest containing the workflow tables,
+the pinned Cloudflare DOFS schema-version-5 tables and indexes, immutable
+Workspace root and reachability tables, the current-root singleton, and the
+non-null root reference on every journal event. Initialization creates the
+DOFS objects inside the same immediate transaction through a savepoint, creates
+the canonical root-only empty Workspace, and selects it before commit. Existing
+files are validation-only; the unsupported pre-release metadata-only version-1
+shape is refused without repair or migration and must be deleted and recreated.
+
 Rows are held to what they mean and not only to their column types: a timestamp
 is an instant, an identity is not the empty string, and props are an object.
 
@@ -363,12 +392,13 @@ An incompatible or damaged database is described and left exactly as it was
 found. Nothing initializes, migrates, truncates, deletes or replaces one, and a
 lookup that finds nothing creates no file.
 
-Version 1 reads and writes version 1. An older version with no implemented
-migration, and every newer version, are refused without the file being touched.
+Version 1 reads and writes this complete version-1 shape. An older version with
+no implemented migration, every newer version, and an intermediate pre-release
+version-1 shape are refused without the file being touched.
 
 ## 10. Intentionally excluded
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
-leases and stale-owner recovery; Workspace filesystem storage and its
-transactions; history checkpoints and forks; workflow-owned worktrees; and
-deterministic Git and GitHub effects.
+leases and stale-owner recovery; public `<File>` and history commands; history
+forks; workflow-owned worktrees; Worker Shell; and deterministic Git and GitHub
+effects.

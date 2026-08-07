@@ -37,6 +37,12 @@ export type {
   WorkflowRunStorageApi,
   WorkflowRunTransaction,
 } from "./src/storage/api.ts";
+export type {
+  WorkflowWorkspace,
+  WorkspaceDirectoryEntry,
+  WorkspaceFilesystem,
+  WorkspaceStat,
+} from "./src/workspace/api.ts";
 
 export { definitionToJson, parseWorkflowDefinition } from "./src/storage/definition.ts";
 export type { GitWorkflowDefinitionV1, WorkflowDefinition } from "./src/storage/definition.ts";
@@ -64,6 +70,7 @@ export {
   WorkflowDatabaseClosedError,
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
+  WorkflowIncompleteVersionOneError,
   WorkflowDefinitionError,
   WorkflowDocumentExecutionError,
   WorkflowRecordMalformedError,
