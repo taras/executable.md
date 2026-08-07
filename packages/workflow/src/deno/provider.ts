@@ -25,10 +25,10 @@
  * compares instead of writing.
  */
 
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureDir, exists } from "@effectionx/fs";
-import { Err, Ok, type Operation, type Result } from "effection";
+import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import {
   type CreateWorkflowRunRequest,
@@ -51,6 +51,7 @@ import {
 import { parseJsonValue } from "../storage/members.ts";
 import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
+import { type ConnectionLocks, createConnectionLocks } from "./lock.ts";
 import { workflowRunPath } from "./path.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
 
@@ -68,7 +69,14 @@ const INSERT_RUN = `INSERT INTO workflow_run
   VALUES (1, ?, ?, ?, ?, 'running', ?, ?)`;
 
 export interface WorkflowRunStorageOptions {
-  /** The directory this host is authorized to keep runs in. */
+  /**
+   * The directory this host is authorized to keep runs in.
+   *
+   * Absolute. A relative root names a different directory from a different
+   * working directory, and where a run lives is host arrangement that must not
+   * depend on where a process happened to start. `~` is not expanded: a path
+   * only a shell understands is not a path.
+   */
   readonly root: string;
 }
 
@@ -78,21 +86,46 @@ export interface WorkflowRunStorageOptions {
  * `{ at: "min" }` is not decoration. Middleware installed at the default
  * position runs outermost, so an outer scope's provider would answer ahead of
  * one installed nearer the work — the opposite of what a provider is for.
+ *
+ * The turns taken at each database belong to this installation. They are
+ * created here rather than at module scope, so coordination lasts exactly as
+ * long as the scope that installed the provider and nothing accumulates
+ * between runs.
  */
 export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
-  const { root } = options;
+  const root = authorizedRoot(options.root);
+  const locks = createConnectionLocks();
 
   yield* WorkflowRunStorage.around(
     {
       *create([request]) {
-        return yield* createWorkflowRun(root, request);
+        return yield* createWorkflowRun(root, locks, request);
       },
       *lookup([runId]) {
-        return yield* lookupWorkflowRun(root, runId);
+        return yield* lookupWorkflowRun(root, locks, runId);
       },
     },
     { at: "min" },
   );
+}
+
+function authorizedRoot(root: string): string {
+  if (typeof root !== "string" || root === "") {
+    throw new WorkflowRequestError("a storage root is required.");
+  }
+  if (root.startsWith("~")) {
+    throw new WorkflowRequestError(
+      "a storage root beginning with ~ is a shell convenience rather than a path. Resolve " +
+        "it before installing the provider.",
+    );
+  }
+  if (!isAbsolute(root)) {
+    throw new WorkflowRequestError(
+      "a storage root must be absolute, so that where a run lives does not depend on the " +
+        "working directory a process happened to start in.",
+    );
+  }
+  return root;
 }
 
 /** A request whose every member has been checked rather than believed. */
@@ -105,6 +138,7 @@ interface CheckedRequest {
 
 function* createWorkflowRun(
   root: string,
+  locks: ConnectionLocks,
   request: CreateWorkflowRunRequest,
 ): Operation<Result<WorkflowRunDatabase>> {
   const checked = checkRequest(request);
@@ -118,8 +152,16 @@ function* createWorkflowRun(
     yield* ensureDir(dirname(path));
   }
 
+  const lock = locks.at(path);
+
   return yield* withConnection(path, function* (database): Operation<Result<WorkflowRunDatabase>> {
-    const stored = establish(database, path, wanted);
+    // Held across initialization, so a second caller creating the same run
+    // waits here rather than inside a synchronous `BEGIN IMMEDIATE` that
+    // would stop the host while the first one is still committing.
+    const stored = yield* scoped(function* () {
+      yield* lock.hold();
+      return establish(database, path, wanted);
+    });
     if (!stored.ok) {
       return stored;
     }
@@ -134,11 +176,15 @@ function* createWorkflowRun(
       return Err(new WorkflowRunConflictError(wanted.runId, differing));
     }
 
-    return Ok(yield* openWorkflowRunDatabase({ database, path, record }));
+    return Ok(yield* openWorkflowRunDatabase({ database, path, record, lock }));
   });
 }
 
-function* lookupWorkflowRun(root: string, runId: string): Operation<Result<WorkflowRunDatabase>> {
+function* lookupWorkflowRun(
+  root: string,
+  locks: ConnectionLocks,
+  runId: string,
+): Operation<Result<WorkflowRunDatabase>> {
   if (runId === "") {
     return Err(new WorkflowRequestError("a run id is required, and an empty one names nothing."));
   }
@@ -151,20 +197,27 @@ function* lookupWorkflowRun(root: string, runId: string): Operation<Result<Workf
     return Err(new WorkflowRunNotFoundError(runId));
   }
 
+  const lock = locks.at(path);
+
   return yield* withConnection(path, function* (database): Operation<Result<WorkflowRunDatabase>> {
-    let record: WorkflowRunRecord;
-    try {
-      verifySchema(database, path);
-      record = readRunRow(database, path);
-    } catch (error) {
-      return refusal(error, path);
+    const record = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
+      yield* lock.hold();
+      try {
+        verifySchema(database, path);
+        return Ok(readRunRow(database, path));
+      } catch (error) {
+        return refusal(error, path);
+      }
+    });
+    if (!record.ok) {
+      return record;
     }
 
-    if (record.runId !== runId) {
+    if (record.value.runId !== runId) {
       return Err(new WorkflowRunIdMismatchError(runId, path));
     }
 
-    return Ok(yield* openWorkflowRunDatabase({ database, path, record }));
+    return Ok(yield* openWorkflowRunDatabase({ database, path, record: record.value, lock }));
   });
 }
 
@@ -176,6 +229,11 @@ function* lookupWorkflowRun(root: string, runId: string): Operation<Result<Workf
  * going to release until the process ended. That includes a refusal raised on
  * the way to producing the handle: reading a row while the handle is being
  * built is as capable of finding an unreadable record as reading one later.
+ *
+ * Between opening the file and handing it to a handle there is checking to do,
+ * and a caller may be cancelled during it. The connection is therefore given
+ * up through ordinary teardown as well, so an interrupted open closes what it
+ * opened rather than leaving the file locked by a connection nobody holds.
  */
 function* withConnection(
   path: string,
@@ -193,16 +251,34 @@ function* withConnection(
     return refusal(error, path);
   }
 
+  let adopted = false;
+  let released = false;
+
+  function release(): void {
+    if (adopted || released) {
+      return;
+    }
+    released = true;
+    database.close();
+  }
+
+  // Registered before the checking begins, so cancellation part-way through it
+  // still closes the connection. Once a handle owns the connection this is a
+  // no-op, and the handle's own teardown closes it.
+  yield* ensure(release);
+
   let result: Result<WorkflowRunDatabase>;
   try {
     result = yield* body(database);
   } catch (error) {
-    database.close();
+    release();
     return refusal(error, path);
   }
 
-  if (!result.ok) {
-    database.close();
+  if (result.ok) {
+    adopted = true;
+  } else {
+    release();
   }
   return result;
 }

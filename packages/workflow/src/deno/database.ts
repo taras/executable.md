@@ -62,7 +62,7 @@ import {
   type WorkflowStopReason,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
-import { type ConnectionLock, createConnectionLock } from "./lock.ts";
+import type { ConnectionLock } from "./lock.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
 import { translateSqliteError } from "./schema.ts";
 
@@ -91,6 +91,8 @@ export interface OpenConnection {
   readonly database: DatabaseSync;
   readonly path: string;
   readonly record: WorkflowRunRecord;
+  /** Shared by every handle on this file, so turns are taken per database. */
+  readonly lock: ConnectionLock;
 }
 
 /**
@@ -103,7 +105,8 @@ export interface OpenConnection {
  * savepoint is also able to take one that outlives the body it was given.
  */
 export interface TransactionScope {
-  readonly owner: object;
+  /** The database file, so a second handle on it is refused rather than stuck. */
+  readonly path: string;
   open: boolean;
   savepoint<T>(body: () => T): T;
 }
@@ -111,9 +114,13 @@ export interface TransactionScope {
 /**
  * Which transaction, if any, the current scope is inside.
  *
- * The value is checked against the handle's own private identity, never
- * trusted for being present: a context is addressed by name, so any code can
- * bind this one, and only the object this module made names this database.
+ * Matching on the file rather than on the handle is what makes this useful:
+ * two handles on one run share its turns, so an operation reached through the
+ * second one from inside the first one's body would wait for a transaction its
+ * own caller is holding open. It is refused instead.
+ *
+ * The value can only refuse an operation, never authorize one, which is why
+ * comparing a name-addressed context binding is safe here.
  */
 export const ActiveTransaction: Context<TransactionScope | undefined> = createContext<
   TransactionScope | undefined
@@ -144,21 +151,19 @@ interface Handle {
 }
 
 function createHandle(connection: OpenConnection): Handle {
-  const { database, path } = connection;
-  const lock: ConnectionLock = createConnectionLock();
-  const identity = {};
+  const { database, path, lock } = connection;
 
   let closed = false;
   let record = connection.record;
   let retrieval = readRetrievalRow(database);
 
-  /** Whether this scope may reach the connection at all, and why not. */
+  /** Whether this scope may reach the database at all, and why not. */
   function* admit(): Operation<Result<void>> {
     if (closed) {
       return Err(new WorkflowDatabaseClosedError(record.runId));
     }
     const active = yield* ActiveTransaction.get();
-    if (active !== undefined && active.owner === identity) {
+    if (active !== undefined && active.path === path) {
       return Err(
         new WorkflowTransactionError(
           "this scope is inside a transaction on the same workflow run database, and an " +
@@ -205,7 +210,7 @@ function createHandle(connection: OpenConnection): Handle {
       return Err(new WorkflowDatabaseClosedError(record.runId));
     }
     const active = yield* ActiveTransaction.get();
-    if (active !== undefined && active.owner === identity) {
+    if (active !== undefined && active.path === path) {
       return Err(
         new WorkflowTransactionError(
           "a transaction on this workflow run database is already open in this scope. " +
@@ -224,7 +229,7 @@ function createHandle(connection: OpenConnection): Handle {
         return Err(translateSqliteError(error, path));
       }
 
-      const transaction = createTransactionScope(database, identity);
+      const transaction = createTransactionScope(database, path);
       let committed = false;
 
       // Registered after the lock, so teardown rolls back while the connection
@@ -239,11 +244,24 @@ function createHandle(connection: OpenConnection): Handle {
       yield* ActiveTransaction.set(transaction);
 
       try {
-        const value = yield* body({ journal: enlistedJournal(database, transaction, path) });
+        // The body runs in a scope of its own, so everything it started —
+        // spawned children, resources — has finished tearing down before
+        // anything is committed. Cleanup appends through the same transaction
+        // and belongs inside it; committing while a child was still unwinding
+        // would let that append autocommit on its own, published whatever the
+        // transaction went on to decide.
+        const value = yield* scoped(function* () {
+          return yield* body({ journal: enlistedJournal(database, transaction, path) });
+        });
+
+        // Closed before the commit, not after: nothing may append to a
+        // transaction whose contents are already decided.
+        transaction.open = false;
         database.exec("COMMIT");
         committed = true;
         return Ok(value);
       } catch (error) {
+        transaction.open = false;
         return Err(translateSqliteError(error, path));
       }
     });
@@ -429,11 +447,11 @@ function assertOpen(transaction: TransactionScope): void {
   }
 }
 
-function createTransactionScope(database: DatabaseSync, owner: object): TransactionScope {
+function createTransactionScope(database: DatabaseSync, path: string): TransactionScope {
   let depth = 0;
 
   const scope: TransactionScope = {
-    owner,
+    path,
     open: true,
     savepoint<T>(body: () => T): T {
       assertOpen(scope);

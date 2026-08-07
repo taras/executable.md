@@ -107,6 +107,25 @@ export function tamper(path: string, body: (database: DatabaseSync) => void): vo
 }
 
 /**
+ * What another connection can see of a run's journal right now.
+ *
+ * The discriminating observation for atomicity. Rows written inside an open
+ * transaction are invisible to a second connection until that transaction
+ * commits, so counting from outside says whether a commit has already
+ * happened — which presence in the journal afterwards cannot.
+ */
+export function committedEventCount(path: string): number {
+  const database = new DatabaseSync(path);
+  try {
+    const row = database.prepare("SELECT count(*) AS total FROM journal_events").get();
+    const total = row?.["total"];
+    return typeof total === "number" ? total : Number(total);
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * Rebuild `workflow_run` without its CHECK constraints.
  *
  * The database refuses to store an unreadable status, an incoherent stop

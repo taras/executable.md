@@ -1,20 +1,27 @@
 /**
- * The second process in the restart proof.
+ * A whole workflow run, in a process of its own.
  *
  * A scope closing inside one process is not the same claim as a process
  * ending: the connection, the page cache and every value the first run put in
- * memory go away together only in the second. So the durable half of the
- * acceptance runs here, through the production Deno adapter, and the test
- * observes it from outside.
+ * memory go away together only in the second. Two of the acceptances need
+ * that, so both run here, through the production Deno adapter, and the test
+ * observes them from outside.
  *
  * ```sh
- * deno run -A restart-child.ts <root> <run-id> <marker-file>
+ * deno run -A restart-child.ts <root> <run-id> <marker-file> [base]
  * ```
  *
  * The workflow performs one durable operation whose side effect is a line
- * appended to the marker file. Whether the second process appends a second
- * line is the whole question: a replay that re-executes a recorded operation
+ * appended to the marker file. Whether a second process appends a second line
+ * is the restart question: a replay that re-executes a recorded operation
  * writes twice, and a replay that restores it writes once.
+ *
+ * `base` exists so two processes can race to create the same run id with
+ * different immutable identity. One of them must win and the other must be
+ * told it conflicts.
+ *
+ * A storage refusal is reported on standard output rather than thrown, because
+ * the caller is comparing two processes' outcomes and a refusal is one of them.
  */
 
 import { appendFileSync } from "node:fs";
@@ -22,7 +29,7 @@ import process from "node:process";
 import { durableCall, durableRun } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import { main } from "effection";
-import { WorkflowRunStorage } from "../../mod.ts";
+import { WorkflowRunStorage, WorkflowStorageError } from "../../mod.ts";
 import { useWorkflowRunStorage } from "../../deno.ts";
 
 const DEFINITION = {
@@ -45,17 +52,21 @@ function work(marker: string): () => Workflow<string> {
 main(function* () {
   // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
   // still has to typecheck under the Node project like every other source.
-  const [root, runId, marker] = process.argv.slice(2);
+  const [root, runId, marker, base = "main"] = process.argv.slice(2);
 
   yield* useWorkflowRunStorage({ root });
 
   const opened = yield* WorkflowRunStorage.operations.create({
     runId,
     definition: DEFINITION,
-    base: "main",
+    base,
     props: { channel: "stable" },
   });
   if (!opened.ok) {
+    if (opened.error instanceof WorkflowStorageError) {
+      console.log(JSON.stringify({ refused: opened.error.name }));
+      return;
+    }
     throw opened.error;
   }
   const database = opened.value;
@@ -81,6 +92,7 @@ main(function* () {
   console.log(
     JSON.stringify({
       value,
+      base: database.record.base,
       status: database.record.status,
       events: entries.value.map((entry) => ({
         eventId: entry.eventId,

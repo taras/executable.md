@@ -29,7 +29,7 @@ import {
   type Yield,
 } from "@executablemd/durable-streams";
 import { createSecretScanner, SecretDetectedError } from "@executablemd/core";
-import { all, type Operation, sleep, spawn, suspend, withResolvers } from "effection";
+import { all, ensure, type Operation, sleep, spawn, suspend, withResolvers } from "effection";
 import {
   WorkflowRecordMalformedError,
   WorkflowRunConflictError,
@@ -39,6 +39,7 @@ import {
 } from "../mod.ts";
 import { ActiveTransaction } from "../src/deno/database.ts";
 import {
+  committedEventCount,
   createRun,
   request,
   runPath,
@@ -71,6 +72,20 @@ function closed(value: string): Close {
 /** The names of the yields a journal holds, in the order it holds them. */
 function names(events: DurableEvent[]): string[] {
   return events.flatMap((event) => (event.type === "yield" ? [event.description.name] : []));
+}
+
+/** One whole run in a process of its own, through the production adapter. */
+function* runChild(
+  root: string,
+  runId: string,
+  marker: string,
+  base = "main",
+): Operation<{ code: number; out: string }> {
+  const result = yield* exec({
+    command: [process.execPath, "run", "--allow-all", "--frozen", CHILD, root, runId, marker, base],
+    cwd: REPOSITORY,
+  });
+  return { code: result.exitCode, out: result.stdout };
 }
 
 describe("Tier WJ — appending and replaying the journal", () => {
@@ -366,7 +381,82 @@ describe("Tier WJ — a transaction a caller holds", () => {
     expect(seen.events).toEqual([]);
   });
 
-  it("WJ13: nested work rolls back to a savepoint inside a committing transaction", function* () {
+  it("WJ13: a child's cleanup is inside the transaction, not after it", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    // The body returns while a child it spawned is still alive, so the child's
+    // cleanup appends during teardown. Presence in the journal afterwards
+    // cannot tell whether that append was part of the transaction or
+    // autocommitted on its own once it had already been committed — so the
+    // cleanup asks a second connection what has been committed *so far*.
+    // Nothing has, if the transaction is still open.
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const started = withResolvers<void>();
+      let committedDuringCleanup = -1;
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* spawn(function* () {
+          yield* ensure(function* () {
+            committedDuringCleanup = committedEventCount(path);
+            yield* transaction.journal.append(yielded("cleanup", "cleanup"));
+          });
+          started.resolve();
+          yield* suspend();
+        });
+
+        // Without this the child has not run far enough to register its
+        // cleanup, and the test would prove nothing.
+        yield* started.operation;
+        yield* transaction.journal.append(yielded("body", "body"));
+        return "committed";
+      });
+
+      if (!result.ok) {
+        throw result.error;
+      }
+      return { committedDuringCleanup, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.committedDuringCleanup).toBe(0);
+    expect(names(seen.events)).toEqual(["body", "cleanup"]);
+    expect(committedEventCount(path)).toBe(2);
+  });
+
+  it("WJ14: a child's cleanup rolls back with the transaction it belongs to", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const started = withResolvers<void>();
+      let appended = false;
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* spawn(function* () {
+          yield* ensure(function* () {
+            yield* transaction.journal.append(yielded("cleanup", "cleanup"));
+            appended = true;
+          });
+          started.resolve();
+          yield* suspend();
+        });
+
+        yield* started.operation;
+        yield* transaction.journal.append(yielded("body", "body"));
+        throw new Error("the effect this transaction was publishing failed");
+      });
+
+      expect(result.ok).toBe(false);
+      // The cleanup did append — and went away with everything else.
+      expect(appended).toBe(true);
+      return yield* database.journal.readAll();
+    });
+
+    expect(events).toEqual([]);
+  });
+
+  it("WJ15: nested work rolls back to a savepoint inside a committing transaction", function* () {
     const root = yield* useStorageRoot();
 
     // The seam a Workspace filesystem uses: its own nested transactions become
@@ -560,8 +650,110 @@ describe("Tier WJ — one connection, one operation at a time", () => {
   });
 });
 
+describe("Tier WJ — two handles on one run", () => {
+  it("WJ18: a second handle waits for the first, and the host keeps running", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const first = yield* createRun();
+      const second = yield* createRun();
+      expect(second).not.toBe(first);
+
+      const holding = withResolvers<void>();
+      const release = withResolvers<void>();
+      const order: string[] = [];
+      let ticks = 0;
+
+      // SQLite is reached synchronously. A second handle that entered SQLite
+      // rather than waiting would stop this timer — and stop the first
+      // transaction from ever resuming to commit.
+      const ticking = yield* spawn(function* () {
+        while (true) {
+          yield* sleep(5);
+          ticks += 1;
+        }
+      });
+
+      const transacting = yield* spawn(function* () {
+        const result = yield* first.transact(function* () {
+          order.push("first holds");
+          holding.resolve();
+          yield* release.operation;
+          order.push("first commits");
+          return "done";
+        });
+        if (!result.ok) {
+          throw result.error;
+        }
+      });
+
+      yield* holding.operation;
+      const before = ticks;
+
+      const waiting = yield* spawn(function* () {
+        const result = yield* second.beginDocumentExecution();
+        order.push(result.ok ? "second ran" : "second failed");
+      });
+
+      yield* sleep(60);
+      const during = ticks;
+      order.push("second still waiting");
+
+      release.resolve();
+      yield* transacting;
+      yield* waiting;
+      yield* ticking.halt();
+
+      return { order, before, during };
+    });
+
+    expect(seen.during).toBeGreaterThan(seen.before + 3);
+    expect(seen.order).toEqual([
+      "first holds",
+      "second still waiting",
+      "first commits",
+      "second ran",
+    ]);
+  });
+
+  it("WJ19: a second handle's work is not enlisted in the first's transaction", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const first = yield* createRun();
+      const second = yield* createRun();
+
+      const holding = withResolvers<void>();
+      const release = withResolvers<void>();
+
+      const transacting = yield* spawn(function* () {
+        yield* first.transact(function* (transaction) {
+          yield* transaction.journal.append(yielded("doomed", "doomed"));
+          holding.resolve();
+          yield* release.operation;
+          throw new Error("this transaction publishes nothing");
+        });
+      });
+
+      yield* holding.operation;
+      const appending = yield* spawn(function* () {
+        yield* second.journal.append(yielded("survivor", "survivor"));
+      });
+
+      yield* sleep(20);
+      release.resolve();
+      yield* transacting;
+      yield* appending;
+
+      return yield* first.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["survivor"]);
+  });
+});
+
 describe("Tier WJ — two callers creating at once", () => {
-  it("WJ18: compatible concurrent creation converges on one run", function* () {
+  it("WJ20: compatible concurrent creation converges on one run", function* () {
     const root = yield* useStorageRoot();
 
     const opened = yield* withStorage(root, function* () {
@@ -585,7 +777,7 @@ describe("Tier WJ — two callers creating at once", () => {
     }
   });
 
-  it("WJ19: conflicting concurrent creation produces one winner and one conflict", function* () {
+  it("WJ21: conflicting concurrent creation produces one winner and one conflict", function* () {
     const root = yield* useStorageRoot();
 
     const results = yield* withStorage(root, function* () {
@@ -602,32 +794,39 @@ describe("Tier WJ — two callers creating at once", () => {
 });
 
 describe("Tier WJ — surviving a process", () => {
-  it("WJ20: a second process restores the run and re-executes nothing", function* () {
+  it("WJ22: two processes racing to create one run leave one winner", function* () {
     const root = yield* useStorageRoot();
     const marker = join(root, "marker.txt");
     writeFileSync(marker, "");
 
-    const run = function* (): Operation<{ code: number; out: string }> {
-      const result = yield* exec({
-        command: [
-          process.execPath,
-          "run",
-          "--allow-all",
-          "--frozen",
-          CHILD,
-          root,
-          "restart",
-          marker,
-        ],
-        cwd: REPOSITORY,
-      });
-      return { code: result.exitCode, out: result.stdout };
-    };
+    // Genuinely separate processes with genuinely separate connections, so the
+    // convergence is SQLite's write lock rather than one thread's turn-taking.
+    const [first, second] = yield* all([
+      runChild(root, "raced", marker, "main"),
+      runChild(root, "raced", marker, "develop"),
+    ]);
 
-    const first = yield* run();
+    const outcomes = [JSON.parse(first.out), JSON.parse(second.out)];
+    const created = outcomes.filter((one) => one.refused === undefined);
+    const refused = outcomes.filter((one) => one.refused !== undefined);
+
+    expect(created).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0].refused).toBe("WorkflowRunConflictError");
+    // The winner's base is whichever one got there first, and it is the only
+    // base the run has.
+    expect(["main", "develop"]).toContain(created[0].base);
+  });
+
+  it("WJ23: a second process restores the run and re-executes nothing", function* () {
+    const root = yield* useStorageRoot();
+    const marker = join(root, "marker.txt");
+    writeFileSync(marker, "");
+
+    const first = yield* runChild(root, "restart", marker);
     expect(first.code).toBe(0);
 
-    const second = yield* run();
+    const second = yield* runChild(root, "restart", marker);
     expect(second.code).toBe(0);
 
     // The durable operation ran once. The second process restored its result

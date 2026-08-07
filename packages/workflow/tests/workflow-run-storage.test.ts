@@ -16,7 +16,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
-import type { Result } from "effection";
+import { type Result, scoped } from "effection";
 import {
   type GitWorkflowDefinitionV1,
   WORKFLOW_RUN_STATUSES,
@@ -35,7 +35,7 @@ import {
   WorkflowSchemaVersionError,
   type WorkflowStopReason,
 } from "../mod.ts";
-import { APPLICATION_ID, hashRunId } from "../deno.ts";
+import { APPLICATION_ID, hashRunId, useWorkflowRunStorage } from "../deno.ts";
 import {
   createRun,
   definition,
@@ -211,6 +211,22 @@ describe("Tier WS — creating and finding a run", () => {
     expect(!descriptor.ok && descriptor.error).toBeInstanceOf(WorkflowDefinitionError);
 
     expect(entries(root)).toEqual([]);
+  });
+
+  it("WS9: a storage root that is not an absolute path is refused", function* () {
+    // Where a run lives must not depend on the working directory a process
+    // happened to start in, and `~` is a shell convenience rather than a path.
+    for (const root of ["", ".xmd/runs", "~/.xmd/runs"]) {
+      let raised: unknown;
+      try {
+        yield* scoped(function* () {
+          yield* useWorkflowRunStorage({ root });
+        });
+      } catch (error) {
+        raised = error;
+      }
+      expect(raised).toBeInstanceOf(WorkflowRequestError);
+    }
   });
 });
 

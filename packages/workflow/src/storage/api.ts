@@ -15,7 +15,7 @@
  * ## Installing a provider
  *
  * ```ts
- * yield* useWorkflowRunStorage({ root: "~/.xmd/runs" });
+ * yield* useWorkflowRunStorage({ root: join(homedir(), ".xmd", "runs") });
  * ```
  *
  * Providers install at `{ at: "min" }`. Middleware installed at the default
