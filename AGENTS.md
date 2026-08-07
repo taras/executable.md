@@ -131,11 +131,14 @@ here:
   root `deno.json`. Its `exclude` list holds the paths that must stay
   unchecked: the deliberately-malformed `scripts/tests/fixtures`; `.xmd-eval`,
   where a running document writes the `.ts` files its eval blocks compile to;
-  and `**/npm`, the dnt build's output, which a test rewrites while the battery
-  runs. All three are generated and belong to whichever command is producing
-  them — type-checking one mid-write fails on a partial file, and fails the
-  whole workspace check for a file nobody committed. The same output is skipped
-  by `lint` and `fmt`, for the same reason.
+  `**/npm`, the dnt build's output, which a test rewrites while the battery
+  runs; ignored local `.claude/worktrees`; ignored generated spike vendor
+  builds; and byte-identical vendored TypeScript inputs whose deterministic
+  JavaScript and declaration output is checked instead. Generated paths belong
+  to whichever command is producing them — type-checking one mid-write fails on
+  a partial file, and fails the whole workspace check for a file nobody
+  committed. The corresponding generated output is skipped by `lint` and
+  `fmt`, for the same reason.
 - `test:node` and `test:bun` derive the same corpus through
   `scripts/lib/test-files.ts`, which walks `tests/` beneath each workspace
   member plus `scripts/tests/` — that boundary, and nothing else. A new

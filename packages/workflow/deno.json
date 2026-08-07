@@ -4,5 +4,8 @@
   "exports": {
     ".": "./mod.ts",
     "./deno": "./deno.ts"
+  },
+  "publish": {
+    "exclude": ["!vendor/cloudflare-computer-dofs/generated/**/*.d.ts"]
   }
 }
