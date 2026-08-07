@@ -4,13 +4,17 @@ import { NextCard } from "../../components/NextCard.tsx";
 
 const CHAIN = "```bash silent timeout=30s exec\ngit diff --stat\n```";
 
-const EVAL = `\`\`\`ts eval
-const port = yield* findFreePort();
-const baseUrl = \`http://127.0.0.1:\${port}\`;
+const EVAL = `\`\`\`bash service=server exec
+node cooperative-server.js
 \`\`\`
 
-\`\`\`bash daemon exec
-./server --port {port}
+\`\`\`ts persist ephemeral eval
+import { callService } from "./client.ts";
+
+const endpoint = server;
+yield* Sample.around({
+  *sample([request]) { return yield* callService(endpoint, request); },
+});
 \`\`\``;
 
 export default define.page(function ExecEval() {
@@ -48,7 +52,17 @@ export default define.page(function ExecEval() {
         </li>
         <li>
           <code>daemon</code>{" "}
-          — start a long-running subprocess tied to the component invocation.
+          — start an arbitrary fixed-configuration subprocess tied to the
+          component invocation.
+        </li>
+        <li>
+          <code>service=name</code>{" "}
+          — start a cooperative service and publish its invocation-local
+          endpoint.
+        </li>
+        <li>
+          <code>ephemeral</code>{" "}
+          — reconstruct live eval state without writing a journal event.
         </li>
       </ul>
       <p class="muted">
@@ -59,13 +73,17 @@ export default define.page(function ExecEval() {
         installed by provider middleware.
       </p>
 
-      <h2>Eval blocks share bindings</h2>
+      <h2>Durable and live bindings</h2>
       <p>
-        <code>eval</code>{" "}
-        blocks run in a shared binding environment for the current component.
-        Top-level bindings export automatically to later blocks, and bare{" "}
-        <code>{"{name}"}</code>{" "}
+        Plain <code>eval</code>{" "}
+        blocks run in a shared durable binding environment for the current
+        component. Top-level bindings export automatically to later blocks, and
+        bare <code>{"{name}"}</code>{" "}
         interpolation inside any executable block reads from them.
+        <code>ephemeral eval</code>{" "}
+        reruns during partial replay and can also read invocation-local live
+        bindings such as service endpoints; those bindings are never
+        interpolated or journaled.
       </p>
       <CodeBlock>{EVAL}</CodeBlock>
 
@@ -86,8 +104,9 @@ export default define.page(function ExecEval() {
         <code>daemon exec</code>{" "}
         starts a long-lived process, returns control immediately, and is torn
         down by structured concurrency when the component invocation completes —
-        no manual cleanup. Combined with readiness polling, this is how provider
-        components run local model servers.
+        no manual cleanup. It remains the primitive for processes whose fixed
+        configuration the document or host manages explicitly. Dynamic service
+        endpoints use the authenticated <code>service=name</code> protocol.
       </p>
 
       <NextCard href="/docs/providers" label="LLM providers" />

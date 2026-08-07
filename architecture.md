@@ -43,6 +43,8 @@ Existing documents and code get aligned to this section retroactively.
 | suspension | a durable wait: a crash restarts into the same wait |
 | Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow |
 | ephemeral | a replay classification for an operation, context or attachment that runs again to reconstruct live execution; its result is not substituted from the journal and it owns no durable workflow state |
+| live binding | an execution-owned value reconstructed ephemerally for the current document execution; it is visible only to constructs that explicitly consume the live binding overlay and never enters interpolation or the journal |
+| cooperative service | a scoped host process that publishes its authenticated loopback endpoint through the executable.md service-readiness protocol and remains supervised for the lifetime of its acquiring operation |
 | effect transaction | the single atomic SQLite transaction that publishes one Workspace-local mutation together with that effect's journal result |
 | external effect | an effect whose provider-owned outcome cannot participate in the Workspace SQLite transaction and therefore requires a stable identity and provider reconciliation |
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
@@ -583,6 +585,29 @@ execution. No middleware sees it; it is never the document's own outcome.
   journal is parsed, never trusted — an unreadable record is refused, not
   coerced.
 
+## Replay-safe live services
+
+A cooperative service belongs to the document execution that acquires it. The
+host owns port selection, process spawning, protocol authentication, startup
+supervision and teardown. Shared runtime code reaches that behavior through the
+provider-neutral `API.Service`; it never imports a host process or networking
+API.
+
+The service publishes a frozen loopback endpoint as a live binding. Live
+bindings form an overlay on the component's durable eval bindings: `ephemeral
+eval` reads both and may add live bindings atomically, while ordinary `eval`,
+code-block interpolation and journal serialization read durable bindings only.
+A live binding cannot shadow a durable binding, and a durable value cannot be
+replaced by a live one.
+
+Service acquisition and `ephemeral eval` execute again during partial replay so
+the current process and middleware chain are reconstructed. A completed
+document replay returns its recorded result without expanding the document and
+therefore starts no service. Workflow execution installs a non-delegating
+`API.Service` denial provider: a workflow cannot reach an inherited host
+adapter, because a run-owned durable service requires stable identity and
+reconciliation rather than an execution-owned live process.
+
 ## State ownership
 
 All state is scoped to the operation that owns it, so it is torn down when
@@ -637,6 +662,10 @@ Status is measured against main.
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, and retains its identity, state, document executions and filtered journal | built on main |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
+| `API.Service` / `startService()` | acquires an authenticated, supervised loopback process as a scoped provider-neutral resource | built on main |
+| `service=<binding>` | publishes the acquired endpoint into the live binding overlay for its invocation | built on main |
+| `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
+| workflow service denial | prevents workflow documents from inheriting an ordinary host service adapter | built on main |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI | defined in `specs/workflow-workspace-spec.md`, unbuilt; the lookup it resumes through is built |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | defined in `specs/workflow-workspace-spec.md`, unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |

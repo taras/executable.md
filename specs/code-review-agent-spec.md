@@ -61,7 +61,7 @@ All executable.md core changes and the full agent implementation are complete:
 - **Simplified `SampleContext`** to `{content, model?, params?, system?, componentName?}` (PR #35)
 - **Removed `sample` modifier** — all LLM calls via `<Sample>` component (PR #35)
 - **Renamed `Instruction.md` input** `text` → `system` for clarity
-- **Fixed broken providers** — `OllamaProvider`, `LlamafileProvider`,
+- **Fixed broken providers** — `OllamaProvider`,
   `AnthropicProvider` updated to use direct `fetch()` calls
 - **Component resolution** — review components resolved via
   `--component-dir .reviews/components --component-dir packages/core/components`

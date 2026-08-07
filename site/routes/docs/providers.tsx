@@ -44,9 +44,6 @@ export default define.page(function Providers() {
           — local models via a running Ollama server.
         </li>
         <li>
-          <code>LlamafileProvider.md</code> — local models via llamafile.
-        </li>
-        <li>
           <code>Sample.md</code> — the sampling call itself.
         </li>
         <li>

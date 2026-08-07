@@ -484,6 +484,8 @@ registry.set("eval", evalFactory);
 registry.set("persist", persistFactory);
 registry.set("timeout", timeoutFactory);
 registry.set("daemon", daemonFactory);
+registry.set("ephemeral", ephemeralFactory);
+registry.set("service", serviceFactory);
 ```
 
 Custom factories can be provided via `ExecuteOptions.modifiers`.
@@ -538,6 +540,35 @@ Observable behavior of an `eval` block:
 - The block's rendered output is the `output()` text, or the coerced
   return value when `output()` was not called (§4.7).
 
+**`ephemeral eval`** evaluates the compiled block without a durable operation
+or journal entry. It reconstructs execution-owned state during partial replay,
+so it reads the component's durable bindings plus its live binding overlay and
+publishes new live bindings atomically after successful completion. It accepts
+only a nullish return value, and calling `output()` is an error. The modifier is
+valid only directly around the terminal `eval`; `persist ephemeral eval` keeps
+installed middleware in the invocation eval scope.
+
+**`service=<binding>`** is a terminal service-acquisition modifier. The code
+block content is the shell command passed to `startService()`, and the required
+parameter is the live binding that receives the frozen
+`{ hostname: "127.0.0.1", port }` endpoint. Binding syntax and collisions are
+validated before process acquisition. The modifier produces no output or
+journal entry, and the acquired service remains supervised until the component
+invocation closes.
+
+````markdown
+```bash service=server exec
+./server --cooperative
+```
+
+```ts persist ephemeral eval
+import { callProvider } from "./client.ts";
+
+const endpoint = server;
+yield* Sample.around({ /* provider middleware using endpoint */ });
+```
+````
+
 **`daemon`** — spawns a long-running subprocess and immediately
 returns control to the document. The process is alive for the
 duration of the component invocation and killed when that invocation's
@@ -559,6 +590,10 @@ The `exec` modifier appears in the chain but is never invoked —
 `daemon` is outermost and ignores `next`. The presence of `exec` in
 the info string is purely syntactic: it satisfies the detection rule
 and signals to readers that this block runs a command.
+
+`daemon` is for fixed-configuration background processes. It does not allocate
+or publish a dynamic endpoint and does not establish readiness; cooperative
+network services use `service=<binding>`.
 
 | Property | `exec` | `daemon` |
 |---|---|---|
@@ -745,8 +780,8 @@ const Sample = createApi<SampleApi>("Sample", {
 ```
 
 Sample Api calls route through the `EvalScope` so that middleware
-installed by `persist eval` blocks (e.g., `LlamafileProvider`'s
-`Sample.around()`) is visible — `evalScope.eval()` runs the operation in
+installed by `persist ephemeral eval` blocks in provider components is
+visible — `evalScope.eval()` runs the operation in
 the same spawned task where the middleware was installed.
 
 #### Sample middleware examples
@@ -1096,13 +1131,11 @@ import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, c
 import { when } from "@effectionx/converge";
 import { fetch } from "@effectionx/fetch";
 import { Sample } from "@executablemd/core";
-import { findFreePort } from "@executablemd/runtime";
 ```
 
 These imports resolve through Deno's import map (`deno.json`).
 `@executablemd/core` re-exports executable.md-specific APIs from its root
-barrel (`packages/core/mod.ts`); `findFreePort` comes from `@executablemd/runtime`
-(and is also re-exported by `packages/core/mod.ts`).
+barrel (`packages/core/mod.ts`).
 
 `useContent` is **not** among them. It projects content, and a projection
 settles its errors under the error mode of the block that started it, which the
@@ -1119,73 +1152,54 @@ of the same name cannot collide.
 The exact list lives in the `STANDARD_IMPORTS` constant, which both
 compilers share (`src/data-uri-compiler.ts`, `src/temp-file-compiler.ts`).
 
-#### `findFreePort`
+#### Cooperative service API
 
-`findFreePort` is available in eval blocks as a standard import
-(`@executablemd/runtime`). It is an Effection
-`Operation<number>`. It binds a `node:net` TCP server to
-port 0 (OS-assigned), reads the port number, and closes the server.
-It uses Effection's structured concurrency primitives (`once` from
-`@effectionx/node` for event bridging, `race` for error handling):
+`@executablemd/runtime` exports provider-neutral `API.Service` under the stable
+context-api name `runtime.service`, and its ordinary operation as
+`startService()`:
 
 ```typescript
-import { race } from "effection";
-import { once } from "@effectionx/node";
-import { createServer } from "node:net";
+interface ServiceEndpoint {
+  readonly hostname: string;
+  readonly port: number;
+}
 
-export function* findFreePort(): Operation<number> {
-  const server = createServer();
+interface ServiceStartOptions {
+  readonly command: string;
+  readonly cwd?: string;
+  readonly startupTimeout?: number;
+}
 
-  const listening = once(server, "listening");
-  const error = once<[Error]>(server, "error");
+interface ServiceResource {
+  readonly endpoint: Readonly<ServiceEndpoint>;
+}
 
-  server.listen(0);
-
-  try {
-    const rethrowError: Operation<never> = {
-      *[Symbol.iterator]() {
-        const [err] = yield* error;
-        throw err;
-      },
-    } as Operation<never>;
-
-    yield* race([listening, rethrowError]);
-
-    const addr = server.address();
-    if (!addr || typeof addr !== "object") {
-      throw new Error("findFreePort: unexpected address format");
-    }
-    return addr.port;
-  } finally {
-    server.close();
-  }
+interface ServiceHandler {
+  start(options: ServiceStartOptions): Operation<ServiceResource>;
 }
 ```
 
-The returned port number is a JSON-serializable primitive. When used in an
-eval block, it is exported to `env.values` and included in that block's
-diagnostic result. Each new run calls `findFreePort()` again.
-
-There is a small race window between closing the server and the
-caller binding the port — acceptable in practice, since daemon
-processes are expected to bind immediately after allocation.
+The endpoint is exactly a newly constructed frozen `{ hostname, port }` object.
+The terminal handler throws `ServiceProviderError`; shared runtime code never
+detects a host or silently starts a native process. Runtime-named CLI adapters
+provide the authenticated loopback implementation described in §6.7.
 
 #### `when`
 
 `when` from `@effectionx/converge` retries an inner operation with
-backoff until it completes without throwing. It is the idiomatic way
-to poll a readiness endpoint:
+backoff until it completes without throwing. It is useful for transient
+application-level conditions after an endpoint already exists:
 
 ```typescript
 yield* when(function* () {
-  yield* fetch(`http://127.0.0.1:${port}/health`).expect();
+  yield* fetch(`${baseUrl}/health`).expect();
 });
 ```
 
-`fetch().expect()` from `@effectionx/fetch` throws `HttpError` on
-non-2xx responses. Network-level errors (connection refused before the
-daemon is listening) throw natively. `when` catches both and retries
-until the assertion passes or the timeout expires.
+`fetch().expect()` from `@effectionx/fetch` throws `HttpError` on non-2xx
+responses. `when` catches it and retries until the assertion passes or the
+timeout expires. Cooperative-service startup readiness is established by the
+host protocol, not by polling from a document.
 
 #### Compiling blocks
 
@@ -1224,7 +1238,7 @@ The env preamble (`const { x, y } = env;`) is already in the
 
 Each run compiles and imports the current transformed source.
 
-### 4.3 Binding environment
+### 4.3 Durable and live binding environments
 
 ```typescript
 // src/types.ts
@@ -1240,6 +1254,26 @@ via the `env` value (§5.5); the expansion engine provides it
 scope-locally around each component body, so eval blocks within a
 component share bindings without leaking into parent or sibling
 components.
+
+`EvalEnv.values` is the **durable binding environment**. A private live overlay
+belongs to the same component environment but is not part of the public
+`EvalEnv` shape. The overlay holds service endpoints and values exported by
+`ephemeral eval`. Content projection switches back to the caller's environment,
+so a component's live overlay remains isolated from its parent, siblings and
+projected caller content.
+
+| Consumer | Durable bindings | Live bindings |
+| --- | --- | --- |
+| ordinary `eval` | yes | no |
+| `ephemeral eval` | yes | yes |
+| code-block and prose interpolation | yes | no |
+| journal serialization and replay restore | yes | no |
+
+The two namespaces may not overlap. `service=<binding>` validates the binding
+name and checks both environments before acquiring a process. `ephemeral eval`
+validates all exports against durable and existing live names before committing
+any of them. A failed block publishes nothing. Values from the live overlay are
+never substituted into a durable effect's source and never serialized.
 
 **Each evaluation runs against a snapshot, and commits its exports.** A block
 receives a plain object holding the bindings as they stood when it started. Its
@@ -1456,6 +1490,7 @@ run but are absent from the diagnostic trace.
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
+| `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
 | `src/errors.ts` | `ErrorMode`, `settle()`, `DocumentationError`, `ContentError` — the error-mode decision (§6.9) and the function-content failure boundary (§5.1.2) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
@@ -1463,15 +1498,20 @@ run but are absent from the diagnostic trace.
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
+| `src/modifiers/ephemeral.ts` | `ephemeralFactory` — replay-safe live eval wrapper |
+| `src/modifiers/service.ts` | `serviceFactory` — scoped cooperative-service acquisition |
 | `src/sample-api.ts` | `Sample` Api definition (§3.4) — LLM middleware surface |
-| `packages/runtime/find-free-port.ts` | `findFreePort()` — OS port allocation via `node:net` (separate `runtime` workspace package) |
+| `packages/runtime/service.ts` | provider-neutral `API.Service`, readiness protocol types and `startService()` resource |
 | `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
 | `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
-| `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs its `API.Env.command` adapter and compiler, then calls `runXmd` |
+| `packages/cli/src/service-host.ts` | shared authenticated readiness observer and supervised host-process adapter |
+| `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
+| `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
+| `packages/workflow/src/service-denial.ts` | non-delegating workflow service denial middleware |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -2982,14 +3022,14 @@ into surrounding prose naturally:
 
 ````markdown
 ```ts eval
-const port = yield* findFreePort();
-const baseUrl = `http://127.0.0.1:${port}`;
+const environment = "staging";
+const dashboard = "https://status.example.test/staging";
 ```
 
-Server running at {baseUrl} on port {port}.
+{environment} status: {dashboard}.
 ````
 
-Renders: `Server running at http://127.0.0.1:49821 on port 49821.`
+Renders: `staging status: https://status.example.test/staging.`
 
 **Precedence:** `{meta.*}` and `{props.*}` resolve first because they
 are the component's declared interface. If a component declares
@@ -3653,15 +3693,15 @@ segment interpolation pipeline).
 
 ````markdown
 ```ts eval
-const port = yield* findFreePort();
+const outputDirectory = "./build";
 ```
 
-```bash daemon exec
-./server --port {port}
+```bash exec
+mkdir -p {outputDirectory}
 ```
 ````
 
-`{port}` resolves to the number exported by the first block. The
+`{outputDirectory}` resolves to the string exported by the first block. The
 substituted content is used to build the subprocess command.
 
 #### Interpolation syntax and precedence
@@ -3738,221 +3778,75 @@ and strings.
 
 ### 6.7 Provider component pattern
 
-A **provider component** is a regular markdown component whose body
-follows a structured pattern that manages background process lifecycle
-for its subtree. It composes `eval` + `daemon` + `eval` (readiness)
-+ `eval` (middleware install) + `<children />` into a reusable
-component — no framework-level configuration, no `ExecuteOptions`
-changes.
+A **provider component** is a regular markdown component whose body acquires a
+cooperative service and installs middleware for its subtree. It composes
+`service=<binding>` + `persist ephemeral eval` + `<Content />`; the host, not
+the document, owns endpoint allocation and authenticated readiness.
 
 #### Structure
 
-1. An `eval` block that allocates resources and exports bindings
-   (port, URLs).
-2. A `daemon` block that starts the background process using those
-   bindings.
-3. An `eval` block that polls for readiness using `when`.
-4. An `eval` block that installs Sample Api middleware, closing over
-   `baseUrl` and `model`.
-5. `<children />` — the subtree that uses the running process.
+1. A `service=<binding>` block starts the cooperative command and waits for an
+   authenticated readiness record.
+2. A `persist ephemeral eval` block reads the live endpoint and installs
+   provider middleware in the component eval scope.
+3. `<Content />` expands the subtree while the supervised process and
+   middleware are active.
 
-#### `LlamafileProvider.md` — standard library component
-
-**File:** `components/LlamafileProvider.md`
-
-This file is part of the executable.md standard library and is distributed
-alongside the executable.md package. It is a regular markdown component — no
-code changes to the executable.md runtime are required to add it.
+#### Example
 
 ````markdown
 ---
 props:
   type: object
   properties:
-    model:
-      type: string
-      description: >
-        Model identifier. Serves two purposes: it is passed as the `model` field
-        in every /v1/chat/completions request, and it is the routing key that
-        sample calls use to target this provider. Must be unique among all
-        LlamafileProvider instances active simultaneously in the same document run.
-        Example: "phi3-mini", "qwen3-0.6b"
     command:
       type: string
-      description: >
-        Shell command to start the llamafile or llama.cpp server.
-        {port} is substituted with the allocated port number before execution.
-        Example: "./phi3-mini.llamafile --nobrowser"
-  required: [model, command]
+  required: [command]
   additionalProperties: false
 ---
 
-```ts eval
-const port = yield* findFreePort();
-const baseUrl = `http://127.0.0.1:${port}`;
+```bash service=server exec
+{command}
 ```
 
-```bash daemon exec
-{command} --port {port}
-```
-
-```ts eval
-yield* when(function* () {
-  yield* (yield* fetch(`${baseUrl}/health`)).expect();
+```ts persist ephemeral eval
+const endpoint = server;
+yield* Sample.around({
+  *sample([context], next) {
+    if (context.model !== undefined && context.model !== "local") {
+      return yield* next(context);
+    }
+    return yield* callProvider(endpoint, context);
+  },
 });
 ```
 
-```ts eval
-// Install Sample Api middleware on the current component scope.
-// baseUrl and model are closed over here — no context lookup at call time.
-// Routing: if context.model matches our model (or is unspecified), handle it.
-// Otherwise pass through to the next handler (an outer provider or the default).
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 2048 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<children />
+<Content />
 ````
 
-#### Prop-to-binding requirement (DEC-EX-09)
+The executable receives `XMD_SERVICE_HOST`, `XMD_SERVICE_PORT` and a
+cryptographically random `XMD_SERVICE_TOKEN`. It binds exactly the supplied
+loopback host and port, then writes one newline-terminated readiness record to
+stdout:
 
-Code block content uses bare `{name}` binding interpolation from
-`env.values` (§6.6). `{command}` in the daemon block and `model` in
-the middleware eval block must be present in `env.values` when those
-blocks run.
-
-Both are declared props, not eval results — so they are not
-automatically in `env.values`. The expansion engine must pre-populate
-`env.values` with all declared prop values at component invocation
-time, before any block executes:
-
-```typescript
-// In expandComponent(), before block execution:
-const componentEnv: EvalEnv = { values: { ...validatedProps } };
+```text
+XMD_SERVICE_READY:{"version":1,"token":"<token>","hostname":"127.0.0.1","port":43210}
 ```
 
-This makes all props available as bare bindings without any explicit
-capture step in the component body. It is consistent with how
-`findFreePort()` results enter `env.values`.
+The host installs its byte-level stdout observer before spawn. It suppresses
+the matching record, forwards every other stdout byte unchanged, and accepts
+readiness only when the JSON object has exactly those fields and matches the
+expected version, token, host and port. Malformed, forged, duplicate or late
+records fail the service without exposing the token or raw protocol line.
+Startup races readiness against process exit, protocol failure and the
+contextual startup timeout. After readiness the host continues supervising
+process exit and duplicate records until acquisition ends.
 
-#### Execution sequence
-
-**Block 1 — resource allocation:**
-`findFreePort()` is available as a VM global. The eval block exports
-`port` and `baseUrl` to `env.values`. The eval operation journals the result.
-
-**Block 2 — daemon spawn:**
-`{port}` is substituted from `env.values` into the command content
-before `buildCommand` runs. `{command}` is also substituted from
-`env.values` (populated from props via DEC-EX-09). The resulting
-command is forked into the eval scope. Control returns immediately.
-No journal entry.
-
-**Block 3 — readiness:**
-`when` polls with retries until the server responds. The eval operation
-journals the result.
-
-**Block 4 — middleware install:**
-`Sample` and `fetch` are standard imports in the generated
-eval module (via `@executablemd/core` and `@effectionx/fetch`, §4.2). The
-middleware closes over `baseUrl` and `model` at install time and issues the
-`/v1/chat/completions` request inline. Routing:
-if `context.model` matches the provider's model (or is unspecified),
-handle it; otherwise pass through via `next()`.
-
-**`<children />`:**
-Child expansion runs with the server alive and ready. `sample` calls
-in children reach the server at `baseUrl`.
-
-**Component scope closes:**
-The eval scope closes. The daemon task is cancelled. The subprocess
-is terminated.
-
-#### Usage examples
-
-**Single provider:**
-
-```markdown
-<LlamafileProvider model="phi3-mini" command="./phi3-mini.llamafile --nobrowser">
-  <AnalyzeTestFailures />
-</LlamafileProvider>
-```
-
-**Multiple models, sequential:**
-
-```markdown
-<LlamafileProvider model="qwen3-0.6b" command="./qwen3-0.6b.llamafile --nobrowser">
-  <ClassifyLogLevel />
-  <ExtractStructuredData />
-</LlamafileProvider>
-
-<LlamafileProvider model="phi3-mini" command="./phi3-mini.llamafile --nobrowser">
-  <InterpretTestFailures />
-</LlamafileProvider>
-```
-
-Each provider spawns its own process on its own port and executes
-sequentially — the second provider's process is not started until the
-first provider's scope closes.
-
-**Multiple models, simultaneous (nested):**
-
-```markdown
-<LlamafileProvider model="qwen3-0.6b" command="./qwen3-0.6b.llamafile --nobrowser">
-  <LlamafileProvider model="phi3-mini" command="./phi3-mini.llamafile --nobrowser">
-    <HybridAnalysis />
-  </LlamafileProvider>
-</LlamafileProvider>
-```
-
-Both processes are alive simultaneously during `<HybridAnalysis />`
-expansion. Sample calls route by `model`:
-
-````markdown
-<!-- inside HybridAnalysis.md -->
-
-```bash sample exec
-classify this output
-```
-<!-- no model → innermost provider wins (phi3-mini) -->
-
-```bash sample[model=phi3-mini] exec
-summarize this
-```
-<!-- explicit model → always phi3-mini regardless of nesting depth -->
-
-```bash sample[model=qwen3-0.6b] exec
-extract entities
-```
-<!-- explicit model → passes through phi3-mini handler, handled by qwen3-0.6b -->
-````
-
-Routing works because the inner provider's middleware is installed
-later and therefore sits higher in the middleware chain (traversed
-first). When `context.model` is `"phi3-mini"`, the inner handler
-accepts it. When `context.model` is `"qwen3-0.6b"`, the inner handler
-calls `next()` and the outer handler accepts it. When `context.model`
-is undefined, the innermost accepting handler wins.
+The service binding is live, so only the `ephemeral eval` block can read it.
+The block installs middleware in the invocation scope through `persist`; plain
+eval, interpolation and the journal cannot observe the endpoint. Partial replay
+runs both blocks again to reconstruct a current process and middleware chain.
+A completed replay expands nothing and starts no process.
 
 #### Nesting providers
 
@@ -3960,15 +3854,16 @@ Provider components nest naturally — each establishes its own eval
 scope boundary:
 
 ```markdown
-<LlamafileProvider command="./phi3-mini.llamafile">
+<LocalProvider command="./first-server">
   <DatabaseProvider command="./db-server">
     <MyReport />
   </DatabaseProvider>
-</LlamafileProvider>
+</LocalProvider>
 ```
 
-Both providers' scopes are nested — the inner provider is torn down
-before the outer, in standard structured concurrency order.
+Each acquisition receives a distinct host-selected endpoint and token. Both
+services remain live while the nested report expands; the inner service tears
+down before the outer in standard structured-concurrency order.
 
 ### 6.8 Sample component
 
@@ -5634,9 +5529,11 @@ export function* useTerminalOutput(): Operation<void> {
 **File:** `packages/cli/src/cli.ts` (separate `cli` workspace package)
 
 `cli.ts` makes no host-specific decision about **how this xmd is re-invoked,
-how an eval block compiles, or which runtime it is on**. A runtime-named
+how an eval block compiles, how a service process is hosted, or which runtime
+it is on**. A runtime-named
 entrypoint — `deno.ts`, `node.ts`, `bun.ts`, `compiled.ts` — installs its
-`API.Env` providers with `{ at: "min" }` and then calls `runXmd(args)`:
+`API.Env` providers with `{ at: "min" }` and passes the matching service
+installer to `runXmd(args, installService)`:
 
 ```typescript
 yield* API.Env.around(
@@ -5651,8 +5548,14 @@ yield* API.Env.around(
   },
   { at: "min" },
 );
-yield* runXmd(args);
+yield* runXmd(args, useDenoService);
 ```
+
+The installer is invoked only for `xmd run` and `xmd test`, immediately before
+`execute()`. Help, inspection and agent-worker paths never install or acquire a
+service. Each adapter supplies host randomness, inherited environment and
+stdout/stderr writers to the shared service host; production adapters reject a
+non-loopback requested host before spawning.
 
 Each entrypoint owns its own argument order; there is no shared builder for
 them to forward to. `cli.ts` still reaches the host directly for terminal and
@@ -5784,9 +5687,9 @@ Given a document:
 ```markdown
 # Title
 
-<LlamafileProvider ...>
+<LocalProvider command="./cooperative-server">
   <AnalyzeTests />
-</LlamafileProvider>
+</LocalProvider>
 
 ## Footer
 ```
@@ -6231,7 +6134,7 @@ visible warning blocks, gather into a separate error report).
 |---|------|--------|
 | H1 | Missing-provider printed errors | `importComponent`, `applyModifiers`, `codeBlock`, and `content` report clear missing-provider errors when no provider is installed |
 | H2 | Effection globals available | `sleep`, `spawn`, `createChannel` accessible in compiled block via standard imports |
-| H3 | executable.md globals available | `findFreePort`, `Sample`, `when` accessible in compiled block via `@executablemd/core` |
+| H3 | executable.md globals available | `Sample` and `when` accessible in compiled block via `@executablemd/core` |
 | H5 | `compileBlock` returns generator function | `yield* compileBlock(code, [])` returns a callable generator function |
 | H6 | Distinct modules per block | Each `compileBlock` call produces a separate module — no shared state between blocks |
 | H7 | `data:` URI encoding | Module source with special characters is correctly URI-encoded |
@@ -6713,20 +6616,20 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | Q6 | Process terminated on component error | If child expansion throws, process still terminated |
 | Q7 | Root cancellation resolves promptly | Cancelling the root resolves instead of waiting on the daemon's blocks; invocation teardown order is covered by Tier O |
 | Q8 | Premature exit propagates as error | Process exits during expansion → `daemon()` throws → `ErrorSegment` in output |
-| Q9 | `{port}` interpolation in daemon content | Binding from preceding `eval` block substituted into command |
+| Q9 | Durable interpolation in daemon content | Binding from preceding `eval` block substituted into fixed command configuration |
 | Q10 | `daemon` without eval scope | No eval scope in scope → clear error |
 | Q11 | Modifier chain: `bash daemon exec` | `daemon` is outermost terminal; `exec` present but never called |
 | Q12 | Repeated run: daemon starts and stops | Process is spawned and terminated again |
-| Q13 | Repeated run: current port used | Eval allocates a current port; daemon binds it |
+| Q13 | Repeated run: process restarts | Fixed daemon command is spawned on each document execution |
 | Q14 | Projected daemon terminated with the invocation | A daemon the caller wrote and the component only projected is gone in a block after the component; inside `<TempDir>` it is signalled while the directory still exists |
 
-### Tier R — VM globals
+### Tier R — VM globals and live eval
 
 | # | Test | Verify |
 |---|------|--------|
-| R1 | `findFreePort` accessible in eval block | `yield* findFreePort()` succeeds, returns a number |
-| R2 | `findFreePort` returns usable port | Returned port is bindable (no EADDRINUSE) |
-| R3 | `findFreePort` called on each run | No port is restored from an earlier trace |
+| R1 | Live overlay hidden from plain eval | A service binding is absent from the ordinary eval preamble |
+| R2 | Live overlay hidden from interpolation | `{server}` remains literal rather than becoming an endpoint string |
+| R3 | `ephemeral eval` executes during partial replay | Live bindings and middleware are reconstructed without a journal entry |
 | R4 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
 | R5 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
 | R6 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
@@ -6735,20 +6638,20 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 
 | # | Test | Verify |
 |---|------|--------|
-| S1 | Full provider golden run | eval → daemon → when → children → cleanup |
-| S2 | Port flows from eval to daemon | `{port}` in daemon content matches `findFreePort()` result |
-| S3 | Children can call sample after daemon ready | `sample` calls in children reach daemon endpoint |
-| S4 | Daemon terminated after children expand | After `execute` completes, process not running |
-| S5 | Provider crash during `when` | Daemon exits before ready → `when` fails → `ErrorSegment` |
-| S6 | Provider crash during children | Daemon exits mid-child-expansion → error propagated |
+| S1 | Full provider golden run | service → persistent ephemeral middleware → children → cleanup |
+| S2 | Endpoint flows to ephemeral middleware | `server` is an exact frozen loopback endpoint available only to ephemeral eval |
+| S3 | Children can call sample after protocol readiness | `sample` calls in children reach the acquired endpoint |
+| S4 | Service terminated after children expand | After `execute` completes, process is not running |
+| S5 | Process exits before readiness | Startup fails with a dedicated exit-before-ready error |
+| S6 | Provider crashes during children | Supervision failure propagates and teardown completes |
 | S7 | Nested providers | Outer + inner provider → both start, inner tears down first |
 | S8 | Nested providers, no model | Innermost provider handles sample call |
 | S9 | Nested providers, explicit model matching outer | Inner passes through, outer handles |
 | S10 | Nested providers, explicit model matching inner | Inner handles regardless of nesting depth |
 | S11 | Unmatched model | Chain exhausted → descriptive error naming the model |
-| S12 | Repeated provider run | Eval, daemon, readiness, and HTTP calls execute again |
-| S13 | Interrupted provider run | Partial diagnostic trace is not accepted as resume input |
-| S14 | Multiple provider instances | Two provider siblings → two processes, different ports |
+| S12 | Partial replay | Service acquisition and ephemeral middleware execute again after the recorded prefix |
+| S13 | Completed replay | Completed document returns without process spawn or token allocation |
+| S14 | Multiple provider instances | Two provider siblings → two processes, distinct endpoints and tokens |
 
 ### Tier EO — eval output() function
 
@@ -7132,28 +7035,28 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 38 | `daemon` produces no journal entry | The process is an ephemeral resource and starts on every run |
 | 39 | Eval binding interpolation uses bare `{name}` syntax | Distinct from `{meta.key}` and `{props.key}` namespaces; local eval bindings are local variables, not namespaced data; regex excludes names containing `.` to avoid conflicts |
 | 40 | Eval binding interpolation runs in the expansion engine, not inside modifier factories | Modifiers transform execution results — they are not responsible for preparing source text; one interpolation site in `expandSegments` is consistent with how text segment interpolation already works, and keeps modifier factories free of knowledge about the binding environment |
-| 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
-| 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
+| 41 | Service allocation belongs to a host adapter | Holding an OS-selected port across spawn is host process and networking behavior; shared runtime and document code use provider-neutral `API.Service` |
+| 42 | Service endpoints are live bindings | The endpoint identifies an execution-owned process and is reconstructed during partial replay, so it cannot enter durable eval, interpolation or the journal |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
 | 44 | Provider lifecycle expressed as a component, not an `ExecuteOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
-| 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
-| 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; the binding environment is already the shared state carrier for within-component coordination; scope-correct because a fresh environment is provided per component expansion |
+| 45 | Cooperative readiness is an authenticated stdout protocol | The host observes from before spawn, verifies version/token/host/port exactly and supervises the process continuously without a close-and-rebind race |
+| 46 | Provider middleware reads an endpoint from the live overlay | The current endpoint is available to `ephemeral eval` while remaining invisible to durable effects and interpolation |
 | 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
 | 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
 | 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
 | 50 | `renderChildren`/`render` are closures in `env.values`, not an Api | A Render Api would require middleware installation per component; closures are simpler and capture the expansion context at the injection point; they are non-serializable and silently omitted from the journal |
 | 51 | `renderChildren`/`render` install the caller's environment and `parentEvalScope` as scope-local providers | Children are caller-provided content and expand in the caller's scope context; the component's `childEvalScope` sequential channel is for its own `persist eval` blocks, not for expanding caller content; children may create resources (nested components, daemons) but their lifecycle is bound by their place in the expansion tree; installing providers inside the closure ensures the correct context is visible regardless of which task it runs in |
-| 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
+| 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by provider components with `persist ephemeral eval` lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
 | 53 | Sample component calls `Sample.operations.sample()` directly | The enclosing eval operation journals the complete block result |
 | 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |
 | 55 | `daemon()` uses `shell: true` | Matches `bash exec` block semantics — the same command string passed to `bash -c` is passed to the shell; handles shell expansions and PATH lookups correctly |
-| 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `execute()` would execute in the outer scope at call time, where the binding environment has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
+| 56 | Provider installs middleware inside its invocation | Middleware closes over the current live endpoint and remains lexically scoped to the subtree that owns the service |
 | 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
-| 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import executable.md globals from `@executablemd/core`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
+| 59 | Provider components use ordinary generated-module imports | Provider-specific client functions may be imported explicitly; executable.md supplies `Sample`, `when`, `fetch` and the contextual document bindings |
 | 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
-| 61 | `callLlamafile()` uses `@effectionx/fetch` | The HTTP call is an Effection operation executed once per document run |
-| 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; the hardcoded path covers the supported targets |
+| 61 | Provider HTTP calls use `@effectionx/fetch` | Calls remain Effection operations under structured cancellation and the provider's lexical middleware |
+| 62 | Protocol readiness and application health are separate | The readiness record proves the cooperative process owns the assigned endpoint; an application may still use `when` for a later domain-specific condition |
 | 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the executable.md `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
 | 64 | `DocumentOutput` Api with single `output` operation | Extensible to progress/printed errors; middleware-composable via `scope.around`; single Api surface for all output concerns |
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
@@ -7180,7 +7083,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |
 | 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; lets a component's whole body be one conditional expression |
-| 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; removes `sampleFactory`, `durableSample`, `callLlamafile`, `callOllama`, `callAnthropic`; simplifies the modifier chain to pure exec/eval concerns |
+| 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; provider-specific call helpers are not built-in modifier behavior |
 | 87 | `SampleContext` simplified to content-centric shape | Changed from exec-centric `{stdout, stderr, exitCode, command, language}` to content-centric `{content, model?, params?, system?, componentName?}`; providers build their own messages directly instead of relying on `buildDefaultMessages` |
 | 91 | Projected children carry caller's eval env | Children substituted via `<Content />` are tagged with `projectedEnv`. Expression props on projected children resolve against merged env (caller + component), with component bindings taking precedence. Follows React's lexical scoping model. |
 | 92 | Multi-level projection env propagation | When `expandComponent` receives `projectedEnv`, it merges it with the current context env before tagging the next level's children. Creates a cumulative chain: Root → Provider → Instruction → ReviewBody all carry root bindings. Innermost-wins on collision. |
