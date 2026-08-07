@@ -845,6 +845,29 @@ omitted, and non-finite numbers become `null`.
 Structured backends such as HTTP retain their own transport encoding; this
 function defines the NDJSON representation, not a requirement on every backend.
 
+`parseDurableEvent(record)` is the inverse. It reads one record — the
+terminating newline optional, since `JSON.parse` ignores trailing whitespace —
+and returns `Ok(event)` or `Err(MalformedDurableEventError)`. A backend that
+retains the record rather than the event, such as a journal file or a SQLite
+column, reads it back through this function.
+
+The record is parsed, never trusted. Every member is checked against the
+protocol types and the returned event is rebuilt from the checked members, so
+no value reaches replay because it merely looked plausible. The closed shapes —
+the event envelope, a `Result`, a `SerializedError` — reject members they do
+not declare. An `EffectDescription` declares an index signature, so its extra
+members are admitted as `Json`; those are the input fields replay guards read.
+A number that overflows to infinity, which `1e999` does, is refused rather than
+restored as a value `JSON.stringify` cannot write back.
+
+`MalformedDurableEventError.path` locates the offending member, such as
+`$.result.error.message`. Members the protocol does not name — the extra
+description fields, anything inside a result value — appear as `*`, because a
+record's own member names are as much retained content as its values. Neither
+the path nor the message repeats anything from the record: a journal is
+retained, filtered history, and a parse failure is not a reason to copy its
+contents into an error that travels to logs and terminals.
+
 ### 11.3 Stream consistency
 
 > **INVARIANT (Append-Only):** Events are only appended, never updated

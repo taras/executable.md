@@ -551,6 +551,34 @@ Structured backends keep their own transport encoding. This function defines the
 representation used by file persistence and by anything that inspects the
 persisted form.
 
+### Reading an event back
+
+`parseDurableEvent` is the inverse. A backend that retains the record rather
+than the event — a journal file, a SQLite column — reads it back through this
+function. The terminating newline is optional, so a stored record and a line
+split out of a journal file both parse.
+
+```typescript
+import { parseDurableEvent } from "@effectionx/durable-streams";
+
+const result = parseDurableEvent(record);
+if (!result.ok) {
+  // result.error is a MalformedDurableEventError; `.path` names the member,
+  // such as `$.result.error.message`.
+}
+```
+
+The record is parsed, never trusted. Every member is checked against the
+protocol types and the event is rebuilt from the checked members. The closed
+shapes — the event envelope, a `Result`, a `SerializedError` — reject members
+they do not declare, while an `EffectDescription` admits the extra `Json`
+members replay guards read.
+
+Nothing from the record reaches the failure. Members the protocol does not name
+appear in the path as `*` rather than by name, because a record's own member
+names are as much retained content as its values, so a parse failure copies
+neither into logs and terminals.
+
 ---
 
 ## Pre-persistence gates

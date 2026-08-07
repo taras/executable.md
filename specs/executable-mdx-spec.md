@@ -6582,6 +6582,73 @@ Defined in [Workflow runs](./workflow-spec.md).
 | WR12 | A slow base | Resolving one run's base does not stall a sibling execution |
 | WR13/WR14 | Seeded journals | A completed and a truncated journal written by hand restore without any live run having happened |
 
+### Tier WD — Workflow definitions and storage contracts
+
+Provider-neutral, and portable across every runtime. Defined in
+[Workflow runs](./workflow-spec.md) §9.
+
+| # | Test | Verify |
+|---|------|--------|
+| WD1 | Round trip | A descriptor parses, serializes and parses back to the same value |
+| WD2/WD3 | Closed shape | An undeclared member is refused, and so is anything that is not an object |
+| WD4/WD5/WD6 | Object identity | Only version 1 and the git kind; an object ID of the length its format requires, in lowercase hexadecimal |
+| WD7/WD8 | Root document path | Absolute, backslashed, NUL-bearing, empty, `.`, `..` and unnormalized paths are refused; ordinary nested paths are not |
+| WD9 | No echo | A refusal never quotes the value it refused |
+| WD10/WD11/WD12 | Stored shapes | Exactly six statuses; both stop-reason variants, and neither a mixture nor a message |
+| WD13 | Canonical values | Key order does not change what a value is named |
+| WD14/WD15/WD16 | Compatible reuse | Every immutable field is compared and named when it differs; status, stop reason and timestamps take no part |
+| WD17 | No provider | `create` and `lookup` refuse rather than answering with an empty store |
+
+### Tier WS — Retained workflow runs
+
+Runs against the production Deno adapter, on real files. Defined in
+[Workflow runs](./workflow-spec.md) §9.
+
+| # | Test | Verify |
+|---|------|--------|
+| WS1 | One file, no registry | A run is one file named for its ID, and nothing else appears |
+| WS2/WS3 | Compatible create | Creating an id twice addresses one run; props compare as values, not text |
+| WS4/WS5 | Conflict | Every immutable field refuses a different value, naming the field and never the value |
+| WS6 | Missing lookup | Creates no file |
+| WS7 | Collision | A database holding another run is refused rather than adopted |
+| WS8/WS9 | Unusable request | An unparseable request, and a storage root that is not absolute, are refused before anything is opened |
+| WS8b/WS8c | Fabricated input | A request that is not an object, an undeclared member, and a run id that is not a usable id all answer rather than throwing |
+| WS10–WS12 | Status and stop reason | All six statuses survive with their reasons; a journal reason names an event the run holds, and one that does not is refused; a reason is parsed on the way in |
+| WS13/WS14 | Document executions | Start and every resume get a record; an execution finishes once |
+| WS15–WS15c | Retrieval metadata | Replaceable and clearable without touching identity; two handles neither lose each other's revision nor carry one past a clear |
+| WS16/WS17 | Restart | Identity, state, retrieval and executions restore; an unfinished execution stays unfinished |
+| WS18 | Closed handle | Answers with a failure and reopens nothing |
+| WS19–WS21 | Not our database | A foreign application ID, non-SQLite bytes, and older and newer schema versions are refused and left unchanged |
+| WS21b | Not pristine | A file carrying a version, or somebody else's tables, is not initialized into |
+| WS22 | Not shaped like version 1 | A missing table, a missing singleton row, a dropped constraint, an extra table and an extra view are each damage |
+| WS23–WS26 | Values a record cannot use | A descriptor that describes nothing, an empty identity or base, a timestamp that is not an instant or names a day that never happened, a stored stop time, an empty journal identity, and props that are not an object are refused without quoting what they held |
+| WS24d | A number too large to hold | A 64-bit stored value reaches a parser instead of escaping as an error quoting it |
+| WS27 | Damage | A scribbled page is reported as damage, and the file stays where it is |
+
+### Tier WJ — The retained journal and caller-owned transactions
+
+Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
+
+| # | Test | Verify |
+|---|------|--------|
+| WJ1/WJ2 | Order and representation | Events replay in append order, stored as the protocol wrote them |
+| WJ3 | Stable identity | An event keeps its opaque ID across reads and across processes |
+| WJ4 | Unreadable row | A row that is not an event is refused rather than replayed |
+| WJ5–WJ5b | Filtering order | A gate that rejects leaves no row, through the standalone journal and through a transaction's |
+| WJ5c/WJ5d | Insertion failure | A real SQLite refusal leaves no partial event, and an append it had already accepted in the same transaction goes away with it |
+| WJ6/WJ6b | Cancelled filtering | A gate cancelled mid-scan leaves no row, through the standalone journal and through a transaction's |
+| WJ7/WJ8/WJ9 | Transaction outcome | A completed body publishes; a failed or cancelled one publishes nothing and leaves the handle usable |
+| WJ10/WJ11 | Nesting | A transaction inside a transaction, and an ordinary operation inside a body, are refused rather than deadlocked |
+| WJ12 | Escaped handle | A transaction handle kept past its body appends nothing |
+| WJ13/WJ14 | Teardown | Cleanup belonging to work the body started is inside the transaction when it commits, and rolls back with it when it fails |
+| WJ15–WJ15c | Savepoint and nesting | Nested work rolls back inside a transaction that still commits; a savepoint outside any transaction is refused; a transaction on another run does not hide the one already held |
+| WJ16/WJ17 | No accidental enlistment | An unrelated append waits for an open transaction, and neither joins it nor is rolled back with it |
+| WJ18/WJ19 | Serialization | Operations never overlap; one cancelled while queued never reaches the database |
+| WJ20/WJ21 | Two handles, one run | A second handle waits without stopping the host, and its work is not enlisted in the first's transaction |
+| WJ22/WJ23 | Concurrent creation | Compatible callers converge on one run; conflicting ones produce one winner and one conflict |
+| WJ24 | Two processes | Two real processes racing to create one run leave one winner and one conflict |
+| WJ25 | A second process | Restores the run, preserves journal order and identity, and performs no recorded operation again |
+
 ### Tier SL — Own-scope context updates
 
 | # | Test | Verify |
