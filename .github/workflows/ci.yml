@@ -264,10 +264,6 @@ jobs:
     # and concurrent checks do not dirty what another reads — is worth a
     # post-merge run, not a place on every pull request's critical path (#279).
     if: github.event_name == 'push'
-    # A wedged `deno bundle` ↔ esbuild pair inside the battery would otherwise
-    # hang this job to the six-hour default with nothing printed. The battery
-    # itself settles a stuck command at 20 minutes; this is the backstop.
-    timeout-minutes: 60
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
