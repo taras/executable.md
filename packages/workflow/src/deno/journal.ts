@@ -53,10 +53,10 @@ export function readJournalEntries(database: DatabaseSync): JournalEntry[] {
   for (const row of database.prepare(SELECT).all()) {
     const eventId = row["event_id"];
     const record = row["record"];
-    if (typeof eventId !== "string") {
+    if (typeof eventId !== "string" || eventId === "") {
       throw new WorkflowRecordMalformedError(
         "journal_events.event_id",
-        `expected text, found ${describe(eventId)}`,
+        `expected a non-empty identity, found ${describe(eventId)}`,
       );
     }
     if (typeof record !== "string") {

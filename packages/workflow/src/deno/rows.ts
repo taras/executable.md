@@ -67,48 +67,64 @@ function optionalText(row: Row, column: string, table: string): string | undefin
 }
 
 /**
- * Text that names something, which the empty string does not.
+ * Text that says something, which the empty string does not.
  *
- * `NOT NULL` says a column has text in it. It does not say the text is an
- * identity, and a run whose id is empty is addressable by nobody.
+ * `NOT NULL` says a column has text in it. It does not say the text names
+ * anything, and a run whose id is empty is addressable by nobody.
  */
-function identifier(row: Row, column: string, table: string): string {
+function nonEmpty(row: Row, column: string, table: string): string {
   const value = text(row, column, table);
   if (value === "") {
-    throw new WorkflowRecordMalformedError(`${table}.${column}`, "expected a non-empty identity");
+    throw new WorkflowRecordMalformedError(`${table}.${column}`, "expected a non-empty value");
   }
   return value;
 }
-
-/** The exact spelling `toISOString()` produces, which is what storage writes. */
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /**
  * A moment, rather than any text at all.
  *
  * SQLite has no date type, so a timestamp column holds whatever text it was
- * given. Checking the shape here is what keeps "when did this run start" an
- * answer rather than a string that once looked like one.
+ * given. The check is a round trip rather than a pattern: `Date` accepts the
+ * 31st of February and quietly answers with the 3rd of March, so a shape test
+ * alone would admit a day that never happened and then report a different one.
  */
 function instant(row: Row, column: string, table: string): string {
   const value = text(row, column, table);
-  if (!INSTANT.test(value) || Number.isNaN(Date.parse(value))) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) {
     throw new WorkflowRecordMalformedError(`${table}.${column}`, "expected an ISO 8601 instant");
   }
   return value;
 }
 
-function integer(row: Row, column: string, table: string): number {
+/** The same, for a column that may hold nothing yet. */
+function optionalInstant(row: Row, column: string, table: string): string | undefined {
+  return optionalText(row, column, table) === undefined ? undefined : instant(row, column, table);
+}
+
+/**
+ * A count, rather than a number SQLite can hold and JavaScript cannot.
+ *
+ * The statement reads integers as `bigint`, because a plain read of a column
+ * holding a 64-bit value throws a `RangeError` that quotes it — before any
+ * parser here could refuse it without doing the same.
+ */
+function positiveInteger(row: Row, column: string, table: string): number {
   const value = row[column];
-  if (typeof value === "number" && Number.isSafeInteger(value)) {
-    return value;
-  }
+  const location = `${table}.${column}`;
+
   if (typeof value === "bigint") {
+    if (value < 1n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new WorkflowRecordMalformedError(location, "expected a positive whole number");
+    }
     return Number(value);
   }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 1) {
+    return value;
+  }
   throw new WorkflowRecordMalformedError(
-    `${table}.${column}`,
-    `expected an integer, found ${describe(value)}`,
+    location,
+    `expected a positive whole number, found ${describe(value)}`,
   );
 }
 
@@ -176,9 +192,9 @@ export function readDefinition(row: Row, table: string): WorkflowDefinition {
 export function readRunRecord(row: Row): WorkflowRunRecord {
   const table = "workflow_run";
   const record: WorkflowRunRecord = {
-    runId: identifier(row, "run_id", table),
+    runId: nonEmpty(row, "run_id", table),
     definition: readDefinition(row, table),
-    base: text(row, "base", table),
+    base: nonEmpty(row, "base", table),
     props: jsonObject(row, "props", table),
     status: readStatus(row, "status", table),
     createdAt: instant(row, "created_at", table),
@@ -193,7 +209,7 @@ export function readRetrieval(row: Row): DefinitionRetrieval {
   const table = "definition_retrieval";
   return Object.freeze({
     metadata: json(row, "metadata", table),
-    revision: integer(row, "revision", table),
+    revision: positiveInteger(row, "revision", table),
     updatedAt: instant(row, "updated_at", table),
   });
 }
@@ -202,10 +218,10 @@ export function readRetrieval(row: Row): DefinitionRetrieval {
 export function readDocumentExecution(row: Row): DocumentExecutionRecord {
   const table = "document_executions";
   const record: DocumentExecutionRecord = {
-    executionId: identifier(row, "execution_id", table),
+    executionId: nonEmpty(row, "execution_id", table),
     startedAt: instant(row, "started_at", table),
   };
-  const stoppedAt = optionalText(row, "stopped_at", table);
+  const stoppedAt = optionalInstant(row, "stopped_at", table);
   if (stoppedAt === undefined) {
     return Object.freeze(record);
   }

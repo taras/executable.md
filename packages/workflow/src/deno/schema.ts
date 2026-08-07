@@ -102,7 +102,7 @@ const TABLES: ReadonlyMap<string, string> = new Map([
     `CREATE TABLE definition_retrieval (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   metadata TEXT NOT NULL CHECK (json_valid(metadata)),
-  revision INTEGER NOT NULL CHECK (revision >= 1),
+  revision INTEGER NOT NULL CHECK (revision >= 1 AND revision <= 9007199254740991),
   updated_at TEXT NOT NULL
 ) STRICT`,
   ],

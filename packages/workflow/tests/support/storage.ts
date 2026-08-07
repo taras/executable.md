@@ -126,16 +126,21 @@ export function committedEventCount(path: string): number {
 }
 
 /**
- * Make the next journal insertion fail inside SQLite.
+ * Make one particular journal insertion fail inside SQLite.
  *
  * A trigger rather than a stubbed statement: the failure has to come from the
- * database, after the row has been offered to it, so that what is being tested
- * is the transaction's response to a real insertion failure and not a mock's.
+ * database, after the row has been offered to it, so what is under test is the
+ * transaction's response to a real insertion failure and not a mock's.
+ *
+ * It matches one event name rather than every insertion, so a test can append
+ * successfully first and then fail — which is the case worth proving, since
+ * that is where a partial transaction would show.
  */
-export function refuseNextJournalInsert(path: string): void {
+export function refuseJournalInsertNamed(path: string, name: string): void {
   tamper(path, (database) => {
     database.exec(`
       CREATE TRIGGER refuse_journal_insert BEFORE INSERT ON journal_events
+      WHEN NEW.record LIKE '%"name":"${name}"%'
       BEGIN
         SELECT raise(ABORT, 'the journal refuses this row');
       END

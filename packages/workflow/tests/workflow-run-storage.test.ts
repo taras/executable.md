@@ -20,6 +20,7 @@ import { type Result, scoped } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  type CreateWorkflowRunRequest,
   type GitWorkflowDefinitionV1,
   WORKFLOW_RUN_STATUSES,
   WorkflowDatabaseClosedError,
@@ -68,6 +69,19 @@ function fabricated(value: Json): JsonObject {
   const container: { props: JsonObject } = { props: {} };
   Object.defineProperty(container, "props", { value, enumerable: true });
   return container.props;
+}
+
+/** The same trick for a whole request, and for a run id. */
+function fabricatedRequest(value: unknown): CreateWorkflowRunRequest {
+  const container: { request: CreateWorkflowRunRequest } = { request: request() };
+  Object.defineProperty(container, "request", { value, enumerable: true });
+  return container.request;
+}
+
+function fabricatedId(value: unknown): string {
+  const container: { id: string } = { id: "" };
+  Object.defineProperty(container, "id", { value, enumerable: true });
+  return container.id;
 }
 
 describe("Tier WS — creating and finding a run", () => {
@@ -225,6 +239,50 @@ describe("Tier WS — creating and finding a run", () => {
     expect(descriptor.ok).toBe(false);
     expect(!descriptor.ok && descriptor.error).toBeInstanceOf(WorkflowDefinitionError);
 
+    expect(entries(root)).toEqual([]);
+  });
+
+  it("WS8b: a request that is not even a request answers, rather than throwing", function* () {
+    const root = yield* useStorageRoot();
+
+    // The types say what a caller meant. What arrives is whatever the language
+    // allows — a host built without types, or one that read a request out of a
+    // file — and reading `.runId` off `null` fails as a TypeError rather than
+    // as an answer about the request.
+    const results = yield* withStorage(root, function* () {
+      return [
+        yield* create(fabricatedRequest(null)),
+        yield* create(fabricatedRequest(undefined)),
+        yield* create(fabricatedRequest("a string")),
+        yield* create(fabricatedRequest({ ...request(), extra: "undeclared" })),
+        yield* create(fabricatedRequest({ ...request(), runId: 17 })),
+      ];
+    });
+
+    for (const result of results) {
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
+    }
+    expect(entries(root)).toEqual([]);
+  });
+
+  it("WS8c: a lookup id that is not a usable id answers the same way", function* () {
+    const root = yield* useStorageRoot();
+
+    const results = yield* withStorage(root, function* () {
+      return [
+        yield* lookup(fabricatedId(undefined)),
+        yield* lookup(fabricatedId(null)),
+        yield* lookup(fabricatedId(42)),
+        yield* lookup(""),
+        yield* lookup("has-a\u0000nul"),
+      ];
+    });
+
+    for (const result of results) {
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
+    }
     expect(entries(root)).toEqual([]);
   });
 
@@ -443,6 +501,59 @@ describe("Tier WS — what a run retains", () => {
 });
 
 describe("Tier WS — surviving the process", () => {
+  it("WS15b: two handles replacing metadata do not lose each other's revision", function* () {
+    const root = yield* useStorageRoot();
+
+    // Both handles are opened before either replacement, so each one's own
+    // snapshot says there is no metadata. A revision counted from the snapshot
+    // rather than from the database would be written as one twice.
+    const seen = yield* withStorage(root, function* () {
+      const first = yield* createRun();
+      const second = yield* createRun();
+
+      const one = yield* first.replaceRetrievalMetadata({ checkout: "/tmp/a" });
+      const two = yield* second.replaceRetrievalMetadata({ checkout: "/tmp/b" });
+      if (!one.ok || !two.ok) {
+        throw new Error("expected both replacements to be stored");
+      }
+
+      const found = yield* lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return found.value.retrieval;
+    });
+
+    expect(seen?.revision).toBe(2);
+    expect(seen?.metadata).toEqual({ checkout: "/tmp/b" });
+  });
+
+  it("WS15c: clearing through one handle restarts a stale handle's next revision", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const first = yield* createRun();
+      const second = yield* createRun();
+
+      yield* first.replaceRetrievalMetadata({ checkout: "/tmp/a" });
+      yield* first.replaceRetrievalMetadata({ checkout: "/tmp/b" });
+      yield* first.replaceRetrievalMetadata(undefined);
+
+      // This handle still believes there is no metadata, and this time it is
+      // right — but for a reason it did not observe.
+      yield* second.replaceRetrievalMetadata({ checkout: "/tmp/c" });
+
+      const found = yield* lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return found.value.retrieval;
+    });
+
+    expect(seen?.revision).toBe(1);
+    expect(seen?.metadata).toEqual({ checkout: "/tmp/c" });
+  });
+
   it("WS16: a second scope restores identity, state, retrieval and executions", function* () {
     const root = yield* useStorageRoot();
 
@@ -696,8 +807,17 @@ describe("Tier WS — refusing what is not this run's database", () => {
     // record claiming to know when a run started or what it is called.
     const cases = [
       { runId: "empty-id", set: `run_id = ''`, column: "workflow_run.run_id" },
+      { runId: "empty-base", set: `base = ''`, column: "workflow_run.base" },
       { runId: "vague-time", set: `created_at = 'a while ago'`, column: "workflow_run.created_at" },
       { runId: "loose-time", set: `updated_at = '2026-08-07'`, column: "workflow_run.updated_at" },
+      {
+        // The 31st of February: correctly shaped, and a day that never
+        // happened. `Date` answers with the 3rd of March rather than refusing,
+        // so only a round trip catches it.
+        runId: "impossible-time",
+        set: `created_at = '2026-02-31T00:00:00.000Z'`,
+        column: "workflow_run.created_at",
+      },
     ];
 
     for (const one of cases) {
@@ -713,6 +833,117 @@ describe("Tier WS — refusing what is not this run's database", () => {
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowRecordMalformedError);
       expect(!result.ok && result.error.message).toContain(one.column);
     }
+  });
+
+  it("WS24b: a stored stop time and an oversized revision are refused too", function* () {
+    const root = yield* useStorageRoot();
+
+    const stopped = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "bad-stop-time" });
+      const started = yield* database.beginDocumentExecution();
+      if (!started.ok) {
+        throw started.error;
+      }
+      yield* database.finishDocumentExecution({
+        executionId: started.value.executionId,
+        status: "completed",
+      });
+
+      tamper(runPath(root, "bad-stop-time"), (raw) => {
+        raw.prepare("UPDATE document_executions SET stopped_at = 'whenever'").run();
+      });
+
+      const found = yield* lookup("bad-stop-time");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return yield* found.value.readDocumentExecutions();
+    });
+
+    expect(stopped.ok).toBe(false);
+    expect(!stopped.ok && stopped.error).toBeInstanceOf(WorkflowRecordMalformedError);
+    expect(!stopped.ok && stopped.error.message).toContain("document_executions.stopped_at");
+
+    // A revision SQLite can hold and JavaScript cannot. Version 1 bounds the
+    // column, so storing one means removing the bound — and that is caught as
+    // damage, before the number is read at all.
+    const oversized = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "huge-revision" });
+      yield* database.replaceRetrievalMetadata({ checkout: "/tmp/a" });
+
+      tamper(runPath(root, "huge-revision"), (raw) => {
+        raw.exec(`
+          DROP TABLE definition_retrieval;
+          CREATE TABLE definition_retrieval (
+            id INTEGER PRIMARY KEY, metadata TEXT, revision INTEGER, updated_at TEXT
+          );
+          INSERT INTO definition_retrieval
+            VALUES (1, '{"checkout":"/tmp/a"}', 9223372036854775807, '2026-08-07T00:00:00.000Z');
+        `);
+      });
+
+      return yield* lookup("huge-revision");
+    });
+
+    expect(oversized.ok).toBe(false);
+    expect(!oversized.ok && oversized.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+    expect(!oversized.ok && oversized.error.message).not.toContain("9223372036854775807");
+  });
+
+  it("WS24d: a 64-bit stored number never escapes as a RangeError quoting it", function* () {
+    const root = yield* useStorageRoot();
+
+    // Not every integer column is bounded — a physical sequence is SQLite's
+    // own. Read plainly, `node:sqlite` throws a RangeError that quotes the
+    // number; every statement therefore reads integers as bigint, so the value
+    // reaches a parser rather than an error message.
+    const executions = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const started = yield* database.beginDocumentExecution();
+      if (!started.ok) {
+        throw started.error;
+      }
+
+      tamper(runPath(root, "release-1.4"), (raw) => {
+        raw.prepare("UPDATE document_executions SET sequence = 9223372036854775807").run();
+      });
+
+      const found = yield* lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return yield* found.value.readDocumentExecutions();
+    });
+
+    expect(executions.ok).toBe(true);
+    expect(executions.ok && executions.value).toHaveLength(1);
+  });
+
+  it("WS24c: a journal event with no identity is refused", function* () {
+    const root = yield* useStorageRoot();
+
+    const result = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append({
+        type: "close",
+        coroutineId: "root",
+        result: { status: "ok", value: "done" },
+      });
+
+      tamper(runPath(root, "release-1.4"), (raw) => {
+        raw.prepare("UPDATE journal_events SET event_id = ''").run();
+      });
+
+      const found = yield* lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return yield* found.value.readJournalEntries();
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowRecordMalformedError);
+    expect(!result.ok && result.error.message).toContain("journal_events.event_id");
   });
 
   it("WS25: props that are not an object are refused by the schema and the parser", function* () {

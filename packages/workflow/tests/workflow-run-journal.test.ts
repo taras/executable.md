@@ -37,12 +37,12 @@ import {
   type WorkflowRunTransaction,
   WorkflowTransactionError,
 } from "../mod.ts";
-import { ActiveTransaction } from "../src/deno/database.ts";
+import { NoOpenTransactionError, savepoint } from "../src/deno/transaction.ts";
 import {
   allowJournalInserts,
   committedEventCount,
   createRun,
-  refuseNextJournalInsert,
+  refuseJournalInsertNamed,
   request,
   runPath,
   tamper,
@@ -256,9 +256,11 @@ describe("Tier WJ — what reaches SQLite", () => {
 
     const seen = yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* database.journal.append(yielded("before", "before"));
+      // The database refuses exactly one event, so the appends around it are
+      // ordinary successful ones rather than casualties of the fixture.
+      refuseJournalInsertNamed(path, "refused");
 
-      refuseNextJournalInsert(path);
+      yield* database.journal.append(yielded("before", "before"));
 
       let raised: unknown;
       try {
@@ -267,9 +269,8 @@ describe("Tier WJ — what reaches SQLite", () => {
         raised = error;
       }
 
-      // The transaction the append opened for itself rolled back, and the
-      // handle is still usable afterwards.
-      allowJournalInserts(path);
+      // The transaction the failed append opened for itself rolled back, and
+      // the handle is still usable.
       yield* database.journal.append(yielded("after", "after"));
 
       return { raised, events: yield* database.journal.readAll() };
@@ -285,19 +286,26 @@ describe("Tier WJ — what reaches SQLite", () => {
 
     const seen = yield* withStorage(root, function* () {
       const database = yield* createRun();
-      refuseNextJournalInsert(path);
+      refuseJournalInsertNamed(path, "doomed");
+
+      let companionInserted = false;
 
       const result = yield* database.transact(function* (transaction) {
+        // This one is accepted by SQLite. The point of the test is what
+        // happens to it when a later append in the same transaction is not.
         yield* transaction.journal.append(yielded("companion", "companion"));
+        companionInserted = true;
+        yield* transaction.journal.append(yielded("doomed", "doomed"));
         return "never reached";
       });
 
       allowJournalInserts(path);
-      return { result, events: yield* database.journal.readAll() };
+      return { result, companionInserted, events: yield* database.journal.readAll() };
     });
 
+    expect(seen.companionInserted).toBe(true);
     expect(seen.result.ok).toBe(false);
-    // The first append succeeded and went away with the failed one.
+    // The accepted append went away with the refused one.
     expect(seen.events).toEqual([]);
   });
 
@@ -328,6 +336,33 @@ describe("Tier WJ — what reaches SQLite", () => {
 });
 
 describe("Tier WJ — a transaction a caller holds", () => {
+  it("WJ6b: filtering cancelled inside a transaction leaves no row either", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const reached = withResolvers<void>();
+
+      const transacting = yield* spawn(function* () {
+        yield* database.transact(function* (transaction) {
+          const guarded = guardDurableStream(transaction.journal, function* () {
+            reached.resolve();
+            yield* suspend();
+          });
+          yield* guarded.append(yielded("never", "never"));
+          return "never reached";
+        });
+      });
+
+      yield* reached.operation;
+      yield* transacting.halt();
+
+      return yield* database.journal.readAll();
+    });
+
+    expect(events).toEqual([]);
+  });
+
   it("WJ7: a body that completes publishes its events with the rest of its work", function* () {
     const root = yield* useStorageRoot();
 
@@ -553,13 +588,8 @@ describe("Tier WJ — a transaction a caller holds", () => {
       const result = yield* database.transact(function* (transaction) {
         yield* transaction.journal.append(yielded("kept", "kept"));
 
-        const active = yield* ActiveTransaction.get();
-        if (active === undefined) {
-          throw new Error("expected an open transaction");
-        }
-
         try {
-          active.savepoint(() => {
+          yield* savepoint(() => {
             throw new Error("the nested mutation failed");
           });
         } catch {
@@ -581,6 +611,17 @@ describe("Tier WJ — a transaction a caller holds", () => {
 });
 
 describe("Tier WJ — one connection, one operation at a time", () => {
+  it("WJ15b: a savepoint outside any transaction is refused, not improvised", function* () {
+    let raised: unknown;
+    try {
+      yield* savepoint(() => "nothing to be inside");
+    } catch (error) {
+      raised = error;
+    }
+
+    expect(raised).toBeInstanceOf(NoOpenTransactionError);
+  });
+
   it("WJ16: an unrelated append waits for a transaction, and is not part of it", function* () {
     const root = yield* useStorageRoot();
 

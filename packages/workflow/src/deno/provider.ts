@@ -47,7 +47,14 @@ import {
   WorkflowRunNotFoundError,
   WorkflowStorageError,
 } from "../storage/errors.ts";
-import { type JsonObject, parseJsonObject } from "../storage/members.ts";
+import {
+  describe,
+  type JsonObject,
+  type Members,
+  parseJsonObject,
+  parseMembers,
+  requireMemberNames,
+} from "../storage/members.ts";
 import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import { type ConnectionLocks, createConnectionLocks } from "./lock.ts";
@@ -184,16 +191,18 @@ function* lookupWorkflowRun(
   locks: ConnectionLocks,
   runId: string,
 ): Operation<Result<WorkflowRunDatabase>> {
-  if (runId === "") {
-    return Err(new WorkflowRequestError("a run id is required, and an empty one names nothing."));
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
   }
+  const wanted = checked.value;
 
-  const path = workflowRunPath(root, runId);
+  const path = workflowRunPath(root, wanted);
   // Asked before opening: `node:sqlite` creates the file it is pointed at, and
   // a lookup that leaves an empty database behind has invented the run it
   // failed to find.
   if (!(yield* exists(path))) {
-    return Err(new WorkflowRunNotFoundError(runId));
+    return Err(new WorkflowRunNotFoundError(wanted));
   }
 
   const lock = locks.at(path);
@@ -241,15 +250,6 @@ function* withConnection(
   let database: DatabaseSync;
   try {
     database = new DatabaseSync(path);
-    // A connection setting, not a change to the file. Without it SQLite
-    // refuses a contended write lock immediately, so a second host reaching
-    // the same run would be told the database is busy rather than waiting the
-    // moment it takes the first one to commit.
-    database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    // Off by default in SQLite, and per connection rather than stored in the
-    // file. Without it a stop reason could name a journal event that is not
-    // there, which is a reason that refers to nothing.
-    database.exec("PRAGMA foreign_keys = ON");
   } catch (error) {
     return refusal(error, path);
   }
@@ -265,10 +265,26 @@ function* withConnection(
     database.close();
   }
 
-  // Registered before the checking begins, so cancellation part-way through it
-  // still closes the connection. Once a handle owns the connection this is a
-  // no-op, and the handle's own teardown closes it.
+  // Registered immediately, before the connection is even configured: from
+  // here on there is an open file handle, and every way out of this function —
+  // a failing pragma, a refusal, cancellation part-way through the checking —
+  // has to close it. Once a handle owns the connection this is a no-op and the
+  // handle's own teardown closes it.
   yield* ensure(release);
+
+  try {
+    // Connection settings, not changes to the file. Without a busy timeout
+    // SQLite refuses a contended write lock immediately, so a second host
+    // reaching the same run would be told the database is busy rather than
+    // waiting the moment it takes the first one to commit. Foreign keys are
+    // off by default and per connection, and without them a stop reason could
+    // name a journal event that is not there.
+    database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    database.exec("PRAGMA foreign_keys = ON");
+  } catch (error) {
+    release();
+    return refusal(error, path);
+  }
 
   let result: Result<WorkflowRunDatabase>;
   try {
@@ -349,11 +365,25 @@ function refusal<T>(error: unknown, path: string): Result<T> {
   throw translated;
 }
 
-function checkRequest(request: CreateWorkflowRunRequest): Result<CheckedRequest> {
-  if (typeof request.runId !== "string" || request.runId === "") {
-    return Err(new WorkflowRequestError("a run id is required, and an empty one names nothing."));
+const REQUEST_MEMBERS = ["runId", "definition", "base", "props"];
+
+/**
+ * The run id a caller named, whichever operation they called.
+ *
+ * `create` and `lookup` address the same runs by the same rule, so they check
+ * it in the same place. Nothing here assumes the argument is a string: a host
+ * built without types, or one that read the id out of a file, can hand over
+ * anything at all, and hashing that would fail somewhere far less legible.
+ */
+function checkRunId(runId: unknown): Result<string> {
+  if (typeof runId !== "string" || runId === "") {
+    return Err(
+      new WorkflowRequestError(
+        `a run id is required, and an empty one names nothing (found ${describe(runId)}).`,
+      ),
+    );
   }
-  if (request.runId.includes("\u0000")) {
+  if (runId.includes("\u0000")) {
     return Err(
       new WorkflowRequestError(
         "a run id cannot contain a NUL: SQLite compares text up to one, so two ids that " +
@@ -361,20 +391,21 @@ function checkRequest(request: CreateWorkflowRunRequest): Result<CheckedRequest>
       ),
     );
   }
-  if (typeof request.base !== "string" || request.base === "") {
-    return Err(
-      new WorkflowRequestError("a base is required: it is what the run's starting state is."),
-    );
-  }
+  return Ok(runId);
+}
 
-  const definition = parseWorkflowDefinition(request.definition);
-  if (!definition.ok) {
-    return definition;
-  }
-
-  let props: JsonObject;
+/**
+ * The whole request, parsed as a closed shape before any member is read.
+ *
+ * The type describes what a caller meant. What arrives is whatever the
+ * language allows, and reading `.runId` off `null` fails as a `TypeError`
+ * rather than as an answer about the request.
+ */
+function checkRequest(offered: CreateWorkflowRunRequest): Result<CheckedRequest> {
+  let members: Members;
   try {
-    props = parseJsonObject(request.props, "$", propsFailure);
+    members = parseMembers(offered, "$", requestFailure);
+    requireMemberNames(members, REQUEST_MEMBERS, "$", requestFailure);
   } catch (error) {
     if (error instanceof WorkflowRequestError) {
       return Err(error);
@@ -382,12 +413,40 @@ function checkRequest(request: CreateWorkflowRunRequest): Result<CheckedRequest>
     throw error;
   }
 
-  return Ok({
-    runId: request.runId,
-    definition: definition.value,
-    base: request.base,
-    props,
-  });
+  const runId = checkRunId(members.get("runId"));
+  if (!runId.ok) {
+    return runId;
+  }
+
+  const base = members.get("base");
+  if (typeof base !== "string" || base === "") {
+    return Err(
+      new WorkflowRequestError("a base is required: it is what the run's starting state is."),
+    );
+  }
+
+  const definition = parseWorkflowDefinition(members.get("definition"));
+  if (!definition.ok) {
+    return definition;
+  }
+
+  let props: JsonObject;
+  try {
+    props = parseJsonObject(members.get("props"), "$", propsFailure);
+  } catch (error) {
+    if (error instanceof WorkflowRequestError) {
+      return Err(error);
+    }
+    throw error;
+  }
+
+  return Ok({ runId: runId.value, definition: definition.value, base, props });
+}
+
+function requestFailure(reason: string, path: string): Error {
+  return new WorkflowRequestError(
+    `the request does not describe a workflow run: ${reason} at ${path}`,
+  );
 }
 
 function propsFailure(reason: string, path: string): Error {

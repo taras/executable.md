@@ -16,10 +16,12 @@
  * waits for its own turn and commits on its own rather than being rolled back
  * with a failure it had nothing to do with.
  *
- * A scope-local context records that a transaction is open. That is how a
- * nested `transact()` is refused, and how an operation called from inside a
- * transaction body is refused rather than deadlocking on the connection its own
- * caller is already holding.
+ * A scope-local marker records which database this scope holds a transaction
+ * on. That is how a nested `transact()` is refused, and how an operation
+ * called from inside a transaction body is refused rather than waiting for a
+ * transaction its own caller is holding open. The marker is structural and the
+ * savepoint that goes with it is a contextual operation; both live in
+ * `transaction.ts`.
  *
  * ## Lifetime
  *
@@ -29,18 +31,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
-import {
-  type Context,
-  createContext,
-  ensure,
-  Err,
-  Ok,
-  type Operation,
-  resource,
-  type Result,
-  scoped,
-} from "effection";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
@@ -63,6 +55,7 @@ import {
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
 import type { ConnectionLock } from "./lock.ts";
+import { ActiveTransaction, holdsTransactionOn, useTransactionSavepoints } from "./transaction.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
 import { translateSqliteError } from "./schema.ts";
 
@@ -94,37 +87,6 @@ export interface OpenConnection {
   /** Shared by every handle on this file, so turns are taken per database. */
   readonly lock: ConnectionLock;
 }
-
-/**
- * An open transaction, and the savepoints nested work may take inside it.
- *
- * `savepoint` is the seam a Workspace filesystem needs: it lets nested work
- * roll back its own mutations while staying inside the one transaction that
- * publishes the effect and its journal result together. It is deliberately not
- * reachable through `WorkflowRunTransaction`, because a caller able to take a
- * savepoint is also able to take one that outlives the body it was given.
- */
-export interface TransactionScope {
-  /** The database file, so a second handle on it is refused rather than stuck. */
-  readonly path: string;
-  open: boolean;
-  savepoint<T>(body: () => T): T;
-}
-
-/**
- * Which transaction, if any, the current scope is inside.
- *
- * Matching on the file rather than on the handle is what makes this useful:
- * two handles on one run share its turns, so an operation reached through the
- * second one from inside the first one's body would wait for a transaction its
- * own caller is holding open. It is refused instead.
- *
- * The value can only refuse an operation, never authorize one, which is why
- * comparing a name-addressed context binding is safe here.
- */
-export const ActiveTransaction: Context<TransactionScope | undefined> = createContext<
-  TransactionScope | undefined
->("executablemd.workflow.deno.transaction", undefined);
 
 /**
  * Open a run's database for the life of the calling scope.
@@ -162,8 +124,7 @@ function createHandle(connection: OpenConnection): Handle {
     if (closed) {
       return Err(new WorkflowDatabaseClosedError(record.runId));
     }
-    const active = yield* ActiveTransaction.get();
-    if (active !== undefined && active.path === path) {
+    if (yield* holdsTransactionOn(path)) {
       return Err(
         new WorkflowTransactionError(
           "this scope is inside a transaction on the same workflow run database, and an " +
@@ -209,8 +170,7 @@ function createHandle(connection: OpenConnection): Handle {
     if (closed) {
       return Err(new WorkflowDatabaseClosedError(record.runId));
     }
-    const active = yield* ActiveTransaction.get();
-    if (active !== undefined && active.path === path) {
+    if (yield* holdsTransactionOn(path)) {
       return Err(
         new WorkflowTransactionError(
           "a transaction on this workflow run database is already open in this scope. " +
@@ -229,7 +189,7 @@ function createHandle(connection: OpenConnection): Handle {
         return Err(translateSqliteError(error, path));
       }
 
-      const transaction = createTransactionScope(database, path);
+      const transaction = { open: true };
       let committed = false;
 
       // Registered after the lock, so teardown rolls back while the connection
@@ -241,7 +201,8 @@ function createHandle(connection: OpenConnection): Handle {
         }
       });
 
-      yield* ActiveTransaction.set(transaction);
+      yield* ActiveTransaction.set({ path, open: true });
+      yield* useTransactionSavepoints(database, () => transaction.open);
 
       try {
         // The body runs in a scope of its own, so everything it started —
@@ -314,13 +275,14 @@ function createHandle(connection: OpenConnection): Handle {
         return Err(error);
       }
 
-      // Revisions count replacements since the metadata was last cleared;
-      // clearing removes the row, and the next replacement starts over at one.
-      const revision = (retrieval?.revision ?? 0) + 1;
-      const updatedAt = now();
-
       const written = yield* write(() => {
-        database.prepare(UPSERT_RETRIEVAL).run(canonical, revision, updatedAt);
+        // Read inside the transaction, not from this handle's snapshot. Two
+        // handles opened before either replacement both hold no retrieval, and
+        // would both write revision one — the second losing the first.
+        // Revisions count replacements since the metadata was last cleared;
+        // clearing removes the row, and the next replacement starts over.
+        const stored = readRetrievalRow(database);
+        database.prepare(UPSERT_RETRIEVAL).run(canonical, (stored?.revision ?? 0) + 1, now());
         return readRetrievalRow(database);
       });
       if (!written.ok) {
@@ -370,7 +332,7 @@ function createHandle(connection: OpenConnection): Handle {
 
     *readDocumentExecutions(): Operation<Result<DocumentExecutionRecord[]>> {
       return yield* read(() =>
-        database.prepare(SELECT_EXECUTIONS).all().map(readDocumentExecution),
+        reading(database, SELECT_EXECUTIONS).all().map(readDocumentExecution),
       );
     },
 
@@ -414,7 +376,7 @@ function createHandle(connection: OpenConnection): Handle {
  */
 function enlistedJournal(
   database: DatabaseSync,
-  transaction: TransactionScope,
+  transaction: { open: boolean },
   path: string,
 ): DurableStream {
   return {
@@ -440,7 +402,7 @@ function enlistedJournal(
   };
 }
 
-function assertOpen(transaction: TransactionScope): void {
+function assertOpen(transaction: { open: boolean }): void {
   if (!transaction.open) {
     throw new WorkflowTransactionError(
       "this transaction has already finished, so nothing more can be appended through it. " +
@@ -449,34 +411,7 @@ function assertOpen(transaction: TransactionScope): void {
   }
 }
 
-function createTransactionScope(database: DatabaseSync, path: string): TransactionScope {
-  let depth = 0;
-
-  const scope: TransactionScope = {
-    path,
-    open: true,
-    savepoint<T>(body: () => T): T {
-      assertOpen(scope);
-      const name = `xmd_savepoint_${depth}`;
-      depth += 1;
-      database.exec(`SAVEPOINT ${name}`);
-      try {
-        const value = body();
-        database.exec(`RELEASE ${name}`);
-        depth -= 1;
-        return value;
-      } catch (error) {
-        database.exec(`ROLLBACK TO ${name}`);
-        database.exec(`RELEASE ${name}`);
-        depth -= 1;
-        throw error;
-      }
-    },
-  };
-
-  return scope;
-}
-
+/** A `DurableStream` reports a failure by raising it, so unwrap and throw. */
 function* mustSucceed<T>(operation: Operation<Result<T>>): Operation<T> {
   const result = yield* operation;
   if (!result.ok) {
@@ -530,7 +465,7 @@ function retrievalFailure(reason: string, path: string): Error {
  * belonging to somebody else.
  */
 export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRecord {
-  const row = database.prepare(SELECT_RUN).get();
+  const row = reading(database, SELECT_RUN).get();
   if (row === undefined) {
     throw new WorkflowDatabaseCorruptError(path, "it holds no workflow run");
   }
@@ -538,12 +473,26 @@ export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRec
 }
 
 function readRetrievalRow(database: DatabaseSync): DefinitionRetrieval | undefined {
-  const row = database.prepare(SELECT_RETRIEVAL).get();
+  const row = reading(database, SELECT_RETRIEVAL).get();
   return row === undefined ? undefined : readRetrieval(row);
 }
 
+/**
+ * A statement that answers with `bigint` rather than refusing to answer.
+ *
+ * `node:sqlite` throws a `RangeError` when a column holds a 64-bit value —
+ * and quotes the value in the message. Reading integers as `bigint` puts the
+ * decision back where every other stored value is decided, in a parser that
+ * refuses without repeating what it refused.
+ */
+function reading(database: DatabaseSync, sql: string): StatementSync {
+  const statement = database.prepare(sql);
+  statement.setReadBigInts(true);
+  return statement;
+}
+
 function readExecution(database: DatabaseSync, executionId: string): DocumentExecutionRecord {
-  const row = database.prepare(SELECT_EXECUTION).get(executionId);
+  const row = reading(database, SELECT_EXECUTION).get(executionId);
   if (row === undefined) {
     throw new WorkflowDocumentExecutionError(executionId);
   }
