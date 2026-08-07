@@ -25,9 +25,9 @@
  *
  * ## Lifetime
  *
- * The handle belongs to the scope that opened it. When that scope ends the
- * connection closes, and every later call answers with a closed-handle failure
- * rather than reopening the file behind the caller's back.
+ * The handle belongs to the scope that opened it. When that scope ends its
+ * lease closes, and every later call answers with a closed-handle failure. The
+ * provider owns the authoritative physical connection for its own scope.
  */
 
 import { randomUUID } from "node:crypto";
@@ -54,7 +54,7 @@ import {
   type WorkflowRunRecord,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
-import type { ConnectionLock } from "./lock.ts";
+import type { RunConnection } from "./connections.ts";
 import {
   ActiveTransaction,
   enclosing,
@@ -86,19 +86,12 @@ const SELECT_EXECUTIONS = "SELECT * FROM document_executions ORDER BY sequence A
 
 /** What opening needs from whoever found the file and checked its schema. */
 export interface OpenConnection {
-  readonly database: DatabaseSync;
-  readonly path: string;
+  readonly connection: RunConnection;
   readonly record: WorkflowRunRecord;
-  /** Shared by every handle on this file, so turns are taken per database. */
-  readonly lock: ConnectionLock;
 }
 
 /**
- * Open a run's database for the life of the calling scope.
- *
- * The connection closes through ordinary teardown rather than a caller
- * remembering to close it, so an interrupted host leaves no connection open on
- * a file another process is about to take a write lock on.
+ * Open a scope-owned lease on a run's provider-owned database connection.
  */
 export function openWorkflowRunDatabase(
   connection: OpenConnection,
@@ -118,7 +111,7 @@ interface Handle {
 }
 
 function createHandle(connection: OpenConnection): Handle {
-  const { database, path, lock } = connection;
+  const { database, path, lock } = connection.connection;
 
   let closed = false;
   let record = connection.record;
@@ -195,12 +188,14 @@ function createHandle(connection: OpenConnection): Handle {
       }
 
       const transaction = { open: true };
+      connection.connection.transactionOpen = true;
       let committed = false;
 
       // Registered after the lock, so teardown rolls back while the connection
       // is still ours and releases it only once that is done.
       yield* ensure(() => {
         transaction.open = false;
+        connection.connection.transactionOpen = false;
         if (!committed) {
           rollback(database);
         }
@@ -209,7 +204,7 @@ function createHandle(connection: OpenConnection): Handle {
       // The chain, not just this path: a transaction on another run nested
       // inside this one must not hide that this one is held.
       yield* ActiveTransaction.set(yield* enclosing(path));
-      yield* useTransactionSavepoints(database, () => transaction.open);
+      yield* useTransactionSavepoints(connection.connection.savepoints, () => transaction.open);
 
       try {
         // The body runs in a scope of its own, so everything it started —
@@ -219,17 +214,21 @@ function createHandle(connection: OpenConnection): Handle {
         // would let that append autocommit on its own, published whatever the
         // transaction went on to decide.
         const value = yield* scoped(function* () {
-          return yield* body({ journal: enlistedJournal(database, transaction, path) });
+          return yield* body({
+            journal: enlistedJournal(database, transaction, path),
+          });
         });
 
         // Closed before the commit, not after: nothing may append to a
         // transaction whose contents are already decided.
         transaction.open = false;
+        connection.connection.transactionOpen = false;
         database.exec("COMMIT");
         committed = true;
         return Ok(value);
       } catch (error) {
         transaction.open = false;
+        connection.connection.transactionOpen = false;
         return Err(translateSqliteError(error, path));
       }
     });
@@ -370,7 +369,6 @@ function createHandle(connection: OpenConnection): Handle {
     database: handle,
     close() {
       closed = true;
-      database.close();
     },
   };
 }

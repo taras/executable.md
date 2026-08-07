@@ -24,12 +24,16 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
+import type { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
+import { initializeSchema as initializeCloudflareSchema } from "../../vendor/cloudflare-computer-dofs/generated/schema/index.js";
 import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
+  WorkflowIncompleteVersionOneError,
   WorkflowRequestError,
   WorkflowSchemaVersionError,
 } from "../storage/errors.ts";
+import { initializeEmptyWorkspace, verifyEmptyWorkspace } from "./workspace/empty.ts";
 
 /**
  * The bytes `XMD1` as a 32-bit integer, written into the SQLite header.
@@ -66,23 +70,259 @@ function coherentStopReason(): string {
  * Kept as separate definitions so verification can compare what a file holds
  * with what this build writes, rather than settling for the table's name.
  *
- * The journal is here from the first version even though metadata landed
- * first: a schema that grew a table between two commits of the same release
- * would owe a migration to databases that never existed. It is also created
- * first, because the stop-reason references point at it.
+ * The complete version-1 shape includes the pinned DOFS objects, retained
+ * Workspace roots, journal and metadata. Dependency order is explicit: DOFS
+ * content precedes root references, and roots precede the journal rows that
+ * name them.
  */
-const TABLES: ReadonlyMap<string, string> = new Map([
+interface DeclaredObject {
+  readonly type: "table" | "index";
+  readonly sql: string;
+}
+
+const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
+  [
+    "vfs_meta",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_meta (
+    k TEXT PRIMARY KEY,
+    v INTEGER NOT NULL
+  )`,
+    },
+  ],
+  [
+    "vfs_nodes",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_nodes (
+    inode         INTEGER PRIMARY KEY AUTOINCREMENT,
+    type          TEXT    NOT NULL CHECK(type IN ('file','dir','symlink')),
+    mode          INTEGER NOT NULL DEFAULT 493,
+    mtime         INTEGER NOT NULL,
+    rev           INTEGER NOT NULL DEFAULT 0,
+    mount_root    TEXT,
+    stub_size     INTEGER,
+    manifest_hash BLOB,
+    link_target   TEXT,
+    size          INTEGER NOT NULL DEFAULT 0
+  )`,
+    },
+  ],
+  [
+    "vfs_dirents",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_dirents (
+    parent_inode INTEGER NOT NULL,
+    name         TEXT    NOT NULL,
+    child_inode  INTEGER NOT NULL,
+    PRIMARY KEY (parent_inode, name)
+  ) WITHOUT ROWID`,
+    },
+  ],
+  [
+    "vfs_dirents_by_child",
+    {
+      type: "index",
+      sql: "CREATE INDEX vfs_dirents_by_child ON vfs_dirents(child_inode)",
+    },
+  ],
+  [
+    "vfs_nodes_by_rev",
+    {
+      type: "index",
+      sql: "CREATE INDEX vfs_nodes_by_rev ON vfs_nodes(rev)",
+    },
+  ],
+  [
+    "vfs_nodes_by_manifest_hash",
+    {
+      type: "index",
+      sql: `CREATE INDEX vfs_nodes_by_manifest_hash
+    ON vfs_nodes(manifest_hash) WHERE manifest_hash IS NOT NULL`,
+    },
+  ],
+  [
+    "vfs_blobs",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_blobs (
+    hash      BLOB    PRIMARY KEY,
+    size      INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+  )`,
+    },
+  ],
+  [
+    "vfs_blob_bytes",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_blob_bytes (
+    hash  BLOB PRIMARY KEY REFERENCES vfs_blobs(hash) ON DELETE CASCADE,
+    bytes BLOB NOT NULL
+  )`,
+    },
+  ],
+  [
+    "vfs_chunks",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_chunks (
+    inode INTEGER NOT NULL,
+    idx   INTEGER NOT NULL,
+    hash  BLOB    NOT NULL,
+    size  INTEGER NOT NULL,
+    PRIMARY KEY (inode, idx)
+  ) WITHOUT ROWID`,
+    },
+  ],
+  [
+    "vfs_chunks_by_hash",
+    {
+      type: "index",
+      sql: "CREATE INDEX vfs_chunks_by_hash ON vfs_chunks(hash)",
+    },
+  ],
+  [
+    "vfs_manifests",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_manifests (
+    hash      BLOB    PRIMARY KEY,
+    size      INTEGER NOT NULL,
+    encoded   BLOB    NOT NULL,
+    last_seen INTEGER NOT NULL DEFAULT 0
+  )`,
+    },
+  ],
+  [
+    "vfs_changes",
+    {
+      type: "table",
+      sql: `CREATE TABLE vfs_changes (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    rev  INTEGER NOT NULL,
+    path TEXT    NOT NULL,
+    op   TEXT    NOT NULL CHECK(op IN ('delete'))
+  )`,
+    },
+  ],
+  [
+    "vfs_changes_by_rev",
+    {
+      type: "index",
+      sql: "CREATE INDEX vfs_changes_by_rev ON vfs_changes(rev)",
+    },
+  ],
+  [
+    "vfs_changes_by_path",
+    {
+      type: "index",
+      sql: "CREATE INDEX vfs_changes_by_path ON vfs_changes(path, id DESC)",
+    },
+  ],
+  [
+    "_vfs_watermark",
+    {
+      type: "table",
+      sql: `CREATE TABLE _vfs_watermark (
+    k       TEXT    NOT NULL,
+    backend TEXT    NOT NULL DEFAULT 'default',
+    v       INTEGER NOT NULL,
+    PRIMARY KEY (k, backend)
+  )`,
+    },
+  ],
+  [
+    "_vfs_fetch_cursor",
+    {
+      type: "table",
+      sql: `CREATE TABLE _vfs_fetch_cursor (
+    k       TEXT    NOT NULL CHECK(k = 'fetch'),
+    backend TEXT    NOT NULL DEFAULT 'default',
+    path    TEXT,
+    PRIMARY KEY (k, backend)
+  )`,
+    },
+  ],
+  [
+    "_vfs_mounts",
+    {
+      type: "table",
+      sql: `CREATE TABLE _vfs_mounts (
+    root    TEXT PRIMARY KEY,
+    kind    TEXT NOT NULL,
+    indexed INTEGER NOT NULL DEFAULT 0,
+    mode    TEXT NOT NULL DEFAULT 'read-only'
+            CHECK(mode IN ('read-only', 'read-write'))
+  )`,
+    },
+  ],
+  [
+    "workspace_roots",
+    {
+      type: "table",
+      sql: `CREATE TABLE workspace_roots (
+  root_id TEXT PRIMARY KEY CHECK (
+    length(root_id) = 64 AND root_id NOT GLOB '*[^0-9a-f]*'
+  ),
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  manifest TEXT NOT NULL CHECK (json_valid(manifest))
+) STRICT`,
+    },
+  ],
+  [
+    "workspace_root_manifest_refs",
+    {
+      type: "table",
+      sql: `CREATE TABLE workspace_root_manifest_refs (
+  root_id TEXT NOT NULL REFERENCES workspace_roots(root_id) ON DELETE CASCADE,
+  manifest_hash BLOB NOT NULL REFERENCES vfs_manifests(hash) ON DELETE RESTRICT,
+  PRIMARY KEY (root_id, manifest_hash)
+) STRICT, WITHOUT ROWID`,
+    },
+  ],
+  [
+    "workspace_root_blob_refs",
+    {
+      type: "table",
+      sql: `CREATE TABLE workspace_root_blob_refs (
+  root_id TEXT NOT NULL REFERENCES workspace_roots(root_id) ON DELETE CASCADE,
+  blob_hash BLOB NOT NULL,
+  PRIMARY KEY (root_id, blob_hash),
+  FOREIGN KEY (blob_hash) REFERENCES vfs_blobs(hash) ON DELETE RESTRICT,
+  FOREIGN KEY (blob_hash) REFERENCES vfs_blob_bytes(hash) ON DELETE RESTRICT
+) STRICT, WITHOUT ROWID`,
+    },
+  ],
+  [
+    "workspace_state",
+    {
+      type: "table",
+      sql: `CREATE TABLE workspace_state (
+  singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+  current_root_id TEXT NOT NULL REFERENCES workspace_roots(root_id) ON DELETE RESTRICT
+) STRICT`,
+    },
+  ],
   [
     "journal_events",
-    `CREATE TABLE journal_events (
+    {
+      type: "table",
+      sql: `CREATE TABLE journal_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
-  record TEXT NOT NULL CHECK (json_valid(record))
+  record TEXT NOT NULL CHECK (json_valid(record)),
+  workspace_root_id TEXT NOT NULL REFERENCES workspace_roots(root_id) ON DELETE RESTRICT
 ) STRICT`,
+    },
   ],
   [
     "workflow_run",
-    `CREATE TABLE workflow_run (
+    {
+      type: "table",
+      sql: `CREATE TABLE workflow_run (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   run_id TEXT NOT NULL,
   definition TEXT NOT NULL CHECK (json_valid(definition)),
@@ -96,19 +336,25 @@ const TABLES: ReadonlyMap<string, string> = new Map([
   updated_at TEXT NOT NULL,
   ${coherentStopReason()}
 ) STRICT`,
+    },
   ],
   [
     "definition_retrieval",
-    `CREATE TABLE definition_retrieval (
+    {
+      type: "table",
+      sql: `CREATE TABLE definition_retrieval (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   metadata TEXT NOT NULL CHECK (json_valid(metadata)),
   revision INTEGER NOT NULL CHECK (revision >= 1 AND revision <= 9007199254740991),
   updated_at TEXT NOT NULL
 ) STRICT`,
+    },
   ],
   [
     "document_executions",
-    `CREATE TABLE document_executions (
+    {
+      type: "table",
+      sql: `CREATE TABLE document_executions (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   execution_id TEXT NOT NULL UNIQUE,
   started_at TEXT NOT NULL,
@@ -121,14 +367,30 @@ const TABLES: ReadonlyMap<string, string> = new Map([
   CHECK (stop_status IS NOT NULL OR stop_reason_kind IS NULL),
   ${coherentStopReason()}
 ) STRICT`,
+    },
   ],
 ]);
 
+export const EXPECTED_SCHEMA = Object.freeze(
+  [...OBJECTS.entries()].map(([name, object]) =>
+    Object.freeze({ name, type: object.type, sql: normalize(object.sql) }),
+  ),
+);
+
+/** Objects version 1 declares, including the pinned Cloudflare structure. */
+export const REQUIRED_OBJECTS: readonly string[] = Object.freeze([...OBJECTS.keys()]);
+
 /** Tables version 1 declares. */
-export const REQUIRED_TABLES: readonly string[] = Object.freeze([...TABLES.keys()]);
+export const REQUIRED_TABLES: readonly string[] = Object.freeze(
+  [...OBJECTS.entries()].filter(([, object]) => object.type === "table").map(([name]) => name),
+);
 
 /** Version 1 in full. */
-export const SCHEMA_SQL = [...TABLES.values()].map((sql) => `${sql};`).join("\n\n");
+export const SCHEMA_SQL = [...OBJECTS.values()]
+  .filter((object) => object.type === "table" && !object.sql.startsWith("CREATE TABLE vfs_"))
+  .filter((object) => !object.sql.startsWith("CREATE TABLE _vfs_"))
+  .map((object) => `${object.sql};`)
+  .join("\n\n");
 
 /**
  * Write the version-1 schema into a database that holds nothing.
@@ -137,10 +399,17 @@ export const SCHEMA_SQL = [...TABLES.values()].map((sql) => `${sql};`).join("\n\
  * and the tables appear together or not at all — a half-initialized file would
  * be indistinguishable from one this build must refuse.
  */
-export function initializeSchema(database: DatabaseSync): void {
+export function initializeSchema(
+  database: DatabaseSync,
+  dofs: CloudflareDatabase,
+  initializeRun: () => void,
+): void {
   database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
-  database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   database.exec(SCHEMA_SQL);
+  initializeCloudflareSchema(dofs, () => 0);
+  initializeEmptyWorkspace(database);
+  initializeRun();
+  database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }
 
 /**
@@ -170,6 +439,12 @@ export function verifySchema(database: DatabaseSync, path: string): void {
 
   const applicationId = readPragmaNumber(database, "application_id", path);
   if (applicationId !== APPLICATION_ID) {
+    if (applicationId === 0 && hasDeclaredVersionOneObjects(database, path)) {
+      throw new WorkflowDatabaseCorruptError(
+        path,
+        "it contains a partial version-1 initialization without the XMD application identity",
+      );
+    }
     throw new WorkflowDatabaseFormatError(
       path,
       `it carries application id ${applicationId} rather than ${APPLICATION_ID}`,
@@ -183,6 +458,7 @@ export function verifySchema(database: DatabaseSync, path: string): void {
 
   verifyStructure(database, path);
   checkForeignKeys(database, path);
+  verifyEmptyWorkspace(database, path);
 }
 
 /**
@@ -194,34 +470,48 @@ export function verifySchema(database: DatabaseSync, path: string): void {
  */
 function verifyStructure(database: DatabaseSync, path: string): void {
   const objects = schemaObjects(database, path);
+  const intermediate = [
+    "definition_retrieval",
+    "document_executions",
+    "journal_events",
+    "workflow_run",
+  ];
+  if (
+    objects.length === intermediate.length &&
+    objects.every((object) => object.type === "table") &&
+    objects
+      .map((object) => object.name)
+      .sort()
+      .join("\0") === intermediate.join("\0")
+  ) {
+    throw new WorkflowIncompleteVersionOneError(path);
+  }
 
   for (const object of objects) {
-    if (object.type !== "table") {
-      throw new WorkflowDatabaseCorruptError(
-        path,
-        `it declares a ${object.type} that version ${SCHEMA_VERSION} does not`,
-      );
-    }
-    const expected = TABLES.get(object.name);
+    const expected = OBJECTS.get(object.name);
     if (expected === undefined) {
       throw new WorkflowDatabaseCorruptError(
         path,
-        `it declares a table that version ${SCHEMA_VERSION} does not`,
+        `it declares an object that version ${SCHEMA_VERSION} does not`,
       );
     }
-    if (normalize(object.sql) !== normalize(expected)) {
+    if (object.type !== expected.type || normalize(object.sql) !== normalize(expected.sql)) {
       throw new WorkflowDatabaseCorruptError(
         path,
-        `its ${object.name} table is not shaped the way version ${SCHEMA_VERSION} declares it`,
+        `its ${object.name} object is not shaped the way version ${SCHEMA_VERSION} declares it`,
       );
     }
   }
 
   const present = new Set(objects.map((object) => object.name));
-  const missing = REQUIRED_TABLES.filter((table) => !present.has(table));
+  const missing = REQUIRED_OBJECTS.filter((name) => !present.has(name));
   if (missing.length > 0) {
     throw new WorkflowDatabaseCorruptError(path, `it is missing the table ${missing.join(", ")}`);
   }
+}
+
+function hasDeclaredVersionOneObjects(database: DatabaseSync, path: string): boolean {
+  return schemaObjects(database, path).some((object) => OBJECTS.has(object.name));
 }
 
 /**
@@ -243,8 +533,8 @@ export function checkIntegrity(database: DatabaseSync, path: string): void {
 /**
  * Ask SQLite whether its references still point at anything.
  *
- * A stop reason naming a journal event is only a reason while that event
- * exists; a row pointing at one that does not is damage, not a reason.
+ * A retained reference names an object only while that object exists; a row
+ * pointing at nothing is damage rather than a partial retained state.
  */
 function checkForeignKeys(database: DatabaseSync, path: string): void {
   if (query(database, "PRAGMA foreign_key_check", path).length > 0) {
@@ -315,7 +605,7 @@ const SQLITE_CORRUPT = 11;
 /** `SQLITE_NOTADB`: the bytes are not a SQLite database at all. */
 const SQLITE_NOTADB = 26;
 
-/** `SQLITE_CONSTRAINT_FOREIGNKEY`: a reference points at a row that is not there. */
+/** `SQLITE_CONSTRAINT_FOREIGNKEY`: a requested journal reference does not exist. */
 const SQLITE_CONSTRAINT_FOREIGNKEY = 787;
 
 /**
@@ -332,9 +622,6 @@ export function translateSqliteError(error: unknown, path: string): unknown {
     case SQLITE_CORRUPT:
       return new WorkflowDatabaseCorruptError(path, "SQLite reported a damaged image");
     case SQLITE_CONSTRAINT_FOREIGNKEY:
-      // The only reference version 1 declares. A stop reason may name a
-      // journal event, and naming one this run does not hold is a reason that
-      // refers to nothing.
       return new WorkflowRequestError(
         "the stop reason names a journal event this run does not hold. A journal reason " +
           "points at an event that has already been appended and filtered.",

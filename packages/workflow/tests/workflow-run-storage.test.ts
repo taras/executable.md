@@ -13,12 +13,13 @@
  */
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
 import { type Result, scoped } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import {
   type CreateWorkflowRunRequest,
   type GitWorkflowDefinitionV1,
@@ -27,6 +28,7 @@ import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
   WorkflowDefinitionError,
+  WorkflowIncompleteVersionOneError,
   WorkflowRecordMalformedError,
   WorkflowRequestError,
   WorkflowRunConflictError,
@@ -40,6 +42,13 @@ import {
 } from "../mod.ts";
 import type { JsonObject } from "../src/storage/members.ts";
 import { APPLICATION_ID, hashRunId, useWorkflowRunStorage } from "../deno.ts";
+import { createWorkflowRunConnections } from "../src/deno/connections.ts";
+import { EXPECTED_SCHEMA, initializeSchema } from "../src/deno/schema.ts";
+import {
+  EMPTY_WORKSPACE_MANIFEST,
+  EMPTY_WORKSPACE_ROOT_ID,
+  WORKSPACE_ROOT_FORMAT,
+} from "../src/deno/workspace/empty.ts";
 import {
   createRun,
   definition,
@@ -57,6 +66,73 @@ const { create, lookup } = WorkflowRunStorage.operations;
 /** Every entry in the storage root, so a test can prove nothing else appeared. */
 function entries(root: string): string[] {
   return readdirSync(root);
+}
+
+function normalizedSchema(database: DatabaseSync): Array<{
+  name: string;
+  type: string;
+  sql: string;
+}> {
+  return database
+    .prepare("SELECT name, type, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+    .all()
+    .map((row) => ({
+      name: String(row["name"]),
+      type: String(row["type"]),
+      sql: String(row["sql"]).replace(/\s+/g, " ").trim(),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function initializeIntermediateVersionOne(database: DatabaseSync): void {
+  const statuses = "'running', 'suspended', 'interrupted', 'completed', 'failed', 'cancelled'";
+  const reason = `CHECK (
+    (stop_reason_kind IS NULL AND stop_reason_code IS NULL AND stop_reason_event_id IS NULL)
+    OR (stop_reason_kind = 'host' AND stop_reason_code IS NOT NULL AND stop_reason_event_id IS NULL)
+    OR (stop_reason_kind = 'journal' AND stop_reason_code IS NULL AND stop_reason_event_id IS NOT NULL)
+  )`;
+  database.exec(`
+    PRAGMA application_id = ${APPLICATION_ID};
+    PRAGMA user_version = 1;
+    CREATE TABLE journal_events (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL UNIQUE,
+      record TEXT NOT NULL CHECK (json_valid(record))
+    ) STRICT;
+    CREATE TABLE workflow_run (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      run_id TEXT NOT NULL,
+      definition TEXT NOT NULL CHECK (json_valid(definition)),
+      base TEXT NOT NULL,
+      props TEXT NOT NULL CHECK (json_valid(props) AND json_type(props) = 'object'),
+      status TEXT NOT NULL CHECK (status IN (${statuses})),
+      stop_reason_kind TEXT CHECK (stop_reason_kind IS NULL OR stop_reason_kind IN ('host', 'journal')),
+      stop_reason_code TEXT,
+      stop_reason_event_id TEXT REFERENCES journal_events (event_id),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      ${reason}
+    ) STRICT;
+    CREATE TABLE definition_retrieval (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      metadata TEXT NOT NULL CHECK (json_valid(metadata)),
+      revision INTEGER NOT NULL CHECK (revision >= 1 AND revision <= 9007199254740991),
+      updated_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE document_executions (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      execution_id TEXT NOT NULL UNIQUE,
+      started_at TEXT NOT NULL,
+      stopped_at TEXT,
+      stop_status TEXT CHECK (stop_status IS NULL OR stop_status IN (${statuses})),
+      stop_reason_kind TEXT CHECK (stop_reason_kind IS NULL OR stop_reason_kind IN ('host', 'journal')),
+      stop_reason_code TEXT,
+      stop_reason_event_id TEXT REFERENCES journal_events (event_id),
+      CHECK ((stopped_at IS NULL) = (stop_status IS NULL)),
+      CHECK (stop_status IS NOT NULL OR stop_reason_kind IS NULL),
+      ${reason}
+    ) STRICT;
+  `);
 }
 
 /**
@@ -83,6 +159,109 @@ function fabricatedId(value: unknown): string {
   Object.defineProperty(container, "id", { value, enumerable: true });
   return container.id;
 }
+
+describe("Tier WS — authoritative connection and complete schema", () => {
+  it("WS0: one provider entry owns each run connection and its DOFS wrappers", function* () {
+    const root = yield* useStorageRoot();
+    const connections = createWorkflowRunConnections();
+    const first = connections.at(join(root, "first.sqlite"));
+    const again = connections.at(join(root, ".", "first.sqlite"));
+    const other = connections.at(join(root, "other.sqlite"));
+
+    expect(again).toBe(first);
+    expect(again.database).toBe(first.database);
+    expect(again.dofs).toBe(first.dofs);
+    expect(again.filesystem).toBe(first.filesystem);
+    expect(other).not.toBe(first);
+
+    connections.close();
+    expect(() => first.database.prepare("SELECT 1")).toThrow();
+    expect(() => connections.at(join(root, "later.sqlite"))).toThrow();
+  });
+
+  it("WS0b: DOFS transactionSync uses a savepoint in the caller-owned transaction", function* () {
+    const root = yield* useStorageRoot();
+    const connections = createWorkflowRunConnections();
+    const connection = connections.at(join(root, "savepoint.sqlite"));
+
+    connection.database.exec("BEGIN IMMEDIATE");
+    connection.transactionOpen = true;
+    expect(() =>
+      connection.dofs.transactionSync(() => {
+        connection.dofs.run("CREATE TABLE rolled_back (value TEXT)");
+        throw new Error("roll back the nested work");
+      }),
+    ).toThrow(Error);
+    connection.database.exec("CREATE TABLE outer_survives (value TEXT)");
+    connection.transactionOpen = false;
+    connection.database.exec("COMMIT");
+
+    const names = connection.database
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
+      .all()
+      .map((row) => row["name"]);
+    expect(names).toContain("outer_survives");
+    expect(names).not.toContain("rolled_back");
+    connections.close();
+  });
+
+  it("WS0c: rolling back fresh initialization leaves no partial schema", function* () {
+    const root = yield* useStorageRoot();
+    const connections = createWorkflowRunConnections();
+    const connection = connections.at(join(root, "atomic.sqlite"));
+
+    connection.database.exec("BEGIN IMMEDIATE");
+    connection.transactionOpen = true;
+    expect(() =>
+      initializeSchema(connection.database, connection.dofs, () => {
+        throw new Error("fail after the filesystem and root are initialized");
+      }),
+    ).toThrow(Error);
+    connection.transactionOpen = false;
+    connection.database.exec("ROLLBACK");
+
+    expect(normalizedSchema(connection.database)).toEqual([]);
+    expect(connection.database.prepare("PRAGMA application_id").get()?.["application_id"]).toBe(0);
+    expect(connection.database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(0);
+    connections.close();
+  });
+
+  it("WS0d: a fresh run has the frozen complete-v1 schema and canonical empty root", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const database = new DatabaseSync(runPath(root, "release-1.4"));
+    try {
+      const expected = [...EXPECTED_SCHEMA].sort((left, right) =>
+        left.name.localeCompare(right.name),
+      );
+      expect(normalizedSchema(database)).toEqual(expected);
+      expect(database.prepare("PRAGMA application_id").get()?.["application_id"]).toBe(
+        APPLICATION_ID,
+      );
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
+      expect(
+        database.prepare("SELECT v FROM vfs_meta WHERE k = 'schema_version'").get()?.["v"],
+      ).toBe(5);
+      expect(database.prepare("SELECT * FROM workspace_roots").all()).toEqual([
+        {
+          root_id: EMPTY_WORKSPACE_ROOT_ID,
+          format_version: WORKSPACE_ROOT_FORMAT,
+          manifest: EMPTY_WORKSPACE_MANIFEST,
+        },
+      ]);
+      expect(database.prepare("SELECT * FROM workspace_state").all()).toEqual([
+        { singleton_id: 1, current_root_id: EMPTY_WORKSPACE_ROOT_ID },
+      ]);
+      expect(database.prepare("SELECT * FROM workspace_root_manifest_refs").all()).toEqual([]);
+      expect(database.prepare("SELECT * FROM workspace_root_blob_refs").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+});
 
 describe("Tier WS — creating and finding a run", () => {
   it("WS1: a run is one file named for its id, and there is no registry", function* () {
@@ -645,6 +824,26 @@ describe("Tier WS — surviving the process", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseClosedError);
   });
+
+  it("WS18b: closing one lease leaves another lease on the authoritative entry usable", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const escaped: WorkflowRunDatabase[] = [];
+      yield* scoped(function* () {
+        escaped.push(yield* createRun());
+      });
+
+      const current = yield* createRun();
+      const closed = yield* escaped[0].updateRunState({ status: "completed" });
+      const updated = yield* current.updateRunState({ status: "completed" });
+
+      expect(closed.ok).toBe(false);
+      expect(!closed.ok && closed.error).toBeInstanceOf(WorkflowDatabaseClosedError);
+      expect(updated.ok).toBe(true);
+      expect(updated.ok && updated.value.status).toBe("completed");
+    });
+  });
 });
 
 describe("Tier WS — refusing what is not this run's database", () => {
@@ -753,23 +952,39 @@ describe("Tier WS — refusing what is not this run's database", () => {
       ["relaxed", relaxRunConstraints],
       ["extra-table", (database) => database.exec("CREATE TABLE souvenirs (a TEXT)")],
       [
+        "extra-index",
+        (database) => database.exec("CREATE INDEX souvenirs ON workflow_run(updated_at)"),
+      ],
+      [
         "extra-view",
         (database) => database.exec("CREATE VIEW shortcut AS SELECT run_id FROM workflow_run"),
       ],
     ];
 
     const results = yield* withStorage(root, function* () {
-      const seen: { runId: string; result: Result<WorkflowRunDatabase> }[] = [];
+      const seen: {
+        runId: string;
+        result: Result<WorkflowRunDatabase>;
+        unchanged: boolean;
+      }[] = [];
       for (const [runId, damage] of damaged) {
         yield* createRun({ runId });
-        tamper(runPath(root, runId), damage);
-        seen.push({ runId, result: yield* lookup(runId) });
+        const path = runPath(root, runId);
+        tamper(path, damage);
+        const before = readFileSync(path);
+        const result = yield* lookup(runId);
+        seen.push({
+          runId,
+          result,
+          unchanged: readFileSync(path).equals(before),
+        });
       }
       return seen;
     });
 
-    for (const { runId, result } of results) {
+    for (const { runId, result, unchanged } of results) {
       expect(result.ok).toBe(false);
+      expect(unchanged).toBe(true);
       if (result.ok) {
         continue;
       }
@@ -777,6 +992,107 @@ describe("Tier WS — refusing what is not this run's database", () => {
         runId,
         WorkflowDatabaseCorruptError.name,
       ]);
+    }
+  });
+
+  it("WS22b: the exact intermediate metadata-only version 1 is refused unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    tamper(path, initializeIntermediateVersionOne);
+    const before = readFileSync(path);
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(!result.ok && result.error.message).toContain("Delete and recreate");
+    expect(readFileSync(path)).toEqual(before);
+  });
+
+  it("WS22c: partial DOFS and retained-root initialization are corruption and stay unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const partials: Array<[string, (database: DatabaseSync) => void]> = [
+      [
+        "partial-dofs",
+        (database) => {
+          database.exec("CREATE TABLE vfs_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)");
+        },
+      ],
+      [
+        "partial-root",
+        (database) => {
+          database.exec(`
+            PRAGMA application_id = ${APPLICATION_ID};
+            PRAGMA user_version = 1;
+            CREATE TABLE workspace_roots (
+              root_id TEXT PRIMARY KEY,
+              format_version INTEGER NOT NULL,
+              manifest TEXT NOT NULL
+            ) STRICT;
+          `);
+        },
+      ],
+    ];
+
+    for (const [runId, initialize] of partials) {
+      const path = runPath(root, runId);
+      tamper(path, initialize);
+      const before = readFileSync(path);
+      const result = yield* withStorage(root, function* () {
+        return yield* lookup(runId);
+      });
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+      expect(readFileSync(path)).toEqual(before);
+    }
+  });
+
+  it("WS22d: malformed empty-root and live-frontier state is refused unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const corruptions: Array<[string, (database: DatabaseSync) => void]> = [
+      [
+        "malformed-root",
+        (database) => {
+          database.prepare("UPDATE workspace_roots SET manifest = '{}'").run();
+        },
+      ],
+      [
+        "changed-frontier",
+        (database) => {
+          database.prepare("UPDATE vfs_nodes SET mtime = 1 WHERE inode = 1").run();
+        },
+      ],
+      [
+        "unexpected-blob",
+        (database) => {
+          const bytes = new Uint8Array([1]);
+          database
+            .prepare("INSERT INTO vfs_blobs (hash, size, last_seen) VALUES (?, 1, 0)")
+            .run(bytes);
+          database
+            .prepare("INSERT INTO vfs_blob_bytes (hash, bytes) VALUES (?, ?)")
+            .run(bytes, bytes);
+        },
+      ],
+    ];
+
+    for (const [runId, corrupt] of corruptions) {
+      yield* withStorage(root, function* () {
+        yield* createRun({ runId });
+      });
+      const path = runPath(root, runId);
+      tamper(path, corrupt);
+      const before = readFileSync(path);
+
+      const result = yield* withStorage(root, function* () {
+        return yield* lookup(runId);
+      });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+      expect(readFileSync(path)).toEqual(before);
     }
   });
 
@@ -992,7 +1308,10 @@ describe("Tier WS — refusing what is not this run's database", () => {
       tamper(path, (database) => {
         for (let index = 0; index < 400; index++) {
           database
-            .prepare("INSERT INTO journal_events (event_id, record) VALUES (?, ?)")
+            .prepare(
+              `INSERT INTO journal_events (event_id, record, workspace_root_id)
+               SELECT ?, ?, current_root_id FROM workspace_state WHERE singleton_id = 1`,
+            )
             .run(`e${index}`, JSON.stringify({ padding: "x".repeat(200), index }));
         }
       });

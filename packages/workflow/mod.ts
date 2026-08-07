@@ -66,6 +66,7 @@ export {
   WorkflowDatabaseFormatError,
   WorkflowDefinitionError,
   WorkflowDocumentExecutionError,
+  WorkflowIncompleteVersionOneError,
   WorkflowRecordMalformedError,
   WorkflowRequestError,
   WorkflowRunConflictError,
