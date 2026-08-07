@@ -22,6 +22,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { useDaemonTimeline } from "./daemon-timeline.ts";
 import { mkdtemp, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,32 +141,34 @@ describe("Tier CW — Contextual working directory", () => {
   });
 
   // CW3/CW4: a daemon starts in the contextual directory and is stopped by
-  // structured teardown. Both answers come from the process: it records its
-  // own `pwd` and pid outside the directory under test, and the pid is probed
-  // once the execution has finished.
+  // structured teardown. The process records its own `pwd`; the timeline
+  // observes teardown at the process API boundary.
   it("CW3: a daemon starts in the contextual directory and is stopped afterwards", function* () {
     const fixture = yield* useFixture();
     const marker = join(fixture.root, "daemon.txt");
+    const timeline = yield* useDaemonTimeline();
     yield* writeDocument(
       fixture,
       [
         `<InDirectory path="${fixture.target}">`,
         "```bash daemon exec",
-        `pwd > ${marker}; echo $$ >> ${marker}; sleep 30`,
+        `pwd > ${marker}; sleep 30`,
         "```",
         "```sh exec",
         "sleep 0.5",
         "```",
         "</InDirectory>",
+        "```sh exec",
+        "echo probe",
+        "```",
       ].join("\n"),
     );
 
     yield* run(fixture);
 
-    const [reported, pid] = (yield* readTextFile(marker)).trim().split("\n");
+    const reported = (yield* readTextFile(marker)).trim();
     expect(reported).toBe(fixture.target);
-    // Structured teardown stopped it: nothing survives the execution.
-    expect(() => process.kill(Number(pid), 0)).toThrow();
+    expect(timeline).toEqual(["daemon:start", "daemon:stop", "probe"]);
   });
 
   // CW5: with no boundary in the document, both kinds of process run where
