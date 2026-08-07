@@ -99,7 +99,10 @@ function parseEffectDescription(value: unknown, path: string): EffectDescription
     if (key === "type" || key === "name") {
       continue;
     }
-    define(description, key, parseJsonValue(member, `${path}.${key}`));
+    // `${path}.*`, not `${path}.${key}`: these member names come from the
+    // record, and a record's own names are as much retained content as its
+    // values. A path built from one would carry it into logs and terminals.
+    define(description, key, parseJsonValue(member, `${path}.*`));
   }
 
   return description;
@@ -166,7 +169,7 @@ function parseJsonValue(value: unknown, path: string): Json {
   if (typeof value === "object") {
     const object: { [key: string]: Json } = {};
     for (const [key, member] of Object.entries(value)) {
-      define(object, key, parseJsonValue(member, `${path}.${key}`));
+      define(object, key, parseJsonValue(member, `${path}.*`));
     }
     return object;
   }
@@ -194,10 +197,17 @@ function parseStringMember(members: Members, key: string, path: string): string 
   return member;
 }
 
+/**
+ * Refuse a member this shape does not declare, without naming it.
+ *
+ * The names it *does* declare are this module's own and safe to print; the one
+ * that turned up is content from the record, and a record's member names are
+ * as much retained history as its values.
+ */
 function requireMemberNames(members: Members, names: string[], path: string): void {
   for (const key of members.keys()) {
     if (!names.includes(key)) {
-      throw new MalformedDurableEventError(`unexpected member ${JSON.stringify(key)}`, path);
+      throw new MalformedDurableEventError(`expected only the members ${names.join(", ")}`, path);
     }
   }
 }

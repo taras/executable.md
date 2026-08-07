@@ -572,9 +572,12 @@ The record is parsed, never trusted. Every member is checked against the
 protocol types and the event is rebuilt from the checked members. The closed
 shapes — the event envelope, a `Result`, a `SerializedError` — reject members
 they do not declare, while an `EffectDescription` admits the extra `Json`
-members replay guards read. Neither the path nor the message quotes a value
-from the record, so a parse failure does not copy retained journal content into
-logs and terminals.
+members replay guards read.
+
+Nothing from the record reaches the failure. Members the protocol does not name
+appear in the path as `*` rather than by name, because a record's own member
+names are as much retained content as its values, so a parse failure copies
+neither into logs and terminals.
 
 ---
 

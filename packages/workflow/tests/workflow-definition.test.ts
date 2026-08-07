@@ -97,7 +97,7 @@ describe("Tier WD — workflow definition descriptors", () => {
     const error = refusal({ ...definition(), repository: "https://example.invalid/a.git" });
 
     expect(error.path).toBe("$");
-    expect(error.message).toContain("unexpected member");
+    expect(error.message).toContain("expected only the members");
   });
 
   it("WD3: refuses anything that is not an object", function* () {
@@ -152,13 +152,16 @@ describe("Tier WD — workflow definition descriptors", () => {
     );
   });
 
-  it("WD9: never quotes the value it refused", function* () {
+  it("WD9: never repeats what it refused, as a value or as a name", function* () {
     const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
 
     for (const error of [
       refusal(definition({ objectId: secret })),
       refusal(definition({ rootDocumentPath: `/${secret}` })),
-      refusal({ ...definition(), token: secret }),
+      // A member name is content too: a value carrying a credential as a key
+      // is no safer to print than one carrying it as a value.
+      refusal({ ...definition(), [secret]: "anything" }),
+      refusal({ ...definition(), [`${secret}-nested`]: { deeper: 1 } }),
     ]) {
       expect(error.message).not.toContain(secret);
       expect(error.path).not.toContain(secret);

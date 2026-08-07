@@ -141,7 +141,7 @@ const MALFORMED: Record<string, { record: string; path: string }> = {
   "a description field that overflows to infinity": {
     record:
       '{"type":"yield","coroutineId":"root","description":{"type":"call","name":"f","limit":1e999},"result":{"status":"cancelled"}}\n',
-    path: "$.description.limit",
+    path: "$.description.*",
   },
   "a close with no result": {
     record: '{"type":"close","coroutineId":"root"}\n',
@@ -180,7 +180,7 @@ const MALFORMED: Record<string, { record: string; path: string }> = {
   "an overflow nested inside a result value": {
     record:
       '{"type":"close","coroutineId":"root","result":{"status":"ok","value":{"sizes":[1,1e999]}}}\n',
-    path: "$.result.value.sizes[1]",
+    path: "$.result.value.*[1]",
   },
 };
 
@@ -233,6 +233,24 @@ describe("parseDurableEvent", () => {
       expect(refusal(record).path).toBe(path);
     });
   }
+  it("repeats no member name from the record, only its own", function* () {
+    const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+
+    // A credential can be a key as easily as a value, and a path or a message
+    // built from one carries it wherever the failure goes.
+    const records = [
+      `{"type":"yield","coroutineId":"root","description":{"type":"call","name":"f","${secret}":1e999},"result":{"status":"cancelled"}}`,
+      `{"type":"close","coroutineId":"root","result":{"status":"ok","value":{"${secret}":1e999}}}`,
+      `{"type":"close","coroutineId":"root","result":{"status":"cancelled"},"${secret}":1}`,
+    ];
+
+    for (const record of records) {
+      const error = refusal(record);
+      expect(error.message).not.toContain(secret);
+      expect(error.path).not.toContain(secret);
+    }
+  });
+
   it("names the offending path without quoting the record", function* () {
     const record =
       '{"type":"close","coroutineId":"root","result":{"status":"ok","value":"s3cret-token"}}';

@@ -29,7 +29,6 @@ import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureDir, exists } from "@effectionx/fs";
 import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
-import type { Json } from "@executablemd/durable-streams";
 import {
   type CreateWorkflowRunRequest,
   type WorkflowRunDatabase,
@@ -48,7 +47,7 @@ import {
   WorkflowRunNotFoundError,
   WorkflowStorageError,
 } from "../storage/errors.ts";
-import { parseJsonValue } from "../storage/members.ts";
+import { type JsonObject, parseJsonObject } from "../storage/members.ts";
 import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import { type ConnectionLocks, createConnectionLocks } from "./lock.ts";
@@ -133,7 +132,7 @@ interface CheckedRequest {
   readonly runId: string;
   readonly definition: WorkflowDefinition;
   readonly base: string;
-  readonly props: Json;
+  readonly props: JsonObject;
 }
 
 function* createWorkflowRun(
@@ -247,6 +246,10 @@ function* withConnection(
     // the same run would be told the database is busy rather than waiting the
     // moment it takes the first one to commit.
     database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    // Off by default in SQLite, and per connection rather than stored in the
+    // file. Without it a stop reason could name a journal event that is not
+    // there, which is a reason that refers to nothing.
+    database.exec("PRAGMA foreign_keys = ON");
   } catch (error) {
     return refusal(error, path);
   }
@@ -369,9 +372,9 @@ function checkRequest(request: CreateWorkflowRunRequest): Result<CheckedRequest>
     return definition;
   }
 
-  let props: Json;
+  let props: JsonObject;
   try {
-    props = parseJsonValue(request.props, "$", propsFailure);
+    props = parseJsonObject(request.props, "$", propsFailure);
   } catch (error) {
     if (error instanceof WorkflowRequestError) {
       return Err(error);

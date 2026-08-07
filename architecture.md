@@ -210,35 +210,56 @@ Events replay in append order. An event's opaque identity is retained
 separately from its physical position; the position orders replay and is not a
 public identifier.
 
-### One connection, and a transaction a caller can hold
+### One database at a time, and a transaction a caller can hold
 
 Operations on one run's storage are serialized, and each runs inside a
-transaction. A caller that must publish several changes together holds the
-transaction itself and receives a handle for taking part in it.
+transaction. Turns belong to the storage a run lives in rather than to a handle
+on it, so two handles for one run take turns instead of contending — a host
+whose storage is reached synchronously would otherwise stop while a second
+handle waited for a transaction the first one cannot resume to finish.
 
-Enlistment travels with that handle rather than with the storage, so work that
-never received one cannot join by accident: an unrelated append waits for its
-turn and commits on its own rather than being rolled back with a failure it had
-nothing to do with. Failure and cancellation roll back everything the
-transaction did. A transaction opened inside another on the same storage is
-refused rather than nested, as is an ordinary operation called from inside a
-transaction body.
+A caller that must publish several changes together holds the transaction
+itself and receives a handle for taking part in it. Enlistment travels with
+that handle rather than with the storage, so work that never received one
+cannot join by accident: an unrelated append waits for its turn and commits on
+its own rather than being rolled back with a failure it had nothing to do with.
 
-Serialization and one authoritative connection are not a single-executor
-policy. Which executor may advance a run is decided above storage.
+A transaction commits only once the work inside it has finished, including work
+that is still unwinding when the body returns. Cleanup belonging to that work
+appends through the same transaction, and a commit that happened first would
+leave those appends to publish themselves outside it. Failure and cancellation
+roll back everything the transaction did.
+
+A transaction opened inside another on the same storage is refused rather than
+nested, as is an ordinary operation called from inside a transaction body.
+
+Serialization is not a single-executor policy. Which executor may advance a run
+is decided above storage.
 
 ### Damaged storage is described, never replaced
 
 Storage is parsed, never trusted, and every condition a caller can act on
 differently is reported as itself: absent, conflicting, holding another run,
 not this kind of storage at all, a schema version this build does not
-implement, damaged, holding a record that does not parse, or unable to
-transact. Collapsing them would leave a host guessing whether to create,
-refuse, or report damage.
+implement, damaged, holding a record that does not parse, asked for with a
+value that describes nothing, or unable to transact. Collapsing them would
+leave a host guessing whether to create, refuse, or report damage.
+
+Recognizing storage means holding its structure to the one this build writes,
+not reading the names of its parts. Storage whose own header claims a version
+it is not shaped like is damage rather than a version this build has not
+learned. Storage is initialized only when it is pristine: something that merely
+looks unused is not.
+
+Records are held to what they mean and not only to the types they are stored
+in. A retained timestamp is an instant, a retained identity is not empty, and
+normalized props are an object.
 
 Nothing initializes, migrates, truncates, deletes or replaces incompatible or
 damaged storage, and a lookup that finds nothing creates nothing. Messages
-describe what failed without quoting retained props or journal payloads.
+describe what failed without repeating retained props or journal payloads —
+including their member *names*, which can carry a credential as readily as a
+member value can.
 
 ## Workflow Workspace
 

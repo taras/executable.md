@@ -185,8 +185,10 @@ rather than reopening the file.
 ### 9.1 What identifies a run
 
 Identity is the run id, the definition descriptor, the base and the normalized
-props. The descriptor carries its own version, and takes part in the comparison
-rather than governing it:
+props. Normalized props are a JSON object: a document declares named props, so
+a run receives a mapping from those names to values, and a bare scalar or array
+names nothing. The descriptor carries its own version, and takes part in the
+comparison rather than governing it:
 
 ```ts
 interface GitWorkflowDefinitionV1 {
@@ -231,6 +233,11 @@ A run lives at the SHA-256 of its UTF-8 run id, directly beneath the authorized
 storage root. Discovery is therefore arithmetic on the id, and no second
 authority exists that could disagree with the files.
 
+The root is absolute. A relative one names a different directory from a
+different working directory, and where a run lives must not depend on where a
+process happened to start; `~` is a shell convenience rather than a path and is
+refused rather than expanded.
+
 The root and the path it produces are host arrangement, not identity — which is
 why the run id is also stored inside the database and checked against the one
 that was asked for. A file at the right path holding a different run is a
@@ -246,7 +253,9 @@ collision or tampering, reported as its own failure and left unchanged.
   code the host assigns, or `{ kind: "journal", eventId }`, a reference to an
   event that already crossed the secret filter. Neither shape can carry an
   arbitrary exception message, because a message retained this way would be
-  history nothing had filtered.
+  history nothing had filtered. A journal reason names an event the run holds;
+  one naming an event that is not there is refused, because a reason that
+  refers to nothing is not a reason.
 - One **document execution** record per start and per resume, each with an
   opaque id, a start time, and — once it ends — a stop time, stop status and
   stop reason. These are not attempts: an attempt is one execution of a retried
@@ -296,6 +305,18 @@ rolled back with a failure it had nothing to do with. Appends made through the
 transaction insert and nothing more; the transaction decides whether those rows
 survive, and failure or cancellation rolls all of them back.
 
+The body runs in a scope of its own, and nothing commits until that scope has
+finished tearing down. Work the body started may still be unwinding when the
+body returns, and that work's cleanup appends through the same transaction —
+committing first would leave those appends to publish themselves, outside the
+transaction that was meant to decide about them. The transaction is closed to
+further appends before the commit rather than after it.
+
+Turns are taken per database rather than per handle. Two handles on one run
+share them, so a second handle waits while the first holds the database instead
+of entering SQLite and stopping the host. Contention between processes remains
+SQLite's own.
+
 A transaction opened inside another on the same database is refused rather than
 nested, and so is an ordinary operation called from inside a body — that call
 would otherwise wait for a transaction its own scope is holding open.
@@ -310,14 +331,33 @@ differently is reported as itself:
 | not found | nothing is stored under this id |
 | conflict | a run is stored under this id with different immutable identity |
 | id mismatch | the database at this id's path stores a different run |
-| format | the file is readable and is not a workflow-run database |
+| format | the file is not a workflow-run database at all |
 | schema version | the schema is a version this build does not implement |
-| corrupt | SQLite cannot read the file, or its integrity check fails |
+| corrupt | SQLite cannot read the file, or it is not shaped as version 1 |
 | record malformed | a stored row does not describe what its column claims |
+| request | a value a caller supplied describes nothing storage can keep |
 | transaction | a transaction cannot be started, continued or committed as asked |
 
-No message quotes a stored value: props and journal payloads are retained
-history, and a storage failure is not a reason to copy them into an error.
+Recognizing a database is not the same as reading its table names. Every
+table's stored definition is compared with the definition this build creates,
+so a missing column, a dropped constraint, and a table nobody declared are all
+caught before a row reaches a parser that assumes they hold. A file whose
+header says it is a version-1 workflow run and is not shaped like one is
+**damage**: the file disagrees with itself. Format and version failures are
+reserved for a file that belongs to something else, or to a version this build
+has not learned.
+
+A database is initialized only when it is pristine — no application id, no
+schema version and not one object anybody created. A file carrying a version
+but no tables, or tables belonging to something else, is not empty.
+
+Rows are held to what they mean and not only to their column types: a timestamp
+is an instant, an identity is not the empty string, and props are an object.
+
+No message repeats a stored value — or a stored *name*. Props and journal
+payloads are retained history, and a member name can carry a credential as
+readily as a member value, so an unexpected member is refused without being
+named and a path through unknown members is written `*`.
 
 An incompatible or damaged database is described and left exactly as it was
 found. Nothing initializes, migrates, truncates, deletes or replaces one, and a

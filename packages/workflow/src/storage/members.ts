@@ -13,6 +13,9 @@
 
 import type { Json } from "@executablemd/durable-streams";
 
+/** A JSON value that is an object: the shape normalized props always take. */
+export type JsonObject = { [key: string]: Json };
+
 /** The members of one JSON object, in the order the value wrote them. */
 export type Members = Map<string, unknown>;
 
@@ -34,6 +37,13 @@ export function parseStringMember(members: Members, key: string, path: string, f
   return member;
 }
 
+/**
+ * Refuse a member this shape does not declare, without naming it.
+ *
+ * The names it *does* declare are ours and safe to print; the one that turned
+ * up came from outside, and a value's member names are as capable of holding a
+ * credential as its values are.
+ */
 export function requireMemberNames(
   members: Members,
   names: readonly string[],
@@ -42,7 +52,7 @@ export function requireMemberNames(
 ): void {
   for (const key of members.keys()) {
     if (!names.includes(key)) {
-      throw fail(`unexpected member ${JSON.stringify(key)}`, path);
+      throw fail(`expected only the members ${names.join(", ")}`, path);
     }
   }
 }
@@ -77,7 +87,10 @@ export function parseJsonValue(value: unknown, path: string, fail: Fail): Json {
     const object: { [key: string]: Json } = {};
     for (const [key, member] of Object.entries(value)) {
       Object.defineProperty(object, key, {
-        value: parseJsonValue(member, `${path}.${key}`, fail),
+        // `${path}.*`, not `${path}.${key}`: these names come from the value
+        // being parsed, and a path built from one would carry it into an error
+        // that travels to logs and terminals.
+        value: parseJsonValue(member, `${path}.*`, fail),
         enumerable: true,
         writable: true,
         configurable: true,
@@ -86,6 +99,15 @@ export function parseJsonValue(value: unknown, path: string, fail: Fail): Json {
     return object;
   }
   throw fail(`expected a JSON value, found ${describe(value)}`, path);
+}
+
+/** The JSON object a parsed value describes. */
+export function parseJsonObject(value: unknown, path: string, fail: Fail): JsonObject {
+  const parsed = parseJsonValue(value, path, fail);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw fail(`expected an object, found ${describe(parsed)}`, path);
+  }
+  return parsed;
 }
 
 /** Name a value's kind without repeating what it holds. */

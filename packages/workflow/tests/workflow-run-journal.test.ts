@@ -39,8 +39,10 @@ import {
 } from "../mod.ts";
 import { ActiveTransaction } from "../src/deno/database.ts";
 import {
+  allowJournalInserts,
   committedEventCount,
   createRun,
+  refuseNextJournalInsert,
   request,
   runPath,
   tamper,
@@ -214,6 +216,89 @@ describe("Tier WJ — what reaches SQLite", () => {
 
     expect(seen.raised).toBeInstanceOf(SecretDetectedError);
     expect(names(seen.events)).toEqual(["before"]);
+  });
+
+  it("WJ5b: the same gate on a transaction's journal keeps the row out too", function* () {
+    const root = yield* useStorageRoot();
+    const scanner = createSecretScanner();
+
+    // The transaction's journal is a second way into the same table, so the
+    // filtering boundary has to hold there as well.
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const result = yield* database.transact(function* (transaction) {
+        const guarded = guardDurableStream(transaction.journal, function* (event) {
+          const findings = yield* scanner.scan(serializeDurableEvent(event));
+          if (findings.length > 0) {
+            throw new SecretDetectedError(findings);
+          }
+        });
+
+        yield* guarded.append(yielded("before", "harmless"));
+        yield* guarded.append(yielded("leak", CANARY));
+        return "never reached";
+      });
+
+      return { result, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.result.ok).toBe(false);
+    expect(!seen.result.ok && seen.result.error).toBeInstanceOf(SecretDetectedError);
+    // The rejected event never reached SQLite, and the transaction it happened
+    // inside published nothing either.
+    expect(seen.events).toEqual([]);
+  });
+
+  it("WJ5c: a real SQLite insertion failure leaves no partial event", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(yielded("before", "before"));
+
+      refuseNextJournalInsert(path);
+
+      let raised: unknown;
+      try {
+        yield* database.journal.append(yielded("refused", "refused"));
+      } catch (error) {
+        raised = error;
+      }
+
+      // The transaction the append opened for itself rolled back, and the
+      // handle is still usable afterwards.
+      allowJournalInserts(path);
+      yield* database.journal.append(yielded("after", "after"));
+
+      return { raised, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.raised).toBeInstanceOf(Error);
+    expect(names(seen.events)).toEqual(["before", "after"]);
+  });
+
+  it("WJ5d: an insertion failure rolls back the rest of the caller's transaction", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      refuseNextJournalInsert(path);
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("companion", "companion"));
+        return "never reached";
+      });
+
+      allowJournalInserts(path);
+      return { result, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.result.ok).toBe(false);
+    // The first append succeeded and went away with the failed one.
+    expect(seen.events).toEqual([]);
   });
 
   it("WJ6: a gate cancelled mid-scan produces no row either", function* () {
@@ -829,18 +914,23 @@ describe("Tier WJ — surviving a process", () => {
     const second = yield* runChild(root, "restart", marker);
     expect(second.code).toBe(0);
 
-    // The durable operation ran once. The second process restored its result
-    // from the retained journal instead of performing it again.
-    expect(readFileSync(marker, "utf8")).toBe("ran\n");
+    // Every durable operation ran once. The second process restored their
+    // results from the retained journal instead of performing them again.
+    expect(readFileSync(marker, "utf8")).toBe("first\nsecond\nthird\n");
 
     const before = JSON.parse(first.out);
     const after = JSON.parse(second.out);
 
     expect(after.value).toBe(before.value);
     expect(after.status).toBe("completed");
-    // Identity survives, and replay adds no second copy of a recorded event.
-    expect(after.events.map((event: { eventId: string }) => event.eventId)).toEqual(
-      before.events.map((event: { eventId: string }) => event.eventId),
-    );
+    // Order and identity both survive: the same events, the same ids, in the
+    // same sequence, read by a process that never saw them written.
+    expect(after.events).toEqual(before.events);
+    expect(after.events.map((event: { name?: string }) => event.name)).toEqual([
+      "first",
+      "second",
+      "third",
+      undefined,
+    ]);
   });
 });

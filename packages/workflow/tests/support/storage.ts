@@ -126,6 +126,31 @@ export function committedEventCount(path: string): number {
 }
 
 /**
+ * Make the next journal insertion fail inside SQLite.
+ *
+ * A trigger rather than a stubbed statement: the failure has to come from the
+ * database, after the row has been offered to it, so that what is being tested
+ * is the transaction's response to a real insertion failure and not a mock's.
+ */
+export function refuseNextJournalInsert(path: string): void {
+  tamper(path, (database) => {
+    database.exec(`
+      CREATE TRIGGER refuse_journal_insert BEFORE INSERT ON journal_events
+      BEGIN
+        SELECT raise(ABORT, 'the journal refuses this row');
+      END
+    `);
+  });
+}
+
+/** Take that refusal away again, leaving the schema as version 1 declares it. */
+export function allowJournalInserts(path: string): void {
+  tamper(path, (database) => {
+    database.exec("DROP TRIGGER IF EXISTS refuse_journal_insert");
+  });
+}
+
+/**
  * Rebuild `workflow_run` without its CHECK constraints.
  *
  * The database refuses to store an unreadable status, an incoherent stop

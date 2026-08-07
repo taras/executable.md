@@ -45,7 +45,7 @@ import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-st
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   WorkflowDatabaseClosedError,
-  WorkflowDatabaseFormatError,
+  WorkflowDatabaseCorruptError,
   WorkflowDocumentExecutionError,
   WorkflowRequestError,
   WorkflowTransactionError,
@@ -56,10 +56,10 @@ import {
   type DefinitionRetrieval,
   type DocumentExecutionCompletion,
   type DocumentExecutionRecord,
-  parseStopReasonInput,
+  parseDocumentExecutionCompletion,
+  parseStoredRunState,
   type StoredRunState,
   type WorkflowRunRecord,
-  type WorkflowStopReason,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
 import type { ConnectionLock } from "./lock.ts";
@@ -340,13 +340,14 @@ function createHandle(connection: OpenConnection): Handle {
     },
 
     *finishDocumentExecution(
-      completion: DocumentExecutionCompletion,
+      offered: DocumentExecutionCompletion,
     ): Operation<Result<DocumentExecutionRecord>> {
-      const reason = checkedStopReason(completion.reason);
-      if (!reason.ok) {
-        return reason;
+      const checked = parseDocumentExecutionCompletion(offered);
+      if (!checked.ok) {
+        return checked;
       }
-      const columns = stopReasonColumns(reason.value);
+      const completion = checked.value;
+      const columns = stopReasonColumns(completion.reason);
       const stoppedAt = now();
 
       return yield* write(() => {
@@ -373,12 +374,13 @@ function createHandle(connection: OpenConnection): Handle {
       );
     },
 
-    *updateRunState(state: StoredRunState): Operation<Result<WorkflowRunRecord>> {
-      const reason = checkedStopReason(state.reason);
-      if (!reason.ok) {
-        return reason;
+    *updateRunState(offered: StoredRunState): Operation<Result<WorkflowRunRecord>> {
+      const checked = parseStoredRunState(offered);
+      if (!checked.ok) {
+        return checked;
       }
-      const columns = stopReasonColumns(reason.value);
+      const state = checked.value;
+      const columns = stopReasonColumns(state.reason);
       const updatedAt = now();
 
       const written = yield* write(() => {
@@ -514,26 +516,23 @@ function rollback(database: DatabaseSync): void {
   }
 }
 
-function checkedStopReason(
-  reason: WorkflowStopReason | undefined,
-): Result<WorkflowStopReason | undefined> {
-  if (reason === undefined) {
-    return Ok(undefined);
-  }
-  return parseStopReasonInput(reason);
-}
-
 function retrievalFailure(reason: string, path: string): Error {
   return new WorkflowRequestError(
     `the retrieval metadata is not a JSON value: ${reason} at ${path}`,
   );
 }
 
-/** The run the singleton row describes, for whoever opened the file. */
+/**
+ * The run the singleton row describes, for whoever opened the file.
+ *
+ * A database that has already said it is a version-1 workflow run, and then
+ * has no run in it, disagrees with itself. That is damage rather than a file
+ * belonging to somebody else.
+ */
 export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRecord {
   const row = database.prepare(SELECT_RUN).get();
   if (row === undefined) {
-    throw new WorkflowDatabaseFormatError(path, "its workflow_run row is missing");
+    throw new WorkflowDatabaseCorruptError(path, "it holds no workflow run");
   }
   return readRunRecord(row);
 }

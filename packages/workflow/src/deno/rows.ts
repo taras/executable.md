@@ -15,7 +15,7 @@
 import type { Json } from "@executablemd/durable-streams";
 import { parseWorkflowDefinition, type WorkflowDefinition } from "../storage/definition.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
-import { describe, type Fail, parseJsonValue } from "../storage/members.ts";
+import { describe, type Fail, type JsonObject, parseJsonValue } from "../storage/members.ts";
 import {
   type DefinitionRetrieval,
   type DocumentExecutionRecord,
@@ -66,6 +66,38 @@ function optionalText(row: Row, column: string, table: string): string | undefin
   return value;
 }
 
+/**
+ * Text that names something, which the empty string does not.
+ *
+ * `NOT NULL` says a column has text in it. It does not say the text is an
+ * identity, and a run whose id is empty is addressable by nobody.
+ */
+function identifier(row: Row, column: string, table: string): string {
+  const value = text(row, column, table);
+  if (value === "") {
+    throw new WorkflowRecordMalformedError(`${table}.${column}`, "expected a non-empty identity");
+  }
+  return value;
+}
+
+/** The exact spelling `toISOString()` produces, which is what storage writes. */
+const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/**
+ * A moment, rather than any text at all.
+ *
+ * SQLite has no date type, so a timestamp column holds whatever text it was
+ * given. Checking the shape here is what keeps "when did this run start" an
+ * answer rather than a string that once looked like one.
+ */
+function instant(row: Row, column: string, table: string): string {
+  const value = text(row, column, table);
+  if (!INSTANT.test(value) || Number.isNaN(Date.parse(value))) {
+    throw new WorkflowRecordMalformedError(`${table}.${column}`, "expected an ISO 8601 instant");
+  }
+  return value;
+}
+
 function integer(row: Row, column: string, table: string): number {
   const value = row[column];
   if (typeof value === "number" && Number.isSafeInteger(value)) {
@@ -92,6 +124,18 @@ function json(row: Row, column: string, table: string): Json {
     throw new WorkflowRecordMalformedError(location, "expected JSON");
   }
   return parseJsonValue(parsed, "$", failure(location));
+}
+
+/** A stored JSON column that must hold an object, such as normalized props. */
+function jsonObject(row: Row, column: string, table: string): JsonObject {
+  const value = json(row, column, table);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new WorkflowRecordMalformedError(
+      `${table}.${column}`,
+      `expected an object, found ${describe(value)}`,
+    );
+  }
+  return value;
 }
 
 /** The stop reason three columns describe, or none when they are all empty. */
@@ -132,13 +176,13 @@ export function readDefinition(row: Row, table: string): WorkflowDefinition {
 export function readRunRecord(row: Row): WorkflowRunRecord {
   const table = "workflow_run";
   const record: WorkflowRunRecord = {
-    runId: text(row, "run_id", table),
+    runId: identifier(row, "run_id", table),
     definition: readDefinition(row, table),
     base: text(row, "base", table),
-    props: json(row, "props", table),
+    props: jsonObject(row, "props", table),
     status: readStatus(row, "status", table),
-    createdAt: text(row, "created_at", table),
-    updatedAt: text(row, "updated_at", table),
+    createdAt: instant(row, "created_at", table),
+    updatedAt: instant(row, "updated_at", table),
   };
   const stopReason = readStopReason(row, table);
   return Object.freeze(stopReason === undefined ? record : { ...record, stopReason });
@@ -150,7 +194,7 @@ export function readRetrieval(row: Row): DefinitionRetrieval {
   return Object.freeze({
     metadata: json(row, "metadata", table),
     revision: integer(row, "revision", table),
-    updatedAt: text(row, "updated_at", table),
+    updatedAt: instant(row, "updated_at", table),
   });
 }
 
@@ -158,8 +202,8 @@ export function readRetrieval(row: Row): DefinitionRetrieval {
 export function readDocumentExecution(row: Row): DocumentExecutionRecord {
   const table = "document_executions";
   const record: DocumentExecutionRecord = {
-    executionId: text(row, "execution_id", table),
-    startedAt: text(row, "started_at", table),
+    executionId: identifier(row, "execution_id", table),
+    startedAt: instant(row, "started_at", table),
   };
   const stoppedAt = optionalText(row, "stopped_at", table);
   if (stoppedAt === undefined) {

@@ -8,10 +8,11 @@ import type { CoroutineId, EffectDescription } from "./types.ts";
  * Raised when a persisted record does not describe a `DurableEvent`.
  *
  * `path` locates the offending member within the record, such as
- * `$.result.error.message`. Neither the path nor the message quotes a
- * value from the record: a journal is retained, filtered history, and a
- * parse failure is not a reason to copy its contents into an error that
- * travels to logs and terminals.
+ * `$.result.error.message`. Members the protocol does not name appear as `*`,
+ * because a record's own member names are as much retained content as its
+ * values. Neither the path nor the message repeats anything from the record: a
+ * journal is retained, filtered history, and a parse failure is not a reason to
+ * copy its contents into an error that travels to logs and terminals.
  */
 export class MalformedDurableEventError extends Error {
   override name = "MalformedDurableEventError";

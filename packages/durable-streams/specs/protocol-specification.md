@@ -861,9 +861,12 @@ A number that overflows to infinity, which `1e999` does, is refused rather than
 restored as a value `JSON.stringify` cannot write back.
 
 `MalformedDurableEventError.path` locates the offending member, such as
-`$.result.error.message`. Neither the path nor the message quotes a value from
-the record: a journal is retained, filtered history, and a parse failure is not
-a reason to copy its contents into an error that travels to logs and terminals.
+`$.result.error.message`. Members the protocol does not name — the extra
+description fields, anything inside a result value — appear as `*`, because a
+record's own member names are as much retained content as its values. Neither
+the path nor the message repeats anything from the record: a journal is
+retained, filtered history, and a parse failure is not a reason to copy its
+contents into an error that travels to logs and terminals.
 
 ### 11.3 Stream consistency
 

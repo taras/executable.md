@@ -17,6 +17,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
 import { type Result, scoped } from "effection";
+import type { Json } from "@executablemd/durable-streams";
+import type { DatabaseSync } from "node:sqlite";
 import {
   type GitWorkflowDefinitionV1,
   WORKFLOW_RUN_STATUSES,
@@ -35,6 +37,7 @@ import {
   WorkflowSchemaVersionError,
   type WorkflowStopReason,
 } from "../mod.ts";
+import type { JsonObject } from "../src/storage/members.ts";
 import { APPLICATION_ID, hashRunId, useWorkflowRunStorage } from "../deno.ts";
 import {
   createRun,
@@ -53,6 +56,18 @@ const { create, lookup } = WorkflowRunStorage.operations;
 /** Every entry in the storage root, so a test can prove nothing else appeared. */
 function entries(root: string): string[] {
   return readdirSync(root);
+}
+
+/**
+ * A props value the interface forbids, for testing that storage checks anyway.
+ *
+ * The type says props are an object; nothing stops a host built without types,
+ * or one that read them from a file, from handing over something else.
+ */
+function fabricated(value: Json): JsonObject {
+  const container: { props: JsonObject } = { props: {} };
+  Object.defineProperty(container, "props", { value, enumerable: true });
+  return container.props;
 }
 
 describe("Tier WS — creating and finding a run", () => {
@@ -262,17 +277,46 @@ describe("Tier WS — what a run retains", () => {
 
     const record = yield* withStorage(root, function* () {
       const database = yield* createRun();
+
+      // The event has to be there. A reason naming one that is not is a
+      // reason referring to nothing, which is why the reference is enforced.
+      yield* database.journal.append({
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "call", name: "failing" },
+        result: { status: "err", error: { message: "filtered" } },
+      });
+      const entries = yield* database.readJournalEntries();
+      if (!entries.ok) {
+        throw entries.error;
+      }
+
       const updated = yield* database.updateRunState({
         status: "failed",
-        reason: { kind: "journal", eventId: "e17" },
+        reason: { kind: "journal", eventId: entries.value[0].eventId },
       });
       if (!updated.ok) {
         throw updated.error;
       }
-      return updated.value;
+      return { record: updated.value, eventId: entries.value[0].eventId };
     });
 
-    expect(record.stopReason).toEqual({ kind: "journal", eventId: "e17" });
+    expect(record.record.stopReason).toEqual({ kind: "journal", eventId: record.eventId });
+  });
+
+  it("WS11b: a stop reason naming an event this run does not hold is refused", function* () {
+    const root = yield* useStorageRoot();
+
+    const result = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      return yield* database.updateRunState({
+        status: "failed",
+        reason: { kind: "journal", eventId: "an-event-that-was-never-appended" },
+      });
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
   });
 
   it("WS12: a stop reason is parsed on the way in, not only type-checked", function* () {
@@ -554,26 +598,74 @@ describe("Tier WS — refusing what is not this run's database", () => {
     }
   });
 
-  it("WS22: a missing table and a missing singleton row are both refused", function* () {
+  it("WS21b: a file that only looks empty is not initialized into", function* () {
     const root = yield* useStorageRoot();
 
+    // Pristine means all three: no application id, no schema version, and not
+    // one object anybody created. Each of these fails one of them, and none of
+    // them is a file this build has any business writing a run into.
+    const occupied: [string, (database: DatabaseSync) => void][] = [
+      ["versioned", (database) => database.exec("PRAGMA user_version = 7")],
+      ["furnished", (database) => database.exec("CREATE TABLE theirs (a TEXT)")],
+      [
+        "labelled",
+        (database) => {
+          database.exec("PRAGMA application_id = 12345");
+          database.exec("CREATE TABLE theirs (a TEXT)");
+        },
+      ],
+    ];
+
+    for (const [runId, occupy] of occupied) {
+      const path = runPath(root, runId);
+      tamper(path, occupy);
+      const before = readFileSync(path);
+
+      const result = yield* withStorage(root, function* () {
+        return yield* create(request({ runId }));
+      });
+
+      expect(result.ok).toBe(false);
+      expect(readFileSync(path)).toEqual(before);
+    }
+  });
+
+  it("WS22: a recognized database that is not shaped like version 1 is damage", function* () {
+    const root = yield* useStorageRoot();
+
+    // The header already says this is a version-1 workflow run. Anything
+    // missing or differently shaped is the file disagreeing with itself, not a
+    // version this build has not learned or a file belonging to someone else.
+    const damaged: [string, (database: DatabaseSync) => void][] = [
+      ["no-table", (database) => database.exec("DROP TABLE definition_retrieval")],
+      ["no-row", (database) => database.exec("DELETE FROM workflow_run")],
+      ["relaxed", relaxRunConstraints],
+      ["extra-table", (database) => database.exec("CREATE TABLE souvenirs (a TEXT)")],
+      [
+        "extra-view",
+        (database) => database.exec("CREATE VIEW shortcut AS SELECT run_id FROM workflow_run"),
+      ],
+    ];
+
     const results = yield* withStorage(root, function* () {
-      yield* createRun({ runId: "no-table" });
-      tamper(runPath(root, "no-table"), (database) => {
-        database.exec("DROP TABLE definition_retrieval");
-      });
-
-      yield* createRun({ runId: "no-row" });
-      tamper(runPath(root, "no-row"), (database) => {
-        database.exec("DELETE FROM workflow_run");
-      });
-
-      return [yield* lookup("no-table"), yield* lookup("no-row")];
+      const seen: { runId: string; result: Result<WorkflowRunDatabase> }[] = [];
+      for (const [runId, damage] of damaged) {
+        yield* createRun({ runId });
+        tamper(runPath(root, runId), damage);
+        seen.push({ runId, result: yield* lookup(runId) });
+      }
+      return seen;
     });
 
-    for (const result of results) {
+    for (const { runId, result } of results) {
       expect(result.ok).toBe(false);
-      expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseFormatError);
+      if (result.ok) {
+        continue;
+      }
+      expect([runId, result.error.constructor.name]).toEqual([
+        runId,
+        WorkflowDatabaseCorruptError.name,
+      ]);
     }
   });
 
@@ -596,29 +688,22 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(!result.ok && result.error.message).toContain("workflow_run.definition");
   });
 
-  it("WS24: props, a status and a stop reason are parsed out of their columns", function* () {
+  it("WS24: a value the schema admits and the record cannot use is refused", function* () {
     const root = yield* useStorageRoot();
 
+    // These pass every constraint the table declares — `NOT NULL` text is text
+    // whatever it says — so the parser is the only thing between them and a
+    // record claiming to know when a run started or what it is called.
     const cases = [
-      { runId: "bad-props", set: `props = 'not json at all'`, column: "workflow_run.props" },
-      { runId: "bad-status", set: `status = 'elapsed'`, column: "workflow_run.status" },
-      {
-        runId: "bad-reason",
-        set: `stop_reason_kind = 'host', stop_reason_event_id = 'e17'`,
-        column: "workflow_run.stop_reason",
-      },
+      { runId: "empty-id", set: `run_id = ''`, column: "workflow_run.run_id" },
+      { runId: "vague-time", set: `created_at = 'a while ago'`, column: "workflow_run.created_at" },
+      { runId: "loose-time", set: `updated_at = '2026-08-07'`, column: "workflow_run.updated_at" },
     ];
 
     for (const one of cases) {
-      const path = runPath(root, one.runId);
-
       const result = yield* withStorage(root, function* () {
         yield* createRun({ runId: one.runId });
-        tamper(path, (database) => {
-          // The constraints are what stop XMD writing these, so an outside
-          // editor has to remove them first — and then the parser is the only
-          // thing left between the row and replay.
-          relaxRunConstraints(database);
+        tamper(runPath(root, one.runId), (database) => {
           database.prepare(`UPDATE workflow_run SET ${one.set}`).run();
         });
         return yield* lookup(one.runId);
@@ -630,7 +715,27 @@ describe("Tier WS — refusing what is not this run's database", () => {
     }
   });
 
-  it("WS25: a malformed row is described without quoting what it held", function* () {
+  it("WS25: props that are not an object are refused by the schema and the parser", function* () {
+    const root = yield* useStorageRoot();
+
+    // A document declares named props, so a run receives a mapping. The
+    // request is refused at the boundary, and the column would refuse it too.
+    const results = yield* withStorage(root, function* () {
+      return [
+        yield* create(request({ props: fabricated("a bare string") })),
+        yield* create(request({ props: fabricated(["an", "array"]) })),
+        yield* create(request({ props: fabricated(null) })),
+      ];
+    });
+
+    for (const result of results) {
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
+    }
+    expect(entries(root)).toEqual([]);
+  });
+
+  it("WS26: a malformed row is described without quoting what it held", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
     const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
@@ -638,39 +743,13 @@ describe("Tier WS — refusing what is not this run's database", () => {
     const result = yield* withStorage(root, function* () {
       yield* createRun();
       tamper(path, (database) => {
-        relaxRunConstraints(database);
-        database.prepare("UPDATE workflow_run SET props = ?").run(`not json ${secret}`);
+        database.prepare("UPDATE workflow_run SET created_at = ?").run(`not a time ${secret}`);
       });
       return yield* lookup("release-1.4");
     });
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.message).not.toContain(secret);
-  });
-
-  it("WS26: retrieval metadata that does not parse is refused like any other row", function* () {
-    const root = yield* useStorageRoot();
-    const path = runPath(root, "release-1.4");
-
-    const result = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      yield* database.replaceRetrievalMetadata({ checkout: "/tmp/a" });
-
-      tamper(path, (raw) => {
-        raw.exec(`
-          DROP TABLE definition_retrieval;
-          CREATE TABLE definition_retrieval (
-            id INTEGER PRIMARY KEY, metadata TEXT, revision INTEGER, updated_at TEXT
-          );
-          INSERT INTO definition_retrieval VALUES (1, 'not json', 1, 'then');
-        `);
-      });
-
-      return yield* lookup("release-1.4");
-    });
-
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowRecordMalformedError);
   });
 
   it("WS27: a damaged image is reported as damage, and left where it is", function* () {

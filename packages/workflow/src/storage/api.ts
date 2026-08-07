@@ -34,6 +34,7 @@ import type { Operation, Result } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import type { WorkflowDefinition } from "./definition.ts";
 import { WorkflowStorageError } from "./errors.ts";
+import type { JsonObject } from "./members.ts";
 import type {
   DefinitionRetrieval,
   DocumentExecutionCompletion,
@@ -50,8 +51,13 @@ export interface CreateWorkflowRunRequest {
   readonly definition: WorkflowDefinition;
   /** The Git revision chosen as the run's starting repository state. */
   readonly base: string;
-  /** Root props, already normalized by whoever validated them. */
-  readonly props: Json;
+  /**
+   * Root props, already normalized by whoever validated them.
+   *
+   * An object. A document declares named props, so a run receives a mapping
+   * from those names to values — a bare scalar or array names nothing.
+   */
+  readonly props: JsonObject;
 }
 
 /**

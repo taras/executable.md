@@ -2,15 +2,24 @@
  * The version-1 schema, and what a file must satisfy to be read as one.
  *
  * A workflow run is one SQLite database, and every question about whether that
- * file is *this* run's is answered here before a single row is trusted. The
- * order matters: a file that is not SQLite, a database belonging to another
- * program, a schema from a version this build does not implement, and a
- * database missing the tables it claims to have are four different situations,
- * and each is reported as itself.
+ * file is *this* run's is answered here before a single row is trusted.
+ *
+ * Three answers are kept apart because a host acts on them differently. A file
+ * that belongs to another program is a **format** failure: nothing here will
+ * ever read it. A schema version this build does not implement is a **version**
+ * failure: a later build might read it, and this one must not touch it. A file
+ * that claims to be a version-1 workflow database and is not shaped like one is
+ * **damage** — the header says the tables are there, so their absence or their
+ * wrong shape is the file disagreeing with itself.
+ *
+ * Recognizing it is not the same as reading its table names. The stored
+ * definition of every table is compared with the definition this build creates,
+ * so a column that is gone, a constraint that was dropped, and a table nobody
+ * declared are all caught before a row reaches a parser that assumes they hold.
  *
  * Nothing in this module writes to a database it did not just create. An
- * incompatible or damaged file is described and left exactly as it was found:
- * a host that silently replaced it would be claiming to continue a run whose
+ * incompatible or damaged file is described and left exactly as it was found: a
+ * host that silently replaced it would be claiming to continue a run whose
  * history it had just deleted.
  */
 
@@ -18,6 +27,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
+  WorkflowRequestError,
   WorkflowSchemaVersionError,
 } from "../storage/errors.ts";
 
@@ -33,62 +43,72 @@ export const APPLICATION_ID = 0x584d4431;
 /** The only schema version this build reads or writes. */
 export const SCHEMA_VERSION = 1;
 
-/** Tables version 1 declares. `sqlite_sequence` follows from AUTOINCREMENT. */
-export const REQUIRED_TABLES: readonly string[] = Object.freeze([
-  "workflow_run",
-  "definition_retrieval",
-  "document_executions",
-  "journal_events",
-]);
-
 const STATUSES = "'running', 'suspended', 'interrupted', 'completed', 'failed', 'cancelled'";
 
 /**
- * A stop reason is two columns wide and has three legal shapes.
+ * A stop reason is three columns wide and has three legal shapes.
  *
  * Spreading the variant across columns is what lets SQLite hold the invariant
  * rather than the code that writes rows: a host reason with an event id, or a
  * journal reason with a code, is refused by the database itself.
  */
-function coherentStopReason(prefix: string): string {
+function coherentStopReason(): string {
   return `CHECK (
-    (${prefix}kind IS NULL AND ${prefix}code IS NULL AND ${prefix}event_id IS NULL)
-    OR (${prefix}kind = 'host' AND ${prefix}code IS NOT NULL AND ${prefix}event_id IS NULL)
-    OR (${prefix}kind = 'journal' AND ${prefix}code IS NULL AND ${prefix}event_id IS NOT NULL)
+    (stop_reason_kind IS NULL AND stop_reason_code IS NULL AND stop_reason_event_id IS NULL)
+    OR (stop_reason_kind = 'host' AND stop_reason_code IS NOT NULL AND stop_reason_event_id IS NULL)
+    OR (stop_reason_kind = 'journal' AND stop_reason_code IS NULL AND stop_reason_event_id IS NOT NULL)
   )`;
 }
 
 /**
- * Version 1 in full, including the journal table.
+ * Version 1, one table at a time.
  *
- * The journal is here from the first version even though metadata lands first:
- * a schema that grew a table between two commits of the same release would owe
- * a migration to databases that never existed.
+ * Kept as separate definitions so verification can compare what a file holds
+ * with what this build writes, rather than settling for the table's name.
+ *
+ * The journal is here from the first version even though metadata landed
+ * first: a schema that grew a table between two commits of the same release
+ * would owe a migration to databases that never existed. It is also created
+ * first, because the stop-reason references point at it.
  */
-export const SCHEMA_SQL = `
-CREATE TABLE workflow_run (
+const TABLES: ReadonlyMap<string, string> = new Map([
+  [
+    "journal_events",
+    `CREATE TABLE journal_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  record TEXT NOT NULL CHECK (json_valid(record))
+) STRICT`,
+  ],
+  [
+    "workflow_run",
+    `CREATE TABLE workflow_run (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   run_id TEXT NOT NULL,
   definition TEXT NOT NULL CHECK (json_valid(definition)),
   base TEXT NOT NULL,
-  props TEXT NOT NULL CHECK (json_valid(props)),
+  props TEXT NOT NULL CHECK (json_valid(props) AND json_type(props) = 'object'),
   status TEXT NOT NULL CHECK (status IN (${STATUSES})),
   stop_reason_kind TEXT CHECK (stop_reason_kind IS NULL OR stop_reason_kind IN ('host', 'journal')),
   stop_reason_code TEXT,
-  stop_reason_event_id TEXT,
+  stop_reason_event_id TEXT REFERENCES journal_events (event_id),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  ${coherentStopReason("stop_reason_")}
-) STRICT;
-
-CREATE TABLE definition_retrieval (
+  ${coherentStopReason()}
+) STRICT`,
+  ],
+  [
+    "definition_retrieval",
+    `CREATE TABLE definition_retrieval (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   metadata TEXT NOT NULL CHECK (json_valid(metadata)),
   revision INTEGER NOT NULL CHECK (revision >= 1),
   updated_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE document_executions (
+) STRICT`,
+  ],
+  [
+    "document_executions",
+    `CREATE TABLE document_executions (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   execution_id TEXT NOT NULL UNIQUE,
   started_at TEXT NOT NULL,
@@ -96,18 +116,19 @@ CREATE TABLE document_executions (
   stop_status TEXT CHECK (stop_status IS NULL OR stop_status IN (${STATUSES})),
   stop_reason_kind TEXT CHECK (stop_reason_kind IS NULL OR stop_reason_kind IN ('host', 'journal')),
   stop_reason_code TEXT,
-  stop_reason_event_id TEXT,
+  stop_reason_event_id TEXT REFERENCES journal_events (event_id),
   CHECK ((stopped_at IS NULL) = (stop_status IS NULL)),
   CHECK (stop_status IS NOT NULL OR stop_reason_kind IS NULL),
-  ${coherentStopReason("stop_reason_")}
-) STRICT;
+  ${coherentStopReason()}
+) STRICT`,
+  ],
+]);
 
-CREATE TABLE journal_events (
-  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_id TEXT NOT NULL UNIQUE,
-  record TEXT NOT NULL CHECK (json_valid(record))
-) STRICT;
-`;
+/** Tables version 1 declares. */
+export const REQUIRED_TABLES: readonly string[] = Object.freeze([...TABLES.keys()]);
+
+/** Version 1 in full. */
+export const SCHEMA_SQL = [...TABLES.values()].map((sql) => `${sql};`).join("\n\n");
 
 /**
  * Write the version-1 schema into a database that holds nothing.
@@ -122,11 +143,19 @@ export function initializeSchema(database: DatabaseSync): void {
   database.exec(SCHEMA_SQL);
 }
 
-/** Whether a database holds nothing at all, and may therefore be initialized. */
+/**
+ * Whether a database holds nothing at all, and may therefore be initialized.
+ *
+ * Pristine means all three: no application id, no schema version, and not one
+ * object anybody created. A file carrying a version but no tables, or tables
+ * belonging to something else, is not empty — it is a file this build has no
+ * business writing into, whatever its header happens to say.
+ */
 export function isUninitialized(database: DatabaseSync, path: string): boolean {
   return (
     readPragmaNumber(database, "application_id", path) === 0 &&
-    tableNames(database, path).size === 0
+    readPragmaNumber(database, "user_version", path) === 0 &&
+    schemaObjects(database, path).length === 0
   );
 }
 
@@ -152,10 +181,46 @@ export function verifySchema(database: DatabaseSync, path: string): void {
     throw new WorkflowSchemaVersionError(path, version, SCHEMA_VERSION);
   }
 
-  const present = tableNames(database, path);
+  verifyStructure(database, path);
+  checkForeignKeys(database, path);
+}
+
+/**
+ * Hold a recognized database to the schema this build writes.
+ *
+ * The header already claims version 1, so anything missing or differently
+ * shaped is the file disagreeing with itself rather than a version this build
+ * has not learned yet.
+ */
+function verifyStructure(database: DatabaseSync, path: string): void {
+  const objects = schemaObjects(database, path);
+
+  for (const object of objects) {
+    if (object.type !== "table") {
+      throw new WorkflowDatabaseCorruptError(
+        path,
+        `it declares a ${object.type} that version ${SCHEMA_VERSION} does not`,
+      );
+    }
+    const expected = TABLES.get(object.name);
+    if (expected === undefined) {
+      throw new WorkflowDatabaseCorruptError(
+        path,
+        `it declares a table that version ${SCHEMA_VERSION} does not`,
+      );
+    }
+    if (normalize(object.sql) !== normalize(expected)) {
+      throw new WorkflowDatabaseCorruptError(
+        path,
+        `its ${object.name} table is not shaped the way version ${SCHEMA_VERSION} declares it`,
+      );
+    }
+  }
+
+  const present = new Set(objects.map((object) => object.name));
   const missing = REQUIRED_TABLES.filter((table) => !present.has(table));
   if (missing.length > 0) {
-    throw new WorkflowDatabaseFormatError(path, `it is missing the table ${missing.join(", ")}`);
+    throw new WorkflowDatabaseCorruptError(path, `it is missing the table ${missing.join(", ")}`);
   }
 }
 
@@ -175,16 +240,53 @@ export function checkIntegrity(database: DatabaseSync, path: string): void {
   }
 }
 
-function tableNames(database: DatabaseSync, path: string): Set<string> {
-  const rows = query(database, "SELECT name FROM sqlite_schema WHERE type = 'table'", path);
-  const names = new Set<string>();
-  for (const row of rows) {
-    const name = row["name"];
-    if (typeof name === "string") {
-      names.add(name);
-    }
+/**
+ * Ask SQLite whether its references still point at anything.
+ *
+ * A stop reason naming a journal event is only a reason while that event
+ * exists; a row pointing at one that does not is damage, not a reason.
+ */
+function checkForeignKeys(database: DatabaseSync, path: string): void {
+  if (query(database, "PRAGMA foreign_key_check", path).length > 0) {
+    throw new WorkflowDatabaseCorruptError(path, "one of its references points at nothing");
   }
-  return names;
+}
+
+interface SchemaObject {
+  readonly type: string;
+  readonly name: string;
+  readonly sql: string;
+}
+
+/**
+ * Everything somebody declared in this database.
+ *
+ * `sqlite_` names are SQLite's own — the `sqlite_sequence` table AUTOINCREMENT
+ * creates, the indexes UNIQUE creates — and are not anybody's declarations.
+ */
+function schemaObjects(database: DatabaseSync, path: string): SchemaObject[] {
+  const rows = query(
+    database,
+    "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+    path,
+  );
+
+  const objects: SchemaObject[] = [];
+  for (const row of rows) {
+    const type = row["type"];
+    const name = row["name"];
+    const sql = row["sql"];
+    if (typeof type !== "string" || typeof name !== "string") {
+      throw new WorkflowDatabaseCorruptError(path, "its schema does not describe itself");
+    }
+    objects.push({ type, name, sql: typeof sql === "string" ? sql : "" });
+  }
+  return objects;
+}
+
+/** One statement's shape, independent of how it was laid out. */
+function normalize(sql: string): string {
+  return sql.replace(/\s+/g, " ").trim();
 }
 
 function readPragmaNumber(database: DatabaseSync, pragma: string, path: string): number {
@@ -199,12 +301,6 @@ function readPragmaNumber(database: DatabaseSync, pragma: string, path: string):
   throw new WorkflowDatabaseFormatError(path, `SQLite reported no ${pragma}`);
 }
 
-/**
- * SQLite's own refusals, told apart.
- *
- * `SQLITE_NOTADB` means the bytes are not a database, which is a different
- * report from a database whose pages no longer agree with each other.
- */
 function query(database: DatabaseSync, sql: string, path: string): Record<string, unknown>[] {
   try {
     return database.prepare(sql).all();
@@ -219,6 +315,9 @@ const SQLITE_CORRUPT = 11;
 /** `SQLITE_NOTADB`: the bytes are not a SQLite database at all. */
 const SQLITE_NOTADB = 26;
 
+/** `SQLITE_CONSTRAINT_FOREIGNKEY`: a reference points at a row that is not there. */
+const SQLITE_CONSTRAINT_FOREIGNKEY = 787;
+
 /**
  * The typed refusal a SQLite failure describes, or the failure unchanged.
  *
@@ -232,6 +331,14 @@ export function translateSqliteError(error: unknown, path: string): unknown {
       return new WorkflowDatabaseFormatError(path, "SQLite does not recognize it as a database");
     case SQLITE_CORRUPT:
       return new WorkflowDatabaseCorruptError(path, "SQLite reported a damaged image");
+    case SQLITE_CONSTRAINT_FOREIGNKEY:
+      // The only reference version 1 declares. A stop reason may name a
+      // journal event, and naming one this run does not hold is a reason that
+      // refers to nothing.
+      return new WorkflowRequestError(
+        "the stop reason names a journal event this run does not hold. A journal reason " +
+          "points at an event that has already been appended and filtered.",
+      );
     default:
       return error;
   }

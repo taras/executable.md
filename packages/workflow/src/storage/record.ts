@@ -21,6 +21,7 @@ import { WorkflowRequestError } from "./errors.ts";
 import {
   describe,
   type Fail,
+  type JsonObject,
   parseMembers,
   parseStringMember,
   requireMemberNames,
@@ -68,7 +69,7 @@ export interface WorkflowRunRecord {
   readonly runId: string;
   readonly definition: WorkflowDefinition;
   readonly base: string;
-  readonly props: Json;
+  readonly props: JsonObject;
   readonly status: WorkflowRunStatus;
   readonly stopReason?: WorkflowStopReason;
   readonly createdAt: string;
@@ -197,4 +198,70 @@ export function parseStopReasonInput(value: unknown): Result<WorkflowStopReason>
 
 function stopReasonFailure(reason: string, path: string): Error {
   return new WorkflowRequestError(`the stop reason does not describe one: ${reason} at ${path}`);
+}
+
+function requestFailure(reason: string, path: string): Error {
+  return new WorkflowRequestError(`${reason} at ${path}`);
+}
+
+/**
+ * A completion a caller offered, checked before anything is written.
+ *
+ * The types say what a caller meant; they do not say what arrived. An
+ * execution id that is empty, or a status nobody defined, would otherwise
+ * reach SQLite and come back as a constraint failure describing a column
+ * rather than as an answer about the request.
+ */
+export function parseDocumentExecutionCompletion(
+  value: unknown,
+): Result<DocumentExecutionCompletion> {
+  try {
+    const members = parseMembers(value, "$", requestFailure);
+    requireMemberNames(members, ["executionId", "status", "reason"], "$", requestFailure);
+
+    const completion: DocumentExecutionCompletion = {
+      executionId: parseNonEmpty(members, "executionId", "$", requestFailure),
+      status: parseWorkflowRunStatus(members.get("status"), "$.status", requestFailure),
+    };
+
+    const reason = members.get("reason");
+    if (reason === undefined) {
+      return Ok(completion);
+    }
+    const parsed = parseStopReasonInput(reason);
+    if (!parsed.ok) {
+      return parsed;
+    }
+    return Ok({ ...completion, reason: parsed.value });
+  } catch (error) {
+    if (error instanceof WorkflowRequestError) {
+      return Err(error);
+    }
+    throw error;
+  }
+}
+
+/** A run state a caller offered, checked before anything is written. */
+export function parseStoredRunState(value: unknown): Result<StoredRunState> {
+  try {
+    const members = parseMembers(value, "$", requestFailure);
+    requireMemberNames(members, ["status", "reason"], "$", requestFailure);
+
+    const status = parseWorkflowRunStatus(members.get("status"), "$.status", requestFailure);
+
+    const reason = members.get("reason");
+    if (reason === undefined) {
+      return Ok({ status });
+    }
+    const parsed = parseStopReasonInput(reason);
+    if (!parsed.ok) {
+      return parsed;
+    }
+    return Ok({ status, reason: parsed.value });
+  } catch (error) {
+    if (error instanceof WorkflowRequestError) {
+      return Err(error);
+    }
+    throw error;
+  }
 }

@@ -40,12 +40,27 @@ const DEFINITION = {
   rootDocumentPath: "workflows/release.md",
 } as const;
 
+/**
+ * Three durable operations, so replay has an order to preserve.
+ *
+ * Each one's side effect is a line in the marker file, which is what makes
+ * "did this run again" observable from outside the process.
+ */
 function work(marker: string): () => Workflow<string> {
   return function* (): Workflow<string> {
-    return yield* durableCall("mark", function* () {
-      appendFileSync(marker, "ran\n");
-      return "marked";
+    const first = yield* durableCall("first", function* () {
+      appendFileSync(marker, "first\n");
+      return "one";
     });
+    const second = yield* durableCall("second", function* () {
+      appendFileSync(marker, "second\n");
+      return "two";
+    });
+    const third = yield* durableCall("third", function* () {
+      appendFileSync(marker, "third\n");
+      return "three";
+    });
+    return [first, second, third].join(",");
   };
 }
 
