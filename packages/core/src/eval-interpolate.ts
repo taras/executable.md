@@ -15,8 +15,9 @@
  * value is null/undefined, the reference is left verbatim.
  *
  * Text `{meta.key}` references are consumed by the `interpolate()` pass
- * before this function runs. Executable block content has no text pass, so
- * `{props.key}` reaches this function through `env.values.props`.
+ * before this function runs. Text `{props.key}` uses the same current
+ * `env.values.props` binding as this function. Executable block content has
+ * no text pass, so `{props.key}` reaches this function directly.
  *
  * If `env.values` has no key matching the root reference, it is left
  * verbatim. Non-string values are converted via `String()`.

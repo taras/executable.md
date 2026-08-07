@@ -29,13 +29,15 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      # install.sh resolves the latest published release, for the same reason
-      # PR Review does — a pinned version names an unpublished release for the
-      # whole of a release-bump PR. See .github/workflows/review.yml.
-      - name: Install xmd release binary
-        run: |
-          curl -fsSL https://executable.md/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
+
+      - name: Install dependencies
+        run: deno task deps
+
+      - name: Build the checked-out xmd binary
+        run: deno task build
 
       - name: Run repo analysis
         env:
@@ -43,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          xmd run .reviews/AnalyzeRepoCI.md \
+          ./dist/xmd run .reviews/AnalyzeRepoCI.md \
             --component-dir .reviews/components \
             --component-dir .reviews/policies \
             --component-dir packages/core/components \

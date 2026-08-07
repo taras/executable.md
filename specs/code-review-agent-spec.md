@@ -1158,14 +1158,15 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - uses: denoland/setup-deno@v2
-
-      - uses: actions/cache@v4
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          path: .reviews/journal.jsonl
-          key: xmd-review-${{ github.event.pull_request.head.sha }}
-          restore-keys: |
-            xmd-review-${{ github.event.pull_request.base.sha }}
+          deno-version: v2.9.5
+
+      - name: Install dependencies
+        run: deno task deps
+
+      - name: Build the checked-out xmd binary
+        run: deno task build
 
       - name: Run review
         env:
@@ -1177,15 +1178,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task xmd run .reviews/ReviewPR.md
+        run: |
+          ./dist/xmd run .reviews/ReviewPR.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir packages/core/components \
+            -j .reviews/journal.jsonl \
+            --verbose
 ```
 
-### Journal caching
+### Journal artifact
 
-The journal is cached by head SHA. On re-run of the same SHA, full
-replay — no git commands, no API calls, no LLM calls. On new commits,
-`restore-keys` falls back to the base SHA for partial replay of
-shared component imports.
+The workflow uploads `.reviews/journal.jsonl` as an artifact keyed by the
+pull request head SHA after each review, including failed runs. The checked-out
+binary and review documents therefore produce one inspectable journal for the
+revision under review.
 
 ---
 
