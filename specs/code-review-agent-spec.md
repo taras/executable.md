@@ -268,19 +268,20 @@ props:
 const content = yield* renderChildren();
 const body = props.marker + "\n" + content;
 
-const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
 const [owner, name] = repo.split("/");
 const api = `https://api.github.com/repos/${owner}/${name}`;
 
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-};
+function githubHeaders() {
+  return {
+    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+    "Accept": "application/vnd.github+json",
+  };
+}
 
 const { json: comments } = yield* fetch(
-  `${api}/issues/${prNumber}/comments`, { headers }
+  `${api}/issues/${prNumber}/comments`, { headers: githubHeaders() }
 ).expect();
 
 const existing = comments.find(c =>
@@ -290,13 +291,13 @@ const existing = comments.find(c =>
 if (existing) {
   yield* fetch(`${api}/issues/comments/${existing.id}`, {
     method: "PATCH",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: { ...githubHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 } else {
   yield* fetch(`${api}/issues/${prNumber}/comments`, {
     method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: { ...githubHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 }
@@ -1185,6 +1186,17 @@ jobs:
             --component-dir packages/core/components \
             -j .reviews/journal.jsonl \
             --verbose
+
+      - name: Verify review result
+        if: always()
+        run: |
+          test -f .reviews/journal.jsonl
+          ROOT_CLOSE=$(jq -c 'select(.type == "close" and .coroutineId == "root")' .reviews/journal.jsonl | tail -n 1)
+          test -n "$ROOT_CLOSE"
+          test "$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.status // "missing"')" = ok
+          test "$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.status // "ok"')" = ok
+          ROOT_OUTPUT=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.output? // .result.value.value? // .result.value? // "" | tostring')
+          test "${ROOT_OUTPUT/<!-- ERROR:/}" = "$ROOT_OUTPUT"
 ```
 
 ### Journal artifact
@@ -1348,6 +1360,10 @@ The normalized records contain only `message`, `ruleId`, `severity`, `file`,
 `pr.stats.additions` is only meaningful when diagnostics come from the same
 files the additions are in.
 Repo analysis entry points run on everything.
+
+GitHub API credentials are read inside a non-serializable header factory at
+each request. The credential-bearing header object is never assigned to an
+eval binding, so default-on secret detection does not reject or persist it.
 
 ### 13.4 Density calibration
 
