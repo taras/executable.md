@@ -5,6 +5,27 @@
 import type { CoroutineId, EffectDescription } from "./types.ts";
 
 /**
+ * Raised when a persisted record does not describe a `DurableEvent`.
+ *
+ * `path` locates the offending member within the record, such as
+ * `$.result.error.message`. Neither the path nor the message quotes a
+ * value from the record: a journal is retained, filtered history, and a
+ * parse failure is not a reason to copy its contents into an error that
+ * travels to logs and terminals.
+ */
+export class MalformedDurableEventError extends Error {
+  override name = "MalformedDurableEventError";
+
+  /** Location of the offending member within the record. */
+  path: string;
+
+  constructor(reason: string, path: string) {
+    super(`${reason} at ${path}`);
+    this.path = path;
+  }
+}
+
+/**
  * Raised when the replay index entry at the current cursor position
  * does not match the effect yielded by the generator. See spec §6.2.
  *

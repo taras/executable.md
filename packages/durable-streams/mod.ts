@@ -44,6 +44,7 @@ export {
   ContinuePastCloseDivergenceError,
   DivergenceError,
   EarlyReturnDivergenceError,
+  MalformedDurableEventError,
   StaleInputError,
 } from "./errors.ts";
 
@@ -67,6 +68,9 @@ export {
   serializeDurableEvent,
   serializeError,
 } from "./serialize.ts";
+
+// The typed inverse of serializeDurableEvent
+export { parseDurableEvent } from "./parse.ts";
 
 // Core effect factories
 export { createDurableEffect, createDurableOperation } from "./effect.ts";
