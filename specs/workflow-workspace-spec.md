@@ -673,23 +673,34 @@ permanently ambiguous    → fail; never duplicate
 No separate local `started` and `completed` journal protocol is required. A
 missing result causes reconciliation under the same deterministic identity.
 
-### 10.3 Worker Shell candidate
+### 10.3 Worker Shell
 
 Worker Shell means Cloudflare's Workspace Shell capability implemented by
 `just-bash`, Cloudflare's Workspace filesystem adapter and a Deno Worker
 availability boundary. It is neither native Bash nor native process execution.
 
-It enters the first production capability set only after proving that every
-filesystem RPC in one invocation participates in one effect transaction.
-Successful zero-status execution commits its mutations and journal result.
-Nonzero exit, error, timeout, cancellation or Worker termination rolls
-filesystem changes back to an effect-local savepoint and commits the failed
-result. A host crash rolls back the still-open transaction and leaves no result
-event.
+Worker Shell belongs to the first production capability set. One invocation
+owns one effect identity, one immediate SQLite transaction and one
+`shell_mutations` savepoint. DOFS operations use nested savepoints inside that
+caller-owned transaction.
 
-The proof also preserves the measured constraints: no host PATH or native
-execution, no host filesystem escape, network denied unless explicitly
-authorized and CPU-bound code preemptible by Worker termination.
+Successful zero-status execution releases `shell_mutations`, appends the
+already-filtered successful result and commits. Nonzero exit, interpreter
+error, timeout, cancellation or Worker termination rolls back
+`shell_mutations`, appends one failed result in the same outer transaction and
+commits. A host crash rolls back the still-open transaction and leaves neither
+published filesystem mutations nor a result event.
+
+Every filesystem request carries the effect ID and a per-invocation token. The
+host refuses missing, foreign, cancelled, completed and stale or late requests.
+Cancellation forcefully terminates a CPU-bound interpreter before publishing
+the failed result; graceful shutdown that cannot regain control is
+insufficient.
+
+The capability exposes no host PATH, native execution or host filesystem.
+Network is denied unless explicitly authorized. A committed result restores
+without starting a Worker; an effect interrupted before commit executes again
+against its pre-effect Workspace root.
 
 ## 11. History forks
 
@@ -758,10 +769,11 @@ the authoritative filesystem. It keeps journal and Workspace state together so
 the provider can implement effect transactions. It requires no writable FUSE,
 native subprocess bridge or bundled `workerd`.
 
-Worker JavaScript is outside the initial local capability set. Worker Shell is
-conditional on the transactional proof in §10.3. A later Cloudflare-hosted or
-workerd-backed provider may install the same Workspace and lifecycle contracts;
-documents do not choose that topology.
+One host-owned DOFS connection is authoritative for each workflow database, and
+Workspace-local effect transactions execute serially on it. Worker JavaScript
+is outside the initial local capability set; Worker Shell follows §10.3. A later
+Cloudflare-hosted or workerd-backed provider may install the same Workspace and
+lifecycle contracts; documents do not choose that topology.
 
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be
@@ -778,6 +790,6 @@ delegated without changing the document language.
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
-| scoped Deno Worker Shell | containment proven by #351 / PR #353; transaction proof required |
+| scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |
 | bundled workerd local host | omitted; POC #347 / PR #348 retained as provider evidence |

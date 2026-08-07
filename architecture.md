@@ -237,20 +237,31 @@ again.
 
 The local workflow host owns SQLite directly in Deno and reuses Cloudflare's
 DOFS filesystem layer behind the provider-neutral Workspace boundary. The
-journal and DOFS adapter share the operation-scoped transaction. The initial
-topology requires neither writable FUSE nor native subprocess access and does
-not bundle `workerd`. A Cloudflare-hosted or workerd-backed provider may install
-the same contextual contract without changing documents or lifecycle commands.
+journal and DOFS adapter share the operation-scoped transaction. One
+authoritative host-owned DOFS connection serves each workflow database, and the
+host serializes its Workspace-local effect transactions. A second long-lived
+DOFS connection is not a coherent reader because provider caches may retain
+negative entries across another connection's commit.
+
+The initial topology requires neither writable FUSE nor native subprocess
+access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed
+provider may install the same contextual contract without changing documents or
+lifecycle commands.
 
 Worker JavaScript is outside the initial local capability set. Worker Shell is
-eligible for the first production release only when its focused proof shows
-that one `just-bash` invocation, running inside a Deno Worker through
-Cloudflare's Workspace filesystem adapter, routes every filesystem request
-through one effect transaction. Success commits mutations with the journal
-result. Failure, timeout, cancellation and Worker termination roll mutations
-back to an effect-local savepoint while recording the failed result; a host
-crash rolls back the still-open transaction entirely. Worker Shell exposes no
-native executable or host PATH and is not described as POSIX or native Bash.
+inside it: one `just-bash` invocation runs in a Deno Worker through Cloudflare's
+Workspace filesystem adapter. The host begins one immediate SQLite transaction
+and one effect-local mutation savepoint. Success releases the savepoint, appends
+the already-filtered result and commits. Failure, timeout, cancellation and
+Worker termination roll the mutation savepoint back, append the failed result
+and commit. A host crash rolls back the still-open transaction entirely.
+
+Every Worker filesystem request carries the effect identity and a
+per-invocation token. Missing, foreign, cancelled, completed and stale requests
+are refused. Cancellation must be able to forcefully terminate a CPU-bound
+interpreter; graceful Worker shutdown alone is insufficient. Worker Shell
+exposes no native executable or host PATH and is not described as POSIX or
+native Bash.
 
 ## Expansion identity
 
@@ -502,7 +513,7 @@ Status is measured against main.
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | Deno-local DOFS provider | stores the authoritative local Workspace in SQLite | persistence POC complete; effect-transaction integration unbuilt |
-| scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment POC complete; effect-transaction proof required |
+| scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
