@@ -5,10 +5,8 @@ const SITE = "https://executable.md";
 const THEME_SCRIPT =
   `(function(){try{var t=localStorage.getItem('theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();`;
 
-const FAVICON = "data:image/svg+xml," +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#0f914b"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="15" font-weight="700" fill="#fffdf5" text-anchor="middle">.md</text></svg>`,
-  );
+// static/favicon.svg — the ink tile: `x` on near-black, over an accent rule.
+const FAVICON = "/favicon.svg";
 
 const DEFAULT_TITLE =
   "executable.md — turn documentation into repeatable workflows";
@@ -74,7 +72,7 @@ export default define.page(function App({ Component, url }) {
         />
         <meta
           name="theme-color"
-          content="#0f0f0d"
+          content="#131210"
           media="(prefers-color-scheme: dark)"
         />
 

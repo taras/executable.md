@@ -9,11 +9,11 @@ const GITHUB = "https://github.com/taras/executable.md";
 
 const MONO = "font-family:var(--font-mono);";
 const STAGE_LABEL =
-  `${MONO}font-size:0.75rem;font-weight:800;letter-spacing:0.1em;color:var(--fg-muted);`;
+  `${MONO}font-size:0.75rem;font-weight:800;letter-spacing:0.1em;color:var(--dim);`;
 const CARD_H3 =
   "margin:0;font-size:1.125rem;font-weight:800;letter-spacing:-0.01em;line-height:1.25;";
 const CARD_P =
-  "margin:0;font-size:0.875rem;line-height:1.55;color:var(--fg-body);text-wrap:pretty;";
+  "margin:0;font-size:0.875rem;line-height:1.55;color:var(--body);text-wrap:pretty;";
 
 /** The four stages of "How it works". */
 const STAGES: {
@@ -174,7 +174,9 @@ function Term(
 ) {
   return (
     <span
-      style={`${MONO}font-weight:700;color:var(--${warn ? "warn" : "fg"});`}
+      style={`${MONO}font-weight:700;color:var(--${
+        warn ? "code-expr" : "ink"
+      });`}
     >
       {children}
     </span>
@@ -326,7 +328,7 @@ export default define.page(function Home({ url }) {
               Turn documentation into repeatable workflows.
             </h1>
 
-            <p style="margin:0;max-width:50ch;font-size:clamp(1.05rem,2.2vw,1.2rem);line-height:1.5;color:var(--fg-body);text-wrap:pretty;">
+            <p style="margin:0;max-width:50ch;font-size:clamp(1.05rem,2.2vw,1.2rem);line-height:1.5;color:var(--body);text-wrap:pretty;">
               Executable.md keeps procedures readable as Markdown, then gives
               them reusable components, typed inputs, and executable steps so
               the same process can run consistently.
@@ -344,9 +346,9 @@ export default define.page(function Home({ url }) {
               </a>
             </div>
 
-            <p style="margin:0;max-width:56ch;font-size:0.8125rem;line-height:1.6;color:var(--fg-muted);">
+            <p style="margin:0;max-width:56ch;font-size:0.8125rem;line-height:1.6;color:var(--dim);">
               Markdown that runs. Standalone binary (built with{" "}
-              <span style={`${MONO}color:var(--fg);`}>deno compile</span>) ·
+              <span style={`${MONO}color:var(--ink);`}>deno compile</span>) ·
               also runs from source on Deno · CLI command: <Term>xmd</Term>
             </p>
           </div>
@@ -357,7 +359,7 @@ export default define.page(function Home({ url }) {
             <div class="panel">
               <div class="panel-head">Still just markdown</div>
               <div class="panel-body">
-                <p style="margin:0;font-size:0.9375rem;line-height:1.6;color:var(--fg-body);text-wrap:pretty;">
+                <p style="margin:0;font-size:0.9375rem;line-height:1.6;color:var(--body);text-wrap:pretty;">
                   Standard renderers only read the first word of a fenced code
                   block's info string, so <Term warn>exec</Term>,{" "}
                   <Term warn>eval</Term>, and every modifier stay invisible to
@@ -399,11 +401,11 @@ export default define.page(function Home({ url }) {
                   <span style={STAGE_LABEL}>{s.step}</span>
                   {s.mark === "today"
                     ? (
-                      <span style="font-size:0.75rem;font-weight:800;color:var(--accent-strong);">
+                      <span style="font-size:0.75rem;font-weight:800;color:var(--green);">
                         ✓ today
                       </span>
                     )
-                    : <span style="color:var(--fg-muted);">→</span>}
+                    : <span style="color:var(--dim);">→</span>}
                 </div>
                 <h3 style={CARD_H3}>{s.title}</h3>
                 <p style={CARD_P}>{s.body}</p>
@@ -418,14 +420,14 @@ export default define.page(function Home({ url }) {
             <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
               <span
                 class="pill"
-                style="align-self:flex-start;color:var(--warn);"
+                style="align-self:flex-start;color:var(--code-expr);"
               >
                 Product direction · not yet shipped
               </span>
               <h3 style="margin:0;font-size:1.125rem;font-weight:800;letter-spacing:-0.01em;">
                 Continuation after interruption
               </h3>
-              <p style="margin:0;font-size:0.875rem;line-height:1.6;color:var(--fg-body);text-wrap:pretty;">
+              <p style="margin:0;font-size:0.875rem;line-height:1.6;color:var(--body);text-wrap:pretty;">
                 <Term>xmd workflow</Term>{" "}
                 will execute supported operations in a constrained, retained
                 environment so a workflow can reattach and continue. The
@@ -434,23 +436,23 @@ export default define.page(function Home({ url }) {
               </p>
             </div>
             <div style="display:flex;flex-direction:column;gap:0.75rem;min-width:0;">
-              <div style="display:flex;flex-direction:column;gap:0.25rem;border-left:var(--rule) solid var(--ink);padding-left:0.8125rem;">
+              <div style="display:flex;flex-direction:column;gap:0.25rem;border-left:var(--rule) solid var(--line);padding-left:0.8125rem;">
                 <span style={`${MONO}font-size:0.8125rem;font-weight:700;`}>
                   xmd run
                 </span>
-                <span style="font-size:0.8125rem;line-height:1.55;color:var(--fg-body);">
+                <span style="font-size:0.8125rem;line-height:1.55;color:var(--body);">
                   Available now. Ordinary host capabilities. No promise of
                   Workspace retention, reattachment, or continuation — a
                   successful file write still completes correctly.
                 </span>
               </div>
-              <div style="display:flex;flex-direction:column;gap:0.25rem;border-left:var(--rule) dashed var(--warn);padding-left:0.8125rem;">
+              <div style="display:flex;flex-direction:column;gap:0.25rem;border-left:var(--rule) dashed var(--code-expr);padding-left:0.8125rem;">
                 <span
-                  style={`${MONO}font-size:0.8125rem;font-weight:700;color:var(--warn);`}
+                  style={`${MONO}font-size:0.8125rem;font-weight:700;color:var(--code-expr);`}
                 >
                   xmd workflow
                 </span>
-                <span style="font-size:0.8125rem;line-height:1.55;color:var(--fg-body);">
+                <span style="font-size:0.8125rem;line-height:1.55;color:var(--body);">
                   Planned. Durable Workspace-backed capabilities. An unsupported
                   imperative operation fails explicitly rather than silently
                   falling back to the host.
@@ -480,37 +482,37 @@ export default define.page(function Home({ url }) {
               <div
                 key={s.title}
                 style={`border:var(--rule) solid var(--${
-                  s.model ? "warn" : "ink"
+                  s.model ? "code-expr" : "line"
                 });padding:0.875rem;display:flex;flex-direction:column;gap:0.375rem;min-width:0;${
-                  s.model ? "background:var(--term-bg);" : ""
+                  s.model ? "background:var(--panel);" : ""
                 }`}
               >
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
                   <span
                     style={`font-size:0.9375rem;font-weight:800;letter-spacing:-0.01em;${
-                      s.model ? "color:var(--term-fg);" : ""
+                      s.model ? "color:var(--on-panel);" : ""
                     }`}
                   >
                     {s.title}
                   </span>
                   <span
                     style={s.done
-                      ? "color:var(--accent-strong);font-weight:800;"
-                      : "color:var(--fg-muted);"}
+                      ? "color:var(--green);font-weight:800;"
+                      : "color:var(--dim);"}
                   >
                     {s.done ? "✓" : "→"}
                   </span>
                 </div>
                 <span
                   style={`${MONO}font-size:0.8125rem;font-weight:700;color:var(--${
-                    s.model ? "term-warn" : "accent-strong"
+                    s.model ? "on-panel-str" : "green"
                   });`}
                 >
                   {s.tag}
                 </span>
                 <span
                   style={`${MONO}font-size:0.625rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--${
-                    s.model ? "term-warn" : "fg-muted"
+                    s.model ? "on-panel-str" : "dim"
                   });`}
                 >
                   {s.kind}
@@ -528,7 +530,7 @@ export default define.page(function Home({ url }) {
                 <ReviewDocument />
               </CodeBlock>
               <CodeBlock command>
-                <span style="color:var(--term-accent);font-weight:700;user-select:none;">
+                <span style="color:var(--green);font-weight:700;user-select:none;">
                   $
                 </span>{" "}
                 xmd run review-instructions.md --default-agent codex
@@ -542,7 +544,7 @@ export default define.page(function Home({ url }) {
                   <div key={note.n} style="display:flex;gap:0.6875rem;">
                     <span
                       style={`${MONO}flex:0 0 auto;font-size:0.75rem;font-weight:800;color:var(--${
-                        note.model ? "warn" : "fg-muted"
+                        note.model ? "code-expr" : "dim"
                       });`}
                     >
                       {note.n}
@@ -571,7 +573,7 @@ export default define.page(function Home({ url }) {
               style="padding:1.375rem;display:flex;flex-direction:column;gap:0.75rem;min-width:0;"
             >
               <span class="eyebrow">Instruction-only document</span>
-              <p style="margin:0;font-size:0.9375rem;line-height:1.6;color:var(--fg-body);text-wrap:pretty;">
+              <p style="margin:0;font-size:0.9375rem;line-height:1.6;color:var(--body);text-wrap:pretty;">
                 The entire procedure stays probabilistic on every invocation. A
                 model reads it, reconstructs the plan, chooses tools and
                 arguments, resolves ambiguities, and often verifies or retries
@@ -580,11 +582,11 @@ export default define.page(function Home({ url }) {
             </div>
             <div
               class="card push"
-              style="background:var(--accent);color:var(--accent-contrast);padding:1.375rem;display:flex;flex-direction:column;gap:0.75rem;min-width:0;"
+              style="background:var(--green);color:var(--on-green);padding:1.375rem;display:flex;flex-direction:column;gap:0.75rem;min-width:0;"
             >
               <span
                 class="eyebrow"
-                style="color:var(--accent-contrast);opacity:0.85;"
+                style="color:var(--on-green);opacity:0.85;"
               >
                 Executable document
               </span>
@@ -612,10 +614,10 @@ export default define.page(function Home({ url }) {
               class="dashed-warn"
               style="padding:1.25rem;display:flex;flex-direction:column;gap:0.5rem;min-width:0;"
             >
-              <span class="eyebrow" style="color:var(--warn);">
+              <span class="eyebrow" style="color:var(--code-expr);">
                 Not every workflow pays only once
               </span>
-              <p style="margin:0;font-size:0.875rem;line-height:1.6;color:var(--fg-body);text-wrap:pretty;">
+              <p style="margin:0;font-size:0.875rem;line-height:1.6;color:var(--body);text-wrap:pretty;">
                 A workflow containing <Term>{"<Prompt>"}</Term>,{" "}
                 <Term>{"<Sample>"}</Term>, or another probabilistic step still
                 spends tokens when that step runs. What stops paying an
@@ -652,7 +654,7 @@ export default define.page(function Home({ url }) {
             <h2 style="margin:0;font-size:clamp(1.5rem,3vw,2.1rem);line-height:1.1;font-weight:800;letter-spacing:-0.03em;">
               One document, two models.
             </h2>
-            <p style="margin:0;max-width:56ch;font-size:0.9375rem;line-height:1.6;color:var(--fg-body);text-wrap:pretty;">
+            <p style="margin:0;max-width:56ch;font-size:0.9375rem;line-height:1.6;color:var(--body);text-wrap:pretty;">
               A deeper example of composition.{" "}
               <Term>{"<AnthropicProvider>"}</Term> and{" "}
               <Term>{"<OllamaProvider>"}</Term>{" "}
@@ -682,7 +684,7 @@ export default define.page(function Home({ url }) {
               style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;"
             >
               <h3 style={CARD_H3}>Install script</h3>
-              <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--fg-muted);">
+              <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--dim);">
                 Standalone binary, no runtime required.
               </p>
               <div style="margin-top:auto;">
@@ -694,7 +696,7 @@ export default define.page(function Home({ url }) {
               style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;"
             >
               <h3 style={CARD_H3}>Deno users</h3>
-              <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--fg-muted);">
+              <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--dim);">
                 Or run it straight from JSR, with no install at all.
               </p>
               <div style="margin-top:auto;">
@@ -708,7 +710,7 @@ export default define.page(function Home({ url }) {
               style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;"
             >
               <h3 style={CARD_H3}>Prebuilt binary</h3>
-              <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--fg-muted);">
+              <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--dim);">
                 Download for your platform from{" "}
                 <a href={`${GITHUB}/releases`} rel="noopener">
                   GitHub Releases
@@ -727,7 +729,7 @@ export default define.page(function Home({ url }) {
           style="align-items:flex-start;gap:1.25rem;"
         >
           <h2>Early, and open.</h2>
-          <p style="margin:0;max-width:70ch;font-size:1rem;line-height:1.6;color:var(--fg-body);text-wrap:pretty;">
+          <p style="margin:0;max-width:70ch;font-size:1rem;line-height:1.6;color:var(--body);text-wrap:pretty;">
             executable.md is a first public release and a draft spec. It's built
             for experimentation with executable markdown workflows,
             Effection-based evaluation, and provider-driven AI documents.
