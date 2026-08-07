@@ -12,16 +12,16 @@ props:
   additionalProperties: false
 ---
 
-## PR #{props.pr.meta.number}: {props.pr.meta.title}
+## PR #{pr.meta.number}: {pr.meta.title}
 
-**{props.pr.stats.totalFiles}** files, **+{props.pr.stats.additions}** / **-{props.pr.stats.deletions}**
+**{pr.stats.totalFiles}** files, **+{pr.stats.additions}** / **-{pr.stats.deletions}**
 
-<ScopePolicy pr={props.pr} />
+<ScopePolicy pr={pr} />
 
-<BloatPolicy pr={props.pr} diagnostics={props.diagnostics} />
+<BloatPolicy pr={pr} diagnostics={diagnostics} />
 
-<SlopPolicy pr={props.pr} diagnostics={props.diagnostics} />
+<SlopPolicy pr={pr} diagnostics={diagnostics} />
 
-<OxlintSummary diagnostics={props.diagnostics} doctor={props.doctor} />
+<OxlintSummary diagnostics={diagnostics} doctor={doctor} />
 
-<ExtraneousCodePolicy pr={props.pr} diagnostics={props.diagnostics} doctor={props.doctor} />
+<ExtraneousCodePolicy pr={pr} diagnostics={diagnostics} doctor={doctor} />

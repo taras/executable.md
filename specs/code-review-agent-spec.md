@@ -192,8 +192,8 @@ props:
 ```ts eval
 const content = yield* renderChildren();
 return content.trim().length > 0
-  ? `### ${props.heading}\n\n${content}`
-  : `### ${props.heading}\n\n${props.clean}`;
+  ? `### ${heading}\n\n${content}`
+  : `### ${heading}\n\n${clean}`;
 ```
 ````
 
@@ -216,12 +216,12 @@ props:
 ---
 
 ```ts eval
-const icon = props.severity === "error" ? "🔴" : "🟡";
+const icon = severity === "error" ? "🔴" : "🟡";
 ```
 
-<If condition={props.when}>
+<If condition={when}>
 
-{icon} {props.message}
+{icon} {message}
 
 </If>
 ````
@@ -244,7 +244,7 @@ const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
   return yield* next({
     ...context,
-    system: props.system,
+    system,
   });
 });
 ```
@@ -267,38 +267,37 @@ props:
 
 ```ts eval
 const content = yield* renderChildren();
-const body = props.marker + "\n" + content;
+const body = marker + "\n" + content;
 
+const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
 const [owner, name] = repo.split("/");
 const api = `https://api.github.com/repos/${owner}/${name}`;
 
-function githubHeaders() {
-  return {
-    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-    "Accept": "application/vnd.github+json",
-  };
-}
+const headers = {
+  "Authorization": `Bearer ${token}`,
+  "Accept": "application/vnd.github+json",
+};
 
 const { json: comments } = yield* fetch(
-  `${api}/issues/${prNumber}/comments`, { headers: githubHeaders() }
+  `${api}/issues/${prNumber}/comments`, { headers }
 ).expect();
 
 const existing = comments.find(c =>
-  c.user.type === "Bot" && c.body.includes(props.marker)
+  c.user.type === "Bot" && c.body.includes(marker)
 );
 
 if (existing) {
   yield* fetch(`${api}/issues/comments/${existing.id}`, {
     method: "PATCH",
-    headers: { ...githubHeaders(), "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 } else {
   yield* fetch(`${api}/issues/${prNumber}/comments`, {
     method: "POST",
-    headers: { ...githubHeaders(), "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 }
@@ -323,7 +322,7 @@ props:
 ```ts persist eval
 const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== props.model) {
+  if (context.model !== undefined && context.model !== model) {
     return yield* next(context);
   }
 
@@ -339,7 +338,7 @@ scope.around(Sample, function* ([context], next) {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${process.env.DEEPINFRA_TOKEN}`,
     },
-    body: JSON.stringify({ model: props.model, messages, temperature: 0, max_tokens: 4096 }),
+    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 4096 }),
   })
     .expect()
     .json();
@@ -370,7 +369,7 @@ props:
 ```ts persist eval
 const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== props.model) {
+  if (context.model !== undefined && context.model !== model) {
     return yield* next(context);
   }
 
@@ -380,10 +379,10 @@ scope.around(Sample, function* ([context], next) {
   }
   messages.push({ role: "user", content: context.content });
 
-  const result = yield* fetch(`${props.baseUrl}/v1/chat/completions`, {
+  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: props.model, messages, temperature: 0 }),
+    body: JSON.stringify({ model, messages, temperature: 0 }),
   })
     .expect()
     .json();
@@ -425,14 +424,14 @@ props:
 
 ```ts eval
 const metrics = {
-  totalChanges: props.pr.stats.totalChanges,
-  totalFiles: props.pr.stats.totalFiles,
-  additions: props.pr.stats.additions,
-  deletions: props.pr.stats.deletions,
-  directories: props.pr.directories.size,
+  totalChanges: pr.stats.totalChanges,
+  totalFiles: pr.stats.totalFiles,
+  additions: pr.stats.additions,
+  deletions: pr.stats.deletions,
+  directories: pr.directories.size,
 };
 
-const actual = metrics[props.metric];
+const actual = metrics[metric];
 const ops = {
   ">":  (a, b) => a > b,
   ">=": (a, b) => a >= b,
@@ -441,9 +440,9 @@ const ops = {
   "==": (a, b) => a == b,
 };
 
-if (ops[props.op](actual, props.value)) {
-  const icon = props.severity === "error" ? "🔴" : "🟡";
-  return icon + " " + props.message
+if (ops[op](actual, value)) {
+  const icon = severity === "error" ? "🔴" : "🟡";
+  return icon + " " + message
     .replace("{actual}", String(actual))
     .replace("{value}", String(value));
 }
@@ -477,16 +476,16 @@ props:
 ---
 
 ```ts eval
-const re = new RegExp(props.pattern, "g");
-const lines = props.excludeTests
-  ? props.pr.added.filter(l => !l.isTest)
-  : props.pr.added;
+const re = new RegExp(pattern, "g");
+const lines = excludeTests
+  ? pr.added.filter(l => !l.isTest)
+  : pr.added;
 const matches = lines.filter(l => re.test(l.content));
 re.lastIndex = 0;
 
-if (matches.length >= props.min) {
-  const icon = props.severity === "error" ? "🔴" : "🟡";
-  return icon + " " + props.message
+if (matches.length >= min) {
+  const icon = severity === "error" ? "🔴" : "🟡";
+  return icon + " " + message
     .replace("{count}", String(matches.length));
 }
 ```
@@ -523,20 +522,20 @@ props:
 ---
 
 ```ts eval
-const numRe = new RegExp(props.numerator, "g");
-const denRe = new RegExp(props.denominator, "g");
-const lines = props.excludeTests
-  ? props.pr.added.filter(l => !l.isTest)
-  : props.pr.added;
+const numRe = new RegExp(numerator, "g");
+const denRe = new RegExp(denominator, "g");
+const lines = excludeTests
+  ? pr.added.filter(l => !l.isTest)
+  : pr.added;
 const source = lines.map(l => l.content).join("\n");
 
 const numCount = (source.match(numRe) ?? []).length;
 const denCount = (source.match(denRe) ?? []).length;
 
-if (denCount >= props.minDenominator && numCount / denCount > props.threshold) {
+if (denCount >= minDenominator && numCount / denCount > threshold) {
   const ratio = (numCount / denCount * 100).toFixed(1);
-  const icon = props.severity === "error" ? "🔴" : "🟡";
-  return icon + " " + props.message
+  const icon = severity === "error" ? "🔴" : "🟡";
+  return icon + " " + message
     .replace("{ratio}", ratio)
     .replace("{numeratorCount}", String(numCount))
     .replace("{denominatorCount}", String(denCount));
@@ -565,7 +564,7 @@ props:
 ---
 
 ```ts eval
-const lines = props.pr.added.filter(l =>
+const lines = pr.added.filter(l =>
   l.file.endsWith(".ts") || l.file.endsWith(".tsx")
 );
 const source = lines.map(l => l.content).join("\n");
@@ -575,7 +574,7 @@ const source = lines.map(l => l.content).join("\n");
 // whose `type` keyword sits inside braces rather than at the start of a
 // declaration.
 const declPattern = new RegExp(
-  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${props.construct}\\s+(\\w+)`
+  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${construct}\\s+(\\w+)`
 );
 
 const decls = [];
@@ -594,8 +593,8 @@ const unused = decls
   .filter(d => d.refs <= 1);
 
 const hasUnused = unused.length > 0;
-const icon = props.severity === "error" ? "🔴" : "🟡";
-const summary = icon + " " + props.message
+const icon = severity === "error" ? "🔴" : "🟡";
+const summary = icon + " " + message
   .replace("{names}", unused.map(u => u.name).join(", "))
   .replace("{count}", String(unused.length));
 ```
@@ -645,8 +644,8 @@ props:
   additionalProperties: false
 ---
 
-<Finding when={props.pr.meta.body.length < props.minLength}
-  severity={props.severity} message={props.message} />
+<Finding when={pr.meta.body.length < minLength}
+  severity={severity} message={message} />
 ```
 
 ### 5.6 `LinkedIssue.md`
@@ -672,11 +671,11 @@ props:
 ---
 
 ```ts eval
-const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(props.pr.meta.body);
+const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(pr.meta.body);
 ```
 
-<Finding when={!hasIssue && props.pr.stats.totalChanges > props.whenLinesExceed}
-  severity={props.severity} message={props.message} />
+<Finding when={!hasIssue && pr.stats.totalChanges > whenLinesExceed}
+  severity={severity} message={message} />
 ````
 
 ### 5.7 `ConfigSourceMix.md`
@@ -702,14 +701,14 @@ props:
 ---
 
 ```ts eval
-const hasConfig = props.pr.files.some(f => f.isConfig);
-const hasSource = props.pr.files.some(f =>
+const hasConfig = pr.files.some(f => f.isConfig);
+const hasSource = pr.files.some(f =>
   !f.isConfig && !f.isTest && !f.isTypeDeclaration
 );
-const triggered = hasConfig && hasSource && props.pr.stats.totalFiles > props.minFiles;
+const triggered = hasConfig && hasSource && pr.stats.totalFiles > minFiles;
 ```
 
-<Finding when={triggered} severity={props.severity} message={props.message} />
+<Finding when={triggered} severity={severity} message={message} />
 ````
 
 ### 5.8 `AbstractionNames.md`
@@ -735,17 +734,17 @@ props:
 ---
 
 ```ts eval
-const re = new RegExp(props.pattern, "i");
-const suspicious = props.pr.created
+const re = new RegExp(pattern, "i");
+const suspicious = pr.created
   .filter(f => f.path.endsWith(".ts") && !f.isTest && !f.isTypeDeclaration)
   .filter(f => re.test(f.path));
 const triggered = suspicious.length > 0;
-const resolvedMessage = props.message.replace(
+const resolvedMessage = message.replace(
   "{names}", suspicious.map(f => f.path).join(", ")
 );
 ```
 
-<Finding when={triggered} severity={props.severity} message={resolvedMessage} />
+<Finding when={triggered} severity={severity} message={resolvedMessage} />
 ````
 
 ### 5.9 `NewDependencies.md`
@@ -768,14 +767,14 @@ props:
 ---
 
 ```ts eval
-const touchesPkg = props.pr.files.some(f =>
+const touchesPkg = pr.files.some(f =>
   f.path === "package.json" || f.path.endsWith("/package.json")
 );
-const mentionsDeps = props.pr.meta.body.toLowerCase().includes("dependenc");
+const mentionsDeps = pr.meta.body.toLowerCase().includes("dependenc");
 const triggered = touchesPkg && !mentionsDeps;
 ```
 
-<Finding when={triggered} severity={props.severity} message={props.message} />
+<Finding when={triggered} severity={severity} message={message} />
 ````
 
 ### 5.10 `CommentReview.md`
@@ -848,39 +847,39 @@ props:
 
 <ReviewSection heading="Scope" clean="✅ PR scope looks good.">
 
-<Threshold pr={props.pr} metric="totalChanges" op=">" value={800}
+<Threshold pr={pr} metric="totalChanges" op=">" value={800}
   severity="error"
   message="PR has {actual} lines changed. Split into focused PRs." />
 
-<Threshold pr={props.pr} metric="totalChanges" op=">" value={400}
+<Threshold pr={pr} metric="totalChanges" op=">" value={400}
   severity="warning"
   message="{actual} lines changed. PRs under {value} receive more thorough review." />
 
-<Threshold pr={props.pr} metric="totalFiles" op=">" value={20}
+<Threshold pr={pr} metric="totalFiles" op=">" value={20}
   severity="warning"
   message="{actual} files changed. Are all changes related?" />
 
-<Threshold pr={props.pr} metric="directories" op=">" value={5}
+<Threshold pr={pr} metric="directories" op=">" value={5}
   severity="warning"
   message="Changes span {actual} directories." />
 
-<DescriptionCheck pr={props.pr} minLength={50}
+<DescriptionCheck pr={pr} minLength={50}
   severity="error"
   message="PR description must explain what and why." />
 
-<LinkedIssue pr={props.pr} whenLinesExceed={200}
+<LinkedIssue pr={pr} whenLinesExceed={200}
   severity="warning"
   message="Large PR with no linked issue." />
 
-<ConfigSourceMix pr={props.pr} minFiles={5}
+<ConfigSourceMix pr={pr} minFiles={5}
   severity="warning"
   message="PR mixes config and source changes." />
 
-<AbstractionNames pr={props.pr}
+<AbstractionNames pr={pr}
   severity="warning"
   message="New abstraction files: {names}. Verify 3+ consumers." />
 
-<NewDependencies pr={props.pr}
+<NewDependencies pr={pr}
   severity="warning"
   message="package.json changed without dependency justification." />
 
@@ -902,15 +901,15 @@ props:
 
 <ReviewSection heading="Structural" clean="✅ No structural bloat detected.">
 
-<UnusedInDiff pr={props.pr} construct="type"
+<UnusedInDiff pr={pr} construct="type"
   severity="warning"
   message="Type declarations with no consumers: {names}." />
 
-<UnusedInDiff pr={props.pr} construct="interface"
+<UnusedInDiff pr={pr} construct="interface"
   severity="warning"
   message="Interface declarations with no consumers: {names}." />
 
-<Ratio pr={props.pr}
+<Ratio pr={pr}
   numerator=":\s*any\b"
   denominator=":\s*\w"
   threshold={0.05}
@@ -919,13 +918,13 @@ props:
   severity="warning"
   message="{numeratorCount} uses of `any` ({ratio}% of annotations)." />
 
-<Pattern pr={props.pr}
+<Pattern pr={pr}
   pattern="(?:function\s+\w+|=>\s*)\([^)]*\)\s*\{\s*\}"
   excludeTests={true}
   severity="warning"
   message="{count} empty function bodies." />
 
-<Pattern pr={props.pr}
+<Pattern pr={pr}
   pattern="console\.(log|debug|info|trace)\("
   excludeTests={true}
   severity="warning"
@@ -949,7 +948,7 @@ props:
 
 <ReviewSection heading="Verbosity" clean="✅ Comment quality looks reasonable.">
 
-<Ratio pr={props.pr}
+<Ratio pr={pr}
   numerator="^\s*(?://|/\*|\*)"
   denominator="^\s*\S"
   threshold={0.4}
@@ -958,7 +957,7 @@ props:
   severity="warning"
   message="Comment ratio is {ratio}%." />
 
-<CommentReview pr={props.pr} />
+<CommentReview pr={pr} />
 
 </ReviewSection>
 ```
@@ -976,14 +975,14 @@ props:
   additionalProperties: false
 ---
 
-<If condition={props.pr.stats.totalChanges > 20}>
+<If condition={pr.stats.totalChanges > 20}>
 
 <Sample>
 
 You are reviewing a TypeScript PR for EXTRANEOUS code only.
 
-PR: {props.pr.meta.title}
-Description: {props.pr.meta.body}
+PR: {pr.meta.title}
+Description: {pr.meta.body}
 
 Report ONLY:
 1. Scope creep — changes unrelated to stated purpose
@@ -998,7 +997,7 @@ For each finding: FILE, PATTERN, CONCERN, QUESTION for the author.
 If clean: "No extraneous code patterns detected."
 
 DIFF:
-{props.pr.diffPreview}
+{pr.diffPreview}
 
 </Sample>
 
@@ -1025,17 +1024,17 @@ props:
   additionalProperties: false
 ---
 
-## PR #{props.pr.meta.number}: {props.pr.meta.title}
+## PR #{pr.meta.number}: {pr.meta.title}
 
-**{props.pr.stats.totalFiles}** files, **+{props.pr.stats.additions}** / **-{props.pr.stats.deletions}**
+**{pr.stats.totalFiles}** files, **+{pr.stats.additions}** / **-{pr.stats.deletions}**
 
-<ScopeCheck pr={props.pr} />
+<ScopeCheck pr={pr} />
 
-<StructuralBloat pr={props.pr} />
+<StructuralBloat pr={pr} />
 
-<VerbosityCheck pr={props.pr} />
+<VerbosityCheck pr={pr} />
 
-<SemanticReview pr={props.pr} />
+<SemanticReview pr={pr} />
 ```
 
 Zero eval blocks.
@@ -1050,6 +1049,8 @@ Zero eval blocks.
 ---
 title: PR Review
 ---
+
+<Output>
 
 ```ts eval
 const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
@@ -1089,6 +1090,8 @@ const pr = parseDiff(rawDiff, rawFiles, {
     </GitHubComment>
   </Instructions>
 </DeepInfraProvider>
+
+</Output>
 ````
 
 ### 7.2 `.reviews/ReviewPR.local.md` (local with Ollama)
@@ -1160,9 +1163,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
-        with:
-          deno-version: v2.9.5
+      - uses: denoland/setup-deno@v2
 
       - name: Install dependencies
         run: deno task deps
@@ -1174,7 +1175,6 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1187,31 +1187,34 @@ jobs:
             --component-dir packages/core/components \
             -j .reviews/journal.jsonl \
             --verbose
-
-      - name: Verify review result
-        if: always()
-        run: |
-          test -f .reviews/journal.jsonl
-          ROOT_CLOSE=$(jq -c 'select(.type == "close" and .coroutineId == "root")' .reviews/journal.jsonl | tail -n 1)
-          test -n "$ROOT_CLOSE"
-          test "$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.status // "missing"')" = ok
-          test "$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.status // "ok"')" = ok
-          ROOT_OUTPUT=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.output? // .result.value.value? // .result.value? // "" | tostring')
-          test "${ROOT_OUTPUT/<!-- ERROR:/}" = "$ROOT_OUTPUT"
 ```
+
+The executable body of the CI root is enclosed in one top-level `<Output>`
+region. An execution failure therefore remains a failed `DocumentResult`,
+fails `execute()`, and makes `xmd run` exit nonzero. Review findings are report
+text and do not fail the run. The workflow does not inspect journal records or
+rendered error markers after the command; it only uploads the journal with
+`if: always()`.
 
 ### Journal artifact
 
-The workflow uploads `.reviews/journal.jsonl` as an artifact keyed by the
-pull request head SHA after each review, including failed runs. The checked-out
-binary and review documents therefore produce one inspectable journal for the
-revision under review.
+The journal is uploaded by head SHA after every run, including failed runs, so
+an execution failure remains inspectable without making the artifact a second
+workflow result channel.
 
-The review workflow fails closed after XMD finishes. It requires a root
-`close` record, requires both the close result and its nested output status to
-be successful, and rejects root output containing an XMD `<!-- ERROR:` marker.
-The repository-analysis workflow applies the same postcondition to its root
-close record. Both workflows upload their journals with `if: always()`.
+### Durable-boundary safety
+
+Doctor compatibility probes emit aggregate facts only: diagnostic count,
+import-noise count or ratio, file counts, crash state, and available rule IDs.
+Actual Oxlint output is normalized before it enters a capture or durable event
+to `message`, `ruleId` or `code`, `severity`, `file`, and the minimal line and
+column span. PR review keeps diagnostics for changed files; repository analysis
+may keep all files. Source excerpts, causes, rendered source, URLs, and other
+arbitrary payload are discarded.
+
+GitHub credentials are created inside non-serializable header factories at the
+request site. Tokens are not placed in eval bindings or durable output, and
+secret detection remains enabled.
 
 ---
 
@@ -1342,29 +1345,13 @@ Its JSON output is wrapped in a `` ```json `` code fence and
 extracted via `<Capture select="code[lang=json]">` (see executable.md spec
 §6.5), isolating the structured data from surrounding narration.
 
-The probe does not emit the Oxlint result itself. The executable command
-reduces it before stdout to aggregate counts, file counts, import-noise
-counts, crash state, and available rule identifiers. The diagnostic capture
-uses the same boundary discipline: it emits only `message`, `ruleId`,
-`severity`, `file`, `line`, and `column`. PR review filters those records to
-the changed TypeScript files; repository analysis retains records for all
-files. Source excerpts, causes, rendered source, URLs, and other Oxlint
-payload fields never enter the durable stream.
-
 ### 13.3 PR-scoped analysis
 
 PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) scope oxlint
 to changed `.ts`/`.tsx` files only via `git diff --name-only` +
-`xargs`, then normalize the result with `jq` before the capture emits it.
-The normalized records contain only `message`, `ruleId`, `severity`, `file`,
-`line`, and `column`; the final map selects the changed paths. Density against
-`pr.stats.additions` is only meaningful when diagnostics come from the same
-files the additions are in.
+`xargs`. Density against `pr.stats.additions` is only meaningful
+when diagnostics come from the same files the additions are in.
 Repo analysis entry points run on everything.
-
-GitHub API credentials are read inside a non-serializable header factory at
-each request. The credential-bearing header object is never assigned to an
-eval binding, so default-on secret detection does not reject or persist it.
 
 ### 13.4 Density calibration
 

@@ -15,18 +15,18 @@ props:
 <ReviewSection heading="Correctness"
   clean="✅ Small PR — correctness review skipped.">
 
-<Show when={props.pr.stats.totalChanges > 20}>
+<Show when={pr.stats.totalChanges > 20}>
 
 <Sample>
 
 You are reviewing a TypeScript PR for EXTRANEOUS code only.
 
-PR: {props.pr.meta.title}
-Description: {props.pr.meta.body}
+PR: {pr.meta.title}
+Description: {pr.meta.body}
 
 STATIC ANALYSIS SIGNALS:
-{props.diagnostics.summary}
-Violation density: {props.diagnostics.density} per added line.
+{diagnostics.summary}
+Violation density: {diagnostics.density} per added line.
 
 DENSITY CALIBRATION:
 - Below 0.020: clean — experienced contributor, reviewed code
@@ -57,7 +57,7 @@ For each finding: FILE, PATTERN, CONCERN, QUESTION for author.
 If clean: "No extraneous code patterns detected."
 
 DIFF:
-{props.pr.diffPreview}
+{pr.diffPreview}
 
 </Sample>
 

@@ -18,8 +18,8 @@ props:
 ---
 
 ```ts eval
-const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(props.pr.meta.body);
+const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(pr.meta.body);
 ```
 
-<Finding when={!hasIssue && props.pr.stats.totalChanges > props.whenLinesExceed}
-  severity={props.severity} message={props.message} />
+<Finding when={!hasIssue && pr.stats.totalChanges > whenLinesExceed}
+  severity={severity} message={message} />

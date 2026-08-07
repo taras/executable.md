@@ -20,10 +20,10 @@ props:
 
 ## Repository Analysis
 
-**{props.fileCount}** TypeScript files, **{props.lineCount}** total lines
+**{fileCount}** TypeScript files, **{lineCount}** total lines
 
-<OxlintSummary diagnostics={props.diagnostics} doctor={props.doctor} />
+<OxlintSummary diagnostics={diagnostics} doctor={doctor} />
 
-<RepoCleanupPolicy diagnostics={props.diagnostics} doctor={props.doctor} fileList={props.fileList} cleanupAnalysis={props.cleanupAnalysis} />
+<RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} cleanupAnalysis={cleanupAnalysis} />
 
-<CleanupIssues cleanupAnalysis={props.cleanupAnalysis} diagnostics={props.diagnostics} />
+<CleanupIssues cleanupAnalysis={cleanupAnalysis} diagnostics={diagnostics} />

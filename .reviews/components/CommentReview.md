@@ -12,7 +12,7 @@ props:
 // ---------------------------------------------------------------------------
 // 1. Build comment/code pairs with file/line metadata
 const pairs = [];
-const lines = props.pr.added.filter(l => !l.isTest);
+const lines = pr.added.filter(l => !l.isTest);
 
 for (let i = 0; i < lines.length - 1; i++) {
   const current = lines[i].content.trim();
@@ -170,7 +170,7 @@ const dismissedSet = new Set(
 );
 
 const addedLineSet = new Set(
-  props.pr.added.map(l => `${l.file}:${l.lineNumber}`)
+  pr.added.map(l => `${l.file}:${l.lineNumber}`)
 );
 const appliedFindings = previousFindings.filter(pf =>
   pf.lineNumber && !addedLineSet.has(`${pf.file}:${pf.lineNumber}`) &&

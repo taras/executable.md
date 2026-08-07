@@ -14,45 +14,6 @@
  */
 
 import type { ErrorMode } from "./errors.ts";
-import type { EvalEnv, Json } from "./types.ts";
-
-export function propsEnvironment(validatedProps: Record<string, Json>): EvalEnv {
-  return { values: { props: validatedProps } };
-}
-
-/**
- * Layer an inner environment over an outer one while keeping the lexical
- * props namespace attached to projected content.
- */
-export function layerEnvironments(
-  outer: EvalEnv | undefined,
-  inner: EvalEnv | undefined,
-  preserveOuterProps = true,
-): EvalEnv | undefined {
-  if (outer === undefined) {
-    return inner;
-  }
-  if (inner === undefined) {
-    return outer;
-  }
-
-  const values = { ...outer.values, ...inner.values };
-  if (preserveOuterProps && "props" in outer.values) {
-    values.props = outer.values.props;
-  }
-  return { values };
-}
-
-export function layerProjectedContentEnvironment(
-  caller: EvalEnv | undefined,
-  authored: EvalEnv | undefined,
-): EvalEnv | undefined {
-  const callerProps =
-    caller !== undefined && "props" in caller.values
-      ? { values: { props: caller.values.props } }
-      : undefined;
-  return layerEnvironments(callerProps, authored);
-}
 
 /** Bindings the snapshot rebinds; the shared record holds the unbound originals. */
 const PROJECTING = ["renderChildren", "render", "useContent"];

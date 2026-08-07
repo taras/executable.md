@@ -16,7 +16,7 @@ props:
 ---
 
 ```ts eval
-const lines = props.pr.added.filter(l =>
+const lines = pr.added.filter(l =>
   l.file.endsWith(".ts") || l.file.endsWith(".tsx")
 );
 const source = lines.map(l => l.content).join("\n");
@@ -26,7 +26,7 @@ const source = lines.map(l => l.content).join("\n");
 // whose `type` keyword sits inside braces rather than at the start of a
 // declaration.
 const declPattern = new RegExp(
-  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${props.construct}\\s+(\\w+)`
+  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${construct}\\s+(\\w+)`
 );
 
 const decls = [];
@@ -45,8 +45,8 @@ const unused = decls
   .filter(d => d.refs <= 1);
 
 const hasUnused = unused.length > 0;
-const icon = props.severity === "error" ? "🔴" : "🟡";
-const summary = icon + " " + props.message
+const icon = severity === "error" ? "🔴" : "🟡";
+const summary = icon + " " + message
   .replace("{names}", unused.map(u => u.name).join(", "))
   .replace("{count}", String(unused.length));
 ```

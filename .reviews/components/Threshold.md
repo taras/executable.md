@@ -21,14 +21,14 @@ props:
 
 ```ts eval
 const metrics = {
-  totalChanges: props.pr.stats.totalChanges,
-  totalFiles: props.pr.stats.totalFiles,
-  additions: props.pr.stats.additions,
-  deletions: props.pr.stats.deletions,
-  directories: props.pr.directories.size,
+  totalChanges: pr.stats.totalChanges,
+  totalFiles: pr.stats.totalFiles,
+  additions: pr.stats.additions,
+  deletions: pr.stats.deletions,
+  directories: pr.directories.size,
 };
 
-const actual = metrics[props.metric];
+const actual = metrics[metric];
 const ops = {
   ">":  (a, b) => a > b,
   ">=": (a, b) => a >= b,
@@ -37,10 +37,10 @@ const ops = {
   "==": (a, b) => a == b,
 };
 
-if (ops[props.op](actual, props.value)) {
-  const icon = props.severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
-  return icon + " " + props.message
+if (ops[op](actual, value)) {
+  const icon = severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
+  return icon + " " + message
     .replace("{actual}", String(actual))
-    .replace("{value}", String(props.value));
+    .replace("{value}", String(value));
 }
 ```

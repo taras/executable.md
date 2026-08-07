@@ -88,7 +88,6 @@ import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 import { useSecretDetection } from "./secrets/policy.ts";
-import { propsEnvironment } from "./eval-env.ts";
 
 export interface ExecuteSettings {
   /** Durable stream for journaling. */
@@ -564,7 +563,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
 
   const validatedProps = yield* ephemeral(validateProps("__root__", props, root.props));
 
-  const rootEnv: EvalEnv = propsEnvironment(validatedProps);
+  const rootEnv: EvalEnv = { values: { ...validatedProps } };
 
   // Per-root-segment emission loop (spec §9).
   // Mutable counter preserves deterministic blockIds across

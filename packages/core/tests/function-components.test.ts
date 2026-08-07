@@ -255,44 +255,6 @@ describe("Tier FC — Function components", () => {
     }
   });
 
-  it("FC2-defaults: receives the validated object directly", function* () {
-    const tmpDir = makeTempDir();
-    try {
-      writeFiles(tmpDir, {
-        "components/Defaults.ts": [
-          "export const props = {",
-          '  type: "object",',
-          "  properties: {",
-          "    nested: {",
-          '      type: "object",',
-          '      properties: { value: { type: "string", default: "default" } },',
-          "      additionalProperties: false,",
-          "    },",
-          "  },",
-          "  additionalProperties: false,",
-          "};",
-          "",
-          "export default function*(props) {",
-          "  const before = props.nested.value;",
-          '  props.nested.value = "changed";',
-          "  return `${before}->${props.nested.value}`;",
-          "}",
-        ].join("\n"),
-        "doc.md": "<Defaults nested={{}} />",
-      });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
-      expect(output).toContain("default->changed");
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
   it("FC3: function component renders its content with content()", function* () {
     const tmpDir = makeTempDir();
     try {

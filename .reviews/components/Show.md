@@ -12,10 +12,10 @@ props:
 ---
 
 ```ts eval
-if (props.when) {
+if (when) {
   return yield* renderChildren();
 }
-if (props.fallback) {
-  return props.fallback;
+if (fallback) {
+  return fallback;
 }
 ```

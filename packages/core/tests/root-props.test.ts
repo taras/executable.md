@@ -93,7 +93,7 @@ function* runDoc(files: Record<string, string>, path: string, props?: Record<str
 }
 
 describe("Tier RP — root document properties", () => {
-  it("RP1: supplied props reach interpolation without bare prop bindings", function* () {
+  it("RP1: supplied props reach interpolation and bare bindings", function* () {
     const { output, result } = yield* runDoc({ "hello.md": GREETING }, "hello.md", {
       name: "Ada",
       loud: true,
@@ -101,7 +101,7 @@ describe("Tier RP — root document properties", () => {
     expect(result.ok).toBe(true);
     expect(output).toContain("Hello, Ada!");
     expect(output).toContain("loud=true");
-    expect(output).toContain("bare={name}");
+    expect(output).toContain("bare=Ada");
   });
 
   it("RP2: schema defaults apply to the root", function* () {
@@ -232,7 +232,7 @@ describe("Tier RS — concise props declarations", () => {
     expect(result.ok).toBe(true);
     expect(output).toContain("Hello, Ada!");
     expect(output).toContain("loud=false");
-    expect(output).toContain("bare={name}");
+    expect(output).toContain("bare=Ada");
   });
 
   it("RS2: the concise and full spellings behave identically", function* () {

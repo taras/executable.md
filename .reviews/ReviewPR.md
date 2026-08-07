@@ -2,6 +2,8 @@
 title: PR Review
 ---
 
+<Output>
+
 ```ts eval
 const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
 const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
@@ -212,3 +214,5 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
   </Instruction>
 </DeepInfraProvider>
 </ThinkFilter>
+
+</Output>

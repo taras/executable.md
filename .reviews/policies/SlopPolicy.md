@@ -12,7 +12,7 @@ props:
 
 <ReviewSection heading="Slop" clean="✅ Slop indicators look low.">
 
-<Ratio pr={props.pr}
+<Ratio pr={pr}
   numerator="^\s*(?://|/\*|\*)"
   denominator="^\s*\S"
   threshold={0.4}
@@ -21,9 +21,9 @@ props:
   severity="warning"
   message="Comment ratio is {ratio}%." />
 
-<CommentReview pr={props.pr} />
+<CommentReview pr={pr} />
 
-<OxlintSignals groups={props.diagnostics.byCategory.verbosity}
+<OxlintSignals groups={diagnostics.byCategory.verbosity}
   label="slop signals" />
 
 </ReviewSection>

@@ -11,5 +11,5 @@ props:
 ---
 
 ```ts eval
-return props.files.join(", ");
+return files.join(", ");
 ```

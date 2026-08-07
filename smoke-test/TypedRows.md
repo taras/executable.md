@@ -23,5 +23,5 @@ props:
 ---
 
 ```ts eval
-return props.rows.map((row) => `${row.symbol}@${row.line}:${row.level}`).join(", ");
+return rows.map((row) => `${row.symbol}@${row.line}:${row.level}`).join(", ");
 ```

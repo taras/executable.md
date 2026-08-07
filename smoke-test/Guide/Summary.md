@@ -37,7 +37,7 @@ cat <<'TABLE'
 | daemon + when readiness   | Daemon server polled until ready        |
 | provider pattern          | StubProvider installs Sample middleware  |
 | per-component eval scope  | Each provider gets isolated middleware   |
-| props namespace in env.values | `props.model` available in eval blocks |
+| props in env.values       | model prop available in eval blocks     |
 | Sample component          | <Sample prompt>, <Sample> with children |
 | output() function         | Sample component calls output()         |
 | renderChildren() closure  | Sample component captures children      |

@@ -394,14 +394,21 @@ calling task.
 
 The Sample component has three optional props: `prompt`, `model`,
 `params` — declared in the props schema but absent from its `required`
-array. The component keeps a complete, predictable validated props object
-for its body and routing semantics.
+array. When such a prop has no `default` and is not provided, Ajv
+`useDefaults` leaves the key off the validated props, so it is absent
+from `env.values`. The variable is then undefined in the eval block
+scope, causing `ReferenceError`.
 
 ### Decision
 
 All three props declare `default: ""` in the props schema. The eval block
 converts empty strings to `undefined` for routing semantics:
 `model || undefined`, `params || undefined`.
+
+**Why not just leave the prop optional:** Without a `default`, the
+variable simply doesn't exist in `env.values`, so `transformBlock`
+doesn't include it in the preamble. The eval block would get
+`ReferenceError: params is not defined`.
 
 **Why empty string, not undefined:** an optional property with no
 `default` never adds the key to validated props. Empty string is a
