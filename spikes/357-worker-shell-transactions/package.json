@@ -1,0 +1,15 @@
+{
+  "name": "spike-357-worker-shell-transactions",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/dofs": "file:../349-dofs/vendor/dofs",
+    "@effectionx/process": "0.8.1",
+    "@effectionx/worker": "0.5.4",
+    "effection": "4.1.0",
+    "just-bash": "3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24"
+  }
+}

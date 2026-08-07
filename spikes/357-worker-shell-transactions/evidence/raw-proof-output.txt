@@ -1,0 +1,53 @@
+$ deno --version
+deno 2.9.1 (stable, release, aarch64-apple-darwin)
+v8 14.9.207.2-rusty
+typescript 6.0.3
+
+$ node --version
+v26.5.1
+
+$ uname -a
+Darwin MacBook-Pro-3.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:18:58 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6000 arm64
+
+$ deno task --cwd spikes/357-worker-shell-transactions test
+running 3 tests from ./tests/isolation-crash.test.ts
+compiled host crash rolls back mutation and result; replay reruns from the pre-effect root ... ok (636ms)
+Worker Shell retains filesystem, native execution, environment and network isolation ... ok (1s)
+a CPU-bound shell is preempted without starving host cancellation ... ok (976ms)
+running 8 tests from ./tests/transaction.test.ts
+success hides filesystem and journal until one outer commit ... ok (647ms)
+nonzero exit rolls mutations back and commits one failed result ... ok (613ms)
+interpreter error rolls mutations back and commits one failed result ... ok (620ms)
+timeout rolls mutations back and commits one failed result ... ok (704ms)
+explicit cancellation rolls mutations back and commits one failed result ... ok (604ms)
+Worker.terminate() rolls mutations back and commits one failed result ... ok (699ms)
+filesystem RPCs reject missing, foreign, stale, completed and cancelled identities ... ok (3ms)
+a committed result replays without starting a Worker ... ok (609ms)
+
+ok | 11 passed | 0 failed (8s)
+
+$ stat -f '%z %N' spikes/357-worker-shell-transactions/dist/proof spikes/357-worker-shell-transactions/dist/crash-host
+139984178 spikes/357-worker-shell-transactions/dist/proof
+139984178 spikes/357-worker-shell-transactions/dist/crash-host
+
+$ /usr/bin/time -p spikes/357-worker-shell-transactions/dist/proof /tmp/spike357-smoke.JE7h9D/cost-final-2.db effect cost-final-2 'echo cost > result.txt' --payload '{"filtered":"cost"}'
+{"shell":{"outcome":"exit","stdout":"","stderr":"","exitCode":0},"journal":{"effectId":"cost-final-2","status":"ok","payload":"{\"filtered\":\"cost\"}"},"transaction":{"nestedDofsTransactions":1,"effectTransactionsBegun":1,"effectCommits":1,"effectRollbacks":0,"journalAppendsInEffect":1}}
+real 0.12
+user 0.13
+sys 0.01
+
+$ /usr/bin/time -p spikes/357-worker-shell-transactions/dist/proof /tmp/cost.db replay cost 'echo duplicate > result.txt' --payload '{"filtered":"duplicate"}'
+{"replayed":true,"journal":{"effectId":"cost","status":"ok","payload":"{\"filtered\":\"cost\"}"},"workerStarts":0}
+real 0.04
+user 0.03
+sys 0.00
+
+Unpatched @effectionx/worker 0.5.4 lifecycle probe:
+
+$ dist/proof /tmp/cpu.db effect cpu 'i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done' --timeout 500 --max-commands 10000000 --max-loops 10000000
+[no output after 3 seconds; proof process required external termination]
+
+Patched lifecycle probe:
+
+$ dist/proof /tmp/cpu-patched.db effect cpu 'i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done' --timeout 500 --max-commands 10000000 --max-loops 10000000 --payload '{"filtered":"cpu-timeout"}'
+{"shell":{"outcome":"timeout","stdout":"","stderr":"Execution timed out\n","exitCode":124},"journal":{"effectId":"cpu","status":"failed","payload":"{\"filtered\":\"cpu-timeout\"}"},"transaction":{"nestedDofsTransactions":0}}

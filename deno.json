@@ -69,6 +69,9 @@
     "spike:349:test": "deno task --cwd spikes/349-dofs test",
     "spike:351": "deno task --cwd spikes/351-worker-backends all",
     "spike:351:build": "deno task --cwd spikes/351-worker-backends build",
-    "spike:351:test": "deno task --cwd spikes/351-worker-backends test"
+    "spike:351:test": "deno task --cwd spikes/351-worker-backends test",
+    "spike:357": "deno task --cwd spikes/357-worker-shell-transactions all",
+    "spike:357:build": "deno task --cwd spikes/357-worker-shell-transactions build",
+    "spike:357:test": "deno task --cwd spikes/357-worker-shell-transactions test"
   }
 }

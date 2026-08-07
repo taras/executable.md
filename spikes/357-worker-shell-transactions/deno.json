@@ -1,0 +1,19 @@
+{
+  "exclude": [
+    "dist",
+    "node_modules"
+  ],
+  "nodeModulesDir": "manual",
+  "scopes": {
+    "../351-worker-backends/vendor/": {
+      "@cloudflare/dofs": "../351-worker-backends/host/dofs-types.ts"
+    }
+  },
+  "tasks": {
+    "all": "deno task vendor && deno task build && deno task check && deno task test",
+    "vendor": "npm install --prefix ../349-dofs/vendor/dofs --no-audit --no-fund && npx --prefix ../349-dofs/vendor/dofs tsc -p ../349-dofs/vendor/dofs/tsconfig.build.json && npm install --install-links --no-audit --no-fund && deno run --allow-read --allow-write patch-worker.ts",
+    "build": "deno run --allow-all build.ts",
+    "check": "deno check .",
+    "test": "deno test --allow-all --unstable-worker-options tests/"
+  }
+}
