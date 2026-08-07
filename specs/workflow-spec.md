@@ -2,7 +2,8 @@
 
 * **Status:** Current
 * **Scope:** `@executablemd/workflow` — associating a document execution with a
-  workflow run whose starting repository state is pinned once.
+  workflow run whose starting repository state is pinned once, and retaining
+  that run so another process can find it.
 
 ---
 
@@ -154,8 +155,180 @@ workflow runs may contain the same expansion id; the expansion id does not embed
 the run id, and expansion identity works with no workflow middleware installed
 at all.
 
-## 9. Intentionally excluded
+## 9. Retained run storage
 
-Durable workflow lookup, artifact history and cross-process continuation;
-`xmd workflow run` and `xmd workflow continue`; workflow-owned worktrees; and
+A run recorded only in the journal of the execution that created it can be
+found only by whoever already has that journal. Retained storage is what lets
+a second process open a run by its public id and continue from durable data.
+
+Each run owns one database. Shared code reaches it through a contextual Api
+that names no provider, so the lifecycle stays host-neutral:
+
+```ts
+interface WorkflowRunStorageApi {
+  create(request: CreateWorkflowRunRequest): Operation<Result<WorkflowRunDatabase>>;
+  lookup(runId: string): Operation<Result<WorkflowRunDatabase>>;
+}
+```
+
+The default handler refuses. A run that appears to start and retains nothing
+has not started, so a missing provider is reported immediately rather than
+after an interruption. The Deno host installs its own with
+`useWorkflowRunStorage({ root })` from `@executablemd/workflow/deno`, and that
+entrypoint is the only place SQLite, run-id hashing, filesystem paths and host
+behavior appear. Shared modules import none of them and detect no runtime.
+
+A handle belongs to the scope that asked for it. Its connection closes through
+ordinary teardown, and every later call answers with a closed-handle failure
+rather than reopening the file.
+
+### 9.1 What identifies a run
+
+Identity is the run id, the definition descriptor, the base and the normalized
+props. The descriptor carries its own version, and takes part in the comparison
+rather than governing it:
+
+```ts
+interface GitWorkflowDefinitionV1 {
+  version: 1;
+  kind: "git";
+  objectFormat: "sha1" | "sha256";
+  objectId: string;
+  rootDocumentPath: string;
+}
+```
+
+An object id is lowercase hexadecimal of the length its format requires, so two
+hosts that agree about the commit agree about the run. A root document path is
+an already-normalized repository-relative POSIX path: absolute paths,
+backslashes, NULs, empty paths, empty segments and `.` or `..` segments are
+refused rather than normalized, because two spellings of one path would
+otherwise be two identities.
+
+Where that object can be fetched from is deliberately not identity. A locator
+and a local checkout path are **retrieval metadata** — replaceable, excluded
+from the comparison, never containing credentials, and reauthorized by the host
+before use. A run that moves between hosts is the same run.
+
+### 9.2 Creating a run is also how it is found
+
+`create()` answers with the stored run when the request describes it, and
+refuses with a conflict when any immutable field differs. That is what makes a
+caller-selected id usable twice — as a retry, or as a second process addressing
+the same work — without a separate idempotency concept.
+
+Props are compared canonically, so reordering a JSON object does not look like
+asking for a different run. Everything a run accumulates is excluded: status,
+stop reason, retrieval metadata, timestamps, document executions and journal
+records all change while the run stays the run it was. A conflict names the
+fields that differ and never the values behind them.
+
+`lookup()` finds by id and creates nothing.
+
+### 9.3 Finding a run without a registry
+
+A run lives at the SHA-256 of its UTF-8 run id, directly beneath the authorized
+storage root. Discovery is therefore arithmetic on the id, and no second
+authority exists that could disagree with the files.
+
+The root and the path it produces are host arrangement, not identity — which is
+why the run id is also stored inside the database and checked against the one
+that was asked for. A file at the right path holding a different run is a
+collision or tampering, reported as its own failure and left unchanged.
+
+### 9.4 What a run retains
+
+- The immutable identity above.
+- One of six statuses: `running`, `suspended`, `interrupted`, `completed`,
+  `failed`, `cancelled`. Which transitions are legal is lifecycle policy and is
+  decided elsewhere.
+- A nullable **stop reason**: either `{ kind: "host", code }`, a categorical
+  code the host assigns, or `{ kind: "journal", eventId }`, a reference to an
+  event that already crossed the secret filter. Neither shape can carry an
+  arbitrary exception message, because a message retained this way would be
+  history nothing had filtered.
+- One **document execution** record per start and per resume, each with an
+  opaque id, a start time, and — once it ends — a stop time, stop status and
+  stop reason. These are not attempts: an attempt is one execution of a retried
+  operation or region and stays in the journal.
+- Replaceable retrieval metadata, with a revision counting replacements since
+  it was last cleared.
+- The filtered journal.
+
+### 9.5 The journal
+
+`WorkflowRunDatabase.journal` is an ordinary `DurableStream`, so `durableRun`
+reads and appends through the interface it already uses. A record is stored
+exactly as `serializeDurableEvent` produced it and read back through
+`parseDurableEvent`, so a replay reads the record the protocol wrote rather
+than a re-encoding of it. Events replay in append order.
+
+An event's opaque id is stored separately from its physical position. The id is
+stable once written and is what a journal stop reason points at; the position
+is what ordering uses and is not a public identifier.
+
+Events arrive already filtered:
+
+```text
+DurableEvent → secret gate → journal append
+```
+
+Storage performs no filtering of its own — a second policy in a second place is
+a second thing to keep in agreement with the first — and a gate that rejects or
+is cancelled leaves no row at all.
+
+### 9.6 One connection, one operation
+
+Operations on one handle are serialized, and each runs inside a transaction. A
+caller that needs several statements published together holds the transaction
+itself:
+
+```ts
+yield* database.transact(function* (transaction) {
+  yield* transaction.journal.append(event);
+});
+```
+
+Enlistment travels with the `transaction` object rather than with the database.
+Work that never received one cannot join by accident, so an append happening
+elsewhere waits for its own turn and commits on its own rather than being
+rolled back with a failure it had nothing to do with. Appends made through the
+transaction insert and nothing more; the transaction decides whether those rows
+survive, and failure or cancellation rolls all of them back.
+
+A transaction opened inside another on the same database is refused rather than
+nested, and so is an ordinary operation called from inside a body — that call
+would otherwise wait for a transaction its own scope is holding open.
+
+### 9.7 Refusals
+
+Storage is parsed, never trusted, and each condition a caller can act on
+differently is reported as itself:
+
+| Condition | Meaning |
+| --- | --- |
+| not found | nothing is stored under this id |
+| conflict | a run is stored under this id with different immutable identity |
+| id mismatch | the database at this id's path stores a different run |
+| format | the file is readable and is not a workflow-run database |
+| schema version | the schema is a version this build does not implement |
+| corrupt | SQLite cannot read the file, or its integrity check fails |
+| record malformed | a stored row does not describe what its column claims |
+| transaction | a transaction cannot be started, continued or committed as asked |
+
+No message quotes a stored value: props and journal payloads are retained
+history, and a storage failure is not a reason to copy them into an error.
+
+An incompatible or damaged database is described and left exactly as it was
+found. Nothing initializes, migrates, truncates, deletes or replaces one, and a
+lookup that finds nothing creates no file.
+
+Version 1 reads and writes version 1. An older version with no implemented
+migration, and every newer version, are refused without the file being touched.
+
+## 10. Intentionally excluded
+
+Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
+leases and stale-owner recovery; Workspace filesystem storage and its
+transactions; history checkpoints and forks; workflow-owned worktrees; and
 deterministic Git and GitHub effects.

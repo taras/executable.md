@@ -300,6 +300,46 @@ The run's SQLite database is one physical backup and retention boundary for
 logically separate journal, filesystem, Git metadata and Agent-session tables.
 Co-location does not make arbitrary filesystem content journal data.
 
+### 5.1 What the run record holds
+
+The run's own record is the part of that database the lifecycle reads. It holds
+the immutable definition, the definition base and the normalized props;
+the current status and its stop reason; one document-execution record per start
+and per resume; replaceable retrieval metadata; and the filtered journal.
+
+The immutable definition is a versioned descriptor naming an object format, an
+object ID and the repository-relative root document path. A repository locator
+is not part of it. Where the definition can be fetched from, and where it is
+checked out on one machine, are retrieval metadata: replaceable, free of
+credentials, reauthorized by the host before use, and excluded from the
+comparison that decides whether a reused run ID addresses the same run.
+
+Compatible reuse compares the run ID, the whole descriptor including its
+version, the base and the normalized props, canonically. Status, stop reason,
+retrieval metadata, timestamps, document executions and journal records are
+excluded, so a completed run asked for again is found rather than refused.
+
+A stop reason is a categorical host code or a reference to an already-filtered
+journal event. Arbitrary failure text is not retained beside the journal that
+filtered it, and `history` therefore exposes no value the journal's security
+policy has not already seen.
+
+Document-execution records are not attempts. An attempt is one execution of a
+retried operation or region and belongs to the journal.
+
+### 5.2 Storage is described, never replaced
+
+A run is found by its public ID alone, without consulting a second registry.
+The database's location on a host is arrangement rather than identity, so the
+run ID is also retained inside the run and checked: storage holding a different
+run than its location implies is reported as a distinct failure.
+
+Absent, conflicting, foreign, version-incompatible, damaged and unparseable
+storage are separate reported conditions. None of them is repaired in place: an
+incompatible or damaged database is described and left exactly as found, and a
+lookup that finds nothing creates nothing. A host never claims to continue a
+run whose history it has just replaced.
+
 ## 6. Repository and Worktree
 
 ### 6.1 Repository
@@ -784,6 +824,8 @@ delegated without changing the document language.
 | Contract | Status at this design revision |
 | --- | --- |
 | workflow-run and expansion identity | built by #289 / PR #341 |
+| retained run record and filtered journal | built by #291 |
+| caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
 | provider-backed retained Workspace | defined here; unbuilt (#218) |
 | Repository, Worktree and transactional Git components | defined here; unbuilt |
 | lifecycle start/resume/status/history/fork/delete | defined here; unbuilt |
