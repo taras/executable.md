@@ -1,5 +1,6 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
+import { NextCard } from "../../components/NextCard.tsx";
 
 const HELLO = `---
 title: Hello World
@@ -22,7 +23,7 @@ title: Hello World
 export default define.page(function Providers() {
   return (
     <>
-      <h1 style="font-size:2rem;font-weight:800;">LLM providers</h1>
+      <h1>LLM providers</h1>
       <p class="muted">
         Provider components install <code>Sample</code>{" "}
         middleware so a document can talk to cloud or local models with no
@@ -69,7 +70,7 @@ export default define.page(function Providers() {
         For this release, provider documents need the built-in components on the
         search path:
       </p>
-      <CodeBlock>
+      <CodeBlock command>
         {"xmd run packages/core/examples/hello-world.md --component-dir packages/core/components"}
       </CodeBlock>
       <p>
@@ -79,9 +80,7 @@ export default define.page(function Providers() {
         (so <code>--component-dir</code> isn't required) is on the roadmap.
       </p>
 
-      <p style="margin-top:2rem;">
-        Next: <a href="/docs/reference">Reference →</a>
-      </p>
+      <NextCard href="/docs/reference" label="Reference" />
     </>
   );
 });

@@ -111,6 +111,9 @@ importers:
       '@executablemd/testing':
         specifier: workspace:*
         version: link:packages/testing
+      '@executablemd/workflow':
+        specifier: workspace:*
+        version: link:packages/workflow
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
@@ -438,6 +441,24 @@ importers:
       react-dom:
         specifier: 19.2.0
         version: 19.2.0(react@19.2.0)
+
+  packages/workflow:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: 0.6.0
+        version: 0.6.0(effection@4.1.0)
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
 
 packages:
 

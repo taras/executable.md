@@ -54,6 +54,9 @@
       ],
       "@executablemd/web": [
         "./packages/web/mod.ts"
+      ],
+      "@executablemd/workflow": [
+        "./packages/workflow/mod.ts"
       ]
     }
   },
@@ -68,6 +71,7 @@
     "packages/test-support/**/*.ts",
     "packages/testing/**/*.ts",
     "packages/web/**/*.ts",
+    "packages/workflow/**/*.ts",
     "scripts/runtime-tests.ts",
     "scripts/runtime-test-exclusions.ts",
     "scripts/lib/github.ts",

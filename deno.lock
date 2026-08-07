@@ -4186,6 +4186,14 @@
           ]
         }
       },
+      "packages/workflow": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@effectionx/context-api@0.6.0",
+            "npm:effection@4.1.0"
+          ]
+        }
+      },
       "site": {
         "dependencies": [
           "jsr:@fresh/core@^2.3.3",

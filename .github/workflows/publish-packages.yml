@@ -30,7 +30,7 @@ jobs:
       - name: Validate the manifests declare this version
         run: |
           VERSION="${{ steps.resolve.outputs.value }}"
-          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/cli/deno.json packages/code-review-agent/deno.json; do
+          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/cli/deno.json packages/code-review-agent/deno.json packages/workflow/deno.json; do
             declared="$(jq -r .version "$f")"
             if [ "$declared" != "$VERSION" ]; then
               echo "::error::$f declares $declared, not $VERSION — the tag does not match the manifests"
@@ -124,6 +124,13 @@ jobs:
       package: packages/code-review-agent
       version: ${{ needs.version.outputs.value }}
 
+  workflow:
+    needs: [version, core, durable-streams, runtime]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: packages/workflow
+      version: ${{ needs.version.outputs.value }}
+
   jsr:
     needs: [version]
     runs-on: ubuntu-latest
@@ -135,7 +142,7 @@ jobs:
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       # A build installs nothing, so a fresh checkout prepares first (spec §8).
       - name: Install dependencies

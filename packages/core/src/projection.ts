@@ -60,6 +60,12 @@ export interface ProjectionHandle {
     props: Record<string, Json>,
     hideSet: Set<string>,
     owner: Segment[],
+    /**
+     * This `<Content />` element's own structural path, which already descends
+     * from the invocation whose body holds it, so two `<Content />` elements
+     * project under different identities (§5.6).
+     */
+    elementPath: string,
   ): Operation<Segment[]>;
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;

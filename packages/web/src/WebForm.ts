@@ -26,8 +26,8 @@
  * sensible way to carry on from "the person was never asked".
  */
 
-import { content, invocation } from "@executablemd/core";
-import type { ComponentInvocationMetadata, PropsSchema, ReturnsSchema } from "@executablemd/core";
+import { content, getExpansion } from "@executablemd/core";
+import type { Expansion, PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 
 import { parseDeclaration } from "./declaration.ts";
@@ -74,7 +74,7 @@ export function* WebForm(props: Record<string, Json>): Operation<Json> {
   const prepared = prepareForm(question);
 
   const identity = {
-    location: formatLocation(yield* invocation()),
+    location: formatLocation(yield* getExpansion()),
     fingerprint: fingerprint(question),
   };
 
@@ -86,7 +86,7 @@ export function* WebForm(props: Record<string, Json>): Operation<Json> {
 }
 
 /** `path:line:column`, `line:column`, or `unknown` — the durable identity. */
-function formatLocation(metadata: ComponentInvocationMetadata): string {
+function formatLocation(metadata: Expansion): string {
   const position = metadata.position;
   if (!position) {
     return "unknown";
