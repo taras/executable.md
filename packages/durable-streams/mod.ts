@@ -75,6 +75,12 @@ export { parseDurableEvent } from "./parse.ts";
 // Core effect factories
 export { createDurableEffect, createDurableOperation } from "./effect.ts";
 export type { Executor } from "./effect.ts";
+export { LiveDurableEffectCoordinator } from "./live-coordinator.ts";
+export type {
+  LiveDurableEffect,
+  LiveDurableEffectCoordinate,
+  LiveDurableEffectCoordinatorApi,
+} from "./live-coordinator.ts";
 
 // Workflow-enabled effects
 export { durableAction, durableCall, durableSleep, versionCheck } from "./operations.ts";

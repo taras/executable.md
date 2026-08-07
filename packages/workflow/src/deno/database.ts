@@ -25,15 +25,22 @@
  *
  * ## Lifetime
  *
- * The handle belongs to the scope that opened it. When that scope ends the
- * connection closes, and every later call answers with a closed-handle failure
- * rather than reopening the file behind the caller's back.
+ * The handle belongs to the scope that opened it. When that scope ends its
+ * lease closes, and every later call answers with a closed-handle failure. The
+ * provider owns the authoritative physical connection for its own scope.
  */
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
-import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  type DurableEvent,
+  type DurableStream,
+  type Json,
+  serializeError,
+} from "@executablemd/durable-streams";
+import type { LiveDurableEffect, Result as DurableResult } from "@executablemd/durable-streams";
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   WorkflowDatabaseClosedError,
@@ -54,7 +61,12 @@ import {
   type WorkflowRunRecord,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
-import type { ConnectionLock } from "./lock.ts";
+import type { RunConnection } from "./connections.ts";
+import {
+  routeJournalAppend,
+  type TransactionIdentity,
+  useJournalDestination,
+} from "./journal-route.ts";
 import {
   ActiveTransaction,
   enclosing,
@@ -63,6 +75,18 @@ import {
 } from "./transaction.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
 import { translateSqliteError } from "./schema.ts";
+import type { WorkflowWorkspace } from "../workspace/api.ts";
+import {
+  clearWorkspaceCaches,
+  createWorkspaceFilesystem,
+  isJournalableWorkspaceError,
+} from "./workspace/filesystem.ts";
+import {
+  currentWorkspaceRoot,
+  retainWorkspaceRoot,
+  setCurrentWorkspaceRoot,
+  snapshotWorkspace,
+} from "./workspace/root.ts";
 
 const SELECT_RUN = "SELECT * FROM workflow_run WHERE id = 1";
 const UPDATE_RUN_STATE = `UPDATE workflow_run
@@ -86,19 +110,12 @@ const SELECT_EXECUTIONS = "SELECT * FROM document_executions ORDER BY sequence A
 
 /** What opening needs from whoever found the file and checked its schema. */
 export interface OpenConnection {
-  readonly database: DatabaseSync;
-  readonly path: string;
+  readonly connection: RunConnection;
   readonly record: WorkflowRunRecord;
-  /** Shared by every handle on this file, so turns are taken per database. */
-  readonly lock: ConnectionLock;
 }
 
 /**
- * Open a run's database for the life of the calling scope.
- *
- * The connection closes through ordinary teardown rather than a caller
- * remembering to close it, so an interrupted host leaves no connection open on
- * a file another process is about to take a write lock on.
+ * Open a scope-owned lease on a run's provider-owned database connection.
  */
 export function openWorkflowRunDatabase(
   connection: OpenConnection,
@@ -118,7 +135,8 @@ interface Handle {
 }
 
 function createHandle(connection: OpenConnection): Handle {
-  const { database, path, lock } = connection;
+  const entry = connection.connection;
+  const { database, path, lock } = entry;
 
   let closed = false;
   let record = connection.record;
@@ -172,6 +190,14 @@ function createHandle(connection: OpenConnection): Handle {
   function* transact<T>(
     body: (transaction: WorkflowRunTransaction) => Operation<T>,
   ): Operation<Result<T>> {
+    return yield* runTransaction(function* (transaction) {
+      return yield* body(transaction);
+    });
+  }
+
+  function* runTransaction<T>(
+    body: (transaction: WorkflowRunTransaction, identity: TransactionIdentity) => Operation<T>,
+  ): Operation<Result<T>> {
     if (closed) {
       return Err(new WorkflowDatabaseClosedError(record.runId));
     }
@@ -194,13 +220,22 @@ function createHandle(connection: OpenConnection): Handle {
         return Err(translateSqliteError(error, path));
       }
 
-      const transaction = { open: true };
+      const identity: TransactionIdentity = {
+        id: randomUUID(),
+        connection: entry,
+        open: true,
+      };
+      entry.transactionOpen = true;
+      entry.activeTransactionId = identity.id;
       let committed = false;
 
       // Registered after the lock, so teardown rolls back while the connection
       // is still ours and releases it only once that is done.
       yield* ensure(() => {
-        transaction.open = false;
+        identity.open = false;
+        entry.transactionOpen = false;
+        entry.activeTransactionId = undefined;
+        clearWorkspaceCaches(entry);
         if (!committed) {
           rollback(database);
         }
@@ -209,7 +244,11 @@ function createHandle(connection: OpenConnection): Handle {
       // The chain, not just this path: a transaction on another run nested
       // inside this one must not hide that this one is held.
       yield* ActiveTransaction.set(yield* enclosing(path));
-      yield* useTransactionSavepoints(database, () => transaction.open);
+      yield* useTransactionSavepoints(entry.savepoints, () => identity.open);
+
+      const transaction: WorkflowRunTransaction = {
+        journal: enlistedJournal(database, identity, path),
+      };
 
       try {
         // The body runs in a scope of its own, so everything it started —
@@ -219,20 +258,28 @@ function createHandle(connection: OpenConnection): Handle {
         // would let that append autocommit on its own, published whatever the
         // transaction went on to decide.
         const value = yield* scoped(function* () {
-          return yield* body({ journal: enlistedJournal(database, transaction, path) });
+          return yield* body(transaction, identity);
         });
 
         // Closed before the commit, not after: nothing may append to a
         // transaction whose contents are already decided.
-        transaction.open = false;
+        identity.open = false;
+        entry.transactionOpen = false;
+        entry.activeTransactionId = undefined;
         database.exec("COMMIT");
         committed = true;
         return Ok(value);
       } catch (error) {
-        transaction.open = false;
+        identity.open = false;
+        entry.transactionOpen = false;
+        entry.activeTransactionId = undefined;
         return Err(translateSqliteError(error, path));
       }
     });
+  }
+
+  function* standaloneAppend(event: DurableEvent): Operation<void> {
+    yield* mustSucceed(write(() => insertJournalEvent(database, event)));
   }
 
   const journal: DurableStream = {
@@ -242,7 +289,68 @@ function createHandle(connection: OpenConnection): Handle {
     },
 
     *append(event: DurableEvent): Operation<void> {
-      yield* mustSucceed(write(() => insertJournalEvent(database, event)));
+      yield* routeJournalAppend(entry, standaloneAppend, event);
+    },
+  };
+
+  const filesystem = createWorkspaceFilesystem(entry);
+
+  function* coordinateWorkspace<T extends Json>(
+    effect: LiveDurableEffect<T>,
+  ): Operation<DurableResult> {
+    const coordinated = yield* runTransaction(function* (_transaction, identity) {
+      const previousRoot = currentWorkspaceRoot(database, path);
+      let result: DurableResult;
+      let publishedRoot = previousRoot;
+      try {
+        const value = yield* entry.savepoints.operation(function* () {
+          return yield* effect.execute();
+        });
+        const root = snapshotWorkspace(database, entry.dofs, path, true);
+        retainWorkspaceRoot(database, root, path);
+        setCurrentWorkspaceRoot(database, root.rootId, path);
+        publishedRoot = root.rootId;
+        result = { status: "ok", value };
+      } catch (error) {
+        clearWorkspaceCaches(entry);
+        if (!isJournalableWorkspaceError(error)) {
+          throw error;
+        }
+        result = { status: "err", error: serializeError(error) };
+      }
+
+      const destination = {
+        path,
+        generation: entry.generation,
+        transaction: identity,
+        journal: enlistedJournal(database, identity, path, publishedRoot),
+        workspaceRootId: publishedRoot,
+        used: false,
+      };
+      yield* scoped(function* () {
+        yield* useJournalDestination(destination);
+        yield* effect.publish(result);
+      });
+      if (!destination.used) {
+        throw new WorkflowTransactionError(
+          "the Workspace effect publication did not reach this database's guarded journal router.",
+        );
+      }
+      return result;
+    });
+    if (!coordinated.ok) {
+      throw coordinated.error;
+    }
+    return coordinated.value;
+  }
+
+  const workspace: WorkflowWorkspace = {
+    *currentRoot(): Operation<Result<string>> {
+      return yield* read(() => currentWorkspaceRoot(database, path));
+    },
+
+    effect(description, mutation) {
+      return createDurableOperation(description, () => mutation(filesystem), coordinateWorkspace);
     },
   };
 
@@ -256,6 +364,7 @@ function createHandle(connection: OpenConnection): Handle {
     },
 
     journal,
+    workspace,
 
     transact,
 
@@ -320,6 +429,7 @@ function createHandle(connection: OpenConnection): Handle {
       const stoppedAt = now();
 
       return yield* write(() => {
+        requireJournalStopReason(database, columns.eventId);
         const changed = database
           .prepare(FINISH_EXECUTION)
           .run(
@@ -353,6 +463,7 @@ function createHandle(connection: OpenConnection): Handle {
       const updatedAt = now();
 
       const written = yield* write(() => {
+        requireJournalStopReason(database, columns.eventId);
         database
           .prepare(UPDATE_RUN_STATE)
           .run(state.status, columns.kind, columns.code, columns.eventId, updatedAt);
@@ -370,7 +481,6 @@ function createHandle(connection: OpenConnection): Handle {
     database: handle,
     close() {
       closed = true;
-      database.close();
     },
   };
 }
@@ -383,8 +493,9 @@ function createHandle(connection: OpenConnection): Handle {
  */
 function enlistedJournal(
   database: DatabaseSync,
-  transaction: { open: boolean },
+  transaction: TransactionIdentity,
   path: string,
+  workspaceRootId?: string,
 ): DurableStream {
   return {
     // deno-lint-ignore require-yield
@@ -401,7 +512,7 @@ function enlistedJournal(
     *append(event: DurableEvent): Operation<void> {
       assertOpen(transaction);
       try {
-        insertJournalEvent(database, event);
+        insertJournalEvent(database, event, workspaceRootId);
       } catch (error) {
         throw translateSqliteError(error, path);
       }
@@ -409,7 +520,7 @@ function enlistedJournal(
   };
 }
 
-function assertOpen(transaction: { open: boolean }): void {
+function assertOpen(transaction: TransactionIdentity): void {
   if (!transaction.open) {
     throw new WorkflowTransactionError(
       "this transaction has already finished, so nothing more can be appended through it. " +
@@ -462,6 +573,19 @@ function retrievalFailure(reason: string, path: string): Error {
   return new WorkflowRequestError(
     `the retrieval metadata is not a JSON value: ${reason} at ${path}`,
   );
+}
+
+function requireJournalStopReason(database: DatabaseSync, eventId: string | null): void {
+  if (eventId === null) {
+    return;
+  }
+  const present = database.prepare("SELECT 1 FROM journal_events WHERE event_id = ?").get(eventId);
+  if (present === undefined) {
+    throw new WorkflowRequestError(
+      "the stop reason names a journal event this run does not hold. A journal reason " +
+        "points at an event that has already been appended and filtered.",
+    );
+  }
 }
 
 /**

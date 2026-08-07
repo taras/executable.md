@@ -24,6 +24,10 @@ import type { Operation } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
 import { Divergence } from "./divergence.ts";
 import { StaleInputError } from "./errors.ts";
+import {
+  coordinateLiveDurableEffect,
+  type LiveDurableEffectCoordinate,
+} from "./live-coordinator.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
 import type {
@@ -289,7 +293,7 @@ export function createDurableEffect<T>(
  * concurrency — if the scope tears down, the operation is cancelled.
  *
  * Use this for durableCall and any effect where the work is expressed
- * as an Operation (or can be wrapped as one via Effection's call()).
+ * as an Operation (or can be wrapped as one via Effection's until()).
  *
  * @param desc Structured description for the journal and divergence detection
  * @param execute Returns an Operation to run during live execution
@@ -297,6 +301,7 @@ export function createDurableEffect<T>(
 export function createDurableOperation<T extends Json>(
   desc: EffectDescription,
   execute: () => Operation<T>,
+  coordinate: LiveDurableEffectCoordinate = coordinateLiveDurableEffect,
 ): DurableEffect<T> {
   return {
     description: `${desc.type}(${desc.name})`,
@@ -316,24 +321,19 @@ export function createDurableOperation<T extends Json>(
       // Run the entire execute → capture → persist → resolve sequence
       // as a structured operation in the routine's scope.
       routine.scope.run(function* () {
-        let result: Result;
         try {
-          const value = yield* execute();
-          result = { status: "ok", value: value as Json };
-        } catch (e) {
-          const error = e instanceof Error ? e : new Error(String(e));
-          result = { status: "err", error: serializeError(error) };
-        }
-
-        const event: Yield = {
-          type: "yield",
-          coroutineId: ctx.coroutineId,
-          description: desc,
-          result,
-        };
-
-        try {
-          yield* ctx.stream.append(event);
+          const result = yield* coordinate({
+            execute,
+            *publish(result): Operation<void> {
+              const event: Yield = {
+                type: "yield",
+                coroutineId: ctx.coroutineId,
+                description: desc,
+                result,
+              };
+              yield* ctx.stream.append(event);
+            },
+          });
           resolve(protocolToEffection<T>(result));
         } catch (err) {
           resolve({

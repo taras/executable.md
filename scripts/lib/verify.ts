@@ -58,6 +58,7 @@ export interface CommandSpec {
 
 /** The battery, in the order every report uses. */
 export const BATTERY: readonly CommandSpec[] = [
+  { id: "vendor", program: "deno", args: ["task", "vendor:verify"] },
   { id: "lint", program: "deno", args: ["task", "lint"] },
   { id: "check", program: "deno", args: ["task", "check"] },
   { id: "test", program: "deno", args: ["task", "test"] },

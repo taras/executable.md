@@ -37,6 +37,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/cloudflare-dofs-vendor.test.ts",
+    reason:
+      "runs the no-network vendored-source verifier under the Deno executable against altered temporary snapshots",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
+  {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
       "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
@@ -89,6 +95,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     reason:
       "the same Deno storage adapter, plus a restart proof that relaunches the run under the Deno executable; `node:sqlite` is behind --experimental-sqlite on Node 22",
     issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/workflow/tests/workspace-filesystem.test.ts",
+    reason:
+      "exercises the Deno workflow storage adapter through node:sqlite and includes a real Deno child-process SIGKILL recovery proof",
+    issue: "https://github.com/taras/executable.md/issues/365",
   },
 ];
 

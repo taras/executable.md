@@ -25,8 +25,8 @@
  * ## Lifetime
  *
  * A handle is owned by the scope that asked for it. When that scope ends the
- * connection closes, and every later call on the handle fails rather than
- * reopening anything behind the caller's back.
+ * lease closes, and every later call on the handle fails. A provider may keep
+ * one authoritative physical connection for its own longer-lived scope.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
@@ -42,6 +42,7 @@ import type {
   StoredRunState,
   WorkflowRunRecord,
 } from "./record.ts";
+import type { WorkflowWorkspace } from "../workspace/api.ts";
 
 /** What a caller must decide before a run can exist. */
 export interface CreateWorkflowRunRequest {
@@ -106,6 +107,9 @@ export interface WorkflowRunDatabase {
 
   /** The run's filtered journal. An append here commits on its own. */
   readonly journal: DurableStream;
+
+  /** The retained provider-level Workspace transaction foundation. */
+  readonly workspace: WorkflowWorkspace;
 
   /** Every retained event with its opaque id, in append order. */
   readJournalEntries(): Operation<Result<JournalEntry[]>>;

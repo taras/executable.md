@@ -694,6 +694,17 @@ A crash commits all three or none. Nested child effects finish before the
 parent's effect transaction begins. Direct filesystem operations and
 declarative Git operations use this boundary.
 
+The retained-filesystem foundation implements this boundary for
+provider-level Workspace effects. Its durable-effect coordinator runs a live
+mutation inside an operation savepoint and invokes the existing publication
+continuation while the outer transaction remains open. Successful teardown
+publishes a complete immutable root and its exact retained DOFS reachability
+set before the filtered Yield. A known filesystem-domain failure rolls the
+savepoint back and publishes one failed Yield against the prior root. Storage,
+schema, corruption, routing, filtering, serialization and journal failures
+roll back the outer transaction and publish nothing. Cancellation is never
+converted into a failed effect.
+
 ### 10.2 External effects
 
 Prompt, Push and PullRequest cannot place provider-owned state in SQLite. Each
@@ -815,6 +826,38 @@ is outside the initial local capability set; Worker Shell follows §10.3. A late
 Cloudflare-hosted or workerd-backed provider may install the same Workspace and
 lifecycle contracts; documents do not choose that topology.
 
+The provider registry owns one physical SQLite connection, one DOFS database
+wrapper, one Workspace filesystem, one cooperative queue and one unique
+savepoint allocator per run path. Scope-owned run-database handles are leases;
+no second long-lived DOFS wrapper observes the same path. DOFS synchronous
+transactions use nested savepoints on the exact connection and caller-owned
+transaction used by the journal.
+
+The local database keeps XMD schema version 1, DOFS internal schema version 5
+and Workspace-root format version 1 as separate contracts. One frozen
+`sqlite_schema` manifest covers every table, index and constraint. Only a
+pristine database initializes: Cloudflare initialization runs through a
+savepoint inside XMD's immediate transaction, then XMD creates a canonical
+root-only empty Workspace and selects it before commit. Existing databases are
+validation-only. The intermediate metadata-only version-1 shape is an
+unsupported pre-release artifact and is refused byte-for-byte unchanged.
+
+Root format 1 is fixed-key-order canonical UTF-8 JSON containing `/` and every
+reachable canonical absolute POSIX path in UTF-8 byte order. Names retain their
+original code points and invalid or noncanonical names are refused. Entries
+record kind, mode and observable mtime; files also record size, DOFS manifest
+hash and deterministic path-order hardlink group; symlinks record their target.
+The lowercase root ID is SHA-256 over
+`"xmd-workspace-root\0v1\0"` followed by the canonical manifest bytes.
+
+An immutable root owns normalized references to exactly its transitive DOFS
+manifests and blobs. Foreign keys prevent their deletion while the root remains
+retained, so historical roots reuse content rather than copying bytes. Garbage
+collection is disabled at this stage. An adapter-private materializer can
+rebuild a complete valid DOFS frontier from a retained root inside a
+caller-owned transaction and savepoint, then proves the rebuilt frontier
+snapshots to the same root ID. No public history or fork command exposes it yet.
+
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be
 delegated without changing the document language.
@@ -825,13 +868,14 @@ delegated without changing the document language.
 | --- | --- |
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
-| caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | defined here; unbuilt (#218) |
+| caller-owned storage transaction | built by #291; provider-level Workspace mutations join it atomically in #365 |
+| retained Workspace filesystem foundation | built by #365; immutable roots, retained DOFS content, restoration and atomic filtered publication |
+| public Workspace composition and `<File>` | defined here; unbuilt (#218 / #366) |
 | Repository, Worktree and transactional Git components | defined here; unbuilt |
 | lifecycle start/resume/status/history/fork/delete | defined here; unbuilt |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |
-| Deno-local DOFS persistence | POC proven by #349 / PR #350 |
+| Deno-local DOFS persistence | production retained-filesystem foundation built by #365 from the pinned upstream source; #349 / PR #350 remain evidence only |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |
 | bundled workerd local host | omitted; POC #347 / PR #348 retained as provider evidence |

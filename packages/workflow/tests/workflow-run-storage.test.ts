@@ -780,6 +780,35 @@ describe("Tier WS — refusing what is not this run's database", () => {
     }
   });
 
+  it("WS22b: the intermediate metadata-only version 1 is refused byte-for-byte", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    tamper(path, (database) => {
+      database.exec(`
+        PRAGMA application_id = ${APPLICATION_ID};
+        PRAGMA user_version = 1;
+        CREATE TABLE journal_events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          record TEXT NOT NULL CHECK (json_valid(record))
+        ) STRICT;
+        CREATE TABLE workflow_run (id INTEGER PRIMARY KEY) STRICT;
+        CREATE TABLE definition_retrieval (id INTEGER PRIMARY KEY) STRICT;
+        CREATE TABLE document_executions (sequence INTEGER PRIMARY KEY AUTOINCREMENT) STRICT;
+      `);
+    });
+    const before = readFileSync(path);
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+    expect(!result.ok && result.error.message).toContain("Delete and recreate");
+    expect(readFileSync(path)).toEqual(before);
+  });
+
   it("WS23: a stored descriptor that describes no definition is refused", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
@@ -992,7 +1021,10 @@ describe("Tier WS — refusing what is not this run's database", () => {
       tamper(path, (database) => {
         for (let index = 0; index < 400; index++) {
           database
-            .prepare("INSERT INTO journal_events (event_id, record) VALUES (?, ?)")
+            .prepare(
+              `INSERT INTO journal_events (event_id, record, workspace_root_id)
+               SELECT ?, ?, current_root_id FROM workspace_state WHERE singleton_id = 1`,
+            )
             .run(`e${index}`, JSON.stringify({ padding: "x".repeat(200), index }));
         }
       });
