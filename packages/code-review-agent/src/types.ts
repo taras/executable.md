@@ -10,7 +10,7 @@ export interface PR {
   created: DiffFile[];
   modified: DiffFile[];
   deleted: DiffFile[];
-  directories: Set<string>;
+  directories: string[];
   /** Concatenated content of all added lines. */
   addedSource: string;
   /** addedSource truncated to 80,000 characters. */
@@ -95,6 +95,7 @@ export interface DoctorResult {
   filesAnalyzed: number;
   filesSkipped: number;
   importErrors: number;
+  availableRuleIds: string[];
   bloatRulesAvailable: string[];
   bloatRulesMissing: string[];
   recommendation: "type-aware" | "type-aware-filtered" | "syntax-only";

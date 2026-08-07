@@ -8,7 +8,7 @@
 
 import type { PR, DiffFile, DiffHunk, DiffLine } from "./types.ts";
 
-const DIFF_PREVIEW_MAX = 80_000;
+const DIFF_PREVIEW_MAX = 40_000;
 
 const EXTENSION_LANGUAGE: Record<string, string> = {
   ".ts": "typescript",
@@ -227,7 +227,7 @@ function parseDiffContent(
 /**
  * Compute unique directories at depth 2 (e.g., "src/components").
  */
-function computeDirectories(files: DiffFile[]): Set<string> {
+function computeDirectories(files: DiffFile[]): string[] {
   const dirs = new Set<string>();
   for (const file of files) {
     const parts = file.path.split("/");
@@ -237,7 +237,7 @@ function computeDirectories(files: DiffFile[]): Set<string> {
       dirs.add(".");
     }
   }
-  return dirs;
+  return [...dirs].sort();
 }
 
 /**

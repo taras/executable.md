@@ -2,184 +2,267 @@
 props:
   type: object
   properties:
-    pr:
-      type: object
     tsconfigPath:
       type: string
       default: ".reviews/tsconfig.oxlint.json"
-  required: [pr]
+  additionalProperties: false
+returns:
+  type: object
+  properties:
+    oxlintInstalled: { type: boolean }
+    oxlintVersion: { type: string }
+    tsgolintInstalled: { type: boolean }
+    tsgolintVersion: { type: string }
+    tsconfigExists: { type: boolean }
+    nodeModulesExists: { type: boolean }
+    typeAwareAvailable: { type: boolean }
+    filesAnalyzed: { type: number }
+    filesSkipped: { type: number }
+    importErrors: { type: number }
+    availableRuleIds:
+      type: array
+      items: { type: string }
+    bloatRulesAvailable:
+      type: array
+      items: { type: string }
+    bloatRulesMissing:
+      type: array
+      items: { type: string }
+    recommendation: { type: string }
+    nativeSpecifiers:
+      type: object
+      properties:
+        count: { type: number }
+        files:
+          type: array
+          items: { type: string }
+        jsr: { type: number }
+        npm: { type: number }
+      required: [count, files, jsr, npm]
+      additionalProperties: false
+  required:
+    - oxlintInstalled
+    - oxlintVersion
+    - tsgolintInstalled
+    - tsgolintVersion
+    - tsconfigExists
+    - nodeModulesExists
+    - typeAwareAvailable
+    - filesAnalyzed
+    - filesSkipped
+    - importErrors
+    - availableRuleIds
+    - bloatRulesAvailable
+    - bloatRulesMissing
+    - recommendation
+    - nativeSpecifiers
   additionalProperties: false
 ---
 
-Checking environment for Oxlint static analysis...
-
-<EnsureOxlint />
-
-<Capture as="oxlintVersion">
-
-```bash exec
-.reviews/.oxlint/oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
-```
-
-</Capture>
-
-<Capture as="tsgolintVersion">
-
-```bash exec
-test -x .reviews/.oxlint/tsgolint && echo "INSTALLED" || echo "NOT_INSTALLED"
-```
-
-</Capture>
-
-<Capture as="nodeModulesCheck">
-
-```bash exec
-test -x .reviews/.oxlint/oxlint && echo "EXISTS" || echo "MISSING"
-```
-
-</Capture>
-
-<Capture as="tsconfigCheck">
-
-```bash exec
-test -f {tsconfigPath} && echo "EXISTS" || echo "MISSING"
-```
-
-</Capture>
-
 ```ts eval
-const oxlintInstalled = !oxlintVersion.includes("NOT_INSTALLED");
-const tsgolintInstalled = !tsgolintVersion.includes("NOT_INSTALLED");
-const nodeModulesExists = nodeModulesCheck.trim() === "EXISTS";
-const tsconfigExists = tsconfigCheck.trim() === "EXISTS";
+import { exec, glob, readTextFile, stat } from "@executablemd/runtime";
 
-const canProbeTypeAware = oxlintInstalled && tsgolintInstalled
-  && nodeModulesExists && tsconfigExists;
-```
-
-Scanning source files for scheme specifiers (jsr:, npm:)...
-
-<Capture as="specifierScan">
-
-```bash exec
-grep -rn --include='*.ts' --include='*.tsx' -E '^\s*(import|export)\s.*from\s+['"'"'"](jsr:|npm:)' packages/ src/ 2>/dev/null | head -50 || echo "NONE"
-```
-
-</Capture>
-
-```ts eval
-const hasNativeSpecifiers = specifierScan.trim() !== "NONE"
-  && specifierScan.trim().length > 0;
-
-const specifierLines = hasNativeSpecifiers
-  ? specifierScan.trim().split("\n") : [];
-
-const specifierFiles = [...new Set(
-  specifierLines.map(l => l.split(":")[0]).filter(Boolean)
-)];
-
-const jsrCount = specifierLines.filter(l => l.includes("jsr:")).length;
-const npmCount = specifierLines.filter(l => l.includes("npm:")).length;
-```
-
-Running type-aware probe to test Oxlint compatibility...
-
-<Capture as="probeResult">
-
-<Show when={canProbeTypeAware}
-  fallback='{"diagnostics":[],"stderr":""}'>
-
-```bash exec
-RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
-STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
-rm -f .reviews/probe-stderr.tmp
-echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
-```
-
-</Show>
-
-</Capture>
-
-```ts eval
-const BLOAT_RULES = [
-  "no-unused-vars", "no-inferrable-types", "no-empty-function",
-  "no-empty-object-type", "no-useless-empty-export",
-  "no-unnecessary-type-constraint",
-  "no-unnecessary-parameter-property-assignment",
-  "no-static-only-class", "no-console", "no-debugger",
-  "no-unnecessary-type-assertion", "no-redundant-type-constituents",
-  "no-unnecessary-type-arguments",
-  "no-unnecessary-boolean-literal-compare",
-];
-const TYPE_AWARE_RULES = [
-  "no-unnecessary-type-assertion", "no-redundant-type-constituents",
-  "no-unnecessary-type-arguments",
-  "no-unnecessary-boolean-literal-compare",
-];
-
-let probe = { diagnostics: [], stderr: "" };
-try { probe = JSON.parse(probeResult); } catch { /* malformed */ }
-
-const diagnostics = Array.isArray(probe.diagnostics)
-  ? probe.diagnostics
-  : (probe.diagnostics && typeof probe.diagnostics === "object"
-      && Array.isArray(probe.diagnostics.diagnostics))
-  ? probe.diagnostics.diagnostics
-  : [];
-
-const importNoise = diagnostics.filter(d =>
-  d.message?.includes("Cannot find module")
-  || d.message?.includes("cannot find")
-  || d.ruleId?.includes("import")
-);
-
-const fileSet = new Set(diagnostics.map(d => d.file).filter(Boolean));
-const noiseRatio = diagnostics.length > 0
-  ? importNoise.length / diagnostics.length : 0;
-
-const tsgolintCrashed = typeof probe.stderr === "string"
-  && probe.stderr.includes("tsgolint")
-  && (probe.stderr.includes("panic")
-    || probe.stderr.includes("OOM")
-    || probe.stderr.includes("fatal"));
-
-const typeAwareAvailable = canProbeTypeAware && !tsgolintCrashed;
-
-let recommendation = "syntax-only";
-if (typeAwareAvailable && noiseRatio < 0.3) {
-  recommendation = "type-aware";
-} else if (typeAwareAvailable && noiseRatio >= 0.3) {
-  recommendation = "type-aware-filtered";
+function diagnosticEntries(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === "object" && Array.isArray(value.diagnostics)) {
+    return value.diagnostics;
+  }
+  return [];
 }
 
-const bloatRulesAvailable = typeAwareAvailable
-  ? BLOAT_RULES
-  : BLOAT_RULES.filter(r => !TYPE_AWARE_RULES.includes(r));
-const bloatRulesMissing = typeAwareAvailable
-  ? []
-  : TYPE_AWARE_RULES;
+function diagnosticFile(entry) {
+  return typeof entry.file === "string"
+    ? entry.file
+    : typeof entry.filename === "string" ? entry.filename : "";
+}
 
-const doctor = {
-  oxlintInstalled,
-  oxlintVersion: oxlintVersion.trim(),
-  tsgolintInstalled,
-  tsgolintVersion: tsgolintVersion.trim(),
-  tsconfigExists,
-  nodeModulesExists,
-  typeAwareAvailable,
-  filesAnalyzed: fileSet.size,
-  filesSkipped: new Set(importNoise.map(d => d.file).filter(Boolean)).size,
-  importErrors: importNoise.length,
-  bloatRulesAvailable,
-  bloatRulesMissing,
-  recommendation,
-  nativeSpecifiers: {
-    count: hasNativeSpecifiers ? specifierLines.length : 0,
-    files: specifierFiles,
-    jsr: jsrCount,
-    npm: npmCount,
-  },
-};
+function diagnosticRule(entry) {
+  return typeof entry.ruleId === "string"
+    ? entry.ruleId
+    : typeof entry.code === "string" ? entry.code : "unknown";
+}
 
-return '```json\n' + JSON.stringify(doctor) + '\n```';
+function diagnosticMessage(entry) {
+  return typeof entry.message === "string" ? entry.message : "";
+}
+
+function isImportNoise(entry) {
+  const message = diagnosticMessage(entry).toLowerCase();
+  const rule = diagnosticRule(entry).toLowerCase();
+  return message.includes("cannot find module") || rule.includes("import");
+}
+
+function* scanSpecifiers() {
+  const files = yield* glob({
+    root: ".",
+    patterns: ["packages/**/*.ts", "packages/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"],
+    exclude: ["**/*.test.ts", "**/*.spec.ts", "**/node_modules/**"],
+  });
+  const lines = [];
+  const filesWithSpecifiers = new Set();
+  let jsr = 0;
+  let npm = 0;
+  for (const entry of files) {
+    if (!entry.isFile) {
+      continue;
+    }
+    const source = yield* readTextFile(entry.path);
+    for (const line of source.split(/\r?\n/)) {
+      if (!/^\s*(import|export)\s.*from\s+["'](jsr:|npm:)/.test(line)) {
+        continue;
+      }
+      if (lines.length < 50) {
+        lines.push(`${entry.path}:${line.trim()}`);
+      }
+      filesWithSpecifiers.add(entry.path);
+      if (line.includes("jsr:")) {
+        jsr++;
+      }
+      if (line.includes("npm:")) {
+        npm++;
+      }
+    }
+  }
+  return { lines, files: [...filesWithSpecifiers].slice(0, 50), jsr, npm };
+}
+
+function* probeTypeAware(canProbe) {
+  if (!canProbe) {
+    return {
+      diagnosticCount: 0,
+      importNoiseCount: 0,
+      filesAnalyzed: 0,
+      filesSkipped: 0,
+      importErrors: 0,
+      availableRuleIds: [],
+      tsgolintCrashed: false,
+    };
+  }
+
+  const result = yield* exec({
+    command: [
+      ".reviews/.oxlint/oxlint",
+      "--config",
+      ".reviews/.oxlintrc.json",
+      "--type-aware",
+      "--tsconfig",
+      tsconfigPath,
+      "--format",
+      "json",
+    ],
+    env: { OXLINT_TSGOLINT_PATH: ".reviews/.oxlint/tsgolint" },
+  });
+  const stderr = result.stderr.toLowerCase();
+  const crashed = stderr.includes("tsgolint") &&
+    (stderr.includes("panic") || stderr.includes("fatal") || stderr.includes("oom"));
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    parsed = [];
+  }
+
+  const diagnostics = diagnosticEntries(parsed);
+  const files = new Set();
+  const skipped = new Set();
+  const rules = new Set();
+  let importNoiseCount = 0;
+  for (const entry of diagnostics) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const file = diagnosticFile(entry);
+    const rule = diagnosticRule(entry);
+    if (file) {
+      files.add(file);
+    }
+    if (rule) {
+      rules.add(rule);
+    }
+    if (isImportNoise(entry)) {
+      importNoiseCount++;
+      if (file) {
+        skipped.add(file);
+      }
+    }
+  }
+  return {
+    diagnosticCount: diagnostics.length,
+    importNoiseCount,
+    filesAnalyzed: files.size,
+    filesSkipped: skipped.size,
+    importErrors: importNoiseCount,
+    availableRuleIds: [...rules],
+    tsgolintCrashed: crashed,
+  };
+}
+
+function* inspect() {
+  const oxlintStat = yield* stat(".reviews/.oxlint/oxlint");
+  const tsgolintStat = yield* stat(".reviews/.oxlint/tsgolint");
+  const tsconfigStat = yield* stat(tsconfigPath);
+  const nodeModulesStat = yield* stat("node_modules");
+  const oxlintInstalled = oxlintStat.exists && oxlintStat.isFile;
+  const tsgolintInstalled = tsgolintStat.exists && tsgolintStat.isFile;
+  const canProbe = oxlintInstalled && tsgolintInstalled && tsconfigStat.exists && nodeModulesStat.exists;
+
+  const oxlintVersionResult = oxlintInstalled
+    ? yield* exec({ command: [".reviews/.oxlint/oxlint", "--version"] })
+    : { stdout: "", stderr: "", exitCode: 0 };
+  const tsgolintVersionResult = tsgolintInstalled
+    ? yield* exec({ command: [".reviews/.oxlint/tsgolint", "--version"] })
+    : { stdout: "", stderr: "", exitCode: 0 };
+  const specifiers = yield* scanSpecifiers();
+  const probe = yield* probeTypeAware(canProbe);
+
+  const BLOAT_RULES = [
+    "no-unused-vars", "no-inferrable-types", "no-empty-function",
+    "no-empty-object-type", "no-useless-empty-export",
+    "no-unnecessary-type-constraint",
+    "no-unnecessary-parameter-property-assignment",
+    "no-static-only-class", "no-console", "no-debugger",
+    "no-unnecessary-type-assertion", "no-redundant-type-constituents",
+    "no-unnecessary-type-arguments", "no-unnecessary-boolean-literal-compare",
+  ];
+  const TYPE_AWARE_RULES = [
+    "no-unnecessary-type-assertion", "no-redundant-type-constituents",
+    "no-unnecessary-type-arguments", "no-unnecessary-boolean-literal-compare",
+  ];
+  const noiseRatio = probe.diagnosticCount > 0
+    ? probe.importNoiseCount / probe.diagnosticCount : 0;
+  const typeAwareAvailable = canProbe && !probe.tsgolintCrashed;
+  const recommendation = !typeAwareAvailable
+    ? "syntax-only"
+    : noiseRatio >= 0.3 ? "type-aware-filtered" : "type-aware";
+
+  return {
+    oxlintInstalled,
+    oxlintVersion: oxlintVersionResult.stdout.trim(),
+    tsgolintInstalled,
+    tsgolintVersion: tsgolintVersionResult.stdout.trim(),
+    tsconfigExists: tsconfigStat.exists,
+    nodeModulesExists: nodeModulesStat.exists,
+    typeAwareAvailable,
+    filesAnalyzed: probe.filesAnalyzed,
+    filesSkipped: probe.filesSkipped,
+    importErrors: probe.importErrors,
+    availableRuleIds: probe.availableRuleIds,
+    bloatRulesAvailable: typeAwareAvailable
+      ? BLOAT_RULES : BLOAT_RULES.filter((rule) => !TYPE_AWARE_RULES.includes(rule)),
+    bloatRulesMissing: typeAwareAvailable ? [] : TYPE_AWARE_RULES,
+    recommendation,
+    nativeSpecifiers: {
+      count: specifiers.lines.length,
+      files: specifiers.files,
+      jsr: specifiers.jsr,
+      npm: specifiers.npm,
+    },
+  };
+}
+
+const doctor = yield* inspect();
 ```
+
+<Return value={doctor} />

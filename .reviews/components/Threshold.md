@@ -25,7 +25,7 @@ const metrics = {
   totalFiles: pr.stats.totalFiles,
   additions: pr.stats.additions,
   deletions: pr.stats.deletions,
-  directories: pr.directories.size,
+  directories: pr.directories.length,
 };
 
 const actual = metrics[metric];

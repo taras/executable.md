@@ -2,131 +2,29 @@
 title: PR Review
 ---
 
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
-const PR_NUMBER = process.env.PR_NUMBER ?? "";
-const PR_TITLE = process.env.PR_TITLE ?? "";
-const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY ?? "";
-```
+<Output>
 
-<Capture as="rawDiff">
+<GitHubAuth>
+<ReviewSetup />
 
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
+<ReviewContext as="context" />
 
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="prBody">
-
-```bash exec
-gh api repos/{GITHUB_REPOSITORY}/pulls/{PR_NUMBER} --jq '.body' 2>/dev/null || echo ""
-```
-
-</Capture>
+<Doctor as="doctor" />
 
 ```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: PR_TITLE,
-  body: prBody.trim(),
-  number: PR_NUMBER,
-});
-
-// TODO: we need an easier way to work with diffs here.
-const changedFilePaths = pr.files.map((file) => file.path);
+const pr = context.pr;
+const changedFilePaths = context.changedFilePaths;
+const changedTsFiles = pr.files
+  .filter((file) => file.language === "typescript" && !file.isTest && !file.isTypeDeclaration)
+  .map((file) => file.path)
+  .slice(0, 200);
 ```
 
-```bash silent exec
-mkdir -p .reviews
-cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
-{
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "lib": ["ESNext", "DOM"],
-    "types": []
-  },
-  "include": [
-    "packages/*/src/**/*.ts",
-    "packages/*/*.ts",
-    "durable-effects/**/*.ts"
-  ],
-  "exclude": ["node_modules", "dist", ".vendor", "**/*.test.ts"]
-}
-TSCONFIG
-```
-
-<Capture as="doctorJson" select="code[lang=json]">
-
-<Doctor pr={pr} />
-
-</Capture>
-
-```ts eval
-import { parseDoctorResult } from "@executablemd/code-review-agent";
-
-const doctor = parseDoctorResult(doctorJson);
-```
-
-<Capture as="changedTsFiles">
-
-```bash silent exec
-git diff --name-only {BASE_SHA}...{HEAD_SHA} -- '*.ts' '*.tsx' | grep -v '\.test\.' | grep -v '\.spec\.' | grep -v '\.d\.ts$' | head -200
-```
-
-</Capture>
-
-<Capture as="rawDiagnostics">
-
-<Show when={doctor.recommendation === "type-aware"
-         || doctor.recommendation === "type-aware-filtered"}>
-
-```bash exec
-if [ -n "{changedTsFiles}" ]; then
-  echo "{changedTsFiles}" | tr '\n' ' ' | OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true
-else
-  echo "[]"
-fi
-```
-
-</Show>
-
-<Show when={doctor.recommendation === "syntax-only"
-         && doctor.oxlintInstalled}>
-
-```bash exec
-if [ -n "{changedTsFiles}" ]; then
-  echo "{changedTsFiles}" | tr '\n' ' ' | xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true
-else
-  echo "[]"
-fi
-```
-
-</Show>
-
-<Show when={!doctor.oxlintInstalled}>
-
-[]
-
-</Show>
-
-</Capture>
+<OxlintDiagnostics
+  files={changedTsFiles}
+  typeAware={doctor.recommendation !== "syntax-only"}
+  as="rawDiagnostics"
+ />
 
 ```ts eval
 import { parseDiagnostics } from "@executablemd/code-review-agent";
@@ -146,3 +44,6 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
   </Instruction>
 </DeepInfraProvider>
 </ThinkFilter>
+
+</GitHubAuth>
+</Output>

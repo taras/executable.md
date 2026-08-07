@@ -16,6 +16,7 @@ const DEFAULTS: DoctorResult = {
   filesAnalyzed: 0,
   filesSkipped: 0,
   importErrors: 0,
+  availableRuleIds: [],
   bloatRulesAvailable: [],
   bloatRulesMissing: [],
   recommendation: "syntax-only",

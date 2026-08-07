@@ -1,86 +1,47 @@
 # Specification: `@executablemd/code-review-agent`
 
-**Status:** Draft  
-**Scope:** An Executable Markdown Agent that reviews pull requests for extraneous code, posts findings as GitHub comments, and runs locally via Ollama or in CI via DeepInfra.
+**Status:** Draft
 
----
+This agent reviews pull requests for extraneous code, renders findings as a
+GitHub comment in CI, and runs locally with Ollama. The document is the
+orchestrator: it composes Markdown components, uses JavaScript eval blocks for
+structured work, and crosses into Bash only for host operations with no
+contextual equivalent.
 
-## 1. Architecture
+## 1. Review composition
 
-A PR review is an executable markdown document. The document gathers
-the diff, parses it into a structured object, passes it through
-composable check components, optionally sends it to an LLM for
-semantic analysis, and posts the rendered output as a GitHub comment.
+The review entrypoints share the same data path:
 
 ```
-ReviewPR.md
-  ├─ Capture: git diff → rawDiff
-  ├─ Capture: git diff --name-status → rawFiles
-  ├─ eval: parseDiff(rawDiff, rawFiles) → pr
-  │
-  └─ DeepInfraProvider (or OllamaProvider)
-       └─ Instructions (system prompt)
-            └─ GitHubComment (or stdout)
-                 └─ ReviewBody
-                      ├─ ScopeCheck
-                      │    ├─ Threshold (×4)
-                      │    ├─ DescriptionCheck
-                      │    ├─ LinkedIssue
-                      │    ├─ ConfigSourceMix
-                      │    ├─ AbstractionNames
-                      │    └─ NewDependencies
-                      ├─ StructuralBloat
-                      │    ├─ UnusedInDiff (×2)
-                      │    ├─ Ratio
-                      │    └─ Pattern (×2)
-                      ├─ VerbosityCheck
-                      │    ├─ Ratio
-                      │    └─ CommentReview → Sample
-                      └─ SemanticReview → Sample
+ReviewSetup
+  ├─ EnsureOxlint
+  └─ OxlintConfig
+ReviewContext as context
+  ├─ runtime exec: git diff and name-status
+  ├─ runtime fetch: pull-request body in CI
+  └─ parseDiff: bounded structured PR
+Doctor as doctor
+OxlintDiagnostics as rawDiagnostics
+  ├─ runtime exec: selected Oxlint invocation
+  └─ eval: parse, filter, and normalize diagnostics
+parseDiagnostics(rawDiagnostics, context.pr, doctor)
+  └─ policy components and provider
 ```
 
-Three layers of concern, three layers of middleware:
+`ReviewPR.md` places this body inside one top-level `<Output>` region. A
+review finding is ordinary report text. An execution failure is a raised
+`ErrorSegment` that the output error mode propagates to `execute()` and the
+CLI exit status.
 
-| Layer | Component | Responsibility |
-|---|---|---|
-| Transport | `DeepInfraProvider` / `OllamaProvider` | Send HTTP request, return response |
-| Policy | `Instructions` | Set system prompt |
-| Delivery | `GitHubComment` | Post rendered output as PR comment |
+`ReviewPR.local.md` uses the same composition with Ollama and no GitHub delivery
+component. `AnalyzeRepo.md` and `AnalyzeRepoCI.md` replace `ReviewContext` with
+`RepositoryInventory`, which uses contextual `glob` and `readTextFile` to
+return `{ fileList, fileCount, lineCount }`.
 
-The review logic (`ReviewBody` and its children) knows nothing about
-which model runs, what system prompt is set, or where the output goes.
+## 2. Structured review data
 
----
-
-## 2. executable.md Changes (Implemented)
-
-All executable.md core changes and the full agent implementation are complete:
-
-- **Eval block `return` as rendered output** (PR #35)
-- **Eval binding interpolation in text segments** (PR #34)
-- **Simplified `SampleContext`** to `{content, model?, params?, system?, componentName?}` (PR #35)
-- **Removed `sample` modifier** — all LLM calls via `<Sample>` component (PR #35)
-- **Renamed `Instruction.md` input** `text` → `system` for clarity
-- **Fixed broken providers** — `OllamaProvider`, `LlamafileProvider`,
-  `AnthropicProvider` updated to use direct `fetch()` calls
-- **Component resolution** — review components resolved via
-  `--component-dir .reviews/components --component-dir packages/core/components`
-- **AST-based user import extraction** (DEC-93) — eval blocks can use
-  standard `import` declarations; extracted via acorn's
-  `allowImportExportEverywhere` and hoisted to module level
-- **Projected children expression prop scoping** (DEC-91, DEC-92) —
-  children substituted via `<Content />` carry the caller's eval env.
-  Expression props on projected children resolve against merged env
-  (all ancestor bindings propagated through multi-level nesting)
-
----
-
-## 3. Package: `@executablemd/code-review-agent`
-
-One export: `parseDiff`. Takes raw `git diff` and `git diff --name-status`
-output, returns a typed `PR` object.
-
-### 3.1 `PR` type
+`parseDiff()` accepts unified diff text, name-status text, and pull-request
+metadata. It returns a JSON-compatible PR object:
 
 ```typescript
 interface PR {
@@ -90,1306 +51,148 @@ interface PR {
   created: DiffFile[];
   modified: DiffFile[];
   deleted: DiffFile[];
-  directories: Set<string>;
+  directories: string[];
   addedSource: string;
-  diffPreview: string;       // addedSource truncated to 80K chars
+  diffPreview: string;
   stats: {
     totalFiles: number;
     additions: number;
     deletions: number;
     totalChanges: number;
   };
-  meta: {
-    title: string;
-    body: string;
-    number: string;
-  };
-}
-
-interface DiffFile {
-  path: string;
-  status: "A" | "M" | "D" | "R" | "C";
-  hunks: DiffHunk[];
-  language: string;
-  isTest: boolean;
-  isConfig: boolean;
-  isTypeDeclaration: boolean;
-}
-
-interface DiffHunk {
-  header: string;
-  lines: DiffLine[];
-}
-
-interface DiffLine {
-  type: "add" | "remove" | "context";
-  content: string;
-  file: string;
-  lineNumber: number;
-  isTest: boolean;
+  meta: { title: string; body: string; number: string };
 }
 ```
 
-### 3.2 `parseDiff` signature
+`directories` is sorted JSON data rather than a `Set`, so a value component
+can return the PR without introducing a non-serializable value. The review
+context bounds `addedSource` to `diffPreview`; the prompt preview is at most
+40,000 characters. The PR's parsed line and file data remains available to the
+deterministic policy components.
+
+`parseDiff()` handles unified diffs, renames, binary-file skipping, language
+inference, test/config/type-declaration classification, directory discovery,
+and change statistics. Its `diffPreview` is at most 40,000 characters.
+`parseDiagnostics()` accepts either legacy JSON text or
+the structured array returned by `OxlintDiagnostics`.
+
+## 3. Oxlint and Doctor boundary
+
+`Doctor` returns a validated object containing executable/config availability,
+versions, type-aware availability, aggregate probe counts, import-noise counts,
+available rule identifiers, the recommendation, and native-specifier counts.
+The probe keeps Oxlint stdout and stderr inside a generator-local scope. It
+returns no raw diagnostic, source excerpt, cause, rendered source, URL, or
+arbitrary process payload.
+
+`OxlintDiagnostics` invokes the selected type-aware or syntax-only command with
+an argument array. Its generator-local parser accepts Oxlint's array or
+`diagnostics` envelope and returns only:
 
 ```typescript
-function parseDiff(
-  rawDiff: string,
-  rawFiles: string,
-  meta: { title: string; body: string; number: string },
-): PR;
-```
-
-### 3.3 What `parseDiff` handles
-
-- Standard unified diff format
-- Rename detection (R status)
-- Binary file detection (skipped)
-- Language inference from file extension
-- Test file detection: `*.test.ts`, `*.spec.ts`, `__tests__/`, `test/`
-- Config file detection: `*.config.*`, `.*rc`, `tsconfig*`, `package.json`
-- Type declaration detection: `*.d.ts`
-- `diffPreview`: `addedSource` truncated to 80,000 characters
-- `directories`: unique top-level dirs at depth 2
-
-### 3.4 Package structure
-
-```
-packages/code-review-agent/
-  src/
-    parse-diff.ts
-    types.ts
-  mod.ts
-```
-
-Zero dependencies beyond Deno stdlib.
-
----
-
-## 4. Standard Library Components
-
-Conditional rendering is not among them. `<If>` and `<Else>` are expansion-engine
-directives (executable-mdx-spec §6.5), so the components below branch with them
-directly instead of wrapping a conditional of their own.
-
-### 4.1 `ReviewSection.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    heading:
-      type: string
-    clean:
-      type: string
-      default: "✅ No issues found."
-  required: [heading]
-  additionalProperties: false
----
-
-```ts eval
-const content = yield* renderChildren();
-return content.trim().length > 0
-  ? `### ${heading}\n\n${content}`
-  : `### ${heading}\n\n${clean}`;
-```
-````
-
-### 4.2 `Finding.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    when:
-      type: boolean
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-  required: [when, message]
-  additionalProperties: false
----
-
-```ts eval
-const icon = severity === "error" ? "🔴" : "🟡";
-```
-
-<If condition={when}>
-
-{icon} {message}
-
-</If>
-````
-
-### 4.3 `Instructions.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    system:
-      type: string
-  required: [system]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  return yield* next({
-    ...context,
-    system,
-  });
-});
-```
-
-<Content />
-````
-
-### 4.4 `GitHubComment.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    marker:
-      type: string
-      default: "<!-- xmd-review -->"
-  additionalProperties: false
----
-
-```ts eval
-const content = yield* renderChildren();
-const body = marker + "\n" + content;
-
-const token = process.env.GITHUB_TOKEN;
-const repo = process.env.GITHUB_REPOSITORY;
-const prNumber = process.env.PR_NUMBER;
-const [owner, name] = repo.split("/");
-const api = `https://api.github.com/repos/${owner}/${name}`;
-
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-};
-
-const { json: comments } = yield* fetch(
-  `${api}/issues/${prNumber}/comments`, { headers }
-).expect();
-
-const existing = comments.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
-);
-
-if (existing) {
-  yield* fetch(`${api}/issues/comments/${existing.id}`, {
-    method: "PATCH",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).expect();
-} else {
-  yield* fetch(`${api}/issues/${prNumber}/comments`, {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).expect();
-}
-
-return content;
-```
-````
-
-### 4.5 `DeepInfraProvider.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    model:
-      type: string
-  required: [model]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch("https://api.deepinfra.com/v1/openai/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${process.env.DEEPINFRA_TOKEN}`,
-    },
-    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 4096 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<Content />
-````
-
-### 4.6 `OllamaProvider.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    model:
-      type: string
-    baseUrl:
-      type: string
-      default: "http://localhost:11434"
-  required: [model]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, temperature: 0 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<Content />
-````
-
----
-
-## 5. Rule Components
-
-### 5.1 `Threshold.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    metric:
-      type: string
-    op:
-      type: string
-    value:
-      type: number
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-  required: [pr, metric, op, value, message]
-  additionalProperties: false
----
-
-```ts eval
-const metrics = {
-  totalChanges: pr.stats.totalChanges,
-  totalFiles: pr.stats.totalFiles,
-  additions: pr.stats.additions,
-  deletions: pr.stats.deletions,
-  directories: pr.directories.size,
-};
-
-const actual = metrics[metric];
-const ops = {
-  ">":  (a, b) => a > b,
-  ">=": (a, b) => a >= b,
-  "<":  (a, b) => a < b,
-  "<=": (a, b) => a <= b,
-  "==": (a, b) => a == b,
-};
-
-if (ops[op](actual, value)) {
-  const icon = severity === "error" ? "🔴" : "🟡";
-  return icon + " " + message
-    .replace("{actual}", String(actual))
-    .replace("{value}", String(value));
+interface NormalizedDiagnostic {
+  message: string;
+  ruleId: string;
+  severity: string;
+  file: string;
+  line: number;
+  column: number;
 }
 ```
-````
 
-### 5.2 `Pattern.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    pattern:
-      type: string
-    min:
-      type: number
-      default: 1
-    excludeTests:
-      type: boolean
-      default: true
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-  required: [pr, pattern, message]
-  additionalProperties: false
----
-
-```ts eval
-const re = new RegExp(pattern, "g");
-const lines = excludeTests
-  ? pr.added.filter(l => !l.isTest)
-  : pr.added;
-const matches = lines.filter(l => re.test(l.content));
-re.lastIndex = 0;
-
-if (matches.length >= min) {
-  const icon = severity === "error" ? "🔴" : "🟡";
-  return icon + " " + message
-    .replace("{count}", String(matches.length));
-}
-```
-````
-
-### 5.3 `Ratio.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    numerator:
-      type: string
-    denominator:
-      type: string
-    threshold:
-      type: number
-    minDenominator:
-      type: number
-      default: 10
-    excludeTests:
-      type: boolean
-      default: true
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-  required: [pr, numerator, denominator, threshold, message]
-  additionalProperties: false
----
-
-```ts eval
-const numRe = new RegExp(numerator, "g");
-const denRe = new RegExp(denominator, "g");
-const lines = excludeTests
-  ? pr.added.filter(l => !l.isTest)
-  : pr.added;
-const source = lines.map(l => l.content).join("\n");
-
-const numCount = (source.match(numRe) ?? []).length;
-const denCount = (source.match(denRe) ?? []).length;
-
-if (denCount >= minDenominator && numCount / denCount > threshold) {
-  const ratio = (numCount / denCount * 100).toFixed(1);
-  const icon = severity === "error" ? "🔴" : "🟡";
-  return icon + " " + message
-    .replace("{ratio}", ratio)
-    .replace("{numeratorCount}", String(numCount))
-    .replace("{denominatorCount}", String(denCount));
-}
-```
-````
-
-### 5.4 `UnusedInDiff.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    construct:
-      type: string
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-  required: [pr, construct, message]
-  additionalProperties: false
----
-
-```ts eval
-const lines = pr.added.filter(l =>
-  l.file.endsWith(".ts") || l.file.endsWith(".tsx")
-);
-const source = lines.map(l => l.content).join("\n");
-
-// Anchoring the keyword to statement position (line start, after an optional
-// export/default/declare prefix) excludes `import { type X }` specifiers,
-// whose `type` keyword sits inside braces rather than at the start of a
-// declaration.
-const declPattern = new RegExp(
-  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${construct}\\s+(\\w+)`
-);
-
-const decls = [];
-for (const line of lines) {
-  const match = declPattern.exec(line.content);
-  if (match) {
-    decls.push({ name: match[1], file: line.file, lineNumber: line.lineNumber });
-  }
-}
-
-const unused = decls
-  .map(d => ({
-    ...d,
-    refs: (source.match(new RegExp(`\\b${d.name}\\b`, "g")) ?? []).length,
-  }))
-  .filter(d => d.refs <= 1);
-
-const hasUnused = unused.length > 0;
-const icon = severity === "error" ? "🔴" : "🟡";
-const summary = icon + " " + message
-  .replace("{names}", unused.map(u => u.name).join(", "))
-  .replace("{count}", String(unused.length));
-```
-
-<If condition={hasUnused}>
-
-<details>
-<summary>{summary}</summary>
-
-| Symbol | Declared at | Refs in diff | Why flagged |
-| --- | --- | --- | --- |
-<Each in={unused} let="u">| `{u.name}` | `{u.file}:{u.lineNumber}` | {u.refs} | referenced ≤1× within the added diff (pre-existing usages not counted) |
-</Each>
-
-</details>
-
-</If>
-````
-
-Findings render as a `<details>` disclosure: the summary carries the terse
-message, and the body is a per-symbol table giving the declaration
-`file:lineNumber`, the added-diff reference count, and why the symbol was
-flagged. The declaration matcher is anchored to statement position, so
-`import { type X }` specifiers are not mistaken for declarations. Reference
-counts cover added diff lines only — a symbol used elsewhere in the file
-still reports a low count, which the "why flagged" column states.
-
-### 5.5 `DescriptionCheck.md`
-
-```markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    minLength:
-      type: number
-      default: 50
-    severity:
-      type: string
-      default: error
-    message:
-      type: string
-      default: "PR description must explain what and why."
-  required: [pr]
-  additionalProperties: false
----
-
-<Finding when={pr.meta.body.length < minLength}
-  severity={severity} message={message} />
-```
-
-### 5.6 `LinkedIssue.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    whenLinesExceed:
-      type: number
-      default: 0
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-      default: "Large PR with no linked issue."
-  required: [pr]
-  additionalProperties: false
----
-
-```ts eval
-const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(pr.meta.body);
-```
-
-<Finding when={!hasIssue && pr.stats.totalChanges > whenLinesExceed}
-  severity={severity} message={message} />
-````
-
-### 5.7 `ConfigSourceMix.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    minFiles:
-      type: number
-      default: 5
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-      default: "PR mixes config and source changes."
-  required: [pr]
-  additionalProperties: false
----
-
-```ts eval
-const hasConfig = pr.files.some(f => f.isConfig);
-const hasSource = pr.files.some(f =>
-  !f.isConfig && !f.isTest && !f.isTypeDeclaration
-);
-const triggered = hasConfig && hasSource && pr.stats.totalFiles > minFiles;
-```
-
-<Finding when={triggered} severity={severity} message={message} />
-````
-
-### 5.8 `AbstractionNames.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    pattern:
-      type: string
-      default: "factory|abstract|base|provider|strategy|adapter|helper|util"
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-      default: "New abstraction files: {names}. Verify 3+ consumers."
-  required: [pr]
-  additionalProperties: false
----
-
-```ts eval
-const re = new RegExp(pattern, "i");
-const suspicious = pr.created
-  .filter(f => f.path.endsWith(".ts") && !f.isTest && !f.isTypeDeclaration)
-  .filter(f => re.test(f.path));
-const triggered = suspicious.length > 0;
-const resolvedMessage = message.replace(
-  "{names}", suspicious.map(f => f.path).join(", ")
-);
-```
-
-<Finding when={triggered} severity={severity} message={resolvedMessage} />
-````
-
-### 5.9 `NewDependencies.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    severity:
-      type: string
-      default: warning
-    message:
-      type: string
-      default: "package.json changed without dependency justification."
-  required: [pr]
-  additionalProperties: false
----
-
-```ts eval
-const touchesPkg = pr.files.some(f =>
-  f.path === "package.json" || f.path.endsWith("/package.json")
-);
-const mentionsDeps = pr.meta.body.toLowerCase().includes("dependenc");
-const triggered = touchesPkg && !mentionsDeps;
-```
-
-<Finding when={triggered} severity={severity} message={message} />
-````
-
-### 5.10 `CommentReview.md`
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
-
-```ts eval
-const pairs = [];
-const lines = pr.added.filter(l => !l.isTest);
-
-for (let i = 0; i < lines.length - 1; i++) {
-  const current = lines[i].content.trim();
-  const next = lines[i + 1].content.trim();
-  if (current.startsWith("//") && !next.startsWith("//") && next.length > 0) {
-    pairs.push({ comment: current, code: next });
-  }
-}
-
-const hasPairs = pairs.length >= 3;
-const pairsText = hasPairs
-  ? pairs.slice(0, 20).map(p =>
-      `COMMENT: ${p.comment}\nCODE: ${p.code}`
-    ).join("\n---\n")
-  : "";
-```
-
-<If condition={hasPairs}>
-
-<Sample>
-
-Review these comment/code pairs. List ONLY obvious/redundant ones
-where the comment restates what the code does.
-
-Format: "- `<comment>` — restates `<code pattern>`"
-
-If none are obvious: "No obvious comments found."
-
-{pairsText}
-
-</Sample>
-
-</If>
-````
-
----
-
-## 6. Policy Documents (zero JavaScript)
-
-### 6.1 `ScopeCheck.md`
-
-```markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
-
-<ReviewSection heading="Scope" clean="✅ PR scope looks good.">
-
-<Threshold pr={pr} metric="totalChanges" op=">" value={800}
-  severity="error"
-  message="PR has {actual} lines changed. Split into focused PRs." />
-
-<Threshold pr={pr} metric="totalChanges" op=">" value={400}
-  severity="warning"
-  message="{actual} lines changed. PRs under {value} receive more thorough review." />
-
-<Threshold pr={pr} metric="totalFiles" op=">" value={20}
-  severity="warning"
-  message="{actual} files changed. Are all changes related?" />
-
-<Threshold pr={pr} metric="directories" op=">" value={5}
-  severity="warning"
-  message="Changes span {actual} directories." />
-
-<DescriptionCheck pr={pr} minLength={50}
-  severity="error"
-  message="PR description must explain what and why." />
-
-<LinkedIssue pr={pr} whenLinesExceed={200}
-  severity="warning"
-  message="Large PR with no linked issue." />
-
-<ConfigSourceMix pr={pr} minFiles={5}
-  severity="warning"
-  message="PR mixes config and source changes." />
-
-<AbstractionNames pr={pr}
-  severity="warning"
-  message="New abstraction files: {names}. Verify 3+ consumers." />
-
-<NewDependencies pr={pr}
-  severity="warning"
-  message="package.json changed without dependency justification." />
-
-</ReviewSection>
-```
-
-### 6.2 `StructuralBloat.md`
-
-```markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
-
-<ReviewSection heading="Structural" clean="✅ No structural bloat detected.">
-
-<UnusedInDiff pr={pr} construct="type"
-  severity="warning"
-  message="Type declarations with no consumers: {names}." />
-
-<UnusedInDiff pr={pr} construct="interface"
-  severity="warning"
-  message="Interface declarations with no consumers: {names}." />
-
-<Ratio pr={pr}
-  numerator=":\s*any\b"
-  denominator=":\s*\w"
-  threshold={0.05}
-  minDenominator={10}
-  excludeTests={true}
-  severity="warning"
-  message="{numeratorCount} uses of `any` ({ratio}% of annotations)." />
-
-<Pattern pr={pr}
-  pattern="(?:function\s+\w+|=>\s*)\([^)]*\)\s*\{\s*\}"
-  excludeTests={true}
-  severity="warning"
-  message="{count} empty function bodies." />
-
-<Pattern pr={pr}
-  pattern="console\.(log|debug|info|trace)\("
-  excludeTests={true}
-  severity="warning"
-  message="{count} console statements." />
-
-</ReviewSection>
-```
-
-### 6.3 `VerbosityCheck.md`
-
-```markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
-
-<ReviewSection heading="Verbosity" clean="✅ Comment quality looks reasonable.">
-
-<Ratio pr={pr}
-  numerator="^\s*(?://|/\*|\*)"
-  denominator="^\s*\S"
-  threshold={0.4}
-  minDenominator={20}
-  excludeTests={true}
-  severity="warning"
-  message="Comment ratio is {ratio}%." />
-
-<CommentReview pr={pr} />
-
-</ReviewSection>
-```
-
-### 6.4 `SemanticReview.md`
-
-```markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
-
-<If condition={pr.stats.totalChanges > 20}>
-
-<Sample>
-
-You are reviewing a TypeScript PR for EXTRANEOUS code only.
-
-PR: {pr.meta.title}
-Description: {pr.meta.body}
-
-Report ONLY:
-1. Scope creep — changes unrelated to stated purpose
-2. Speculative abstractions — new constructs with one consumer
-3. Dead constructs — declarations never referenced in diff
-4. Wrapper indirection — functions that only forward calls
-
-Do NOT flag test helpers, exported types, or style preferences.
-
-For each finding: FILE, PATTERN, CONCERN, QUESTION for the author.
-
-If clean: "No extraneous code patterns detected."
-
-DIFF:
-{pr.diffPreview}
-
-</Sample>
-
-<Else>
-
-✅ Small PR — semantic review skipped.
-
-</Else>
-</If>
-```
-
-Zero eval blocks.
-
-### 6.5 `ReviewBody.md`
-
-```markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
-
-## PR #{pr.meta.number}: {pr.meta.title}
-
-**{pr.stats.totalFiles}** files, **+{pr.stats.additions}** / **-{pr.stats.deletions}**
-
-<ScopeCheck pr={pr} />
-
-<StructuralBloat pr={pr} />
-
-<VerbosityCheck pr={pr} />
-
-<SemanticReview pr={pr} />
-```
-
-Zero eval blocks.
-
----
-
-## 7. Entry Points
-
-### 7.1 `.reviews/ReviewPR.md` (CI with DeepInfra)
-
-````markdown
----
-title: PR Review
----
-
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
-```
-
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
-<DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
-  <Instructions system="You are a precise TypeScript code review assistant for the effectionx monorepo. Be concise. Report only findings, not praise.">
-    <GitHubComment>
-      <ReviewBody pr={pr} />
-    </GitHubComment>
-  </Instructions>
-</DeepInfraProvider>
-````
-
-### 7.2 `.reviews/ReviewPR.local.md` (local with Ollama)
-
-````markdown
----
-title: PR Review (local)
----
-
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
-```
-
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
-<OllamaProvider model="qwen3:30b-a3b">
-  <Instructions system="You are a precise TypeScript code review assistant. Be concise. Report only findings, not praise.">
-    <ReviewBody pr={pr} />
-  </Instructions>
-</OllamaProvider>
-````
-
-Output goes to stdout. No `<GitHubComment>` wrapper.
-
----
-
-## 8. CI Workflow
-
-### `.github/workflows/review.yml`
-
-```yaml
-name: PR Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      - uses: denoland/setup-deno@v2
-
-      - uses: actions/cache@v4
-        with:
-          path: .reviews/journal.jsonl
-          key: xmd-review-${{ github.event.pull_request.head.sha }}
-          restore-keys: |
-            xmd-review-${{ github.event.pull_request.base.sha }}
-
-      - name: Run review
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task xmd run .reviews/ReviewPR.md
-```
-
-### Journal caching
-
-The journal is cached by head SHA. On re-run of the same SHA, full
-replay — no git commands, no API calls, no LLM calls. On new commits,
-`restore-keys` falls back to the base SHA for partial replay of
-shared component imports.
-
----
-
-## 9. Deterministic Analysis (separate CI jobs, unchanged)
-
-executable.md replaces the advisory/AI review layer and process enforcement.
-Deterministic static analysis continues as separate CI jobs:
-
-| Job | Tool | What it catches |
-|---|---|---|
-| `lint` | Oxlint `--type-aware` | Unused vars, inferrable types, empty functions, type bloat, console/debugger |
-| `dead-code` | Knip | Unused exports, files, types, dependencies (cross-file) |
-
-These block merges. The executable.md review is advisory.
-
----
-
-## 10. File Tree
+The component filters by the supplied file list after parsing. PR review passes
+changed, non-test TypeScript paths; repository analysis passes the complete
+inventory. `parseDiagnostics()` performs the existing import-noise policy and
+grouping on this bounded array.
+
+`ReviewContext`, `Doctor`, `RepositoryInventory`, and `OxlintDiagnostics` are
+value-returning Markdown components. Their callers use `as` and receive a
+structured value through `<Return>`, rather than rendering JSON into a code
+fence and parsing it again.
+
+## 4. Providers and credentials
+
+Provider and GitHub components read credentials with the contextual `env`
+operation inside request-time generator functions. A token is never a
+top-level binding. Request functions use contextual `fetch`, read only the
+response text needed for the decision, and discard the response object after
+normalizing its result. The journal therefore contains neither credential-
+bearing headers nor full response objects.
+
+Review entrypoints compose a `GitHubAuth` Markdown provider inside the
+top-level `<Output>` region. The provider reads `GITHUB_TOKEN` once into a
+private generator closure and installs one `API.Fetch` middleware around its
+projected `<Content />`. It adds the shared GitHub `Accept` header and a Bearer
+authorization header only for HTTPS requests whose exact hostname is
+`api.github.com`. It preserves request-specific headers and bodies, delegates
+missing-token and non-GitHub requests unchanged, and never returns the token as
+props, rendered text, or component data. The provider's context is inherited by
+projected review components and is restored when the provider exits.
+
+Review output is posted by `GitHubComment`. Comment history and dismissal
+updates use the same local request boundary. Local runs omit GitHub delivery
+when the required environment is absent.
+
+## 5. Remaining host shell boundary
+
+`EnsureOxlint.md` uses JavaScript and `platform()` to select the pinned target,
+archive URLs, and checksums. Its two small Bash blocks only download an archive,
+verify its checksum with an available host checksum tool, extract it, install
+the executable file, and clean up the temporary archive directory. These are
+binary-transfer and executable-mode operations that the current contextual
+APIs do not provide. No review document uses jq, grep, find, wc, awk, xargs,
+tee, heredoc configuration generation, or temporary files to pass values
+between document steps.
+
+`DispatchRepoAnalysis.md` uses contextual GitHub HTTP requests and runtime
+filesystem APIs. It retains one `gh run download` boundary only because the
+current Fetch API exposes text, not binary artifact bytes; all response parsing,
+polling, filtering, and artifact reading remains generator-based JavaScript.
+
+## 6. Review components
+
+The policy tree is intentionally compositional:
 
 ```
-.reviews/
-  ReviewPR.md                    CI entry point (DeepInfra + GitHubComment)
-  ReviewPR.local.md              Local entry point (Ollama + stdout)
-
-  components/
-    # Standard library
-    Finding.md                   Severity icon + message
-    ReviewSection.md             Heading + children or clean message
-    Instructions.md              System prompt middleware
-    GitHubComment.md             Post/update PR comment
-    DeepInfraProvider.md         DeepInfra Sample Api provider
-    OllamaProvider.md            Ollama Sample Api provider
-
-    # Rule primitives (one eval block each, written once)
-    Threshold.md                 Numeric comparison
-    Pattern.md                   Regex match on added lines
-    Ratio.md                     Ratio of two regex counts
-    UnusedInDiff.md              Declarations with no references
-    DescriptionCheck.md          PR body length
-    LinkedIssue.md               Issue linkage
-    ConfigSourceMix.md           Config + source mixing
-    AbstractionNames.md          Suspicious file names
-    NewDependencies.md           Dependency justification
-    CommentReview.md             Pair extraction + LLM review
-
-    # Policy documents (zero JavaScript)
-    ScopeCheck.md                Composes Threshold, Finding checks
-    StructuralBloat.md           Composes Pattern, Ratio, UnusedInDiff
-    VerbosityCheck.md            Composes Ratio, CommentReview
-    SemanticReview.md            Prompt template + If + Sample
-    ReviewBody.md                Composes all four checks
+PrPolicyReport
+  ├─ ScopePolicy
+  ├─ BloatPolicy
+  ├─ SlopPolicy
+  ├─ RepoPolicyReport / CleanupIssues
+  └─ CommentReview
 ```
 
----
+The deterministic components inspect the parsed PR and diagnostics. LLM
+providers receive bounded Markdown context and return report text. Review
+findings, warnings, and requested changes do not fail a workflow; failures to
+provision, acquire, parse, or render the review do.
 
-## 11. Eval Block Census
+## 7. Workflows and failure contract
 
-| Document | Eval blocks | Why |
-|---|---|---|
-| `Finding.md` | 1 | Icon selection |
-| `ReviewSection.md` | 1 | renderChildren + heading |
-| `Instructions.md` | 1 persist | Middleware install |
-| `GitHubComment.md` | 1 | renderChildren + GitHub API |
-| `DeepInfraProvider.md` | 1 persist | Provider middleware |
-| `OllamaProvider.md` | 1 persist | Provider middleware |
-| `Threshold.md` | 1 | Comparison logic |
-| `Pattern.md` | 1 | Regex matching |
-| `Ratio.md` | 1 | Ratio computation |
-| `UnusedInDiff.md` | 1 | Declaration scanning |
-| `DescriptionCheck.md` | 0 | Uses `<Finding>` |
-| `LinkedIssue.md` | 1 | Regex test for `<Finding>` |
-| `ConfigSourceMix.md` | 1 | File classification for `<Finding>` |
-| `AbstractionNames.md` | 1 | Name pattern for `<Finding>` |
-| `NewDependencies.md` | 1 | Dependency check for `<Finding>` |
-| `CommentReview.md` | 1 | Pair extraction |
-| **`ScopeCheck.md`** | **0** | |
-| **`StructuralBloat.md`** | **0** | |
-| **`VerbosityCheck.md`** | **0** | |
-| **`SemanticReview.md`** | **0** | |
-| **`ReviewBody.md`** | **0** | |
-| `ReviewPR.md` | 2 | Env vars + parseDiff |
-| `ReviewPR.local.md` | 2 | Env vars + parseDiff |
+Both review workflows:
 
-17 eval blocks across 17 reusable components. 5 policy documents
-and `ReviewBody` have zero. The documents a team edits day-to-day
-contain no JavaScript.
+1. check out the requested revision;
+2. install the repository-pinned Deno version;
+3. run `deno task deps`;
+4. run `deno task build`;
+5. execute the checked-out `./dist/xmd` binary; and
+6. upload the journal/report with `if: always()`.
 
----
+The CI roots use `<Output>`, not `<PrintErrors>`. They rely on `xmd run`'s
+native exit status and do not parse journal close records, nested result
+statuses, rendered output, or `<!-- ERROR:` markers after execution.
 
-## 12. Implementation Order (All Complete)
+## 8. Verification
 
-All phases have been implemented across PRs #34, #35, and the
-code-review-agent PR:
+The prerequisite is portable across Deno, Node, and Bun. `packages/core/tests/
+cli-journal.test.ts` covers:
 
-- Phase 1: executable.md core (text interpolation, eval return) — PR #34, #35
-- Phase 2: Infrastructure components — code-review-agent PR
-- Phase 3: `@executablemd/code-review-agent` package — code-review-agent PR
-- Phase 4: Rule components — code-review-agent PR
-- Phase 5: Policy documents + entry points + CI — code-review-agent PR
-- Phase 6: Sample modifier removal — PR #35
+- successful review-style `<Output>` execution with ordinary finding text;
+- nonzero CLI exit for a missing component beneath `<Output>`;
+- journal availability after the failed run; and
+- a normalized diagnostic crossing the journal boundary while raw source,
+  arbitrary fields, credential-shaped headers, and unbounded payloads remain
+  local.
 
----
-
-## 13. Extension: Oxlint Sensor (v2)
-
-**Full spec:** `oxlint-sensor-spec-v2.md`
-
-Oxlint runs as a structured signal source inside the review pipeline.
-Its JSON output becomes a density metric the LLM uses alongside the
-diff to detect quality deficits that correlate with unreviewed AI
-output. All rules at `"warn"` — Oxlint collects signals, not verdicts.
-
-### 13.1 Sensor configuration
-
-`.reviews/.oxlintrc.json` — committed config with `pedantic: "warn"`
-and `style: "warn"` enabled (14 bloat-relevant rules). All oxlint
-invocations in capture blocks reference this config via
-`--config .reviews/.oxlintrc.json`.
-
-### 13.2 Environment detection (`Doctor.md`)
-
-The Doctor component probes the environment before oxlint runs:
-oxlint binary, tsgolint binary, `node_modules/`, tsconfig, scheme
-specifier scan (`jsr:`, `npm:`), and a type-aware test run. Outputs
-a recommendation: `type-aware`, `type-aware-filtered`, or
-`syntax-only`. Includes prose narration for local visibility.
-Its JSON output is wrapped in a `` ```json `` code fence and
-extracted via `<Capture select="code[lang=json]">` (see executable.md spec
-§6.5), isolating the structured data from surrounding narration.
-
-### 13.3 PR-scoped analysis
-
-PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) scope oxlint
-to changed `.ts`/`.tsx` files only via `git diff --name-only` +
-`xargs`. Density against `pr.stats.additions` is only meaningful
-when diagnostics come from the same files the additions are in.
-Repo analysis entry points run on everything.
-
-### 13.4 Density calibration
-
-| Density | Interpretation |
-|---|---|
-| < 0.020 | Clean — experienced contributor, reviewed code |
-| 0.020–0.080 | Normal — minor issues, typical development |
-| > 0.100 | Elevated — likely unreviewed generated code |
-
-3 decimal places to preserve signal in the narrow normal band.
-
-### 13.5 Policy updates
-
-- `ExtraneousCodePolicy.md` — density calibration thresholds,
-  interpretation rules, Rule of Three, and object literal assertion
-  detection added to LLM prompt
-- `BloatPolicy.md`, `SlopPolicy.md` — `diagnostics` changed from
-  optional to required; defensive guards removed
-- `RepoCleanupPolicy.md` — Rule of Three and YAGNI principles
-  added to LLM prompt
-
-### 13.6 Import specifier enforcement
-
-`lint-plugins/no-scheme-specifiers.ts` — Deno lint plugin that
-flags `jsr:` and `npm:` scheme specifiers in source files and
-auto-fixes them to bare specifiers. Required for tsgo/Oxlint
-compatibility since tsgo uses Node module resolution.
-
-### 13.7 Process enforcement
-
-`.github/pull_request_template.md` — scope confirmation, Rule of
-Three checklist for new abstractions, dependency justification.
-
-### 13.8 Cleanup issues (`CleanupIssues.md`)
-
-The repo analysis pipeline creates idempotent GitHub issues for
-the top 5 file clusters ranked by `buildCleanupAnalysis()`.
-
-**Identity:** Each issue body contains a marker comment
-`<!-- xmd-cleanup:{file} -->`. The component searches open issues
-with the `cleanup` label for matching markers before creating.
-
-**Lifecycle:**
-
-| Existing issue? | File in top 5? | Action |
-|---|---|---|
-| No | Yes | Create new issue |
-| Yes | Yes | Update title + body with latest stats |
-| Yes | No | Close with resolution comment |
-
-Issues are driven entirely by deterministic cluster data — file
-path, score, violation count, co-occurring rule count, category
-breakdown. No LLM output parsing.
-
-Local runs skip issue creation (no `GITHUB_TOKEN` → return empty).
-
-### 13.9 Additional files
-
-```
-.reviews/
-  .oxlintrc.json                   Sensor config (committed)
-  components/
-    CleanupIssues.md               Idempotent GitHub issue lifecycle
-
-.github/
-  pull_request_template.md         Process enforcement
-
-lint-plugins/
-  no-scheme-specifiers.ts          Deno lint plugin
-```
+`packages/code-review-agent/tests/parse-diagnostics.test.ts` also covers the
+structured normalized-diagnostic input path.

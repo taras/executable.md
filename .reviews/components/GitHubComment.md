@@ -9,50 +9,50 @@ props:
 ---
 
 ```ts eval
-// GITHUB_TOKEN is read inline at each call site, never assigned to a binding:
-// eval bindings are journaled, and the journal is uploaded as a CI artifact.
+import { env as runtimeEnv, fetch as runtimeFetch } from "@executablemd/runtime";
+
 const content = yield* renderChildren();
 const body = marker + "\n" + content.trim();
 
-const repo = process.env.GITHUB_REPOSITORY;
-const prNumber = process.env.PR_NUMBER;
-const [owner, name] = repo.split("/");
-const api = `https://api.github.com/repos/${owner}/${name}`;
+function* postComment() {
+  const repo = yield* runtimeEnv("GITHUB_REPOSITORY");
+  const prNumber = yield* runtimeEnv("PR_NUMBER");
+  if (!repo || !prNumber) {
+    return content;
+  }
 
-const commentsResult = yield* fetch(`${api}/issues/${prNumber}/comments`, {
-  headers: {
-    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-    "Accept": "application/vnd.github+json",
-  },
-})
-  .expect()
-  .json();
+  const api = `https://api.github.com/repos/${repo}`;
+  function* request(path, options = {}) {
+    const response = yield* runtimeFetch(`${api}${path}`, {
+      ...options,
+      headers: options.headers,
+    });
+    const result = yield* response.text();
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`GitHub comment request failed (${response.status})`);
+    }
+    return result ? JSON.parse(result) : {};
+  }
 
-const existing = commentsResult.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
-);
-
-if (existing) {
-  yield* fetch(`${api}/issues/comments/${existing.id}`, {
-    method: "PATCH",
-    headers: {
-      "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-      "Accept": "application/vnd.github+json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ body }),
-  }).expect();
-} else {
-  yield* fetch(`${api}/issues/${prNumber}/comments`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-      "Accept": "application/vnd.github+json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ body }),
-  }).expect();
+  const commentsResult = yield* request(`/issues/${prNumber}/comments`);
+  const existing = commentsResult.find((comment) =>
+    comment.user.type === "Bot" && comment.body.includes(marker)
+  );
+  if (existing) {
+    yield* request(`/issues/comments/${existing.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    });
+  } else {
+    yield* request(`/issues/${prNumber}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    });
+  }
+  return content;
 }
 
-return content;
+return yield* postComment();
 ```

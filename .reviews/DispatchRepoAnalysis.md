@@ -2,126 +2,122 @@
 title: Dispatch Repo Analysis Workflow
 ---
 
+<GitHubAuth>
 ```ts eval
-const requestedRef = process.env.ANALYZE_REF ?? "";
-const reportPrefix = process.env.ANALYZE_REPORT_NAME ?? "repo-analysis";
-```
+import { sleep } from "effection";
+import { ensureDir, glob, readTextFile } from "@executablemd/runtime";
+import { env as runtimeEnv, exec, fetch as runtimeFetch } from "@executablemd/runtime";
 
-<Capture as="currentBranch">
-
-```bash exec
-git rev-parse --abbrev-ref HEAD
-```
-
-</Capture>
-
-<Capture as="repoName">
-
-```bash exec
-gh repo view --json nameWithOwner -q .nameWithOwner
-```
-
-</Capture>
-
-<Capture as="dispatchStart">
-
-```bash exec
-date -u +"%Y-%m-%dT%H:%M:%SZ"
-```
-
-</Capture>
-
-```ts eval
-const targetRef = requestedRef || currentBranch.trim();
-const repo = repoName.trim();
-const dispatchStartIso = dispatchStart.trim();
-```
-
-```bash exec
-gh workflow run repo-analysis.yml --repo {repo} --ref {targetRef} -f ref={targetRef} -f report_name={reportPrefix}
-```
-
-<Capture as="runId">
-
-```bash exec
-for i in $(seq 1 30); do
-  RUN_ID=$(gh run list --repo {repo} --workflow repo-analysis.yml --event workflow_dispatch --json databaseId,headBranch,createdAt -q 'map(select(.headBranch == "{targetRef}" and .createdAt >= "{dispatchStartIso}")) | .[0].databaseId // ""')
-  if [ -n "$RUN_ID" ]; then
-    printf '%s' "$RUN_ID"
-    exit 0
-  fi
-  sleep 2
-done
-echo ""
-```
-
-</Capture>
-
-```ts eval
-const runIdValue = runId.trim();
-```
-
-```bash exec
-if [ -z "{runIdValue}" ]; then
-  echo "Unable to locate workflow run id" >&2
-  exit 1
-fi
-gh run watch {runIdValue} --repo {repo} --exit-status
-```
-
-<Capture as="runJson">
-
-```bash exec
-gh run view {runIdValue} --repo {repo} --json databaseId,url,status,conclusion,headSha,displayTitle,createdAt,updatedAt
-```
-
-</Capture>
-
-```bash silent exec
-mkdir -p .reviews/artifacts/{runIdValue}
-gh run download {runIdValue} --repo {repo} --dir .reviews/artifacts/{runIdValue}
-```
-
-```ts eval
-const run = JSON.parse(runJson);
-const artifactDir = `.reviews/artifacts/${runIdValue}`;
-const reportPath = `${artifactDir}/${reportPrefix}-${run.headSha}/analyze-report.md`;
-const metadataPath = `${artifactDir}/${reportPrefix}-${run.headSha}/analyze-run.json`;
-const runUrl = run.url ?? "";
-const runStatus = run.status ?? "";
-const runConclusion = run.conclusion ?? "";
-
-let reportText = "";
-let metadataText = "";
-
-try {
-  reportText = Deno.readTextFileSync(reportPath);
-} catch {
-  reportText = "(analyze-report.md artifact not found)";
+function repositoryFromRemote(remote) {
+  const match = remote.trim().match(/github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/);
+  return match?.[1] ?? "";
 }
 
-try {
-  metadataText = Deno.readTextFileSync(metadataPath);
-} catch {
-  metadataText = "{}";
+function* request(url, options = {}) {
+  const response = yield* runtimeFetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers ?? {}),
+    },
+  });
+  const body = yield* response.text();
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`GitHub workflow request failed (${response.status})`);
+  }
+  return body ? JSON.parse(body) : {};
 }
+
+function* dispatch() {
+  const requestedRef = (yield* runtimeEnv("ANALYZE_REF")) ?? "";
+  const reportPrefix = (yield* runtimeEnv("ANALYZE_REPORT_NAME")) ?? "repo-analysis";
+  const token = yield* runtimeEnv("GITHUB_TOKEN");
+
+  const branchResult = yield* exec({ command: ["git", "rev-parse", "--abbrev-ref", "HEAD"] });
+  if (branchResult.exitCode !== 0) {
+    throw new Error(branchResult.stderr || "Unable to resolve the current branch");
+  }
+  const remoteResult = yield* exec({ command: ["git", "remote", "get-url", "origin"] });
+  if (remoteResult.exitCode !== 0) {
+    throw new Error(remoteResult.stderr || "Unable to resolve the origin remote");
+  }
+
+  const repo = (yield* runtimeEnv("GITHUB_REPOSITORY")) ?? repositoryFromRemote(remoteResult.stdout);
+  const targetRef = requestedRef || branchResult.stdout.trim();
+  const dispatchStart = new Date().toISOString();
+  yield* request(`https://api.github.com/repos/${repo}/actions/workflows/repo-analysis.yml/dispatches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: targetRef, inputs: { ref: targetRef, report_name: reportPrefix } }),
+  });
+
+  let run;
+  for (let attempt = 0; attempt < 30 && !run; attempt++) {
+    const response = yield* request(
+      `https://api.github.com/repos/${repo}/actions/runs?event=workflow_dispatch&branch=${encodeURIComponent(targetRef)}&per_page=20`,
+    );
+    run = response.workflow_runs?.find((candidate) => candidate.created_at >= dispatchStart);
+    if (!run) {
+      yield* sleep(2_000);
+    }
+  }
+  if (!run) {
+    throw new Error("Unable to locate the dispatched workflow run");
+  }
+
+  for (;;) {
+    run = yield* request(`https://api.github.com/repos/${repo}/actions/runs/${run.id}`);
+    if (run.status === "completed") {
+      break;
+    }
+    yield* sleep(2_000);
+  }
+  if (run.conclusion !== "success") {
+    throw new Error(`Repository analysis concluded ${run.conclusion}`);
+  }
+
+  const artifactDir = `.reviews/artifacts/${run.id}`;
+  yield* ensureDir(artifactDir);
+  const download = yield* exec({
+    command: ["gh", "run", "download", String(run.id), "--repo", repo, "--dir", artifactDir],
+    env: { GH_TOKEN: token },
+  });
+  if (download.exitCode !== 0) {
+    throw new Error(download.stderr || "Unable to download the analysis artifact");
+  }
+
+  const files = yield* glob({ root: artifactDir, patterns: ["**/*.md", "**/*.json"] });
+  const reportEntry = files.find((entry) => entry.isFile && entry.path.endsWith("analyze-report.md"));
+  const metadataEntry = files.find((entry) => entry.isFile && entry.path.endsWith("analyze-run.json"));
+  return {
+    repo,
+    targetRef,
+    reportPrefix,
+    run,
+    reportText: reportEntry ? yield* readTextFile(reportEntry.path) : "(report artifact not found)",
+    metadataText: metadataEntry ? yield* readTextFile(metadataEntry.path) : "{}",
+  };
+}
+
+const result = yield* dispatch();
 ```
+
+</GitHubAuth>
 
 ## Repo Analysis Dispatch
 
-- Repository: `{repo}`
-- Ref: `{targetRef}`
-- Run ID: `{runIdValue}`
-- Run URL: {runUrl}
-- Status: `{runStatus}`
-- Conclusion: `{runConclusion}`
+- Repository: `{result.repo}`
+- Ref: `{result.targetRef}`
+- Run ID: `{result.run.id}`
+- Run URL: {result.run.html_url}
+- Status: `{result.run.status}`
+- Conclusion: `{result.run.conclusion}`
 
 ### Run Metadata
 
 ```json
-{metadataText}
+{result.metadataText}
 ```
 
 ### Report
 
-{reportText}
+{result.reportText}

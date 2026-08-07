@@ -114,15 +114,25 @@ function normalizeDiagnostic(entry: unknown): OxlintDiagnostic | null {
 /**
  * Parse raw Oxlint JSON output into structured diagnostics.
  */
-export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
+export function parseDiagnostics(
+  input: string | readonly OxlintDiagnostic[],
+  pr: PR,
+  doctor: DoctorResult,
+): Diagnostics {
   let raw: OxlintDiagnostic[];
-  try {
-    const parsed = JSON.parse(rawJson);
-    raw = extractDiagnosticsArray(parsed)
+  if (typeof input === "string") {
+    try {
+      const parsed = JSON.parse(input);
+      raw = extractDiagnosticsArray(parsed)
+        .map((entry) => normalizeDiagnostic(entry))
+        .filter((entry): entry is OxlintDiagnostic => entry !== null);
+    } catch {
+      return emptyDiagnostics();
+    }
+  } else {
+    raw = input
       .map((entry) => normalizeDiagnostic(entry))
       .filter((entry): entry is OxlintDiagnostic => entry !== null);
-  } catch {
-    return emptyDiagnostics();
   }
 
   const filtered =

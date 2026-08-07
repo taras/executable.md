@@ -15,7 +15,7 @@ function makePR(additions = 100): PR {
     created: [],
     modified: [],
     deleted: [],
-    directories: new Set(),
+    directories: [],
     addedSource: "",
     diffPreview: "",
     stats: { totalFiles: 1, additions, deletions: 0, totalChanges: additions },
@@ -35,6 +35,7 @@ function makeDoctor(overrides: Partial<DoctorResult> = {}): DoctorResult {
     filesAnalyzed: 10,
     filesSkipped: 0,
     importErrors: 0,
+    availableRuleIds: [],
     bloatRulesAvailable: [],
     bloatRulesMissing: [],
     recommendation: "type-aware",
@@ -73,6 +74,13 @@ describe("parseDiagnostics", () => {
     const console = result.groups.find((g) => g.ruleId === "no-console");
     expect(console).toBeDefined();
     expect(console!.count).toBe(1);
+  });
+
+  it("PD1b: accepts the bounded structured diagnostic boundary", function* () {
+    const result = parseDiagnostics([makeDiag("no-console", "src/a.ts")], makePR(), makeDoctor());
+
+    expect(result.total).toBe(1);
+    expect(result.groups[0].instances[0]).toEqual(makeDiag("no-console", "src/a.ts"));
   });
 
   it("PD2: computes density as total / additions", function* () {

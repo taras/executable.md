@@ -39,51 +39,47 @@ let checklistMd = "";
 
 // ---------------------------------------------------------------------------
 // 2. Fetch previous bot review comments and human replies
-const token = process.env.GITHUB_TOKEN;
-const repo = process.env.GITHUB_REPOSITORY;
-const prNumber = process.env.PR_NUMBER;
+import { env as runtimeEnv, fetch as runtimeFetch } from "@executablemd/runtime";
 
-let previousFindings = [];
-let dismissedReplies = [];
-let repliesForClassification = [];
+function* loadReviewHistory() {
+  const repo = yield* runtimeEnv("GITHUB_REPOSITORY");
+  const prNumber = yield* runtimeEnv("PR_NUMBER");
+  if (!repo || !prNumber) {
+    return { previousFindings: [], dismissedReplies: [], repliesForClassification: [] };
+  }
 
-if (token && repo && prNumber) {
-  const [owner, name] = repo.split("/");
-  const api = `https://api.github.com/repos/${owner}/${name}`;
-  const headers = {
-    "Authorization": `Bearer ${token}`,
-    "Accept": "application/vnd.github+json",
-  };
+  const api = `https://api.github.com/repos/${repo}`;
+  function* json(path) {
+    const response = yield* runtimeFetch(`${api}${path}`);
+    const body = yield* response.text();
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`GitHub review history request failed (${response.status})`);
+    }
+    return JSON.parse(body);
+  }
 
-  const allComments = yield* fetch(
-    `${api}/pulls/${prNumber}/comments?per_page=100`, { headers }
-  ).expect().json();
-
-  const botComments = allComments.filter(c =>
-    c.user.login === "github-actions[bot]" &&
-    c.body && c.body.includes("Redundant comment")
+  const allComments = yield* json(`/pulls/${prNumber}/comments?per_page=100`);
+  const botComments = allComments.filter((comment) =>
+    comment.user.login === "github-actions[bot]" &&
+    comment.body && comment.body.includes("Redundant comment")
   );
-
-  // Build map of bot comment id → { file, line, comment }
   const botCommentMap = new Map();
-  for (const bc of botComments) {
-    // Extract the comment text from the diff hunk (last + line with //)
-    const hunkLines = (bc.diff_hunk ?? "").split("\n");
-    const commentLine = hunkLines.filter(l => l.startsWith("+")).pop() ?? "";
-    const commentText = commentLine.replace(/^\+\s*/, "").trim();
-    botCommentMap.set(bc.id, {
-      file: bc.path,
-      lineNumber: bc.original_line ?? bc.line,
-      comment: commentText,
+  for (const comment of botComments) {
+    const hunkLines = (comment.diff_hunk ?? "").split("\n");
+    const commentLine = hunkLines.filter((line) => line.startsWith("+")).pop() ?? "";
+    botCommentMap.set(comment.id, {
+      file: comment.path,
+      lineNumber: comment.original_line ?? comment.line,
+      comment: commentLine.replace(/^\+\s*/, "").trim(),
     });
   }
 
-  const humanReplies = allComments.filter(c =>
-    c.in_reply_to_id && botCommentMap.has(c.in_reply_to_id) &&
-    c.user.type !== "Bot"
+  const dismissedReplies = [];
+  const repliesForClassification = [];
+  const humanReplies = allComments.filter((comment) =>
+    comment.in_reply_to_id && botCommentMap.has(comment.in_reply_to_id) &&
+    comment.user.type !== "Bot"
   );
-
-  // Check which replies already have a 👍 reaction (already processed)
   for (const reply of humanReplies) {
     const location = botCommentMap.get(reply.in_reply_to_id);
     const entry = {
@@ -93,11 +89,9 @@ if (token && repo && prNumber) {
       replyId: reply.id,
     };
     try {
-      const reactions = yield* fetch(
-        `${api}/pulls/comments/${reply.id}/reactions`, { headers }
-      ).expect().json();
-      const alreadyAcked = reactions.some(r =>
-        r.user.login === "github-actions[bot]" && r.content === "+1"
+      const reactions = yield* json(`/pulls/comments/${reply.id}/reactions`);
+      const alreadyAcked = reactions.some((reaction) =>
+        reaction.user.login === "github-actions[bot]" && reaction.content === "+1"
       );
       if (alreadyAcked) {
         dismissedReplies.push({ ...entry, alreadyProcessed: true });
@@ -109,11 +103,20 @@ if (token && repo && prNumber) {
     }
   }
 
-  previousFindings = botComments.map(bc => ({
-    file: bc.path,
-    lineNumber: bc.original_line ?? bc.line,
-  }));
+  return {
+    previousFindings: botComments.map((comment) => ({
+      file: comment.path,
+      lineNumber: comment.original_line ?? comment.line,
+    })),
+    dismissedReplies,
+    repliesForClassification,
+  };
 }
+
+const history = yield* loadReviewHistory();
+let previousFindings = history.previousFindings;
+let dismissedReplies = history.dismissedReplies;
+const repliesForClassification = history.repliesForClassification;
 
 const hasRepliesToClassify = repliesForClassification.length > 0;
 const repliesText = hasRepliesToClassify

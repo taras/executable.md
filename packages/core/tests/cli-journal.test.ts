@@ -151,4 +151,97 @@ describe("CLI journal integration", () => {
       (yield* readJournal(journalPath)).some((event) => event.description?.type === "exec"),
     ).toBe(true);
   });
+
+  it("CJ7: a review-style Output root exits zero for finding text", function* () {
+    const tmpDir = makeTmpDir();
+    const documentPath = path.join(tmpDir, "review.md");
+    const journalPath = path.join(tmpDir, "review.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+
+    yield* writeTextFile(
+      documentPath,
+      [
+        "<Output>",
+        "",
+        "<!-- ERROR: ordinary review finding text -->",
+        "",
+        "Finding text is not an execution failure.",
+        "",
+        "</Output>",
+      ].join("\n"),
+    );
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).expect();
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Finding text is not an execution failure");
+  });
+
+  it("CJ8: an error beneath Output exits nonzero without inspecting output", function* () {
+    const tmpDir = makeTmpDir();
+    const documentPath = path.join(tmpDir, "review.md");
+    const journalPath = path.join(tmpDir, "review.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+    yield* writeTextFile(
+      documentPath,
+      ["<Output>", "", "<MissingReviewComponent />", "", "</Output>"].join("\n"),
+    );
+
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).join();
+
+    expect(result.code).not.toBe(0);
+  });
+
+  it("CJ9: failed Output runs still leave the configured journal", function* () {
+    const tmpDir = makeTmpDir();
+    const documentPath = path.join(tmpDir, "review.md");
+    const journalPath = path.join(tmpDir, "review.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+    yield* writeTextFile(
+      documentPath,
+      ["<Output>", "", "<MissingReviewComponent />", "", "</Output>"].join("\n"),
+    );
+
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).join();
+
+    expect(result.code).not.toBe(0);
+    expect(yield* exists(journalPath)).toBe(true);
+  });
+
+  it("CJ10: only normalized diagnostics cross the journal boundary", function* () {
+    const tmpDir = makeTmpDir();
+    const journalPath = path.join(tmpDir, "diagnostics.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+
+    const result = yield* runCli(
+      [
+        "run",
+        "packages/core/tests/fixtures/streaming/normalized-diagnostics.md",
+        `--journal=${journalPath}`,
+        "--raw",
+      ],
+      RUN,
+    ).expect();
+    const journal = yield* readTextFile(journalPath);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("normalized");
+    expect(result.stdout).not.toContain("ERROR");
+    expect(journal).toContain("normalized");
+    expect(journal).not.toContain("RAW_SOURCE");
+    expect(journal).not.toContain("ARBITRARY");
+    expect(journal).not.toContain("Bearer opaque");
+    expect(journal).not.toContain("authorization");
+    expect(journal).not.toContain("ghp_x");
+    expect(journal).not.toContain("STDOUT");
+    expect(journal).not.toContain("STDERR");
+  });
 });
