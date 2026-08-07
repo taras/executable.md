@@ -30,7 +30,7 @@ jobs:
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       - name: Typecheck
         run: deno task check
@@ -63,7 +63,7 @@ jobs:
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       - name: Install dependencies
         run: deno task deps
@@ -84,7 +84,7 @@ jobs:
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       - name: Install dependencies
         run: deno task deps
@@ -260,7 +260,7 @@ jobs:
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       # Caches the harness's own graph, so it can run --cached-only below.
       - name: Prepare this checkout
@@ -279,7 +279,7 @@ jobs:
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       - name: Install workspace deps
         run: deno install
@@ -316,7 +316,7 @@ jobs:
       # node_modules so it survives.
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       - name: Install dependencies
         run: deno task deps

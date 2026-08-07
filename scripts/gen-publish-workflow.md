@@ -145,7 +145,7 @@ npm stays per-package in `publish-one.yml`, and this job runs in the same
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
-          deno-version: v2.9.1
+          deno-version: v2.9.5
 
       # A build installs nothing, so a fresh checkout prepares first (spec §8).
       - name: Install dependencies
