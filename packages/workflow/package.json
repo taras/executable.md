@@ -3,9 +3,13 @@
   "version": "0.7.0",
   "description": "Workflow runs for executable.md: one pinned starting commit per run, recorded durably.",
   "type": "module",
-  "exports": "./mod.ts",
+  "exports": {
+    ".": "./mod.ts",
+    "./deno": "./deno.ts"
+  },
   "dependencies": {
     "@effectionx/context-api": "0.6.0",
+    "@effectionx/fs": "0.3.0",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",

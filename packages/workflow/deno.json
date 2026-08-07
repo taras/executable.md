@@ -2,6 +2,7 @@
   "name": "@executablemd/workflow",
   "version": "0.7.0",
   "exports": {
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    "./deno": "./deno.ts"
   }
 }

@@ -78,6 +78,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "runs scripts/gen-publish-workflow.md through the xmd CLI with Deno.execPath(); the document is executed by Deno only",
     issue: DERIVED_SCOPE,
   },
+  {
+    path: "packages/workflow/tests/workflow-run-storage.test.ts",
+    reason:
+      "the subject is the Deno workflow-run storage adapter: it opens `node:sqlite`, which Node 22 exposes only behind --experimental-sqlite, and reads pages back through Deno file APIs. The provider-neutral contracts it sits on are covered portably by workflow-definition.test.ts",
+    issue: DERIVED_SCOPE,
+  },
 ];
 
 /**
