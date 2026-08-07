@@ -54,6 +54,15 @@ import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import { workflowRunPath } from "./path.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
 
+/**
+ * How long a connection waits for another host's write lock.
+ *
+ * SQLite is reached synchronously, so this is also how long the thread can
+ * stop. Long enough for a transaction that is committing, short enough that a
+ * host holding a lock it will never release is reported rather than waited on.
+ */
+const BUSY_TIMEOUT_MS = 5_000;
+
 const INSERT_RUN = `INSERT INTO workflow_run
   (id, run_id, definition, base, props, status, created_at, updated_at)
   VALUES (1, ?, ?, ?, ?, 'running', ?, ?)`;
@@ -173,6 +182,11 @@ function* withConnection(
   let database: DatabaseSync;
   try {
     database = new DatabaseSync(path);
+    // A connection setting, not a change to the file. Without it SQLite
+    // refuses a contended write lock immediately, so a second host reaching
+    // the same run would be told the database is busy rather than waiting the
+    // moment it takes the first one to commit.
+    database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   } catch (error) {
     return refusal(error, path);
   }

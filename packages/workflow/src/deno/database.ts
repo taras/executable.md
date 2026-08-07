@@ -1,10 +1,25 @@
 /**
- * One run's open database.
+ * One run's open database, and the transaction a caller can hold.
  *
  * Every operation here runs on one connection, one at a time, inside a
- * transaction of its own. SQLite is reached synchronously but the operations
- * built on it are not, so the adapter serializes the connection rather than
- * relying on callers to take turns with it.
+ * transaction. SQLite is reached synchronously but the operations built on it
+ * are not, so the adapter serializes the connection rather than relying on
+ * callers to take turns with it. A standalone append and a caller's
+ * multi-statement transaction reach SQLite through the same insertion routine,
+ * so there is no second write path to keep in agreement with the first.
+ *
+ * ## Enlistment travels with the caller
+ *
+ * `transact()` hands its body a `WorkflowRunTransaction`, and that object — not
+ * the database — is what joins work to the transaction. Work that never
+ * received one cannot enlist by accident, so an append happening elsewhere
+ * waits for its own turn and commits on its own rather than being rolled back
+ * with a failure it had nothing to do with.
+ *
+ * A scope-local context records that a transaction is open. That is how a
+ * nested `transact()` is refused, and how an operation called from inside a
+ * transaction body is refused rather than deadlocking on the connection its own
+ * caller is already holding.
  *
  * ## Lifetime
  *
@@ -15,14 +30,25 @@
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
-import type { Json } from "@executablemd/durable-streams";
-import type { WorkflowRunDatabase } from "../storage/api.ts";
+import {
+  type Context,
+  createContext,
+  ensure,
+  Err,
+  Ok,
+  type Operation,
+  resource,
+  type Result,
+  scoped,
+} from "effection";
+import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   WorkflowDatabaseClosedError,
   WorkflowDatabaseFormatError,
   WorkflowDocumentExecutionError,
   WorkflowRequestError,
+  WorkflowTransactionError,
 } from "../storage/errors.ts";
 import { parseJsonValue } from "../storage/members.ts";
 import {
@@ -35,6 +61,7 @@ import {
   type WorkflowRunRecord,
   type WorkflowStopReason,
 } from "../storage/record.ts";
+import { insertJournalEvent, readJournalEntries } from "./journal.ts";
 import { type ConnectionLock, createConnectionLock } from "./lock.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
 import { translateSqliteError } from "./schema.ts";
@@ -67,6 +94,32 @@ export interface OpenConnection {
 }
 
 /**
+ * An open transaction, and the savepoints nested work may take inside it.
+ *
+ * `savepoint` is the seam a Workspace filesystem needs: it lets nested work
+ * roll back its own mutations while staying inside the one transaction that
+ * publishes the effect and its journal result together. It is deliberately not
+ * reachable through `WorkflowRunTransaction`, because a caller able to take a
+ * savepoint is also able to take one that outlives the body it was given.
+ */
+export interface TransactionScope {
+  readonly owner: object;
+  open: boolean;
+  savepoint<T>(body: () => T): T;
+}
+
+/**
+ * Which transaction, if any, the current scope is inside.
+ *
+ * The value is checked against the handle's own private identity, never
+ * trusted for being present: a context is addressed by name, so any code can
+ * bind this one, and only the object this module made names this database.
+ */
+export const ActiveTransaction: Context<TransactionScope | undefined> = createContext<
+  TransactionScope | undefined
+>("executablemd.workflow.deno.transaction", undefined);
+
+/**
  * Open a run's database for the life of the calling scope.
  *
  * The connection closes through ordinary teardown rather than a caller
@@ -93,22 +146,33 @@ interface Handle {
 function createHandle(connection: OpenConnection): Handle {
   const { database, path } = connection;
   const lock: ConnectionLock = createConnectionLock();
+  const identity = {};
 
   let closed = false;
   let record = connection.record;
   let retrieval = readRetrievalRow(database);
 
-  /** Whether this scope may still reach the connection at all. */
-  function admit(): Result<void> {
+  /** Whether this scope may reach the connection at all, and why not. */
+  function* admit(): Operation<Result<void>> {
     if (closed) {
       return Err(new WorkflowDatabaseClosedError(record.runId));
+    }
+    const active = yield* ActiveTransaction.get();
+    if (active !== undefined && active.owner === identity) {
+      return Err(
+        new WorkflowTransactionError(
+          "this scope is inside a transaction on the same workflow run database, and an " +
+            "operation outside that transaction cannot run until it commits. Use the " +
+            "transaction handed to the body, or move the operation outside it.",
+        ),
+      );
     }
     return Ok();
   }
 
   /** One turn at the connection, inside a transaction of its own. */
   function* write<T>(body: () => T): Operation<Result<T>> {
-    const admitted = admit();
+    const admitted = yield* admit();
     if (!admitted.ok) {
       return admitted;
     }
@@ -120,7 +184,7 @@ function createHandle(connection: OpenConnection): Handle {
 
   /** One turn at the connection, reading only. */
   function* read<T>(body: () => T): Operation<Result<T>> {
-    const admitted = admit();
+    const admitted = yield* admit();
     if (!admitted.ok) {
       return admitted;
     }
@@ -134,6 +198,68 @@ function createHandle(connection: OpenConnection): Handle {
     });
   }
 
+  function* transact<T>(
+    body: (transaction: WorkflowRunTransaction) => Operation<T>,
+  ): Operation<Result<T>> {
+    if (closed) {
+      return Err(new WorkflowDatabaseClosedError(record.runId));
+    }
+    const active = yield* ActiveTransaction.get();
+    if (active !== undefined && active.owner === identity) {
+      return Err(
+        new WorkflowTransactionError(
+          "a transaction on this workflow run database is already open in this scope. " +
+            "Nesting one inside another would commit or roll back work the outer " +
+            "transaction has not finished deciding about.",
+        ),
+      );
+    }
+
+    return yield* scoped(function* (): Operation<Result<T>> {
+      yield* lock.hold();
+
+      try {
+        database.exec("BEGIN IMMEDIATE");
+      } catch (error) {
+        return Err(translateSqliteError(error, path));
+      }
+
+      const transaction = createTransactionScope(database, identity);
+      let committed = false;
+
+      // Registered after the lock, so teardown rolls back while the connection
+      // is still ours and releases it only once that is done.
+      yield* ensure(() => {
+        transaction.open = false;
+        if (!committed) {
+          rollback(database);
+        }
+      });
+
+      yield* ActiveTransaction.set(transaction);
+
+      try {
+        const value = yield* body({ journal: enlistedJournal(database, transaction, path) });
+        database.exec("COMMIT");
+        committed = true;
+        return Ok(value);
+      } catch (error) {
+        return Err(translateSqliteError(error, path));
+      }
+    });
+  }
+
+  const journal: DurableStream = {
+    *readAll(): Operation<DurableEvent[]> {
+      const entries = yield* mustSucceed(read(() => readJournalEntries(database)));
+      return entries.map((entry) => entry.event);
+    },
+
+    *append(event: DurableEvent): Operation<void> {
+      yield* mustSucceed(write(() => insertJournalEvent(database, event)));
+    },
+  };
+
   const handle: WorkflowRunDatabase = {
     get record() {
       return record;
@@ -141,6 +267,14 @@ function createHandle(connection: OpenConnection): Handle {
 
     get retrieval() {
       return retrieval;
+    },
+
+    journal,
+
+    transact,
+
+    *readJournalEntries(): Operation<Result<JournalEntry[]>> {
+      return yield* read(() => readJournalEntries(database));
     },
 
     *replaceRetrievalMetadata(metadata: Json | undefined): Operation<Result<void>> {
@@ -250,6 +384,85 @@ function createHandle(connection: OpenConnection): Handle {
       database.close();
     },
   };
+}
+
+/**
+ * The journal a transaction body appends through.
+ *
+ * Insertion only: the transaction that opened before the body ran is what
+ * decides whether these rows survive, and nothing here commits.
+ */
+function enlistedJournal(
+  database: DatabaseSync,
+  transaction: TransactionScope,
+  path: string,
+): DurableStream {
+  return {
+    // deno-lint-ignore require-yield
+    *readAll(): Operation<DurableEvent[]> {
+      assertOpen(transaction);
+      try {
+        return readJournalEntries(database).map((entry) => entry.event);
+      } catch (error) {
+        throw translateSqliteError(error, path);
+      }
+    },
+
+    // deno-lint-ignore require-yield
+    *append(event: DurableEvent): Operation<void> {
+      assertOpen(transaction);
+      try {
+        insertJournalEvent(database, event);
+      } catch (error) {
+        throw translateSqliteError(error, path);
+      }
+    },
+  };
+}
+
+function assertOpen(transaction: TransactionScope): void {
+  if (!transaction.open) {
+    throw new WorkflowTransactionError(
+      "this transaction has already finished, so nothing more can be appended through it. " +
+        "A handle kept past the end of the body it was given commits nothing.",
+    );
+  }
+}
+
+function createTransactionScope(database: DatabaseSync, owner: object): TransactionScope {
+  let depth = 0;
+
+  const scope: TransactionScope = {
+    owner,
+    open: true,
+    savepoint<T>(body: () => T): T {
+      assertOpen(scope);
+      const name = `xmd_savepoint_${depth}`;
+      depth += 1;
+      database.exec(`SAVEPOINT ${name}`);
+      try {
+        const value = body();
+        database.exec(`RELEASE ${name}`);
+        depth -= 1;
+        return value;
+      } catch (error) {
+        database.exec(`ROLLBACK TO ${name}`);
+        database.exec(`RELEASE ${name}`);
+        depth -= 1;
+        throw error;
+      }
+    },
+  };
+
+  return scope;
+}
+
+function* mustSucceed<T>(operation: Operation<Result<T>>): Operation<T> {
+  const result = yield* operation;
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
 }
 
 function inTransaction<T>(database: DatabaseSync, path: string, body: () => T): Result<T> {

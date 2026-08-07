@@ -1,0 +1,647 @@
+/**
+ * Tier WJ — the retained journal, and the transaction a caller can hold.
+ *
+ * Two boundaries are under test and they are easy to confuse. The journal
+ * boundary is ordering and identity: events go in filtered, come back in the
+ * order they were appended, and keep an opaque id that outlives the process.
+ * The transaction boundary is enlistment: a caller's transaction publishes its
+ * journal events with the rest of its work, and nothing that did not ask to be
+ * part of it is committed or rolled back with it.
+ *
+ * The filtering order is asserted from outside rather than assumed. The adapter
+ * performs no filtering of its own — a second policy in a second place is a
+ * second thing to keep in agreement with the first — so what these tests check
+ * is that a rejected or cancelled gate leaves no row at all.
+ */
+
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { exec } from "@executablemd/runtime";
+import {
+  type Close,
+  type DurableEvent,
+  guardDurableStream,
+  serializeDurableEvent,
+  type Yield,
+} from "@executablemd/durable-streams";
+import { createSecretScanner, SecretDetectedError } from "@executablemd/core";
+import { all, type Operation, sleep, spawn, suspend, withResolvers } from "effection";
+import {
+  WorkflowRecordMalformedError,
+  WorkflowRunConflictError,
+  WorkflowRunStorage,
+  type WorkflowRunTransaction,
+  WorkflowTransactionError,
+} from "../mod.ts";
+import { ActiveTransaction } from "../src/deno/database.ts";
+import {
+  createRun,
+  request,
+  runPath,
+  tamper,
+  useStorageRoot,
+  withStorage,
+} from "./support/storage.ts";
+
+const { create } = WorkflowRunStorage.operations;
+
+const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
+const CHILD = fileURLToPath(new URL("./support/restart-child.ts", import.meta.url));
+
+/** A synthetic credential, shaped so the shipped preset recognizes it. */
+const CANARY = `ghp_${"abcdefghijklmnopqrstuvwxyz0123456789".slice(0, 36)}`;
+
+function yielded(name: string, value: string): Yield {
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "call", name },
+    result: { status: "ok", value },
+  };
+}
+
+function closed(value: string): Close {
+  return { type: "close", coroutineId: "root", result: { status: "ok", value } };
+}
+
+/** The names of the yields a journal holds, in the order it holds them. */
+function names(events: DurableEvent[]): string[] {
+  return events.flatMap((event) => (event.type === "yield" ? [event.description.name] : []));
+}
+
+describe("Tier WJ — appending and replaying the journal", () => {
+  it("WJ1: events come back in the order they went in", function* () {
+    const root = yield* useStorageRoot();
+
+    const replayed = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      for (const name of ["first", "second", "third"]) {
+        yield* database.journal.append(yielded(name, name));
+      }
+      yield* database.journal.append(closed("done"));
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(replayed)).toEqual(["first", "second", "third"]);
+    expect(replayed).toHaveLength(4);
+    expect(replayed[3].type).toBe("close");
+  });
+
+  it("WJ2: a record is stored as the protocol wrote it, not as a re-encoding", function* () {
+    const root = yield* useStorageRoot();
+    const event = yielded("only", "value");
+
+    const stored = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(event);
+      return yield* database.journal.readAll();
+    });
+
+    expect(stored).toEqual([event]);
+    expect(serializeDurableEvent(stored[0])).toBe(serializeDurableEvent(event));
+  });
+
+  it("WJ3: an event keeps its opaque id, across reads and across processes", function* () {
+    const root = yield* useStorageRoot();
+
+    const first = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(yielded("a", "a"));
+      yield* database.journal.append(yielded("b", "b"));
+
+      const once = yield* database.readJournalEntries();
+      const twice = yield* database.readJournalEntries();
+      if (!once.ok || !twice.ok) {
+        throw new Error("expected the journal to be readable");
+      }
+      expect(once.value.map((entry) => entry.eventId)).toEqual(
+        twice.value.map((entry) => entry.eventId),
+      );
+      return once.value.map((entry) => entry.eventId);
+    });
+
+    const afterReopen = yield* withStorage(root, function* () {
+      const found = yield* WorkflowRunStorage.operations.lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      const entries = yield* found.value.readJournalEntries();
+      if (!entries.ok) {
+        throw entries.error;
+      }
+      return entries.value.map((entry) => entry.eventId);
+    });
+
+    expect(afterReopen).toEqual(first);
+    expect(new Set(first).size).toBe(2);
+  });
+
+  it("WJ4: a journal row that is not an event is refused rather than replayed", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    const result = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(yielded("a", "a"));
+
+      // Valid JSON, and not an event: surviving `json_valid` is not the same
+      // as describing a durable event, which is why the row is parsed.
+      tamper(path, (raw) => {
+        raw.prepare(`UPDATE journal_events SET record = '{"type":"whatever"}'`).run();
+      });
+
+      const found = yield* WorkflowRunStorage.operations.lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return yield* found.value.readJournalEntries();
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowRecordMalformedError);
+    expect(!result.ok && result.error.message).toContain("journal_events.record");
+  });
+});
+
+describe("Tier WJ — what reaches SQLite", () => {
+  it("WJ5: a gate that rejects an event leaves no row behind", function* () {
+    const root = yield* useStorageRoot();
+    const scanner = createSecretScanner();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      // The boundary under test: DurableEvent → secret guard → SQLite append.
+      // The adapter filters nothing itself, so the only thing keeping this row
+      // out is that the gate ran first.
+      const guarded = guardDurableStream(database.journal, function* (event) {
+        const findings = yield* scanner.scan(serializeDurableEvent(event));
+        if (findings.length > 0) {
+          throw new SecretDetectedError(findings);
+        }
+      });
+
+      yield* guarded.append(yielded("before", "harmless"));
+
+      let raised: unknown;
+      try {
+        yield* guarded.append(yielded("leak", CANARY));
+      } catch (error) {
+        raised = error;
+      }
+
+      return { raised, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.raised).toBeInstanceOf(SecretDetectedError);
+    expect(names(seen.events)).toEqual(["before"]);
+  });
+
+  it("WJ6: a gate cancelled mid-scan produces no row either", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const reached = withResolvers<void>();
+
+      const guarded = guardDurableStream(database.journal, function* () {
+        reached.resolve();
+        yield* suspend();
+      });
+
+      const appending = yield* spawn(function* () {
+        yield* guarded.append(yielded("never", "never"));
+      });
+
+      yield* reached.operation;
+      yield* appending.halt();
+
+      return yield* database.journal.readAll();
+    });
+
+    expect(events).toEqual([]);
+  });
+});
+
+describe("Tier WJ — a transaction a caller holds", () => {
+  it("WJ7: a body that completes publishes its events with the rest of its work", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("inside", "inside"));
+        yield* transaction.journal.append(closed("inside"));
+        return "committed";
+      });
+
+      return { result, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.result.ok).toBe(true);
+    expect(seen.result.ok && seen.result.value).toBe("committed");
+    expect(names(seen.events)).toEqual(["inside"]);
+    expect(seen.events).toHaveLength(2);
+  });
+
+  it("WJ8: a body that fails after inserting leaves nothing behind", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(yielded("before", "before"));
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("rolled-back", "rolled-back"));
+        throw new Error("the effect this transaction was publishing failed");
+      });
+
+      return { result, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.result.ok).toBe(false);
+    expect(names(seen.events)).toEqual(["before"]);
+  });
+
+  it("WJ9: a body cancelled after BEGIN rolls back, and the handle still works", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inside = withResolvers<void>();
+
+      const transacting = yield* spawn(function* () {
+        yield* database.transact(function* (transaction) {
+          yield* transaction.journal.append(yielded("cancelled", "cancelled"));
+          inside.resolve();
+          yield* suspend();
+        });
+      });
+
+      yield* inside.operation;
+      yield* transacting.halt();
+
+      // The same handle, immediately afterwards: a rollback that left the
+      // connection mid-transaction would fail here rather than append.
+      yield* database.journal.append(yielded("after", "after"));
+
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(seen)).toEqual(["after"]);
+  });
+
+  it("WJ10: a transaction inside a transaction is refused, not nested", function* () {
+    const root = yield* useStorageRoot();
+
+    const inner = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const outer = yield* database.transact(function* () {
+        return yield* database.transact(function* () {
+          return "should never run";
+        });
+      });
+
+      if (!outer.ok) {
+        throw outer.error;
+      }
+      return outer.value;
+    });
+
+    expect(inner.ok).toBe(false);
+    expect(!inner.ok && inner.error).toBeInstanceOf(WorkflowTransactionError);
+  });
+
+  it("WJ11: an ordinary operation called from inside a body is refused, not deadlocked", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const result = yield* database.transact(function* () {
+        // Taking the connection again from inside the body would wait for a
+        // transaction this very scope is holding open.
+        return yield* database.beginDocumentExecution();
+      });
+
+      if (!result.ok) {
+        throw result.error;
+      }
+      return result.value;
+    });
+
+    expect(seen.ok).toBe(false);
+    expect(!seen.ok && seen.error).toBeInstanceOf(WorkflowTransactionError);
+  });
+
+  it("WJ12: a transaction handle kept past its body appends nothing", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const escaped: WorkflowRunTransaction[] = [];
+
+      yield* database.transact(function* (transaction) {
+        escaped.push(transaction);
+        return "done";
+      });
+
+      let raised: unknown;
+      try {
+        yield* escaped[0].journal.append(yielded("too-late", "too-late"));
+      } catch (error) {
+        raised = error;
+      }
+
+      return { raised, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.raised).toBeInstanceOf(WorkflowTransactionError);
+    expect(seen.events).toEqual([]);
+  });
+
+  it("WJ13: nested work rolls back to a savepoint inside a committing transaction", function* () {
+    const root = yield* useStorageRoot();
+
+    // The seam a Workspace filesystem uses: its own nested transactions become
+    // savepoints inside the one transaction that publishes the effect and its
+    // journal result together.
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("kept", "kept"));
+
+        const active = yield* ActiveTransaction.get();
+        if (active === undefined) {
+          throw new Error("expected an open transaction");
+        }
+
+        try {
+          active.savepoint(() => {
+            throw new Error("the nested mutation failed");
+          });
+        } catch {
+          // The savepoint rolled back; the transaction around it continues.
+        }
+
+        yield* transaction.journal.append(yielded("also-kept", "also-kept"));
+        return "committed";
+      });
+
+      if (!result.ok) {
+        throw result.error;
+      }
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["kept", "also-kept"]);
+  });
+});
+
+describe("Tier WJ — one connection, one operation at a time", () => {
+  it("WJ14: an unrelated append waits for a transaction, and is not part of it", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inside = withResolvers<void>();
+      const release = withResolvers<void>();
+      const order: string[] = [];
+
+      const transacting = yield* spawn(function* () {
+        yield* database.transact(function* (transaction) {
+          yield* transaction.journal.append(yielded("in-transaction", "in-transaction"));
+          order.push("transaction appended");
+          inside.resolve();
+          yield* release.operation;
+          order.push("transaction committing");
+          return "done";
+        });
+      });
+
+      yield* inside.operation;
+
+      const appending = yield* spawn(function* () {
+        yield* database.journal.append(yielded("unrelated", "unrelated"));
+        order.push("unrelated appended");
+      });
+
+      // Long enough for an append that did not have to wait to have finished.
+      yield* sleep(50);
+      const beforeCommit = [...order];
+
+      release.resolve();
+      yield* transacting;
+      yield* appending;
+
+      return { beforeCommit, order, events: yield* database.journal.readAll() };
+    });
+
+    // It waited: the unrelated append had not run while the transaction held
+    // the connection.
+    expect(seen.beforeCommit).toEqual(["transaction appended"]);
+    expect(seen.order).toEqual([
+      "transaction appended",
+      "transaction committing",
+      "unrelated appended",
+    ]);
+    // And it did not enlist: both events are present, in that order.
+    expect(names(seen.events)).toEqual(["in-transaction", "unrelated"]);
+  });
+
+  it("WJ15: an unrelated append survives the rollback of a transaction it waited for", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inside = withResolvers<void>();
+      const release = withResolvers<void>();
+
+      const transacting = yield* spawn(function* () {
+        yield* database.transact(function* (transaction) {
+          yield* transaction.journal.append(yielded("doomed", "doomed"));
+          inside.resolve();
+          yield* release.operation;
+          throw new Error("this transaction publishes nothing");
+        });
+      });
+
+      yield* inside.operation;
+      const appending = yield* spawn(function* () {
+        yield* database.journal.append(yielded("survivor", "survivor"));
+      });
+
+      yield* sleep(20);
+      release.resolve();
+      yield* transacting;
+      yield* appending;
+
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["survivor"]);
+  });
+
+  it("WJ16: operations on one handle run one at a time", function* () {
+    const root = yield* useStorageRoot();
+
+    const log = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const order: string[] = [];
+
+      yield* all(
+        Array.from({ length: 4 }, (_unused, index) =>
+          (function* () {
+            const result = yield* database.transact(function* () {
+              order.push(`enter ${index}`);
+              // A suspension point inside the body: if two transactions could
+              // hold the connection at once, this is where they would overlap.
+              yield* sleep(5);
+              order.push(`leave ${index}`);
+              return index;
+            });
+            if (!result.ok) {
+              throw result.error;
+            }
+          })(),
+        ),
+      );
+
+      return order;
+    });
+
+    expect(log).toHaveLength(8);
+    for (let position = 0; position < log.length; position += 2) {
+      const entered = log[position];
+      expect(entered.startsWith("enter ")).toBe(true);
+      expect(log[position + 1]).toBe(`leave ${entered.slice("enter ".length)}`);
+    }
+  });
+
+  it("WJ17: a caller cancelled while queued never reaches the connection", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inside = withResolvers<void>();
+      const release = withResolvers<void>();
+
+      const holding = yield* spawn(function* () {
+        yield* database.transact(function* () {
+          inside.resolve();
+          yield* release.operation;
+          return "done";
+        });
+      });
+
+      yield* inside.operation;
+
+      const queued = yield* spawn(function* () {
+        yield* database.journal.append(yielded("queued", "queued"));
+      });
+
+      yield* sleep(20);
+      yield* queued.halt();
+
+      release.resolve();
+      yield* holding;
+
+      return yield* database.journal.readAll();
+    });
+
+    expect(events).toEqual([]);
+  });
+});
+
+describe("Tier WJ — two callers creating at once", () => {
+  it("WJ18: compatible concurrent creation converges on one run", function* () {
+    const root = yield* useStorageRoot();
+
+    const opened = yield* withStorage(root, function* () {
+      return yield* all(
+        Array.from({ length: 4 }, () =>
+          (function* () {
+            const result = yield* create(request());
+            if (!result.ok) {
+              throw result.error;
+            }
+            return result.value.record;
+          })(),
+        ),
+      );
+    });
+
+    const created = new Set(opened.map((record) => record.createdAt));
+    expect(created.size).toBe(1);
+    for (const record of opened) {
+      expect(record.runId).toBe("release-1.4");
+    }
+  });
+
+  it("WJ19: conflicting concurrent creation produces one winner and one conflict", function* () {
+    const root = yield* useStorageRoot();
+
+    const results = yield* withStorage(root, function* () {
+      return yield* all([create(request({ base: "main" })), create(request({ base: "develop" }))]);
+    });
+
+    const succeeded = results.filter((result) => result.ok);
+    const refused = results.filter((result) => !result.ok);
+
+    expect(succeeded).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0].ok === false && refused[0].error).toBeInstanceOf(WorkflowRunConflictError);
+  });
+});
+
+describe("Tier WJ — surviving a process", () => {
+  it("WJ20: a second process restores the run and re-executes nothing", function* () {
+    const root = yield* useStorageRoot();
+    const marker = join(root, "marker.txt");
+    writeFileSync(marker, "");
+
+    const run = function* (): Operation<{ code: number; out: string }> {
+      const result = yield* exec({
+        command: [
+          process.execPath,
+          "run",
+          "--allow-all",
+          "--frozen",
+          CHILD,
+          root,
+          "restart",
+          marker,
+        ],
+        cwd: REPOSITORY,
+      });
+      return { code: result.exitCode, out: result.stdout };
+    };
+
+    const first = yield* run();
+    expect(first.code).toBe(0);
+
+    const second = yield* run();
+    expect(second.code).toBe(0);
+
+    // The durable operation ran once. The second process restored its result
+    // from the retained journal instead of performing it again.
+    expect(readFileSync(marker, "utf8")).toBe("ran\n");
+
+    const before = JSON.parse(first.out);
+    const after = JSON.parse(second.out);
+
+    expect(after.value).toBe(before.value);
+    expect(after.status).toBe("completed");
+    // Identity survives, and replay adds no second copy of a recorded event.
+    expect(after.events.map((event: { eventId: string }) => event.eventId)).toEqual(
+      before.events.map((event: { eventId: string }) => event.eventId),
+    );
+  });
+});

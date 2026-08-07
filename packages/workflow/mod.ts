@@ -29,8 +29,10 @@ export type { WorkflowRun } from "./src/run.ts";
 export { WorkflowRunStorage, WorkflowStorageProviderError } from "./src/storage/api.ts";
 export type {
   CreateWorkflowRunRequest,
+  JournalEntry,
   WorkflowRunDatabase,
   WorkflowRunStorageApi,
+  WorkflowRunTransaction,
 } from "./src/storage/api.ts";
 
 export { definitionToJson, parseWorkflowDefinition } from "./src/storage/definition.ts";

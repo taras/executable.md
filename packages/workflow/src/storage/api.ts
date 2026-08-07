@@ -31,7 +31,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation, Result } from "effection";
-import type { Json } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import type { WorkflowDefinition } from "./definition.ts";
 import { WorkflowStorageError } from "./errors.ts";
 import type {
@@ -54,6 +54,31 @@ export interface CreateWorkflowRunRequest {
   readonly props: Json;
 }
 
+/**
+ * A caller's hold on an open transaction.
+ *
+ * Enlistment travels with this object rather than with the database, so work
+ * that never received one cannot join the transaction by accident — which is
+ * what keeps an unrelated journal append from being rolled back with somebody
+ * else's failure.
+ */
+export interface WorkflowRunTransaction {
+  /** Appends inside this transaction, and commits with it or not at all. */
+  readonly journal: DurableStream;
+}
+
+/**
+ * One retained event together with the id it keeps.
+ *
+ * `DurableStream` carries events and not their identities, and a stop reason
+ * points at one. This is the reading that answers "which event", without
+ * putting a second journal interface beside the one replay uses.
+ */
+export interface JournalEntry {
+  readonly eventId: string;
+  readonly event: DurableEvent;
+}
+
 /** One workflow run's durable storage, open for the life of the calling scope. */
 export interface WorkflowRunDatabase {
   /** The run as of the last change this handle committed. */
@@ -61,6 +86,22 @@ export interface WorkflowRunDatabase {
 
   /** Where the definition can be fetched from now, when a host recorded that. */
   readonly retrieval: DefinitionRetrieval | undefined;
+
+  /** The run's filtered journal. An append here commits on its own. */
+  readonly journal: DurableStream;
+
+  /** Every retained event with its opaque id, in append order. */
+  readJournalEntries(): Operation<Result<JournalEntry[]>>;
+
+  /**
+   * Run `body` inside one transaction, and commit only if it completes.
+   *
+   * The body receives the handle it must use to take part. Failure and
+   * cancellation roll back everything the transaction did, including journal
+   * events appended through it. Calling this inside its own body is refused
+   * rather than nested.
+   */
+  transact<T>(body: (transaction: WorkflowRunTransaction) => Operation<T>): Operation<Result<T>>;
 
   /** Replace the retrieval metadata. Identity is unaffected. */
   replaceRetrievalMetadata(metadata: Json | undefined): Operation<Result<void>>;

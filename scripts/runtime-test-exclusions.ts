@@ -84,6 +84,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "the subject is the Deno workflow-run storage adapter: it opens `node:sqlite`, which Node 22 exposes only behind --experimental-sqlite, and reads pages back through Deno file APIs. The provider-neutral contracts it sits on are covered portably by workflow-definition.test.ts",
     issue: DERIVED_SCOPE,
   },
+  {
+    path: "packages/workflow/tests/workflow-run-journal.test.ts",
+    reason:
+      "the same Deno storage adapter, plus a restart proof that relaunches the run under Deno.execPath(); `node:sqlite` is behind --experimental-sqlite on Node 22",
+    issue: DERIVED_SCOPE,
+  },
 ];
 
 /**
