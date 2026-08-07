@@ -31,10 +31,12 @@ cat <<'TABLE'
 | persist resource survival | spawn in persist eval + when() converge |
 | timeout modifier          | js timeout=30s eval block               |
 | eval + exec coexistence   | Both modifier types in same document    |
-| findFreePort VM global    | yield* findFreePort() in eval block     |
-| eval binding interpolation| {port} in exec block from eval binding  |
+| ephemeral eval            | live reconstruction without output      |
+| eval binding interpolation| {label} in exec block from eval binding |
 | daemon modifier           | bash daemon exec starts background proc |
-| daemon + when readiness   | Daemon server polled until ready        |
+| daemon fixed configuration| Arbitrary process stays scope-owned     |
+| service modifier          | Cooperative process publishes live endpoint |
+| cooperative provider      | persist ephemeral eval scopes middleware |
 | provider pattern          | StubProvider installs Sample middleware  |
 | per-component eval scope  | Each provider gets isolated middleware   |
 | props in env.values       | model prop available in eval blocks     |

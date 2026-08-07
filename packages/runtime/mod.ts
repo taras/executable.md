@@ -39,7 +39,6 @@ export {
   compile,
 } from "./apis.ts";
 export type { EvalBlock, ResponseHeaders, RuntimeFetchResponse, StatResult } from "./apis.ts";
-export { findFreePort } from "./find-free-port.ts";
 export {
   Service,
   SERVICE_HOSTNAME,

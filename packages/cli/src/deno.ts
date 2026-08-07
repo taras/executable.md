@@ -13,6 +13,7 @@ import process from "node:process";
 import { API } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { useDenoService } from "./deno-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
@@ -31,5 +32,5 @@ await main(function* (args) {
     },
     { at: "min" },
   );
-  yield* runXmd(args);
+  yield* runXmd(args, useDenoService);
 });

@@ -10,6 +10,7 @@ import process from "node:process";
 import { API } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { useCompiledService } from "./compiled-service.ts";
 
 await main(function* (args) {
   // The base providers for this host. `at: "min"` puts them beneath ordinary
@@ -26,5 +27,5 @@ await main(function* (args) {
     },
     { at: "min" },
   );
-  yield* runXmd(args);
+  yield* runXmd(args, useCompiledService);
 });

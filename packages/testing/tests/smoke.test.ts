@@ -9,6 +9,8 @@ import type { ExecuteOptions } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import type { TestResult } from "../src/test-api.ts";
 import type { Json } from "@executablemd/core";
+import { SERVICE_HOSTNAME } from "@executablemd/runtime";
+import { useStubService } from "@executablemd/runtime/test";
 
 const EMBEDDED_TESTS = [
   "Root frontmatter interpolates into the heading",
@@ -48,9 +50,10 @@ const EMBEDDED_TESTS = [
   "Eval blocks share bindings",
   "Persist keeps spawned tasks alive across blocks",
   "Timeout-bounded eval blocks complete",
-  "findFreePort allocates a free port",
   "Eval bindings interpolate into exec blocks",
-  "A daemon serves requests until its scope closes",
+  "Ephemeral eval reconstructs live bindings without rendering",
+  "A daemon stays alive until its scope closes",
+  "A cooperative service publishes a scoped live endpoint",
   "A standalone Thing's resource outlives it",
   "An empty paired Thing renders nothing and keeps nothing",
   "A paired Thing's resource is live only while its content expands",
@@ -94,6 +97,7 @@ interface SmokeSession {
 
 function* runSmokeSession(options: ExecuteOptions): Operation<SmokeSession> {
   return yield* scoped(function* () {
+    yield* useStubService(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 45_678 }));
     const tests = yield* useTesting();
     const execution = yield* execute(options);
     const result = yield* execution;

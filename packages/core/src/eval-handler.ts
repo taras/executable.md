@@ -18,6 +18,58 @@ import { ErrorMode } from "./errors.ts";
 import { commitExports, evaluationEnv } from "./eval-env.ts";
 import { compileBlock } from "./eval-context.ts";
 import { transformBlock, serializeExports } from "./eval-transform.ts";
+import {
+  commitLiveExports,
+  liveEnvironment,
+  validateLiveExports,
+  validateLiveOverlay,
+} from "./live-env.ts";
+import { EphemeralEval, EphemeralEvalOutputError } from "./modifiers/ephemeral.ts";
+import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
+
+function* runEphemeralEval(
+  ctx: CodeBlockContext,
+  evalEnv: EvalEnv,
+  persist: boolean,
+  mode: import("./errors.ts").ErrorMode,
+): Operation<CodeBlockResult> {
+  const live = liveEnvironment(evalEnv);
+  validateLiveOverlay(evalEnv, live);
+  let outputAttempted = false;
+  const merged: Record<string, unknown> = { ...evalEnv.values, ...live.values };
+  merged.output = (_value: unknown): never => {
+    outputAttempted = true;
+    throw new EphemeralEvalOutputError("ephemeral eval cannot produce document output");
+  };
+
+  const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(merged));
+  validateLiveExports(transformed.exports, evalEnv);
+  const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
+  const blockEnv = evaluationEnv(merged, mode);
+
+  let returnValue: unknown;
+  if (persist) {
+    const scope = yield* evalScope;
+    if (!scope) {
+      throw new Error(
+        `persist ephemeral eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,
+      );
+    }
+    returnValue = unbox(yield* scope.eval(() => fn(blockEnv)));
+  } else {
+    returnValue = yield* scoped(() => fn(blockEnv));
+  }
+
+  if (outputAttempted) {
+    throw new EphemeralEvalOutputError("ephemeral eval cannot produce document output");
+  }
+  if (returnValue !== undefined && returnValue !== null) {
+    throw new EphemeralEvalOutputError("ephemeral eval cannot return document output");
+  }
+
+  commitLiveExports(live, blockEnv, transformed.exports);
+  return { output: "", exitCode: 0, stderr: "" };
+}
 
 /**
  * Refuse `retain()` for the scope this is installed in.
@@ -70,10 +122,15 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
       );
     }
     const persist = yield* ephemeral(persistent);
+    const reconstruct = yield* ephemeral(EphemeralEval.get());
     // Captured here, on the expansion frame, where the block's documentation or
     // <Output> error mode is ambient. A persist block runs on the invocation's
     // eval-scope loop task, which predates that error mode and cannot inherit it.
     const mode = (yield* ephemeral(ErrorMode.get())) ?? "print";
+
+    if (reconstruct) {
+      return yield* ephemeral(runEphemeralEval(ctx, evalEnv, persist, mode));
+    }
 
     // Inject output() function into env so eval blocks can produce
     // rendered output. The function is a plain synchronous call:

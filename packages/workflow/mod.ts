@@ -28,6 +28,7 @@ export { Git, GitRevisionError, revParse } from "./src/git.ts";
 export type { GitApi } from "./src/git.ts";
 export { getWorkflowRun, useWorkflow } from "./src/run.ts";
 export type { WorkflowRun } from "./src/run.ts";
+export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
 export { WorkflowRunStorage, WorkflowStorageProviderError } from "./src/storage/api.ts";
 export type {

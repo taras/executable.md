@@ -15,7 +15,6 @@
 
 import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { parse } from "acorn";
 import type {
   Segment,
   TextSegment,
@@ -72,6 +71,9 @@ import { renderSegments } from "./render.ts";
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
+import { derivedEnvironment, liveEnvironment, validateBindingName } from "./live-env.ts";
+
+export { validateBindingName } from "./live-env.ts";
 
 /**
  * Mutable counter for generating unique, deterministic blockId values.
@@ -166,7 +168,9 @@ function expandChildrenScoped(
   path: string,
 ): Operation<Segment[]> {
   return scoped(function* () {
-    yield* provideEnv({ values: { ...(callerEnv?.values ?? {}), ...(override ?? {}) } });
+    yield* provideEnv(
+      derivedEnvironment(callerEnv, { ...(callerEnv?.values ?? {}), ...(override ?? {}) }),
+    );
     if (scope) {
       yield* provideEvalScope(scope);
     }
@@ -238,7 +242,10 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
 
   function environmentFor(request: ProjectionRequest): EvalEnv | undefined {
     if (request.kind === "children" && request.override) {
-      return { values: { ...(state.callerEnv?.values ?? {}), ...request.override } };
+      return derivedEnvironment(state.callerEnv, {
+        ...(state.callerEnv?.values ?? {}),
+        ...request.override,
+      });
     }
     return state.callerEnv;
   }
@@ -504,7 +511,6 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
 }
 
 const MAX_EXPANSION_DEPTH = 64;
-const IDENTIFIER_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
 /**
  * Expand an array of segments, resolving components and executing code blocks.
@@ -1082,7 +1088,10 @@ function* expandEach(
   // bindings and the current component's bindings.
   const contextEnv = yield* env;
   const callerEnv = segment.projectedEnv
-    ? { values: { ...segment.projectedEnv.values, ...(contextEnv?.values ?? {}) } }
+    ? derivedEnvironment(segment.projectedEnv, {
+        ...segment.projectedEnv.values,
+        ...(contextEnv?.values ?? {}),
+      })
     : contextEnv;
   const parentEvalScope = yield* evalScope;
 
@@ -1900,7 +1909,10 @@ function* expandComponent(
   // The current context env's bindings take precedence (innermost-wins).
   const contextEnv = yield* env;
   const callerEvalEnv = projectedEnv
-    ? { values: { ...projectedEnv.values, ...(contextEnv?.values ?? {}) } }
+    ? derivedEnvironment(projectedEnv, {
+        ...projectedEnv.values,
+        ...(contextEnv?.values ?? {}),
+      })
     : contextEnv;
 
   // Recurse with augmented hide set.
@@ -1917,6 +1929,7 @@ function* expandComponent(
   // next() delegates to the parent scope's middleware.
   const newHideSet = new Set([...hideSet, name]);
   const componentEnv: EvalEnv = { values: { ...validatedProps } };
+  liveEnvironment(componentEnv);
 
   // Children are caller-provided content, not the component's own body.
   // Use the parent's hide set (without the current component name) so
@@ -2391,11 +2404,13 @@ function* expandFunctionComponent(
         // it reads is what its author wrote beside it.
         if (projectedEnv) {
           const siteEnv = yield* env;
+          const projectedSiteEnv = derivedEnvironment(projectedEnv, {
+            ...projectedEnv.values,
+            ...(siteEnv?.values ?? {}),
+          });
           yield* Component.around(
             {
-              env: () => ({
-                values: { ...projectedEnv.values, ...(siteEnv?.values ?? {}) },
-              }),
+              env: () => projectedSiteEnv,
             },
             { at: "min" },
           );
@@ -2510,38 +2525,6 @@ function* expandFunctionComponent(
  */
 function asFailure(thrown: unknown): Error {
   return thrown instanceof Error ? thrown : new Error(String(thrown), { cause: thrown });
-}
-
-export function validateBindingName(value: Json | undefined): Result<string | undefined> {
-  if (value === undefined) {
-    return Ok(undefined);
-  }
-  if (typeof value !== "string") {
-    return Err(new Error("must be a non-empty string literal."));
-  }
-  if (value.length === 0) {
-    return Err(new Error("must be non-empty."));
-  }
-  if (!IDENTIFIER_RE.test(value)) {
-    return Err(new Error(`must be a valid JavaScript identifier. Got: "${value}"`));
-  }
-  // The identifier shape is not sufficient: reserved and contextual words
-  // (in, let, await, ...) match the regex but cannot form an ES-module
-  // binding, which is where these names end up (eval preamble destructures
-  // `const { name } = env;`). Parse the destructuring shape to reject them.
-  if (!isModuleBindingName(value)) {
-    return Err(new Error(`must be a valid JavaScript binding name. Got: "${value}"`));
-  }
-  return Ok(value);
-}
-
-function isModuleBindingName(name: string): boolean {
-  try {
-    parse(`const { ${name} } = 0;`, { ecmaVersion: "latest", sourceType: "module" });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**

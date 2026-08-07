@@ -105,10 +105,15 @@ export { evalFactory } from "./src/eval-handler.ts";
 export { persistFactory } from "./src/modifiers/persist.ts";
 export { timeoutFactory, parseDuration } from "./src/modifiers/timeout.ts";
 export { daemonFactory } from "./src/modifiers/daemon.ts";
+export { EphemeralEvalOutputError, ephemeralFactory } from "./src/modifiers/ephemeral.ts";
+export { serviceFactory } from "./src/modifiers/service.ts";
+export {
+  InvalidServiceBindingError,
+  LiveBindingCollisionError,
+  ServiceBindingCollisionError,
+} from "./src/live-env.ts";
 
 export { interpolateEvalBindings } from "./src/eval-interpolate.ts";
-
-export { findFreePort } from "@executablemd/runtime";
 
 export type { TransformResult } from "./src/eval-transform.ts";
 export { transformBlock, serializeExports, isJson } from "./src/eval-transform.ts";

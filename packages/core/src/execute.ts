@@ -76,6 +76,8 @@ import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
+import { ephemeralFactory } from "./modifiers/ephemeral.ts";
+import { serviceFactory } from "./modifiers/service.ts";
 import {
   DEFAULT_COMPONENT_DIRS,
   effectiveRegistry,
@@ -88,6 +90,7 @@ import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 import { useSecretDetection } from "./secrets/policy.ts";
+import { liveEnvironment } from "./live-env.ts";
 
 export interface ExecuteSettings {
   /** Durable stream for journaling. */
@@ -564,6 +567,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
   const validatedProps = yield* ephemeral(validateProps("__root__", props, root.props));
 
   const rootEnv: EvalEnv = { values: { ...validatedProps } };
+  liveEnvironment(rootEnv);
 
   // Per-root-segment emission loop (spec §9).
   // Mutable counter preserves deterministic blockIds across
@@ -772,6 +776,8 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
   registry.set("persist", persistFactory);
   registry.set("timeout", timeoutFactory);
   registry.set("daemon", daemonFactory);
+  registry.set("ephemeral", ephemeralFactory);
+  registry.set("service", serviceFactory);
   for (const [name, handler] of Object.entries(customModifiers)) {
     registry.set(name, handler);
   }
@@ -805,10 +811,16 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         },
       });
 
-      yield* Stdio.around({
-        *stdout() {},
-        *stderr() {},
-      });
+      // The discard provider is the base so a cooperative-service observer can
+      // authenticate and forward its own process output without unsilencing
+      // unrelated document subprocesses.
+      yield* Stdio.around(
+        {
+          *stdout() {},
+          *stderr() {},
+        },
+        { at: "min" },
+      );
 
       // The state this run owns: the table its printed errors record their
       // causes in, the schema compilers, and the slot its completion reads its

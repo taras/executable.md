@@ -36,7 +36,6 @@ const STANDARD_IMPORTS = [
   'import { when } from "@effectionx/converge";',
   'import { fetch } from "@effectionx/fetch";',
   'import { Sample, Elicitation } from "@executablemd/core";',
-  'import { findFreePort } from "@executablemd/runtime";',
 ];
 
 const EVAL_DIR = ".xmd-eval";
