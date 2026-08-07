@@ -17,5 +17,5 @@ props:
   additionalProperties: false
 ---
 
-<Finding when={props.pr.meta.body.length < props.minLength}
-  severity={props.severity} message={props.message} />
+<Finding when={pr.meta.body.length < minLength}
+  severity={severity} message={message} />

@@ -26,7 +26,7 @@
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import type { ErrorMode } from "./errors.ts";
-import type { ComponentElement, Segment } from "./types.ts";
+import type { ComponentElement, Json, Segment } from "./types.ts";
 
 /**
  * What to project.
@@ -56,6 +56,9 @@ export interface ProjectionHandle {
    */
   expandClaimed(
     element: ComponentElement,
+    meta: Record<string, unknown>,
+    props: Record<string, Json>,
+    hideSet: Set<string>,
     owner: Segment[],
     /**
      * This `<Content />` element's own structural path, which already descends

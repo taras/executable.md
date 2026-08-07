@@ -42,7 +42,7 @@ test -x .reviews/.oxlint/oxlint && echo "EXISTS" || echo "MISSING"
 <Capture as="tsconfigCheck">
 
 ```bash exec
-test -f {props.tsconfigPath} && echo "EXISTS" || echo "MISSING"
+test -f {tsconfigPath} && echo "EXISTS" || echo "MISSING"
 ```
 
 </Capture>
@@ -90,7 +90,7 @@ Running type-aware probe to test Oxlint compatibility...
   fallback='{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}'>
 
 ```bash exec
-RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {props.tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
+RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
 STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
 rm -f .reviews/probe-stderr.tmp
 if [ -n "$RESULT" ] && printf '%s' "$RESULT" | jq -c --arg stderr "$STDERR" '

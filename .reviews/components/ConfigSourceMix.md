@@ -18,11 +18,11 @@ props:
 ---
 
 ```ts eval
-const hasConfig = props.pr.files.some(f => f.isConfig);
-const hasSource = props.pr.files.some(f =>
+const hasConfig = pr.files.some(f => f.isConfig);
+const hasSource = pr.files.some(f =>
   !f.isConfig && !f.isTest && !f.isTypeDeclaration
 );
-const triggered = hasConfig && hasSource && props.pr.stats.totalFiles > props.minFiles;
+const triggered = hasConfig && hasSource && pr.stats.totalFiles > minFiles;
 ```
 
-<Finding when={triggered} severity={props.severity} message={props.message} />
+<Finding when={triggered} severity={severity} message={message} />

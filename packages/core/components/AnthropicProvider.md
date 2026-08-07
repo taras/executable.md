@@ -20,7 +20,7 @@ yield *
   Sample.around(
     {
       *sample([context], next) {
-        if (context.model !== undefined && context.model !== props.model) {
+        if (context.model !== undefined && context.model !== model) {
           return yield* next(context);
         }
 
@@ -38,7 +38,7 @@ yield *
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: props.model,
+            model,
             max_tokens: 4096,
             system: context.system || undefined,
             messages: [{ role: "user", content: context.content }],

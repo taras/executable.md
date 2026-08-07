@@ -10,7 +10,7 @@ props:
 
 ```ts eval
 const content = yield* renderChildren();
-const body = props.marker + "\n" + content.trim();
+const body = marker + "\n" + content.trim();
 
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
@@ -31,7 +31,7 @@ const commentsResult = yield* fetch(`${api}/issues/${prNumber}/comments`, {
   .json();
 
 const existing = commentsResult.find(c =>
-  c.user.type === "Bot" && c.body.includes(props.marker)
+  c.user.type === "Bot" && c.body.includes(marker)
 );
 
 if (existing) {

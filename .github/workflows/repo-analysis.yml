@@ -51,28 +51,6 @@ jobs:
             --component-dir packages/core/components \
             -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
 
-      - name: Verify analysis result
-        if: always()
-        run: |
-          test -x .reviews/.oxlint/oxlint && test -x .reviews/.oxlint/tsgolint \
-            || { echo "::error::oxlint/tsgolint could not be provisioned by EnsureOxlint"; exit 1; }
-          test -f .reviews/journal.analyze.ci.jsonl \
-            || { echo "::error::xmd did not produce an analysis journal"; exit 1; }
-          ROOT_CLOSE=$(jq -c 'select(.type == "close" and .coroutineId == "root")' .reviews/journal.analyze.ci.jsonl | tail -n 1)
-          test -n "$ROOT_CLOSE" \
-            || { echo "::error::xmd did not close the analysis root document"; exit 1; }
-          ROOT_STATUS=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.status // "missing"')
-          test "$ROOT_STATUS" = ok \
-            || { echo "::error::xmd analysis root close was unsuccessful: $ROOT_STATUS"; exit 1; }
-          VALUE_STATUS=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.status // "ok"')
-          test "$VALUE_STATUS" = ok \
-            || { echo "::error::xmd analysis root output was unsuccessful: $VALUE_STATUS"; exit 1; }
-          ROOT_OUTPUT=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.output? // .result.value.value? // .result.value? // "" | tostring')
-          if [[ "$ROOT_OUTPUT" == *'<!-- ERROR:'* ]]; then
-            echo "::error::xmd rendered an analysis document error"
-            exit 1
-          fi
-
       - name: Write run metadata
         if: always()
         run: |

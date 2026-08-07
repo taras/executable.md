@@ -14,11 +14,11 @@ props:
 ```js persist eval
 yield* Sample.around({
   *sample([context], next) {
-    if (context.model !== undefined && context.model !== props.model) {
+    if (context.model !== undefined && context.model !== model) {
       return yield* next(context);
     }
     const sys = context.system ? '|system:' + context.system : '';
-    return '[response-from-' + props.model + sys + '|content:' + context.content + ']';
+    return '[response-from-' + model + sys + '|content:' + context.content + ']';
   },
 }, { at: 'min' });
 ```

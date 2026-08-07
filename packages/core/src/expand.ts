@@ -68,15 +68,10 @@ import { scanSegments } from "./scanner.ts";
 import { expandAnswers, strayAnswerError } from "./answers.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
-import {
-  layerEnvironments,
-  layerProjectedContentEnvironment,
-  propsEnvironment,
-} from "./eval-env.ts";
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
-import { liveEnvironment, validateBindingName } from "./live-env.ts";
+import { derivedEnvironment, liveEnvironment, validateBindingName } from "./live-env.ts";
 
 export { validateBindingName } from "./live-env.ts";
 
@@ -173,11 +168,8 @@ function expandChildrenScoped(
   path: string,
 ): Operation<Segment[]> {
   return scoped(function* () {
-    const overrideEnv = override === undefined ? undefined : { values: override };
     yield* provideEnv(
-      layerEnvironments(callerEnv, overrideEnv, false) ?? {
-        values: {},
-      },
+      derivedEnvironment(callerEnv, { ...(callerEnv?.values ?? {}), ...(override ?? {}) }),
     );
     if (scope) {
       yield* provideEvalScope(scope);
@@ -190,8 +182,15 @@ interface ProjectionState {
   invocation: Invocation;
   enclosing: ProjectionHandle | undefined;
   children: Segment[];
-  caller: ProjectionFrame;
-  authored: ProjectionFrame;
+  /**
+   * The environment projected content expands in. Undefined leaves the ambient
+   * one in place, which is how a function component publishes bindings to its
+   * own content: it installs an env and `content()` inherits it.
+   */
+  callerEnv: EvalEnv | undefined;
+  meta: Record<string, unknown>;
+  props: Record<string, Json>;
+  hideSet: Set<string>;
   counter: BlockCounter;
   /**
    * The loop active where the caller wrote the content it projects, read at
@@ -215,23 +214,17 @@ interface ProjectionState {
   printedErrors?: Segment[];
 }
 
-interface ProjectionFrame {
-  env: EvalEnv | undefined;
-  meta: Record<string, unknown>;
-  props: Record<string, Json>;
-  hideSet: Set<string>;
-}
-
 /**
  * Build the handle one invocation publishes (spec §6.3).
  *
  * Every projection expands in a task the invocation's content scope owns, so
  * nested invocations and persistent work created by projected content descend
- * from it and stop with the invocation. Projected and authored requests carry
- * their own lexical frame; the resource scope is the callee's.
+ * from it and stop with the invocation. The environment is the caller's, the
+ * resource scope is the callee's.
  */
 function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   const slots = partitionBySlot(state.children);
+  const project = makeProjectFn(state.callerEnv);
   let slotErrorsEmitted = false;
 
   function select(request: ProjectionRequest): Segment[] {
@@ -248,15 +241,13 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
   }
 
   function environmentFor(request: ProjectionRequest): EvalEnv | undefined {
-    const frame = request.kind === "markdown" ? state.authored : state.caller;
-    if (request.kind === "children" && request.override !== undefined) {
-      return layerEnvironments(frame.env, { values: request.override }, false);
+    if (request.kind === "children" && request.override) {
+      return derivedEnvironment(state.callerEnv, {
+        ...(state.callerEnv?.values ?? {}),
+        ...request.override,
+      });
     }
-    return frame.env;
-  }
-
-  function frameFor(request: ProjectionRequest): ProjectionFrame {
-    return request.kind === "markdown" ? state.authored : state.caller;
+    return state.callerEnv;
   }
 
   const claimed = new WeakSet<ComponentElement>();
@@ -382,8 +373,6 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     const segments = select(request);
     const mode = request.mode ?? (yield* ErrorMode.get()) ?? "print";
     const contentScope = yield* state.invocation.useContentScope();
-    const frame = frameFor(request);
-    const project = makeProjectFn(frame.env);
     // The enclosing handle answers <Content /> written inside projected
     // content: it belongs to the caller's invocation, not to this one.
     // Dynamic markdown is the component's own, so it keeps this handle.
@@ -426,9 +415,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
           yield* expandSegments(
             project(segments),
-            frame.meta,
-            frame.props,
-            frame.hideSet,
+            state.meta,
+            state.props,
+            state.hideSet,
             state.counter,
             rendered,
             path,
@@ -453,21 +442,24 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     },
     *expandClaimed(
       element: ComponentElement,
+      meta: Record<string, unknown>,
+      props: Record<string, Json>,
+      hideSet: Set<string>,
       owner: Segment[],
       elementPath: string,
     ): Operation<Segment[]> {
-      // Slots were resolved during substitution. The projected content keeps
-      // the caller frame; only the resource scope moves.
+      // Slots were resolved during substitution, so the environment, meta,
+      // props and hide set are the body's own — only the resource scope moves.
       // The error mode has to travel with them: the content task does not inherit
       // the documentation or <Output> frame this `<Content />` sits in.
       const mode = (yield* ErrorMode.get()) ?? "print";
       return yield* runInContentScope({
         segments: element.children,
         mode,
-        env: layerProjectedContentEnvironment(state.caller.env, state.authored.env),
-        meta: state.caller.meta,
-        props: state.caller.props,
-        hideSet: state.caller.hideSet,
+        env: undefined,
+        meta,
+        props,
+        hideSet,
         inner: state.enclosing,
         loop: state.callerLoop,
         errors: [],
@@ -519,7 +511,6 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
 }
 
 const MAX_EXPANSION_DEPTH = 64;
-const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
 
 /**
  * Expand an array of segments, resolving components and executing code blocks.
@@ -595,24 +586,16 @@ export function* expandSegments(
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
         // Runs synchronously — no yield, no journal entry
         const healed = healSegment(segment.content);
-        const protectedEscapes = healed.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
-        const textEvalEnv = yield* env;
-        const textProps =
-          textEvalEnv !== undefined && "props" in textEvalEnv.values
-            ? textEvalEnv.values.props
-            : parentProps;
         // Interpolate {meta.key} and {props.key} — runtime, no journal
-        const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
+        const interpolated = interpolate(healed, parentMeta, parentProps);
         // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
         // Runs after meta/props interpolation so component contract takes
         // precedence. Only runs when a binding environment is in scope.
+        const textEvalEnv = yield* env;
         const final = textEvalEnv
           ? interpolateEvalBindings(interpolated, textEvalEnv.values)
           : interpolated;
-        result.push({
-          type: "text",
-          content: final.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{"),
-        });
+        result.push({ type: "text", content: final });
         break;
       }
 
@@ -635,7 +618,14 @@ export function* expandSegments(
           // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
-            yield* projection.expandClaimed(segment, result, elementPath);
+            yield* projection.expandClaimed(
+              segment,
+              parentMeta,
+              parentProps,
+              hideSet,
+              result,
+              elementPath,
+            );
             break;
           }
         }
@@ -1097,7 +1087,12 @@ function* expandEach(
   // expandComponent, so a projected <Each> resolves both lexical caller
   // bindings and the current component's bindings.
   const contextEnv = yield* env;
-  const callerEnv = layerEnvironments(segment.projectedEnv, contextEnv);
+  const callerEnv = segment.projectedEnv
+    ? derivedEnvironment(segment.projectedEnv, {
+        ...segment.projectedEnv.values,
+        ...(contextEnv?.values ?? {}),
+      })
+    : contextEnv;
   const parentEvalScope = yield* evalScope;
 
   const enclosingLoop = yield* ActiveLoop.get();
@@ -1911,10 +1906,14 @@ function* expandComponent(
   // For multi-level nesting (Root → Provider → Instruction → ReviewBody),
   // the projectedEnv from the outer caller must be merged with the current
   // context env so that ancestor bindings propagate through all levels.
-  // The current context env's ordinary bindings take precedence; the shared
-  // layering helper keeps a projected caller's props object lexical.
+  // The current context env's bindings take precedence (innermost-wins).
   const contextEnv = yield* env;
-  const callerEvalEnv = layerEnvironments(projectedEnv, contextEnv);
+  const callerEvalEnv = projectedEnv
+    ? derivedEnvironment(projectedEnv, {
+        ...projectedEnv.values,
+        ...(contextEnv?.values ?? {}),
+      })
+    : contextEnv;
 
   // Recurse with augmented hide set.
   // Each component gets its own fresh binding environment so that
@@ -1929,7 +1928,7 @@ function* expandComponent(
   // where innermost middleware runs first (innermost-wins), and
   // next() delegates to the parent scope's middleware.
   const newHideSet = new Set([...hideSet, name]);
-  const componentEnv: EvalEnv = propsEnvironment(validatedProps);
+  const componentEnv: EvalEnv = { values: { ...validatedProps } };
   liveEnvironment(componentEnv);
 
   // Children are caller-provided content, not the component's own body.
@@ -1965,18 +1964,10 @@ function* expandComponent(
       invocation,
       enclosing,
       children,
-      caller: {
-        env: capturedCallerEnv,
-        meta: callerMeta,
-        props: callerProps,
-        hideSet,
-      },
-      authored: {
-        env: componentEnv,
-        meta: definition.meta,
-        props: validatedProps,
-        hideSet: newHideSet,
-      },
+      callerEnv: capturedCallerEnv,
+      meta: definition.meta,
+      props: validatedProps,
+      hideSet,
       counter,
       callerLoop: siteLoop,
       ownPath: path,
@@ -2308,7 +2299,10 @@ function* expandFunctionComponent(
   // Resolved once, here: an operand is what the call site meant, not what the
   // component's own body later did to the environment.
   const siteEnv = yield* env;
-  const captureEnv = layerEnvironments(projectedEnv, siteEnv)?.values ?? {};
+  const captureEnv: Record<string, unknown> = {
+    ...(projectedEnv?.values ?? {}),
+    ...(siteEnv?.values ?? {}),
+  };
 
   const expansion = snapshot(path, name, position);
 
@@ -2323,18 +2317,15 @@ function* expandFunctionComponent(
           invocation,
           enclosing,
           children,
-          caller: {
-            env: undefined,
-            meta: callerMeta,
-            props: callerProps,
-            hideSet,
-          },
-          authored: {
-            env: undefined,
-            meta: callerMeta,
-            props: callerProps,
-            hideSet,
-          },
+          // A function component's content inherits whatever environment the
+          // component installed for it — see ProjectionState.callerEnv.
+          callerEnv: undefined,
+          // ...but the content itself is the CALLER's markdown, so `{meta.x}`
+          // and `{props.x}` in it resolve against the expansion that wrote it,
+          // which projection has to be handed.
+          meta: callerMeta,
+          props: callerProps,
+          hideSet,
           counter,
           callerLoop: siteLoop,
           ownPath: path,
@@ -2407,11 +2398,16 @@ function* expandFunctionComponent(
           },
           { at: "min" },
         );
-        // Projection follows the same ordinary-binding layering as Markdown
-        // expansion while retaining the projected caller's props namespace.
+        // Projection honored the way expandComponent and expandEach honor it:
+        // a component written inside content projected through <Content /> sees
+        // the lexical caller's bindings under the current component's, so what
+        // it reads is what its author wrote beside it.
         if (projectedEnv) {
           const siteEnv = yield* env;
-          const projectedSiteEnv = layerEnvironments(projectedEnv, siteEnv) ?? { values: {} };
+          const projectedSiteEnv = derivedEnvironment(projectedEnv, {
+            ...projectedEnv.values,
+            ...(siteEnv?.values ?? {}),
+          });
           yield* Component.around(
             {
               env: () => projectedSiteEnv,
@@ -2623,7 +2619,10 @@ function* expressionEnv(
   // (contextEnv). The component's env takes priority because its eval
   // blocks run before <Content /> and may define bindings that children
   // reference. The caller's env provides fallback bindings from the
-  const evalEnv = layerEnvironments(explicitEnv, contextEnv);
+  const evalEnv =
+    explicitEnv && contextEnv
+      ? { values: { ...explicitEnv.values, ...contextEnv.values } }
+      : (contextEnv ?? explicitEnv);
 
   if (!evalEnv) {
     throw new Error(
@@ -2811,14 +2810,15 @@ function makeProjectFn(callerEnv: EvalEnv | undefined): ProjectFn {
 
 /**
  * Replace `<Content />` / `<Content slot="X" />` in a segment list with the
- * caller's children (partitioned by slot). Text interpolation waits until the
- * expansion frame is installed, so a current binding named `props` is used.
- * Slot validation errors are emitted once, at the first projection point,
- * tracked via the shared `state`.
+ * caller's children (partitioned by slot) and interpolate {meta}/{props} in
+ * text. Slot validation errors are emitted once, at the first projection
+ * point, tracked via the shared `state`.
  */
 function substituteSegmentList(
   segments: Segment[],
   slots: SlotMap,
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
   project: ProjectFn,
   state: SubstitutionState,
   claim: ClaimFn,
@@ -2842,6 +2842,9 @@ function substituteSegmentList(
       const element: ComponentElement = { ...segment, children: projected, selfClosing: false };
       return [...pendingErrors, claim(element)];
     }
+    if (segment.type === "text") {
+      return [{ ...segment, content: interpolate(segment.content, meta, props) }];
+    }
     return [segment];
   });
 }
@@ -2849,6 +2852,7 @@ function substituteSegmentList(
 /**
  * Replace `<Content />` and `<Content slot="X" />` invocations with the
  * caller's children, partitioned by slot assignment.
+ * Also interpolates {meta.key} and {props.key} in text segments.
  *
  * When no `slot` props are present anywhere, this behaves identically
  * to the original single-slot substituteContent.
@@ -2856,13 +2860,15 @@ function substituteSegmentList(
 function substituteContent(
   bodySegments: Segment[],
   children: Segment[],
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn,
 ): Segment[] {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);
-  return substituteSegmentList(bodySegments, slots, project, state, claim);
+  return substituteSegmentList(bodySegments, slots, meta, props, project, state, claim);
 }
 
 interface BodyChunk {
@@ -3131,6 +3137,8 @@ function validateOutputProps(segment: ComponentElement): ErrorSegment | undefine
 function buildBody(
   bodySegments: Segment[],
   children: Segment[],
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn,
   path: string,
@@ -3147,7 +3155,15 @@ function buildBody(
         chunks.push({ output: true, segments: [propsError], declaration: true });
         continue;
       }
-      const outputSegments = substituteSegmentList(segment.children, slots, project, state, claim);
+      const outputSegments = substituteSegmentList(
+        segment.children,
+        slots,
+        meta,
+        props,
+        project,
+        state,
+        claim,
+      );
       chunks.push({
         output: true,
         segments: outputSegments,
@@ -3156,7 +3172,7 @@ function buildBody(
       continue;
     }
 
-    const docSegments = substituteSegmentList([segment], slots, project, state, claim);
+    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
     chunks.push({ output: false, segments: docSegments, indexBase: index });
   }
 
@@ -3196,11 +3212,11 @@ export function* expandBody(
   path: string = "",
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
-    const substituted = substituteContent(bodySegments, children, callerEnv, claim);
+    const substituted = substituteContent(bodySegments, children, meta, props, callerEnv, claim);
     return yield* expandSegments(substituted, meta, props, hideSet, counter, owner, path);
   }
 
-  const chunks = buildBody(bodySegments, children, callerEnv, claim, path);
+  const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim, path);
   const output: Segment[] = owner ?? [];
 
   for (const chunk of chunks) {
@@ -3329,7 +3345,7 @@ function* expandValueBody(
       produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
       continue;
     }
-    const docSegments = substituteSegmentList([segment], slots, project, state, claim);
+    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
     yield* runDocumentation(docSegments, meta, props, hideSet, counter, path, index);
   }
 

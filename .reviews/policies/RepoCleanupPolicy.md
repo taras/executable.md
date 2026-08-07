@@ -17,7 +17,7 @@ props:
 <ReviewSection heading="Cleanup Policy"
   clean="✅ No code health issues detected.">
 
-<Show when={props.diagnostics.total > 0 && !!props.cleanupAnalysis}>
+<Show when={diagnostics.total > 0 && !!cleanupAnalysis}>
 
 <Sample>
 
@@ -34,7 +34,7 @@ PRINCIPLES:
   Single-consumer abstractions should be inlined.
 - YAGNI: flag code that exists "just in case" with no current caller.
 
-{props.cleanupAnalysis.promptContext}
+{cleanupAnalysis.promptContext}
 
 For each of the top 5 clusters above, produce exactly this format:
 
@@ -63,9 +63,9 @@ Example of a good item:
 
 </Show>
 
-<Show when={props.diagnostics.total > 0 && !props.cleanupAnalysis}>
+<Show when={diagnostics.total > 0 && !cleanupAnalysis}>
 
-{props.diagnostics.summary}
+{diagnostics.summary}
 
 </Show>
 

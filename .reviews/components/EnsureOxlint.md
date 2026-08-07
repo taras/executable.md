@@ -15,7 +15,7 @@ props:
 # neither can change without the other. The workflow guards on the resulting
 # binaries (see review.yml).
 set -euo pipefail
-DIR="{props.dir}"
+DIR="{dir}"
 OXLINT_TAG="apps_v1.74.0"
 TSGOLINT_VERSION="0.25.0"
 mkdir -p "$DIR"

@@ -18,14 +18,14 @@ props:
 ---
 
 ```ts eval
-const re = new RegExp(props.pattern, "i");
-const suspicious = props.pr.created
+const re = new RegExp(pattern, "i");
+const suspicious = pr.created
   .filter(f => f.path.endsWith(".ts") && !f.isTest && !f.isTypeDeclaration)
   .filter(f => re.test(f.path));
 const triggered = suspicious.length > 0;
-const resolvedMessage = props.message.replace(
+const resolvedMessage = message.replace(
   "{names}", suspicious.map(f => f.path).join(", ")
 );
 ```
 
-<Finding when={triggered} severity={props.severity} message={resolvedMessage} />
+<Finding when={triggered} severity={severity} message={resolvedMessage} />

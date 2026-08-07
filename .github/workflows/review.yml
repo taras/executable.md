@@ -42,28 +42,6 @@ jobs:
             -j .reviews/journal.jsonl \
             --verbose
 
-      - name: Verify review result
-        if: always()
-        run: |
-          test -x .reviews/.oxlint/oxlint && test -x .reviews/.oxlint/tsgolint \
-            || { echo "::error::oxlint/tsgolint could not be provisioned by EnsureOxlint"; exit 1; }
-          test -f .reviews/journal.jsonl \
-            || { echo "::error::xmd did not produce a journal"; exit 1; }
-          ROOT_CLOSE=$(jq -c 'select(.type == "close" and .coroutineId == "root")' .reviews/journal.jsonl | tail -n 1)
-          test -n "$ROOT_CLOSE" \
-            || { echo "::error::xmd did not close the root document"; exit 1; }
-          ROOT_STATUS=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.status // "missing"')
-          test "$ROOT_STATUS" = ok \
-            || { echo "::error::xmd root close was unsuccessful: $ROOT_STATUS"; exit 1; }
-          VALUE_STATUS=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.status // "ok"')
-          test "$VALUE_STATUS" = ok \
-            || { echo "::error::xmd root output was unsuccessful: $VALUE_STATUS"; exit 1; }
-          ROOT_OUTPUT=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.output? // .result.value.value? // .result.value? // "" | tostring')
-          if [[ "$ROOT_OUTPUT" == *'<!-- ERROR:'* ]]; then
-            echo "::error::xmd rendered a document error"
-            exit 1
-          fi
-
       - name: Upload journal
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

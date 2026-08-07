@@ -148,21 +148,4 @@ describe("Tier P — Eval binding interpolation", () => {
     });
     expect(result).toBe("5 files, port 3000");
   });
-
-  it("P20: props dotted path resolves nested values", function* () {
-    const result = interpolateEvalBindings("version={props.release.version}", {
-      props: { release: { version: "1.2.3" } },
-    });
-    expect(result).toBe("version=1.2.3");
-  });
-
-  it("P21: props dotted path preserves missing and null intermediates", function* () {
-    const result = interpolateEvalBindings(
-      "{props.release.version.value} {props.release.name.value}",
-      {
-        props: { release: { version: null } },
-      },
-    );
-    expect(result).toBe("{props.release.version.value} {props.release.name.value}");
-  });
 });

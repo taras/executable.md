@@ -2,6 +2,8 @@
 title: Repository Analysis (CI)
 ---
 
+<Output>
+
 ```bash silent exec
 mkdir -p .reviews
 cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
@@ -173,3 +175,5 @@ const cleanupAnalysis = buildCleanupAnalysis(diagnostics);
   </Instruction>
 </DeepInfraProvider>
 </ThinkFilter>
+
+</Output>
