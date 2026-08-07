@@ -487,6 +487,11 @@ All shell checks are `exec` blocks captured into bindings. On
 replay, stored results are returned from the journal — no commands
 re-run.
 
+Credential-bearing GitHub API headers are created by a non-serializable
+function at each request. They are not stored in eval bindings or durable
+diagnostic output, so the default secret-detection policy remains enabled
+through review and repository analysis.
+
 **Checks performed:**
 
 | Check | What | Why |
@@ -1381,6 +1386,17 @@ jobs:
             --component-dir packages/core/components \
             -j .reviews/journal.jsonl \
             --verbose
+
+      - name: Verify review result
+        if: always()
+        run: |
+          test -f .reviews/journal.jsonl
+          ROOT_CLOSE=$(jq -c 'select(.type == "close" and .coroutineId == "root")' .reviews/journal.jsonl | tail -n 1)
+          test -n "$ROOT_CLOSE"
+          test "$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.status // "missing"')" = ok
+          test "$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.status // "ok"')" = ok
+          ROOT_OUTPUT=$(printf '%s' "$ROOT_CLOSE" | jq -r '.result.value.output? // .result.value.value? // .result.value? // "" | tostring')
+          test "${ROOT_OUTPUT/<!-- ERROR:/}" = "$ROOT_OUTPUT"
 
       - name: Upload journal
         if: always()
