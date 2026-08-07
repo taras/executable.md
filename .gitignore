@@ -21,6 +21,3 @@ npm/
 # deno task build:web output — built into the package at release time,
 # never a repository source file (specs/release-process-spec.md)
 packages/web/generated/
-
-# spike #349 working artifacts — vendored build output and databases stay out
-spikes/349-dofs/vendor-build/
