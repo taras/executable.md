@@ -45,7 +45,7 @@ export default define.page(function GettingStarted({ url }) {
           <span style="font-family:var(--font-mono);font-size:0.8125rem;font-weight:700;">
             xmd run
           </span>
-          <span style="font-size:0.84375rem;line-height:1.55;color:var(--fg-body);">
+          <span style="font-size:0.84375rem;line-height:1.55;color:var(--body);">
             Runs a document against the current environment. Operations complete
             correctly, but nothing promises that another execution can restore
             or reattach to that environment.
@@ -53,12 +53,14 @@ export default define.page(function GettingStarted({ url }) {
         </div>
         <div>
           <span style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-            <span style="font-family:var(--font-mono);font-size:0.8125rem;font-weight:700;color:var(--warn);">
+            <span style="font-family:var(--font-mono);font-size:0.8125rem;font-weight:700;color:var(--code-expr);">
               xmd workflow
             </span>
-            <span class="pill" style="color:var(--warn);">Not yet shipped</span>
+            <span class="pill" style="color:var(--code-expr);">
+              Not yet shipped
+            </span>
           </span>
-          <span style="font-size:0.84375rem;line-height:1.55;color:var(--fg-body);">
+          <span style="font-size:0.84375rem;line-height:1.55;color:var(--body);">
             Will run a document in a retained Workspace so an interrupted
             workflow can reattach and continue. Unsupported imperative
             operations fail explicitly instead of falling back to the host.

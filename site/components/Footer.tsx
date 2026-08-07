@@ -3,11 +3,11 @@ import { Wordmark } from "./Wordmark.tsx";
 const GITHUB = "https://github.com/taras/executable.md";
 
 const LINK =
-  "color:var(--fg);border-bottom:var(--rule) solid var(--ink);padding-bottom:1px;";
+  "color:var(--ink);border-bottom:var(--rule) solid var(--line);padding-bottom:1px;";
 
 export function Footer() {
   return (
-    <footer style="margin-top:4rem;border-top:var(--rule) solid var(--ink);background:var(--bg);">
+    <footer style="margin-top:4rem;border-top:var(--rule) solid var(--line);background:var(--paper);">
       <div
         class="container"
         style="padding-block:2.25rem;display:flex;flex-wrap:wrap;gap:1.5rem;justify-content:space-between;align-items:center;"
@@ -38,7 +38,7 @@ export function Footer() {
       <style
         dangerouslySetInnerHTML={{
           __html:
-            "footer a:hover{color:var(--accent-strong);border-bottom-color:var(--accent-strong);}",
+            "footer a:hover{color:var(--green);border-bottom-color:var(--green);}",
         }}
       />
     </footer>
