@@ -1,6 +1,12 @@
 {
-  "workspace": ["packages/*", "site"],
-  "exclude": ["scripts/tests/fixtures", "spikes"],
+  "workspace": [
+    "packages/*",
+    "site"
+  ],
+  "exclude": [
+    "scripts/tests/fixtures",
+    "spikes"
+  ],
   "nodeModulesDir": "auto",
   "lock": {
     "frozen": true
@@ -60,6 +66,9 @@
     "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl",
     "spike:349": "deno task --cwd spikes/349-dofs all",
     "spike:349:build": "deno task --cwd spikes/349-dofs build",
-    "spike:349:test": "deno task --cwd spikes/349-dofs test"
+    "spike:349:test": "deno task --cwd spikes/349-dofs test",
+    "spike:351": "deno task --cwd spikes/351-worker-backends all",
+    "spike:351:build": "deno task --cwd spikes/351-worker-backends build",
+    "spike:351:test": "deno task --cwd spikes/351-worker-backends test"
   }
 }
