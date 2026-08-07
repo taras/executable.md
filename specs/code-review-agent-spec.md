@@ -92,7 +92,7 @@ interface PR {
   deleted: DiffFile[];
   directories: Set<string>;
   addedSource: string;
-  diffPreview: string;       // addedSource truncated to 80K chars
+  diffPreview: string;       // addedSource truncated to 40K chars
   stats: {
     totalFiles: number;
     additions: number;
@@ -149,7 +149,8 @@ function parseDiff(
 - Test file detection: `*.test.ts`, `*.spec.ts`, `__tests__/`, `test/`
 - Config file detection: `*.config.*`, `.*rc`, `tsconfig*`, `package.json`
 - Type declaration detection: `*.d.ts`
-- `diffPreview`: `addedSource` truncated to 80,000 characters
+- `diffPreview`: `addedSource` truncated to 40,000 characters so the
+  correctness prompt stays within the provider context limit on large PRs
 - `directories`: unique top-level dirs at depth 2
 
 ### 3.4 Package structure
