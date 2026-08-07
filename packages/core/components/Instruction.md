@@ -25,7 +25,7 @@ yield *
         const existing = context.system || "";
         return yield* next({
           ...context,
-          system: existing ? existing + "\n" + system : system,
+          system: existing ? existing + "\n" + props.system : props.system,
         });
       },
     },

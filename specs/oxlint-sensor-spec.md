@@ -694,15 +694,22 @@ Skipping type-aware probe — prerequisites not met.
 <If condition={canProbeTypeAware}>
 
 ```bash silent exec
-RESULT=$(npx oxlint --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
-STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
-rm -f .reviews/probe-stderr.tmp
-echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
+RESULT=$(npx oxlint --type-aware --tsconfig {tsconfigPath} --format json 2>/dev/null || true)
+printf '%s' "$RESULT" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def rule: if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end;
+  entries | map({message: (.message // ""), ruleId: rule, file: (.file // .filename // "")}) as $diagnostics
+  | {diagnosticCount: ($diagnostics | length), importNoiseCount: ([$diagnostics[] | select((.message | ascii_downcase | contains("cannot find module")) or (.ruleId | ascii_downcase | contains("import")))] | length), filesAnalyzed: ([$diagnostics[].file | select(length > 0)] | unique | length), filesSkipped: 0, importErrors: ([$diagnostics[] | select((.message | ascii_downcase | contains("cannot find module")) or (.ruleId | ascii_downcase | contains("import")))] | length), availableRuleIds: ([$diagnostics[].ruleId] | unique), tsgolintCrashed: false}
+' || echo '{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}'
 ```
 
 <Else>
 
-{"diagnostics":[],"stderr":""}
+{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}
 
 </Else>
 </If>
@@ -733,27 +740,24 @@ const TYPE_AWARE_RULES = [
   "no-unnecessary-boolean-literal-compare",
 ];
 
-let probe = { diagnostics: [], stderr: "" };
-try { probe = JSON.parse(probeResult); } catch { /* malformed */ }
+let probe = {
+  diagnosticCount: 0,
+  importNoiseCount: 0,
+  filesAnalyzed: 0,
+  filesSkipped: 0,
+  importErrors: 0,
+  availableRuleIds: [],
+  tsgolintCrashed: false,
+};
+try { probe = { ...probe, ...JSON.parse(probeResult) }; } catch { }
 
-const diagnostics = Array.isArray(probe.diagnostics)
-  ? probe.diagnostics : [];
-
-const importNoise = diagnostics.filter(d =>
-  d.message?.includes("Cannot find module")
-  || d.message?.includes("cannot find")
-  || d.ruleId?.includes("import")
-);
-
-const fileSet = new Set(diagnostics.map(d => d.file).filter(Boolean));
-const noiseRatio = diagnostics.length > 0
-  ? importNoise.length / diagnostics.length : 0;
-
-const tsgolintCrashed = typeof probe.stderr === "string"
-  && probe.stderr.includes("tsgolint")
-  && (probe.stderr.includes("panic")
-    || probe.stderr.includes("OOM")
-    || probe.stderr.includes("fatal"));
+const diagnosticCount = typeof probe.diagnosticCount === "number"
+  ? probe.diagnosticCount : 0;
+const importNoiseCount = typeof probe.importNoiseCount === "number"
+  ? probe.importNoiseCount : 0;
+const noiseRatio = diagnosticCount > 0
+  ? importNoiseCount / diagnosticCount : 0;
+const tsgolintCrashed = probe.tsgolintCrashed === true;
 
 const typeAwareAvailable = canProbeTypeAware && !tsgolintCrashed;
 
@@ -779,9 +783,10 @@ const doctor = {
   tsconfigExists,
   nodeModulesExists,
   typeAwareAvailable,
-  filesAnalyzed: fileSet.size,
-  filesSkipped: new Set(importNoise.map(d => d.file).filter(Boolean)).size,
-  importErrors: importNoise.length,
+  filesAnalyzed: typeof probe.filesAnalyzed === "number" ? probe.filesAnalyzed : 0,
+  filesSkipped: typeof probe.filesSkipped === "number" ? probe.filesSkipped : 0,
+  importErrors: typeof probe.importErrors === "number" ? probe.importErrors : 0,
+  availableRuleIds: Array.isArray(probe.availableRuleIds) ? probe.availableRuleIds : [],
   bloatRulesAvailable,
   bloatRulesMissing,
   recommendation,
@@ -801,8 +806,8 @@ return JSON.stringify(doctor);
 <If condition={typeAwareAvailable}>
 
 Type-aware linting available. {bloatRulesAvailable.length} bloat
-rules active across {fileSet.size} files.
-Import noise: {importNoise.length} diagnostics
+rules active across {probe.filesAnalyzed} files.
+Import noise: {probe.importNoiseCount} diagnostics
 ({(noiseRatio * 100).toFixed(1)}%).
 
 </If>
@@ -1064,6 +1069,8 @@ DIFF:
 title: PR Review
 ---
 
+<Output>
+
 ```ts eval
 const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
 const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
@@ -1158,6 +1165,8 @@ const diagnostics = parseDiagnostics(rawDiagnostics, pr, doctor);
     </GitHubComment>
   </Instructions>
 </DeepInfraProvider>
+
+</Output>
 ````
 
 ### 8.2 `ReviewPR.local.md` (local with Ollama)
@@ -1287,9 +1296,11 @@ jobs:
 
       - uses: denoland/setup-deno@v2
 
-      - run: deno install
+      - name: Install dependencies
+        run: deno task deps
 
-      - run: npm install -g oxlint oxlint-tsgolint
+      - name: Build the checked-out xmd binary
+        run: deno task build
 
       - name: Run review
         env:
@@ -1300,7 +1311,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task review --verbose
+        run: |
+          ./dist/xmd run .reviews/ReviewPR.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir packages/core/components \
+            -j .reviews/journal.jsonl \
+            --verbose
 
       - name: Upload journal
         if: always()
@@ -1311,8 +1328,27 @@ jobs:
           retention-days: 30
 ```
 
-`deno install` creates `node_modules/` (required by tsgolint).
-`npm install -g oxlint oxlint-tsgolint` provides the binaries.
+The workflow builds and runs the checked-out `./dist/xmd` after
+`deno task deps`, so the review documents and executable use one revision.
+The root document encloses its executable body in `<Output>`; execution
+failures therefore exit nonzero through the normal `DocumentResult` path.
+Review finding text remains ordinary report output and does not fail the job.
+
+The workflow uploads the journal with `if: always()` and does not interpret
+journal records or rendered Markdown after XMD exits.
+
+### Durable diagnostic boundary
+
+The Doctor compatibility probe emits only aggregate facts: availability or
+crash state, diagnostic and import-noise counts, file counts, and available
+rule identifiers. Actual Oxlint output is normalized before capture to
+`message`, `ruleId` or `code`, `severity`, `file`, and minimal line/column
+information. PR review restricts diagnostics to changed files; repository
+analysis retains all files. Source excerpts, causes, rendered source, URLs,
+and arbitrary payload do not cross the exec/durable boundary.
+
+Credential-bearing headers are created inside non-serializable functions at
+request time. Default secret detection remains enabled.
 
 ### Separate enforcement jobs (unchanged from base spec)
 

@@ -11,30 +11,31 @@ props:
 ---
 
 ```ts persist eval
-const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 
-if (!token || !repo) {
+function githubHeaders() {
+  return {
+    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+    "Accept": "application/vnd.github+json",
+    "Content-Type": "application/json",
+  };
+}
+
+if (!process.env.GITHUB_TOKEN || !repo) {
   return "";
 }
 
 const [owner, repoName] = repo.split("/");
 const api = `https://api.github.com/repos/${owner}/${repoName}`;
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-  "Content-Type": "application/json",
-};
-
 const LABEL = "cleanup";
 const TOP_N = 5;
 
 // 1. Ensure label exists
-const labelResponse = yield* fetch(`${api}/labels/${LABEL}`, { headers });
+const labelResponse = yield* fetch(`${api}/labels/${LABEL}`, { headers: githubHeaders() });
 if (labelResponse.status === 404) {
   yield* fetch(`${api}/labels`, {
     method: "POST",
-    headers,
+    headers: githubHeaders(),
     body: JSON.stringify({
       name: LABEL,
       description: "Auto-generated cleanup finding from repo analysis",
@@ -49,7 +50,7 @@ let page = 1;
 while (true) {
   const batch = yield* fetch(
     `${api}/issues?labels=${LABEL}&state=open&per_page=100&page=${page}`,
-    { headers },
+    { headers: githubHeaders() },
   ).expect().json();
 
   if (!Array.isArray(batch) || batch.length === 0) break;
@@ -69,7 +70,7 @@ for (const issue of existingIssues) {
 }
 
 // 4. Process top 5 clusters
-const topClusters = cleanupAnalysis.fileClusters.slice(0, TOP_N);
+const topClusters = props.cleanupAnalysis.fileClusters.slice(0, TOP_N);
 const topFiles = new Set(topClusters.map(c => c.file));
 
 let created = 0;
@@ -108,14 +109,14 @@ for (const cluster of topClusters) {
   if (existing) {
     yield* fetch(api + "/issues/" + existing.number, {
       method: "PATCH",
-      headers,
+      headers: githubHeaders(),
       body: JSON.stringify({ title, body }),
     }).expect();
     updated++;
   } else {
     yield* fetch(api + "/issues", {
       method: "POST",
-      headers,
+      headers: githubHeaders(),
       body: JSON.stringify({
         title,
         body,
@@ -131,7 +132,7 @@ for (const [file, issue] of issuesByFile.entries()) {
   if (!topFiles.has(file)) {
     yield* fetch(api + "/issues/" + issue.number + "/comments", {
       method: "POST",
-      headers,
+      headers: githubHeaders(),
       body: JSON.stringify({
         body: "Resolved — file no longer in top-5 cleanup targets. Closing automatically.",
       }),
@@ -139,7 +140,7 @@ for (const [file, issue] of issuesByFile.entries()) {
 
     yield* fetch(api + "/issues/" + issue.number, {
       method: "PATCH",
-      headers,
+      headers: githubHeaders(),
       body: JSON.stringify({ state: "closed" }),
     }).expect();
     closed++;

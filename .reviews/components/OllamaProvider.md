@@ -14,7 +14,7 @@ props:
 ```ts persist eval
 yield* Sample.around({
   *sample([context], next) {
-    if (context.model !== undefined && context.model !== model) {
+    if (context.model !== undefined && context.model !== props.model) {
       return yield* next(context);
     }
 
@@ -24,10 +24,10 @@ yield* Sample.around({
     }
     messages.push({ role: "user", content: context.content });
 
-    const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
+    const result = yield* fetch(`${props.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages, temperature: 0 }),
+      body: JSON.stringify({ model: props.model, messages, temperature: 0 }),
     })
       .expect()
       .json();

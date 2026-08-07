@@ -14,11 +14,11 @@ props:
 ---
 
 ```ts eval
-const icon = severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
+const icon = props.severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
 ```
 
-<Show when={when}>
+<Show when={props.when}>
 
-{icon} {message}
+{icon} {props.message}
 
 </Show>

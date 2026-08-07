@@ -71,9 +71,9 @@ they already satisfy the lockfile. Left alone they keep the previous release's
 number. Only the members whose `name` is an `@executablemd` package change; an
 unrelated dependency that happens to share the old version number must not.
 
-The bump touches nothing else. PR Review and Repo Analysis install
-the latest published release rather than a pinned version, so preparing a
-release never depends on a binary that release has not published yet.
+The bump touches nothing else. PR Review and Repo Analysis build the checked-out
+revision with the repository-pinned Deno version, so their executable documents
+run against the source they review rather than against a published binary.
 
 ## 3. Workflows
 
@@ -84,6 +84,19 @@ release never depends on a binary that release has not published yet.
   version is already released, the draft's notes carry a warning banner saying
   the manifests need bumping; once bumped, the banner clears and the draft's
   tag and title default to the guard-passing `v<version>`.
+- **`review.yml`** (`pull_request`): checks out the pull request, installs the
+  repository-pinned Deno version, runs `deno task deps`, and runs `deno task
+  build`. It executes the resulting `./dist/xmd` against `.reviews/ReviewPR.md`.
+  The root review body is enclosed in a top-level `<Output>` region, so an
+  execution failure propagates through `DocumentResult` and makes the command
+  fail. Review findings remain ordinary report text and do not fail execution.
+  The workflow uploads `.reviews/journal.jsonl` with `if: always()` and does
+  not parse journal records or rendered error markers after XMD exits.
+- **`repo-analysis.yml`** (`workflow_dispatch`): checks out the requested ref,
+  prepares and builds that ref's `./dist/xmd`, and executes
+  `.reviews/AnalyzeRepoCI.md`, whose root body uses the same `<Output>` failure
+  contract. Its report, journal, and run metadata remain unconditional
+  artifacts.
 - **`release.yml`** (`push: tags v*`): a preflight job validates the tag
   against `packages/cli/deno.json`; on mismatch it flags the just-published release on
   the Releases page — caution note in the notes, a failed title, and the

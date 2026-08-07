@@ -29,7 +29,7 @@ const baseUrl = `http://127.0.0.1:${port}`;
 ```
 
 ```bash daemon exec
-{command} --port {port}
+        {props.command} --port {port}
 ```
 
 ```ts eval
@@ -44,7 +44,7 @@ yield *
   Sample.around(
     {
       *sample([context], next) {
-        if (context.model !== undefined && context.model !== model) {
+        if (context.model !== undefined && context.model !== props.model) {
           return yield* next(context);
         }
 
@@ -57,7 +57,7 @@ yield *
         const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 2048 }),
+          body: JSON.stringify({ model: props.model, messages, temperature: 0, max_tokens: 2048 }),
         })
           .expect()
           .json();

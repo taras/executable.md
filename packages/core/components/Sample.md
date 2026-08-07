@@ -31,15 +31,15 @@ props:
 
 ```js persist eval
 const childrenOutput = yield * renderChildren();
-const content = childrenOutput || prompt || "";
+const content = childrenOutput || props.prompt || "";
 
 const sampleResult =
   yield *
   Sample.operations.sample({
     content,
-    params: params || undefined,
+    params: props.params || undefined,
     componentName: "Sample",
-    model: model || undefined,
+    model: props.model || undefined,
   });
 
 return sampleResult;

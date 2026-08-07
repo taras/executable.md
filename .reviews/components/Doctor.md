@@ -42,7 +42,7 @@ test -x .reviews/.oxlint/oxlint && echo "EXISTS" || echo "MISSING"
 <Capture as="tsconfigCheck">
 
 ```bash exec
-test -f {tsconfigPath} && echo "EXISTS" || echo "MISSING"
+test -f {props.tsconfigPath} && echo "EXISTS" || echo "MISSING"
 ```
 
 </Capture>
@@ -87,13 +87,71 @@ Running type-aware probe to test Oxlint compatibility...
 <Capture as="probeResult">
 
 <Show when={canProbeTypeAware}
-  fallback='{"diagnostics":[],"stderr":""}'>
+  fallback='{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}'>
 
 ```bash exec
-RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
+RESULT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig {props.tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
 STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
 rm -f .reviews/probe-stderr.tmp
-echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
+if [ -n "$RESULT" ] && printf '%s' "$RESULT" | jq -c --arg stderr "$STDERR" '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def file:
+    if (.file? | type) == "string" then .file
+    elif (.filename? | type) == "string" then .filename
+    else ""
+    end;
+  def rule:
+    if (.ruleId? | type) == "string" then .ruleId
+    elif (.code? | type) == "string" then .code
+    else "unknown"
+    end;
+  def message:
+    if (.message? | type) == "string" then .message else "" end;
+  def import_noise:
+    ((.message | ascii_downcase | contains("cannot find module"))
+      or (.ruleId | ascii_downcase | contains("import")));
+  def crashed($value):
+    ($value | ascii_downcase) as $lower
+    | ($lower | contains("tsgolint"))
+      and (($lower | contains("panic"))
+        or ($lower | contains("oom"))
+        or ($lower | contains("fatal")));
+  entries
+  | map({file: file, ruleId: rule, message: message}) as $diagnostics
+  | {
+      diagnosticCount: ($diagnostics | length),
+      importNoiseCount: ([$diagnostics[] | select(import_noise)] | length),
+      filesAnalyzed: ([$diagnostics[].file | select(length > 0)] | unique | length),
+      filesSkipped: ([$diagnostics[] | select(import_noise) | .file | select(length > 0)] | unique | length),
+      importErrors: ([$diagnostics[] | select(import_noise)] | length),
+      availableRuleIds: ([$diagnostics[].ruleId | select(length > 0)] | unique),
+      tsgolintCrashed: crashed($stderr)
+    }
+'; then
+  :
+else
+  jq -cn --arg stderr "$STDERR" '
+    def crashed($value):
+      ($value | ascii_downcase) as $lower
+      | ($lower | contains("tsgolint"))
+        and (($lower | contains("panic"))
+          or ($lower | contains("oom"))
+          or ($lower | contains("fatal")));
+    {
+      diagnosticCount: 0,
+      importNoiseCount: 0,
+      filesAnalyzed: 0,
+      filesSkipped: 0,
+      importErrors: 0,
+      availableRuleIds: [],
+      tsgolintCrashed: crashed($stderr)
+    }
+  '
+fi
 ```
 
 </Show>
@@ -117,31 +175,25 @@ const TYPE_AWARE_RULES = [
   "no-unnecessary-boolean-literal-compare",
 ];
 
-let probe = { diagnostics: [], stderr: "" };
-try { probe = JSON.parse(probeResult); } catch { /* malformed */ }
+let probe = {
+  diagnosticCount: 0,
+  importNoiseCount: 0,
+  filesAnalyzed: 0,
+  filesSkipped: 0,
+  importErrors: 0,
+  availableRuleIds: [],
+  tsgolintCrashed: false,
+};
+try { probe = { ...probe, ...JSON.parse(probeResult) }; } catch { }
 
-const diagnostics = Array.isArray(probe.diagnostics)
-  ? probe.diagnostics
-  : (probe.diagnostics && typeof probe.diagnostics === "object"
-      && Array.isArray(probe.diagnostics.diagnostics))
-  ? probe.diagnostics.diagnostics
-  : [];
+const diagnosticCount = typeof probe.diagnosticCount === "number"
+  ? probe.diagnosticCount : 0;
+const importNoiseCount = typeof probe.importNoiseCount === "number"
+  ? probe.importNoiseCount : 0;
+const noiseRatio = diagnosticCount > 0
+  ? importNoiseCount / diagnosticCount : 0;
 
-const importNoise = diagnostics.filter(d =>
-  d.message?.includes("Cannot find module")
-  || d.message?.includes("cannot find")
-  || d.ruleId?.includes("import")
-);
-
-const fileSet = new Set(diagnostics.map(d => d.file).filter(Boolean));
-const noiseRatio = diagnostics.length > 0
-  ? importNoise.length / diagnostics.length : 0;
-
-const tsgolintCrashed = typeof probe.stderr === "string"
-  && probe.stderr.includes("tsgolint")
-  && (probe.stderr.includes("panic")
-    || probe.stderr.includes("OOM")
-    || probe.stderr.includes("fatal"));
+const tsgolintCrashed = probe.tsgolintCrashed === true;
 
 const typeAwareAvailable = canProbeTypeAware && !tsgolintCrashed;
 
@@ -167,9 +219,11 @@ const doctor = {
   tsconfigExists,
   nodeModulesExists,
   typeAwareAvailable,
-  filesAnalyzed: fileSet.size,
-  filesSkipped: new Set(importNoise.map(d => d.file).filter(Boolean)).size,
-  importErrors: importNoise.length,
+  filesAnalyzed: typeof probe.filesAnalyzed === "number" ? probe.filesAnalyzed : 0,
+  filesSkipped: typeof probe.filesSkipped === "number" ? probe.filesSkipped : 0,
+  importErrors: typeof probe.importErrors === "number" ? probe.importErrors : 0,
+  availableRuleIds: Array.isArray(probe.availableRuleIds)
+    ? probe.availableRuleIds : [],
   bloatRulesAvailable,
   bloatRulesMissing,
   recommendation,

@@ -92,7 +92,7 @@ interface PR {
   deleted: DiffFile[];
   directories: Set<string>;
   addedSource: string;
-  diffPreview: string;       // addedSource truncated to 80K chars
+  diffPreview: string;       // addedSource truncated to 40K chars
   stats: {
     totalFiles: number;
     additions: number;
@@ -149,7 +149,8 @@ function parseDiff(
 - Test file detection: `*.test.ts`, `*.spec.ts`, `__tests__/`, `test/`
 - Config file detection: `*.config.*`, `.*rc`, `tsconfig*`, `package.json`
 - Type declaration detection: `*.d.ts`
-- `diffPreview`: `addedSource` truncated to 80,000 characters
+- `diffPreview`: `addedSource` truncated to 40,000 characters so the
+  correctness prompt stays within the provider context limit on large PRs
 - `directories`: unique top-level dirs at depth 2
 
 ### 3.4 Package structure
@@ -1049,6 +1050,8 @@ Zero eval blocks.
 title: PR Review
 ---
 
+<Output>
+
 ```ts eval
 const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
 const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
@@ -1087,6 +1090,8 @@ const pr = parseDiff(rawDiff, rawFiles, {
     </GitHubComment>
   </Instructions>
 </DeepInfraProvider>
+
+</Output>
 ````
 
 ### 7.2 `.reviews/ReviewPR.local.md` (local with Ollama)
@@ -1160,32 +1165,56 @@ jobs:
 
       - uses: denoland/setup-deno@v2
 
-      - uses: actions/cache@v4
-        with:
-          path: .reviews/journal.jsonl
-          key: xmd-review-${{ github.event.pull_request.head.sha }}
-          restore-keys: |
-            xmd-review-${{ github.event.pull_request.base.sha }}
+      - name: Install dependencies
+        run: deno task deps
+
+      - name: Build the checked-out xmd binary
+        run: deno task build
 
       - name: Run review
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task xmd run .reviews/ReviewPR.md
+        run: |
+          ./dist/xmd run .reviews/ReviewPR.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir packages/core/components \
+            -j .reviews/journal.jsonl \
+            --verbose
 ```
 
-### Journal caching
+The executable body of the CI root is enclosed in one top-level `<Output>`
+region. An execution failure therefore remains a failed `DocumentResult`,
+fails `execute()`, and makes `xmd run` exit nonzero. Review findings are report
+text and do not fail the run. The workflow does not inspect journal records or
+rendered error markers after the command; it only uploads the journal with
+`if: always()`.
 
-The journal is cached by head SHA. On re-run of the same SHA, full
-replay — no git commands, no API calls, no LLM calls. On new commits,
-`restore-keys` falls back to the base SHA for partial replay of
-shared component imports.
+### Journal artifact
+
+The journal is uploaded by head SHA after every run, including failed runs, so
+an execution failure remains inspectable without making the artifact a second
+workflow result channel.
+
+### Durable-boundary safety
+
+Doctor compatibility probes emit aggregate facts only: diagnostic count,
+import-noise count or ratio, file counts, crash state, and available rule IDs.
+Actual Oxlint output is normalized before it enters a capture or durable event
+to `message`, `ruleId` or `code`, `severity`, `file`, and the minimal line and
+column span. PR review keeps diagnostics for changed files; repository analysis
+may keep all files. Source excerpts, causes, rendered source, URLs, and other
+arbitrary payload are discarded.
+
+GitHub credentials are created inside non-serializable header factories at the
+request site. Tokens are not placed in eval bindings or durable output, and
+secret detection remains enabled.
 
 ---
 

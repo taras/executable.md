@@ -15,14 +15,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # install.sh resolves the latest published release. Pinning a version here
-      # broke every release-bump PR, which pinned the release it was preparing
-      # and downloaded a binary that did not exist yet; the tradeoff is that a
-      # new release changes PR-review behavior as soon as it is the latest.
-      - name: Install xmd release binary
-        run: |
-          curl -fsSL https://executable.md/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
+
+      - name: Install dependencies
+        run: deno task deps
+
+      - name: Build the checked-out xmd binary
+        run: deno task build
 
       - name: Run review
         env:
@@ -34,19 +35,12 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
         run: |
-          xmd run .reviews/ReviewPR.md \
+          ./dist/xmd run .reviews/ReviewPR.md \
             --component-dir .reviews/components \
             --component-dir .reviews/policies \
             --component-dir packages/core/components \
             -j .reviews/journal.jsonl \
             --verbose
-
-      # xmd embeds a failed EnsureOxlint as a comment and still exits 0, so
-      # assert the lint binaries were provisioned — fail the job if not.
-      - name: Verify oxlint provisioning
-        run: |
-          test -x .reviews/.oxlint/oxlint && test -x .reviews/.oxlint/tsgolint \
-            || { echo "::error::oxlint/tsgolint could not be provisioned by EnsureOxlint"; exit 1; }
 
       - name: Upload journal
         if: always()
