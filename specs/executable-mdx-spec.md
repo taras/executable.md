@@ -1459,7 +1459,7 @@ run but are absent from the diagnostic trace.
 | `src/errors.ts` | `ErrorMode`, `settle()`, `DocumentationError`, `ContentError` — the error-mode decision (§6.9) and the function-content failure boundary (§5.1.2) |
 | `packages/test-support/bdd.ts` | Cross-runtime Effection BDD adapter — drives `@std/testing/bdd`, `node:test`, and `bun:test` |
 | `src/eval-handler.ts` | `evalFactory` |
-| `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
+| `src/eval-interpolate.ts` | `interpolateEvalBindings()` — `{name}` and `{name.path}` substitution |
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
@@ -3645,11 +3645,12 @@ terms as `<If>`.
 
 ### 6.6 Eval binding interpolation
 
-Bare `{name}` references (no namespace prefix) resolve against
-`env.values` — the eval binding environment populated by preceding
-`eval` blocks within the same component. This applies to both
-**code block content** and **text segments** (see §6.4 for the text
-segment interpolation pipeline).
+`{name}` references resolve against `env.values` — the eval binding
+environment populated by preceding `eval` blocks within the same
+component. A reference may be a bare name or a dot path: the first
+segment names the binding, and the rest traverse into it. This applies
+to both **code block content** and **text segments** (see §6.4 for the
+text segment interpolation pipeline).
 
 ````markdown
 ```ts eval
@@ -3664,26 +3665,51 @@ const port = yield* findFreePort();
 `{port}` resolves to the number exported by the first block. The
 substituted content is used to build the subprocess command.
 
+A binding holding an object is read the same way, one dot at a time:
+
+````markdown
+```ts eval
+const release = { tag: "v1.4.0", author: { name: "Ada" } };
+```
+
+```bash exec
+gh release view {release.tag} --json body
+echo "cut by {release.author.name}"
+```
+````
+
 #### Interpolation syntax and precedence
 
-Bare `{name}` references use JavaScript identifier syntax:
+References use JavaScript identifier syntax, optionally chained:
 
 ```
-\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}
+\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}
 ```
 
-Namespaced references (`{meta.*}`, `{props.*}`) contain a `.` and
-are excluded — they are handled by the existing interpolation pass
-for text segments. Bare references only match against `env.values`.
-If `env.values` has no key `name`, the reference `{name}` is left
-verbatim. Non-string values are converted via `String()`.
+The **first** segment must be a key in `env.values`; the remaining
+segments traverse into the value it holds. A reference is left
+verbatim when its first segment is not a binding, when an
+intermediate value is `null` or `undefined`, or when an intermediate
+segment is missing — so a dotted reference that cannot be resolved
+appears in the output rather than becoming `undefined`. Non-string
+values are converted via `String()`.
+
+Namespaced references (`{meta.*}`, `{props.*}`) match this pattern
+too; nothing excludes them by shape. In **text segments** they never
+reach this pass, because `interpolate()` (§6.4) consumes them first.
+In **code block content** they reach it and are left verbatim,
+because `meta` and `props` are not binding names — the mechanism is
+"no such binding", not a rule about dots.
 
 Note: `{meta.*}` and `{props.*}` interpolation applies only to
 **text segments**, not to code block content. Code blocks receive
-only eval binding interpolation (`{name}`). To use a prop value in a
-code block, capture it into a binding via an `eval` block first.
-Text segments receive both passes: `{meta.*}`/`{props.*}` first,
-then bare `{name}` from `env.values`.
+only eval binding interpolation. To use a prop value in a code block,
+read it under the name the prop is bound to — declared props are
+pre-populated into `env.values` at invocation (DEC-EX-09), and at the
+root by `execute()` — so a `package` prop is `{package}` in a code
+block and `{props.package}` in prose. Text segments receive both
+passes: `{meta.*}`/`{props.*}` first, then `{name}` from
+`env.values`.
 
 #### Where interpolation runs
 
@@ -3695,7 +3721,7 @@ Eval binding interpolation runs in `expandSegments` in two places:
    are not responsible for text preparation.
 
 2. **Text segments** — after `{meta.*}`/`{props.*}` interpolation
-   (§6.4). The second pass resolves bare `{name}` references from
+   (§6.4). The second pass resolves `{name}` references from
    `env.values` when an `EvalEnv` is present on the scope.
 
 Eval blocks skip interpolation entirely — they access bindings directly
@@ -3710,8 +3736,25 @@ function interpolateEvalBindings(
   // Protect escaped braces: \{ → placeholder
   const escaped = content.replaceAll("\\{", PLACEHOLDER);
   const interpolated = escaped.replace(
-    /\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g,
-    (match, key) => key in bindings ? String(bindings[key]) : match,
+    /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g,
+    (match, key: string) => {
+      const parts = key.split(".");
+      if (!(parts[0] in bindings)) {
+        return match;
+      }
+      let value: unknown = bindings;
+      for (let i = 0; i < parts.length; i++) {
+        if (value == null || typeof value !== "object") {
+          return match;
+        }
+        const obj = value as Record<string, unknown>;
+        if (i < parts.length - 1 && !(parts[i] in obj)) {
+          return match;
+        }
+        value = obj[parts[i]];
+      }
+      return String(value);
+    },
   );
   // Restore escaped braces: placeholder → literal {
   return interpolated.replaceAll(PLACEHOLDER, "{");
@@ -6694,12 +6737,18 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 |---|------|--------|
 | P1 | Bare binding resolves from `env.values` | `{port}` with `env.values.port = 49821` → `"49821"` in content |
 | P2 | Bare binding with no env entry left verbatim | `{port}` with no `port` in `env.values` → `"{port}"` unchanged |
-| P3 | Bare binding does not match namespaced refs | `{meta.title}` and `{props.name}` not affected by eval binding pass |
+| P3 | Namespaced refs survive the eval binding pass | `{meta.title}` and `{props.name}` left verbatim — because `meta` and `props` are not bindings, not because the pattern rejects dots |
 | P4 | Multiple bindings in one content | `{host}:{port}` → both substituted |
 | P5 | Non-string binding converted via `String()` | `env.values.port = 49821` (number) → `"49821"` |
 | P6 | Binding interpolation runs before modifier chain | Resulting `ctx.content` in modifier contains substituted value |
 | P7 | Same-run env populated before interpolation | Eval result sets `port`; subsequent block interpolates correctly |
 | P8 | Non-serializable binding remains current-run only | Function is usable in the current component expansion and absent from the trace |
+| P9 | Dot path reads a nested property | `{pr.meta.number}` with `env.values.pr = { meta: { number: "42" } }` → `"42"` |
+| P10 | Dot path traverses to any depth | `{a.b.c.d}` → the leaf value |
+| P11 | Dot path with an unknown root left verbatim | `{unknown.path}` with no `unknown` binding → `"{unknown.path}"` |
+| P12 | Dot path with a missing intermediate left verbatim | `{pr.nonexistent.field}` → unchanged, not `"undefined"` |
+| P13 | Dot path through `null` left verbatim | `env.values.pr = { meta: null }`, `{pr.meta.title}` → unchanged |
+| P14 | Bare and dotted references mix | `{pr.stats.totalFiles} files, port {port}` → both substituted |
 
 ### Tier Q — `daemon` modifier
 
@@ -7130,7 +7179,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 36 | `daemon` is a terminal modifier that ignores `next` | Process lifetime ≠ command result; `exec` in the chain satisfies the §3.2 detection rule without invoking `durableExec` |
 | 37 | `daemon` uses `evalScope`, not the durable run scope | Lifetime matches component expansion — daemon lives for `<children />` and dies with the component, not the whole document run |
 | 38 | `daemon` produces no journal entry | The process is an ephemeral resource and starts on every run |
-| 39 | Eval binding interpolation uses bare `{name}` syntax | Distinct from `{meta.key}` and `{props.key}` namespaces; local eval bindings are local variables, not namespaced data; regex excludes names containing `.` to avoid conflicts |
+| 39 | Eval binding interpolation resolves `{name}` and `{name.path}` against `env.values` | A binding is a local variable, and reading into one should not require an eval block to flatten it first; the first segment must be a binding, so `{meta.key}` and `{props.key}` stay verbatim in code blocks by having no such binding rather than by a rule about dots — in text segments they never arrive, because `interpolate()` consumes them first |
 | 40 | Eval binding interpolation runs in the expansion engine, not inside modifier factories | Modifiers transform execution results — they are not responsible for preparing source text; one interpolation site in `expandSegments` is consistent with how text segment interpolation already works, and keeps modifier factories free of knowledge about the binding environment |
 | 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
 | 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
