@@ -439,6 +439,7 @@ interface DoctorResult {
   filesAnalyzed: number;
   filesSkipped: number;
   importErrors: number;
+  availableRuleIds: string[];
   bloatRulesAvailable: string[];
   bloatRulesMissing: string[];
   recommendation: "type-aware" | "type-aware-filtered" | "syntax-only";
@@ -694,15 +695,37 @@ Skipping type-aware probe — prerequisites not met.
 <If condition={canProbeTypeAware}>
 
 ```bash silent exec
-RESULT=$(npx oxlint --type-aware --tsconfig {props.tsconfigPath} --format json 2>.reviews/probe-stderr.tmp || true)
-STDERR=$(cat .reviews/probe-stderr.tmp 2>/dev/null || echo "")
-rm -f .reviews/probe-stderr.tmp
-echo "{\"diagnostics\":$RESULT,\"stderr\":\"$STDERR\"}"
+RESULT=$(npx oxlint --type-aware --tsconfig {props.tsconfigPath} --format json 2>/dev/null || true)
+if ! printf '%s' "$RESULT" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def message: if (.message? | type) == "string" then .message else "" end;
+  def rule: if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end;
+  def import_noise:
+    ((.message | ascii_downcase | contains("cannot find module"))
+      or (.ruleId | ascii_downcase | contains("import")));
+  entries
+  | map({message: message, ruleId: rule, file: (.file // .filename // "")}) as $diagnostics
+  | {
+      diagnosticCount: ($diagnostics | length),
+      importNoiseCount: ([$diagnostics[] | select(import_noise)] | length),
+      filesAnalyzed: ([$diagnostics[].file | select(length > 0)] | unique | length),
+      filesSkipped: ([$diagnostics[] | select(import_noise) | .file | select(length > 0)] | unique | length),
+      importErrors: ([$diagnostics[] | select(import_noise)] | length),
+      availableRuleIds: ([$diagnostics[].ruleId] | unique),
+      tsgolintCrashed: false
+    }
+'; then
+  echo '{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}'
+fi
 ```
 
 <Else>
 
-{"diagnostics":[],"stderr":""}
+{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}
 
 </Else>
 </If>
@@ -733,27 +756,24 @@ const TYPE_AWARE_RULES = [
   "no-unnecessary-boolean-literal-compare",
 ];
 
-let probe = { diagnostics: [], stderr: "" };
-try { probe = JSON.parse(probeResult); } catch { /* malformed */ }
+let probe = {
+  diagnosticCount: 0,
+  importNoiseCount: 0,
+  filesAnalyzed: 0,
+  filesSkipped: 0,
+  importErrors: 0,
+  availableRuleIds: [],
+  tsgolintCrashed: false,
+};
+try { probe = { ...probe, ...JSON.parse(probeResult) }; } catch { }
 
-const diagnostics = Array.isArray(probe.diagnostics)
-  ? probe.diagnostics : [];
-
-const importNoise = diagnostics.filter(d =>
-  d.message?.includes("Cannot find module")
-  || d.message?.includes("cannot find")
-  || d.ruleId?.includes("import")
-);
-
-const fileSet = new Set(diagnostics.map(d => d.file).filter(Boolean));
-const noiseRatio = diagnostics.length > 0
-  ? importNoise.length / diagnostics.length : 0;
-
-const tsgolintCrashed = typeof probe.stderr === "string"
-  && probe.stderr.includes("tsgolint")
-  && (probe.stderr.includes("panic")
-    || probe.stderr.includes("OOM")
-    || probe.stderr.includes("fatal"));
+const diagnosticCount = typeof probe.diagnosticCount === "number"
+  ? probe.diagnosticCount : 0;
+const importNoiseCount = typeof probe.importNoiseCount === "number"
+  ? probe.importNoiseCount : 0;
+const noiseRatio = diagnosticCount > 0
+  ? importNoiseCount / diagnosticCount : 0;
+const tsgolintCrashed = probe.tsgolintCrashed === true;
 
 const typeAwareAvailable = canProbeTypeAware && !tsgolintCrashed;
 
@@ -779,9 +799,11 @@ const doctor = {
   tsconfigExists,
   nodeModulesExists,
   typeAwareAvailable,
-  filesAnalyzed: fileSet.size,
-  filesSkipped: new Set(importNoise.map(d => d.file).filter(Boolean)).size,
-  importErrors: importNoise.length,
+  filesAnalyzed: typeof probe.filesAnalyzed === "number" ? probe.filesAnalyzed : 0,
+  filesSkipped: typeof probe.filesSkipped === "number" ? probe.filesSkipped : 0,
+  importErrors: typeof probe.importErrors === "number" ? probe.importErrors : 0,
+  availableRuleIds: Array.isArray(probe.availableRuleIds)
+    ? probe.availableRuleIds : [],
   bloatRulesAvailable,
   bloatRulesMissing,
   recommendation,
@@ -801,8 +823,8 @@ return JSON.stringify(doctor);
 <If condition={typeAwareAvailable}>
 
 Type-aware linting available. {bloatRulesAvailable.length} bloat
-rules active across {fileSet.size} files.
-Import noise: {importNoise.length} diagnostics
+rules active across {probe.filesAnalyzed} files.
+Import noise: {probe.importNoiseCount} diagnostics
 ({(noiseRatio * 100).toFixed(1)}%).
 
 </If>
@@ -1130,7 +1152,19 @@ const doctor = parseDoctorResult(doctorJson);
             || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
-npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
+raw=$(npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
+if ! printf '%s' "$raw" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def span_line: if (.line? | type) == "number" then .line elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line else 0 end;
+  def span_column: if (.column? | type) == "number" then .column elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column else 0 end;
+  entries | map({message: (.message // ""), ruleId: (.ruleId // .code // "unknown"), severity: (if .severity == "error" then "error" else "warning" end), file: (.file // .filename // ""), line: span_line, column: span_column})
+'; then
+  echo '[]'
+fi
 ```
 
 </If>
@@ -1138,7 +1172,19 @@ npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2
 <If condition={doctor.recommendation === "syntax-only"}>
 
 ```bash exec
-npx oxlint --format json 2>&1 || true
+raw=$(npx oxlint --format json 2>/dev/null || true)
+if ! printf '%s' "$raw" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def span_line: if (.line? | type) == "number" then .line elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line else 0 end;
+  def span_column: if (.column? | type) == "number" then .column elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column else 0 end;
+  entries | map({message: (.message // ""), ruleId: (.ruleId // .code // "unknown"), severity: (if .severity == "error" then "error" else "warning" end), file: (.file // .filename // ""), line: span_line, column: span_column})
+'; then
+  echo '[]'
+fi
 ```
 
 </If>
@@ -1235,7 +1281,19 @@ const doctor = parseDoctorResult(doctorJson);
             || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
-npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
+raw=$(npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
+if ! printf '%s' "$raw" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def span_line: if (.line? | type) == "number" then .line elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line else 0 end;
+  def span_column: if (.column? | type) == "number" then .column elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column else 0 end;
+  entries | map({message: (.message // ""), ruleId: (.ruleId // .code // "unknown"), severity: (if .severity == "error" then "error" else "warning" end), file: (.file // .filename // ""), line: span_line, column: span_column})
+'; then
+  echo '[]'
+fi
 ```
 
 </If>
@@ -1243,7 +1301,19 @@ npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2
 <If condition={doctor.recommendation === "syntax-only"}>
 
 ```bash exec
-npx oxlint --format json 2>&1 || true
+raw=$(npx oxlint --format json 2>/dev/null || true)
+if ! printf '%s' "$raw" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def span_line: if (.line? | type) == "number" then .line elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line else 0 end;
+  def span_column: if (.column? | type) == "number" then .column elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column else 0 end;
+  entries | map({message: (.message // ""), ruleId: (.ruleId // .code // "unknown"), severity: (if .severity == "error" then "error" else "warning" end), file: (.file // .filename // ""), line: span_line, column: span_column})
+'; then
+  echo '[]'
+fi
 ```
 
 </If>

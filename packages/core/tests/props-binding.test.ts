@@ -144,6 +144,9 @@ describe("props binding", () => {
           'const label = "callee";',
           "```",
           "authored={props.name} forwarded={props.forwarded} authored-label={label}",
+          "```js eval",
+          "return `component-eval=${props.name}`;",
+          "```",
           "```bash exec",
           "echo authored-exec={props.name}",
           "```",
@@ -174,6 +177,7 @@ describe("props binding", () => {
     expect(output).toContain("authored=callee");
     expect(output).toContain("forwarded=caller");
     expect(output).toContain("authored-label=callee");
+    expect(output).toContain("component-eval=callee");
     expect(output).toContain("authored-exec=callee");
     expect(output).toContain("rendered=callee label=callee");
     expect(output).toContain("projected=caller");
