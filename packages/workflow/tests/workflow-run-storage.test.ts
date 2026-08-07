@@ -16,6 +16,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
+import type { Result } from "effection";
 import {
   type GitWorkflowDefinitionV1,
   WORKFLOW_RUN_STATUSES,
@@ -30,7 +31,9 @@ import {
   WorkflowRunIdMismatchError,
   WorkflowRunNotFoundError,
   WorkflowRunStorage,
+  type WorkflowRunStatus,
   WorkflowSchemaVersionError,
+  type WorkflowStopReason,
 } from "../mod.ts";
 import { APPLICATION_ID, hashRunId } from "../deno.ts";
 import {
@@ -49,7 +52,7 @@ const { create, lookup } = WorkflowRunStorage.operations;
 
 /** Every entry in the storage root, so a test can prove nothing else appeared. */
 function entries(root: string): string[] {
-  return readdirSync(root).toSorted();
+  return readdirSync(root);
 }
 
 describe("Tier WS — creating and finding a run", () => {
@@ -115,7 +118,7 @@ describe("Tier WS — creating and finding a run", () => {
         },
       ];
 
-      const errors = [];
+      const errors: { field: string; result: Result<WorkflowRunDatabase> }[] = [];
       for (const attempt of attempts) {
         const result = yield* create(request(attempt.overrides));
         errors.push({ field: attempt.field, result });
@@ -217,7 +220,7 @@ describe("Tier WS — what a run retains", () => {
 
     const stored = yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const seen = [];
+      const seen: { status: WorkflowRunStatus; reason: WorkflowStopReason | undefined }[] = [];
 
       for (const status of WORKFLOW_RUN_STATUSES) {
         const updated = yield* database.updateRunState({

@@ -18,6 +18,7 @@
  */
 
 import { appendFileSync } from "node:fs";
+import process from "node:process";
 import { durableCall, durableRun } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import { main } from "effection";
@@ -42,7 +43,9 @@ function work(marker: string): () => Workflow<string> {
 }
 
 main(function* () {
-  const [root, runId, marker] = Deno.args;
+  // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
+  // still has to typecheck under the Node project like every other source.
+  const [root, runId, marker] = process.argv.slice(2);
 
   yield* useWorkflowRunStorage({ root });
 
