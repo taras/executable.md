@@ -94,10 +94,43 @@ git diff --name-only {BASE_SHA}...{HEAD_SHA} -- '*.ts' '*.tsx' | grep -v '\.test
          || doctor.recommendation === "type-aware-filtered"}>
 
 ```bash exec
-if [ -n "{changedTsFiles}" ]; then
-  echo "{changedTsFiles}" | tr '\n' ' ' | OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true
+changed_files=$(cat <<'FILES'
+{changedTsFiles}
+FILES
+)
+if [ -z "$changed_files" ]; then
+  printf '[]'
 else
-  echo "[]"
+  raw=$(printf '%s\n' "$changed_files" | OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
+  if [ -z "$raw" ] || ! printf '%s' "$raw" | jq -c --arg changed "$changed_files" '
+    def entries:
+      if type == "array" then .
+      elif (.diagnostics? | type) == "array" then .diagnostics
+      else []
+      end;
+    def span_line:
+      if (.line? | type) == "number" then .line
+      elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line
+      else 0
+      end;
+    def span_column:
+      if (.column? | type) == "number" then .column
+      elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column
+      else 0
+      end;
+    entries
+    | map({
+        message: (if (.message? | type) == "string" then .message else "" end),
+        ruleId: (if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end),
+        severity: (if .severity == "error" then "error" else "warning" end),
+        file: (if (.file? | type) == "string" then .file elif (.filename? | type) == "string" then .filename else "" end),
+        line: span_line,
+        column: span_column
+      })
+    | map(select(.file as $file | ($changed | split("\n") | index($file)) != null))
+  '; then
+    printf '[]'
+  fi
 fi
 ```
 
@@ -107,10 +140,43 @@ fi
          && doctor.oxlintInstalled}>
 
 ```bash exec
-if [ -n "{changedTsFiles}" ]; then
-  echo "{changedTsFiles}" | tr '\n' ' ' | xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true
+changed_files=$(cat <<'FILES'
+{changedTsFiles}
+FILES
+)
+if [ -z "$changed_files" ]; then
+  printf '[]'
 else
-  echo "[]"
+  raw=$(printf '%s\n' "$changed_files" | xargs .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true)
+  if [ -z "$raw" ] || ! printf '%s' "$raw" | jq -c --arg changed "$changed_files" '
+    def entries:
+      if type == "array" then .
+      elif (.diagnostics? | type) == "array" then .diagnostics
+      else []
+      end;
+    def span_line:
+      if (.line? | type) == "number" then .line
+      elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line
+      else 0
+      end;
+    def span_column:
+      if (.column? | type) == "number" then .column
+      elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column
+      else 0
+      end;
+    entries
+    | map({
+        message: (if (.message? | type) == "string" then .message else "" end),
+        ruleId: (if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end),
+        severity: (if .severity == "error" then "error" else "warning" end),
+        file: (if (.file? | type) == "string" then .file elif (.filename? | type) == "string" then .filename else "" end),
+        line: span_line,
+        column: span_column
+      })
+    | map(select(.file as $file | ($changed | split("\n") | index($file)) != null))
+  '; then
+    printf '[]'
+  fi
 fi
 ```
 

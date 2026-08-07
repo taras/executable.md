@@ -88,11 +88,16 @@ binary.
 - **`review.yml`** (`pull_request`): checks out the pull request, installs the
   repository-pinned Deno v2.9.5, runs `deno task deps`, and runs `deno task build`.
   It executes the resulting `./dist/xmd` against `.reviews/ReviewPR.md`, with
-  the checked-out component documents and policies.
+  the checked-out component documents and policies. After execution it
+  requires a successful root close record whose output contains no XMD
+  `<!-- ERROR:` marker; a missing close record, unsuccessful close, or marker
+  fails the job. The journal upload remains unconditional.
 - **`repo-analysis.yml`** (`workflow_dispatch`): checks out the requested ref,
   installs the repository-pinned Deno v2.9.5, runs `deno task deps`, and runs
   `deno task build`. It executes that ref's `./dist/xmd` against
   `.reviews/AnalyzeRepoCI.md` rather than downloading a published release.
+  It applies the same root-close and error-marker postcondition before
+  uploading the report and journal, which are retained with `if: always()`.
 - **`release.yml`** (`push: tags v*`): a preflight job validates the tag
   against `packages/cli/deno.json`; on mismatch it flags the just-published release on
   the Releases page — caution note in the notes, a failed title, and the

@@ -1194,6 +1194,12 @@ pull request head SHA after each review, including failed runs. The checked-out
 binary and review documents therefore produce one inspectable journal for the
 revision under review.
 
+The review workflow fails closed after XMD finishes. It requires a root
+`close` record, requires both the close result and its nested output status to
+be successful, and rejects root output containing an XMD `<!-- ERROR:` marker.
+The repository-analysis workflow applies the same postcondition to its root
+close record. Both workflows upload their journals with `if: always()`.
+
 ---
 
 ## 9. Deterministic Analysis (separate CI jobs, unchanged)
@@ -1323,12 +1329,24 @@ Its JSON output is wrapped in a `` ```json `` code fence and
 extracted via `<Capture select="code[lang=json]">` (see executable.md spec
 §6.5), isolating the structured data from surrounding narration.
 
+The probe does not emit the Oxlint result itself. The executable command
+reduces it before stdout to aggregate counts, file counts, import-noise
+counts, crash state, and available rule identifiers. The diagnostic capture
+uses the same boundary discipline: it emits only `message`, `ruleId`,
+`severity`, `file`, `line`, and `column`. PR review filters those records to
+the changed TypeScript files; repository analysis retains records for all
+files. Source excerpts, causes, rendered source, URLs, and other Oxlint
+payload fields never enter the durable stream.
+
 ### 13.3 PR-scoped analysis
 
 PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) scope oxlint
 to changed `.ts`/`.tsx` files only via `git diff --name-only` +
-`xargs`. Density against `pr.stats.additions` is only meaningful
-when diagnostics come from the same files the additions are in.
+`xargs`, then normalize the result with `jq` before the capture emits it.
+The normalized records contain only `message`, `ruleId`, `severity`, `file`,
+`line`, and `column`; the final map selects the changed paths. Density against
+`pr.stats.additions` is only meaningful when diagnostics come from the same
+files the additions are in.
 Repo analysis entry points run on everything.
 
 ### 13.4 Density calibration

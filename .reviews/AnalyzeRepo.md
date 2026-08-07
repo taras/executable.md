@@ -83,10 +83,33 @@ const doctor = parseDoctorResult(doctorJson);
 
 ```bash exec
 OUT=$(OXLINT_TSGOLINT_PATH=.reviews/.oxlint/tsgolint .reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>/dev/null || true)
-if [ -n "$OUT" ]; then
-  printf '%s' "$OUT"
-else
-  echo "[]"
+if [ -z "$OUT" ] || ! printf '%s' "$OUT" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def span_line:
+    if (.line? | type) == "number" then .line
+    elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line
+    else 0
+    end;
+  def span_column:
+    if (.column? | type) == "number" then .column
+    elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column
+    else 0
+    end;
+  entries
+  | map({
+      message: (if (.message? | type) == "string" then .message else "" end),
+      ruleId: (if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end),
+      severity: (if .severity == "error" then "error" else "warning" end),
+      file: (if (.file? | type) == "string" then .file elif (.filename? | type) == "string" then .filename else "" end),
+      line: span_line,
+      column: span_column
+    })
+'; then
+  printf '[]'
 fi
 ```
 
@@ -97,10 +120,33 @@ fi
 
 ```bash exec
 OUT=$(.reviews/.oxlint/oxlint --config .reviews/.oxlintrc.json --format json 2>/dev/null || true)
-if [ -n "$OUT" ]; then
-  printf '%s' "$OUT"
-else
-  echo "[]"
+if [ -z "$OUT" ] || ! printf '%s' "$OUT" | jq -c '
+  def entries:
+    if type == "array" then .
+    elif (.diagnostics? | type) == "array" then .diagnostics
+    else []
+    end;
+  def span_line:
+    if (.line? | type) == "number" then .line
+    elif (.labels?[0].span.line? | type) == "number" then .labels[0].span.line
+    else 0
+    end;
+  def span_column:
+    if (.column? | type) == "number" then .column
+    elif (.labels?[0].span.column? | type) == "number" then .labels[0].span.column
+    else 0
+    end;
+  entries
+  | map({
+      message: (if (.message? | type) == "string" then .message else "" end),
+      ruleId: (if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end),
+      severity: (if .severity == "error" then "error" else "warning" end),
+      file: (if (.file? | type) == "string" then .file elif (.filename? | type) == "string" then .filename else "" end),
+      line: span_line,
+      column: span_column
+    })
+'; then
+  printf '[]'
 fi
 ```
 
