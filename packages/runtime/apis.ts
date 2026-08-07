@@ -468,21 +468,30 @@ export const API: {
       },
     ): Operation<RuntimeFetchResponse> {
       const timeout = init?.timeout ?? (yield* contextualTimeout);
-      const response = yield* withTimeout(
+      const fetched = yield* withTimeout(
         `fetch(${input})`,
         timeout,
-        effectionFetch(input, {
-          method: init?.method,
-          headers: init?.headers,
-          body: init?.body,
-        }),
+        (function* () {
+          const response = yield* effectionFetch(input, {
+            method: init?.method,
+            headers: init?.headers,
+            body: init?.body,
+          });
+          const body = yield* response.text();
+          return { response, body };
+        })(),
       );
+      const { response, body } = fetched;
 
       return {
         status: response.status,
         headers: response.headers,
+        // The underlying fetch scope closes when the response operation returns.
+        // Capture the body while that scope is still alive so callers can consume
+        // the runtime response after the request operation completes.
+        // deno-lint-ignore require-yield
         *text() {
-          return yield* withTimeout(`fetch(${input}).text()`, timeout, response.text());
+          return body;
         },
       } as RuntimeFetchResponse;
     },

@@ -95,5 +95,6 @@ describe("Tier CF — Config Api", () => {
     yield* installInvalidTimeout("500");
     const response = yield* fetch("data:text/plain,hello", { timeout: 5_000 });
     expect(response.status).toBe(200);
+    expect(yield* response.text()).toBe("hello");
   });
 });
