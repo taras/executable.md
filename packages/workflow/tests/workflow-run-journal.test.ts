@@ -38,6 +38,7 @@ import {
   WorkflowTransactionError,
 } from "../mod.ts";
 import { NoOpenTransactionError, savepoint } from "../src/deno/transaction.ts";
+import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/empty.ts";
 import {
   allowJournalInserts,
   committedEventCount,
@@ -154,6 +155,25 @@ describe("Tier WJ — appending and replaying the journal", () => {
 
     expect(stored).toEqual([event]);
     expect(serializeDurableEvent(stored[0])).toBe(serializeDurableEvent(event));
+  });
+
+  it("WJ2b: every ordinary journal append records the current retained root", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(yielded("first", "one"));
+      yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("second", "two"));
+      });
+    });
+
+    tamper(path, (database) => {
+      expect(
+        database.prepare("SELECT DISTINCT workspace_root_id FROM journal_events").all(),
+      ).toEqual([{ workspace_root_id: EMPTY_WORKSPACE_ROOT_ID }]);
+    });
   });
 
   it("WJ3: an event keeps its opaque id, across reads and across processes", function* () {

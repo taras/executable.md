@@ -30,7 +30,8 @@ export interface JournalEntry {
   readonly event: DurableEvent;
 }
 
-const INSERT = "INSERT INTO journal_events (event_id, record) VALUES (?, ?)";
+const INSERT = `INSERT INTO journal_events (event_id, record, workspace_root_id)
+  VALUES (?, ?, ?)`;
 const SELECT = "SELECT event_id, record FROM journal_events ORDER BY sequence ASC";
 
 /**
@@ -40,10 +41,25 @@ const SELECT = "SELECT event_id, record FROM journal_events ORDER BY sequence AS
  * one a caller opened is decided above this function, which is what lets a
  * standalone append and an enlisted append share one statement.
  */
-export function insertJournalEvent(database: DatabaseSync, event: DurableEvent): string {
+export function insertJournalEvent(
+  database: DatabaseSync,
+  event: DurableEvent,
+  workspaceRootId = currentWorkspaceRoot(database),
+): string {
   const eventId = randomUUID();
-  database.prepare(INSERT).run(eventId, serializeDurableEvent(event));
+  database.prepare(INSERT).run(eventId, serializeDurableEvent(event), workspaceRootId);
   return eventId;
+}
+
+function currentWorkspaceRoot(database: DatabaseSync): string {
+  const row = database
+    .prepare("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")
+    .get();
+  const rootId = row?.["current_root_id"];
+  if (typeof rootId !== "string") {
+    throw new Error("the workflow Workspace has no current root");
+  }
+  return rootId;
 }
 
 /** Every retained event, in the order it was appended. */
