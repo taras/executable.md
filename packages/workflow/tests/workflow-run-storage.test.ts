@@ -629,7 +629,32 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(!result.ok && result.error.message).not.toContain(secret);
   });
 
-  it("WS26: a damaged image is reported as damage, and left where it is", function* () {
+  it("WS26: retrieval metadata that does not parse is refused like any other row", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    const result = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.replaceRetrievalMetadata({ checkout: "/tmp/a" });
+
+      tamper(path, (raw) => {
+        raw.exec(`
+          DROP TABLE definition_retrieval;
+          CREATE TABLE definition_retrieval (
+            id INTEGER PRIMARY KEY, metadata TEXT, revision INTEGER, updated_at TEXT
+          );
+          INSERT INTO definition_retrieval VALUES (1, 'not json', 1, 'then');
+        `);
+      });
+
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowRecordMalformedError);
+  });
+
+  it("WS27: a damaged image is reported as damage, and left where it is", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
 

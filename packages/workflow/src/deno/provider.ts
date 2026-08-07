@@ -173,7 +173,9 @@ function* lookupWorkflowRun(root: string, runId: string): Operation<Result<Workf
  *
  * A refused database must not leave a connection open on a file the caller is
  * about to be told is unusable — that connection would hold a lock nothing was
- * going to release until the process ended.
+ * going to release until the process ended. That includes a refusal raised on
+ * the way to producing the handle: reading a row while the handle is being
+ * built is as capable of finding an unreadable record as reading one later.
  */
 function* withConnection(
   path: string,
@@ -191,7 +193,14 @@ function* withConnection(
     return refusal(error, path);
   }
 
-  const result = yield* body(database);
+  let result: Result<WorkflowRunDatabase>;
+  try {
+    result = yield* body(database);
+  } catch (error) {
+    database.close();
+    return refusal(error, path);
+  }
+
   if (!result.ok) {
     database.close();
   }
