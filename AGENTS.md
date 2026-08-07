@@ -79,10 +79,9 @@ One command runs everything that applies, concurrently:
 deno task verify          # add --no-site to skip the site pair
 ```
 
-The `green` check is the single aggregate check intended to become required. It
-represents every other job in the CI workflow, accepting `skipped` for jobs that
-do not apply to an event. Every new CI job must be added to `green.needs`; the
-workflow regression test parses `ci.yml` and enforces that coverage.
+The `green` check is the aggregate CI check required by the main branch ruleset.
+Every new CI job must be added to `green.needs`; the workflow regression test
+parses `ci.yml` and enforces that coverage.
 
 **The whole applicable battery is designed to run at once, after one setup.**
 That is a repository rule, not a convenience, and it has two halves:
