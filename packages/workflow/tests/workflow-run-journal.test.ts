@@ -29,7 +29,7 @@ import {
   type Yield,
 } from "@executablemd/durable-streams";
 import { createSecretScanner, SecretDetectedError } from "@executablemd/core";
-import { all, ensure, type Operation, sleep, spawn, suspend, withResolvers } from "effection";
+import { all, ensure, type Operation, race, sleep, spawn, suspend, withResolvers } from "effection";
 import {
   WorkflowRecordMalformedError,
   WorkflowRunConflictError,
@@ -74,6 +74,40 @@ function closed(value: string): Close {
 /** The names of the yields a journal holds, in the order it holds them. */
 function names(events: DurableEvent[]): string[] {
   return events.flatMap((event) => (event.type === "yield" ? [event.description.name] : []));
+}
+
+/**
+ * Run `body` under a deadline, so a deadlock fails rather than hanging.
+ *
+ * A test that waits forever is reported as a timeout by the runner long after
+ * the fact, if at all. Racing it against a short sleep turns "no answer" into
+ * an assertion that says so.
+ */
+function* guarded<T>(body: () => Operation<T>): Operation<T> {
+  const outcome = yield* race([
+    (function* (): Operation<{ answered: true; value: T }> {
+      return { answered: true, value: yield* body() };
+    })(),
+    (function* (): Operation<{ answered: false }> {
+      yield* sleep(2_000);
+      return { answered: false };
+    })(),
+  ]);
+
+  if (!outcome.answered) {
+    throw new Error("timed out: the operation is waiting on a lock nobody will release");
+  }
+  return outcome.value;
+}
+
+/** What an operation raised, rather than what it returned. */
+function* attempt(body: () => Operation<unknown>): Operation<unknown> {
+  try {
+    yield* body();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
 }
 
 /** One whole run in a process of its own, through the production adapter. */
@@ -611,6 +645,57 @@ describe("Tier WJ — a transaction a caller holds", () => {
 });
 
 describe("Tier WJ — one connection, one operation at a time", () => {
+  it("WJ15c: a transaction on another run does not hide the one already held", function* () {
+    const root = yield* useStorageRoot();
+
+    // Every assertion here is guarded by a deadline, because the failure this
+    // covers is not a wrong answer — it is no answer at all. An operation that
+    // does not recognize an ancestor transaction waits on a lock its own
+    // caller is holding, forever.
+    const seen = yield* withStorage(root, function* () {
+      const first = yield* createRun({ runId: "run-a" });
+      const second = yield* createRun({ runId: "run-b" });
+
+      return yield* guarded(function* () {
+        const outcome = yield* first.transact(function* (outer) {
+          yield* outer.journal.append(yielded("outer", "outer"));
+
+          const inner = yield* second.transact(function* (nested) {
+            yield* nested.journal.append(yielded("inner", "inner"));
+
+            // Both of these reach run A, which this scope's ancestor holds.
+            const read = yield* attempt(() => first.journal.readAll());
+            const nestedTransact = yield* first.transact(function* () {
+              return "should never run";
+            });
+
+            return { read, nestedTransact };
+          });
+          if (!inner.ok) {
+            throw inner.error;
+          }
+
+          // The transaction on A is still usable once B has finished with it.
+          yield* outer.journal.append(yielded("after-inner", "after-inner"));
+          return inner.value;
+        });
+
+        if (!outcome.ok) {
+          throw outcome.error;
+        }
+        return { ...outcome.value, events: yield* first.journal.readAll() };
+      });
+    });
+
+    expect(seen.read).toBeInstanceOf(WorkflowTransactionError);
+    expect(seen.nestedTransact.ok).toBe(false);
+    expect(!seen.nestedTransact.ok && seen.nestedTransact.error).toBeInstanceOf(
+      WorkflowTransactionError,
+    );
+    // The outer transaction committed both of its own appends.
+    expect(names(seen.events)).toEqual(["outer", "after-inner"]);
+  });
+
   it("WJ15b: a savepoint outside any transaction is refused, not improvised", function* () {
     let raised: unknown;
     try {

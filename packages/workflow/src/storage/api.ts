@@ -87,10 +87,21 @@ export interface JournalEntry {
 
 /** One workflow run's durable storage, open for the life of the calling scope. */
 export interface WorkflowRunDatabase {
-  /** The run as of the last change this handle committed. */
+  /**
+   * The run as of the last change this handle committed.
+   *
+   * A snapshot belonging to this handle, not a live reading of the store. A
+   * second handle on the same run, or another process, may have moved the run
+   * on since. Nothing durable is ever calculated from it: a value that decides
+   * what to write is read inside the transaction that writes it.
+   */
   readonly record: WorkflowRunRecord;
 
-  /** Where the definition can be fetched from now, when a host recorded that. */
+  /**
+   * Where the definition can be fetched from, as this handle last saw it.
+   *
+   * A snapshot on the same terms as `record`, and stale for the same reasons.
+   */
   readonly retrieval: DefinitionRetrieval | undefined;
 
   /** The run's filtered journal. An append here commits on its own. */

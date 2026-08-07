@@ -55,7 +55,12 @@ import {
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
 import type { ConnectionLock } from "./lock.ts";
-import { ActiveTransaction, holdsTransactionOn, useTransactionSavepoints } from "./transaction.ts";
+import {
+  ActiveTransaction,
+  enclosing,
+  holdsTransactionOn,
+  useTransactionSavepoints,
+} from "./transaction.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
 import { translateSqliteError } from "./schema.ts";
 
@@ -201,7 +206,9 @@ function createHandle(connection: OpenConnection): Handle {
         }
       });
 
-      yield* ActiveTransaction.set({ path, open: true });
+      // The chain, not just this path: a transaction on another run nested
+      // inside this one must not hide that this one is held.
+      yield* ActiveTransaction.set(yield* enclosing(path));
       yield* useTransactionSavepoints(database, () => transaction.open);
 
       try {

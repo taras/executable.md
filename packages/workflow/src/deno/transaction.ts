@@ -21,29 +21,45 @@ import type { DatabaseSync } from "node:sqlite";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 
 /**
- * The database the current scope holds a transaction on, if any.
+ * Every database the current scope holds a transaction on.
  *
- * Structural and inert: a path and a flag. Matching on the file rather than on
- * a handle is what makes it useful, because two handles on one run share its
- * turns — an operation reached through the second from inside the first one's
- * body would otherwise wait for a transaction its own caller is holding open.
+ * Structural and inert: a path, and whatever was already held when it opened.
+ * A chain rather than one path, because transactions on *different* runs may
+ * nest — a workflow that reaches two runs opens a transaction on each — and
+ * recording only the innermost would hide the outer one. An operation on the
+ * outer run would then fail to recognize a transaction its own ancestor is
+ * holding, and wait on a lock nobody is going to release.
+ *
+ * Matching on the file rather than on a handle is what makes it useful, since
+ * two handles on one run share its turns.
  *
  * The value can only refuse an operation, never authorize one, which is why
  * comparing a name-addressed binding is safe here.
  */
 export interface OpenTransaction {
   readonly path: string;
-  readonly open: boolean;
+  readonly enclosing: OpenTransaction | undefined;
 }
 
 export const ActiveTransaction: Context<OpenTransaction | undefined> = createContext<
   OpenTransaction | undefined
 >("executablemd.workflow.deno.transaction", undefined);
 
-/** Whether this scope is inside a transaction on `path`. */
+/** The chain this scope would be inside after opening a transaction on `path`. */
+export function* enclosing(path: string): Operation<OpenTransaction> {
+  return { path, enclosing: yield* ActiveTransaction.get() };
+}
+
+/** Whether this scope, or anything enclosing it, holds a transaction on `path`. */
 export function* holdsTransactionOn(path: string): Operation<boolean> {
-  const active = yield* ActiveTransaction.get();
-  return active !== undefined && active.path === path;
+  let active = yield* ActiveTransaction.get();
+  while (active !== undefined) {
+    if (active.path === path) {
+      return true;
+    }
+    active = active.enclosing;
+  }
+  return false;
 }
 
 export interface TransactionApi {

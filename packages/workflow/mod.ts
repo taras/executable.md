@@ -3,8 +3,9 @@
  *
  * Workflow runs for Executable.md.
  *
- * A workflow run ties one run to a single pinned starting commit, recorded
- * durably before the root document is imported, so later document executions
+ * A workflow run is a run of one immutable definition — a Git object and the
+ * path of the root document inside it — from one resolved base, recorded
+ * durably before the root document is imported so later document executions
  * and durable effects share one explicit identity. The run itself is retained,
  * so another process can find it by its public id and continue from durable
  * data rather than from whoever happened to be holding the journal.
