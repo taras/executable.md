@@ -4099,7 +4099,6 @@
         "packageJson": {
           "dependencies": [
             "npm:@effectionx/context-api@0.6.0",
-            "npm:@effectionx/fetch@0.2.0",
             "npm:@effectionx/fs@0.3.0",
             "npm:@effectionx/node@0.2.4",
             "npm:@effectionx/process@0.8.1",

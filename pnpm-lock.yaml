@@ -284,9 +284,6 @@ importers:
       '@effectionx/context-api':
         specifier: 0.6.0
         version: 0.6.0(effection@4.1.0)
-      '@effectionx/fetch':
-        specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0)
       '@effectionx/fs':
         specifier: 0.3.0
         version: 0.3.0(effection@4.1.0)

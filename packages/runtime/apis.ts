@@ -66,7 +66,6 @@ import { type Api, createApi } from "@effectionx/context-api";
 import { join } from "node:path";
 import process from "node:process";
 import { realpath as fsRealpath, rename as fsRename } from "node:fs/promises";
-import { fetch as effectionFetch } from "@effectionx/fetch";
 import {
   ensureDir as fsEnsureDir,
   FsApi,
@@ -77,7 +76,7 @@ import {
   writeTextFile as fsWriteTextFile,
 } from "@effectionx/fs";
 import { exec as processExec } from "@effectionx/process";
-import { race, sleep, until } from "effection";
+import { ensure, race, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeout as contextualTimeout } from "./config.ts";
 
@@ -151,6 +150,40 @@ function* withTimeout<T>(
       throw new Error(`${label} timed out after ${timeout}ms`);
     })(),
   ])) as T;
+}
+
+function* fetchWithAbortSignal(
+  input: string,
+  init:
+    | {
+        method?: string;
+        headers?: Record<string, string>;
+        body?: string;
+      }
+    | undefined,
+): Operation<Response> {
+  const controller = new AbortController();
+  let pending = true;
+  yield* ensure(() => {
+    // Node's fetch can throw while aborting a completed response.
+    if (pending) {
+      controller.abort();
+    }
+  });
+
+  try {
+    const response = yield* until(
+      globalThis.fetch(input, {
+        ...init,
+        signal: controller.signal,
+      }),
+    );
+    pending = false;
+    return response;
+  } catch (error) {
+    pending = false;
+    throw error;
+  }
 }
 
 interface ProcessHandler {
@@ -454,7 +487,7 @@ export const API: {
   /**
    * HTTP requests.
    *
-   * Default implementation uses `@effectionx/fetch`.
+   * Default implementation uses the native Fetch API.
    * Cancellation aborts the request via Effection scope teardown.
    */
   Fetch: createApi("runtime.fetch", {
@@ -471,7 +504,7 @@ export const API: {
       const response = yield* withTimeout(
         `fetch(${input})`,
         timeout,
-        effectionFetch(input, {
+        fetchWithAbortSignal(input, {
           method: init?.method,
           headers: init?.headers,
           body: init?.body,
@@ -482,7 +515,7 @@ export const API: {
         status: response.status,
         headers: response.headers,
         *text() {
-          return yield* withTimeout(`fetch(${input}).text()`, timeout, response.text());
+          return yield* withTimeout(`fetch(${input}).text()`, timeout, until(response.text()));
         },
       } as RuntimeFetchResponse;
     },
