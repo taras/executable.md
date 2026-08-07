@@ -103,6 +103,12 @@ when a command failed, because that is when a dirtied tree would otherwise go
 unnoticed. **Capture a failure's first output before re-running anything**: the
 report is what you paste, and a second run can hide the first.
 
+If a check fails but the identical revision passes without a fix, create or
+update a dedicated issue labeled `flake`. Include the failing test or command,
+runtime, run link, output, and evidence of intermittence. A green re-run restores
+health but does not close the issue; close it only after the cause is fixed and
+the regression evidence is recorded.
+
 The site pair applies when `site/` changed, judged from the branch and the
 worktree, both sides of a rename included.
 
