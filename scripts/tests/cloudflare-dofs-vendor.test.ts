@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -11,16 +11,11 @@ import { ensure } from "effection";
 const REPOSITORY = fileURLToPath(new URL("../../", import.meta.url));
 const SNAPSHOT = join(REPOSITORY, "packages/workflow/vendor/cloudflare-computer-dofs");
 const VERIFY = join(REPOSITORY, "scripts/verify-cloudflare-dofs.ts");
+const COMMIT = "63d363632e558f7e077794988d36ed75017c2a62";
+const COMPILER = "5.9.3";
 
-function* refused(edit: (copy: string) => void) {
-  const temporary = mkdtempSync(join(tmpdir(), "xmd-dofs-drift-"));
-  yield* ensure(() => {
-    rmSync(temporary, { recursive: true, force: true });
-  });
-  const copy = join(temporary, "snapshot");
-  cpSync(SNAPSHOT, copy, { recursive: true });
-  edit(copy);
-  return yield* exec({
+function verify(snapshot: string) {
+  return exec({
     command: [
       process.execPath,
       "run",
@@ -31,13 +26,47 @@ function* refused(edit: (copy: string) => void) {
       "--cached-only",
       "--frozen",
       VERIFY,
-      copy,
+      snapshot,
     ],
     cwd: REPOSITORY,
   });
 }
 
+function* refused(edit: (copy: string) => void) {
+  const temporary = mkdtempSync(join(tmpdir(), "xmd-dofs-drift-"));
+  yield* ensure(() => {
+    rmSync(temporary, { recursive: true, force: true });
+  });
+  const copy = join(temporary, "snapshot");
+  cpSync(SNAPSHOT, copy, { recursive: true });
+  edit(copy);
+  return yield* verify(copy);
+}
+
 describe("Cloudflare Computer DOFS vendored snapshot", () => {
+  it("verifies the unchanged snapshot and regenerates its deterministic output", function* () {
+    const result = yield* verify(SNAPSHOT);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      `verified Cloudflare Computer DOFS ${COMMIT}: 104 recorded files`,
+    );
+    expect(result.stdout).toContain(`regenerated with TypeScript ${COMPILER}`);
+  });
+
+  it("refuses mismatched compiler provenance", function* () {
+    const mismatch = yield* refused((copy) => {
+      const path = join(copy, "MANIFEST.json");
+      const manifest = readFileSync(path, "utf8");
+      writeFileSync(path, manifest.replace(`"compiler": "${COMPILER}"`, '"compiler": "0.0.0"'));
+    });
+
+    expect(mismatch.exitCode).not.toBe(0);
+    expect(mismatch.stderr).toContain("TypeScript compiler provenance mismatch");
+    expect(mismatch.stderr).toContain("manifest:  0.0.0");
+    expect(mismatch.stderr).toContain(`installed: ${COMPILER}`);
+  });
+
   it("rejects changed source or generated output, missing, and extra files", function* () {
     const changed = yield* refused((copy) => {
       writeFileSync(join(copy, "upstream/src/path.ts"), "changed\n");

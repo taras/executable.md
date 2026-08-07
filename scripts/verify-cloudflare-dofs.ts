@@ -12,6 +12,7 @@ const manifestPath = join(root, "MANIFEST.json");
 
 const expectedRepository = "https://github.com/cloudflare/computer";
 const expectedCommit = "63d363632e558f7e077794988d36ed75017c2a62";
+const decoder = new TextDecoder();
 
 const manifestSchema = z.object({
   format: z.literal(1),
@@ -96,8 +97,39 @@ function generatedFiles(manifest: Manifest): string[] {
     .sort();
 }
 
-function emit(manifest: Manifest, output: string): void {
+function compilerVersion(tsc: string): string {
+  const command = new Deno.Command(Deno.execPath(), {
+    cwd: join(repositoryRoot, ".."),
+    args: ["run", "--allow-read", "--allow-env", tsc, "--version"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const result = command.outputSync();
+  if (!result.success) {
+    throw new Error(
+      `installed TypeScript compiler did not report its version\n${decoder.decode(result.stderr)}`,
+    );
+  }
+  const output = decoder.decode(result.stdout).trim();
+  const match = /^Version (\S+)$/.exec(output);
+  if (match === null) {
+    throw new Error(`installed TypeScript compiler reported an unrecognized version: ${output}`);
+  }
+  return match[1];
+}
+
+function verifiedCompiler(manifest: Manifest): string {
   const tsc = join(repositoryRoot, "../node_modules/typescript/bin/tsc");
+  const installed = compilerVersion(tsc);
+  if (installed !== manifest.compiler) {
+    throw new Error(
+      `TypeScript compiler provenance mismatch\nmanifest:  ${manifest.compiler}\ninstalled: ${installed}`,
+    );
+  }
+  return tsc;
+}
+
+function emit(manifest: Manifest, output: string, tsc: string): void {
   const command = new Deno.Command(Deno.execPath(), {
     cwd: join(repositoryRoot, ".."),
     args: [
@@ -131,15 +163,15 @@ function emit(manifest: Manifest, output: string): void {
   });
   const result = command.outputSync();
   if (!result.success) {
-    const message = new TextDecoder().decode(result.stderr);
+    const message = decoder.decode(result.stderr);
     throw new Error(`vendored generated output did not compile\n${message}`);
   }
 }
 
-function verifyGenerated(manifest: Manifest): void {
+function verifyGenerated(manifest: Manifest, tsc: string): void {
   const temporary = Deno.makeTempDirSync({ dir: "/tmp", prefix: "xmd-dofs-vendor-" });
   try {
-    emit(manifest, temporary);
+    emit(manifest, temporary, tsc);
     const actual = walkGenerated(temporary);
     const expected = generatedFiles(manifest);
     if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -176,7 +208,8 @@ function walkGenerated(directory: string): string[] {
 
 const manifest = loadManifest();
 verifyInventory(manifest);
-verifyGenerated(manifest);
+const tsc = verifiedCompiler(manifest);
+verifyGenerated(manifest, tsc);
 console.log(
-  `verified Cloudflare Computer DOFS ${expectedCommit}: ${manifest.files.length} recorded files`,
+  `verified Cloudflare Computer DOFS ${expectedCommit}: ${manifest.files.length} recorded files; regenerated with TypeScript ${manifest.compiler}`,
 );

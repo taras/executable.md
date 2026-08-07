@@ -3,11 +3,9 @@
   "exclude": [
     "scripts/tests/fixtures",
     ".xmd-eval",
-    ".claude/worktrees",
     "**/npm",
-    "spikes/*/vendor/**/dist",
-    "**/vendor/**/upstream",
-    "**/vendor/**/generated/**/*.d.ts"
+    "packages/workflow/vendor/cloudflare-computer-dofs/upstream",
+    "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts"
   ],
   "nodeModulesDir": "auto",
   "lock": {

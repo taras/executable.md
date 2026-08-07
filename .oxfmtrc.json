@@ -4,5 +4,10 @@
   // the exact indentation the rule tests assert on.
   // `packages/*/npm` is generated dnt output, written by a test while the
   // battery runs; format-checking it fails on a file nobody wrote by hand.
-  "ignorePatterns": ["**/*.md", "scripts/tests/fixtures/**", "**/npm/**", "**/vendor/**"]
+  "ignorePatterns": [
+    "**/*.md",
+    "scripts/tests/fixtures/**",
+    "**/npm/**",
+    "packages/workflow/vendor/cloudflare-computer-dofs/**"
+  ]
 }
