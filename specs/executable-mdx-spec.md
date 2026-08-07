@@ -6611,15 +6611,17 @@ Runs against the production Deno adapter, on real files. Defined in
 | WS4/WS5 | Conflict | Every immutable field refuses a different value, naming the field and never the value |
 | WS6 | Missing lookup | Creates no file |
 | WS7 | Collision | A database holding another run is refused rather than adopted |
-| WS8 | Unparseable request | Refused before anything is opened |
-| WS10/WS11/WS12 | Status and stop reason | All six statuses survive with their reasons; a reason is parsed on the way in |
+| WS8/WS9 | Unusable request | An unparseable request, and a storage root that is not absolute, are refused before anything is opened |
+| WS10–WS12 | Status and stop reason | All six statuses survive with their reasons; a journal reason names an event the run holds, and one that does not is refused; a reason is parsed on the way in |
 | WS13/WS14 | Document executions | Start and every resume get a record; an execution finishes once |
 | WS15 | Retrieval metadata | Replaceable and clearable without touching identity |
 | WS16/WS17 | Restart | Identity, state, retrieval and executions restore; an unfinished execution stays unfinished |
 | WS18 | Closed handle | Answers with a failure and reopens nothing |
-| WS19–WS22 | Not our database | Foreign application ID, non-SQLite bytes, older and newer schema versions, missing tables and missing singleton rows are each refused and left unchanged |
-| WS23–WS25 | Malformed rows | A descriptor, props, a status and a stop reason that do not parse are refused without quoting what they held |
-| WS26 | Damage | A scribbled page is reported as damage, and the file stays where it is |
+| WS19–WS21 | Not our database | A foreign application ID, non-SQLite bytes, and older and newer schema versions are refused and left unchanged |
+| WS21b | Not pristine | A file carrying a version, or somebody else's tables, is not initialized into |
+| WS22 | Not shaped like version 1 | A missing table, a missing singleton row, a dropped constraint, an extra table and an extra view are each damage |
+| WS23–WS26 | Values a record cannot use | A descriptor that describes nothing, an empty identity, a timestamp that is not an instant, and props that are not an object are refused without quoting what they held |
+| WS27 | Damage | A scribbled page is reported as damage, and the file stays where it is |
 
 ### Tier WJ — The retained journal and caller-owned transactions
 
@@ -6630,15 +6632,20 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | WJ1/WJ2 | Order and representation | Events replay in append order, stored as the protocol wrote them |
 | WJ3 | Stable identity | An event keeps its opaque ID across reads and across processes |
 | WJ4 | Unreadable row | A row that is not an event is refused rather than replayed |
-| WJ5/WJ6 | Filtering order | A gate that rejects, and one cancelled mid-scan, each leave no row |
+| WJ5–WJ5b | Filtering order | A gate that rejects leaves no row, through the standalone journal and through a transaction's |
+| WJ5c/WJ5d | Insertion failure | A real SQLite refusal leaves no partial event and rolls back the rest of the caller's transaction |
+| WJ6 | Cancelled filtering | A gate cancelled mid-scan leaves no row |
 | WJ7/WJ8/WJ9 | Transaction outcome | A completed body publishes; a failed or cancelled one publishes nothing and leaves the handle usable |
 | WJ10/WJ11 | Nesting | A transaction inside a transaction, and an ordinary operation inside a body, are refused rather than deadlocked |
 | WJ12 | Escaped handle | A transaction handle kept past its body appends nothing |
-| WJ13 | Savepoint | Nested work rolls back inside a transaction that still commits |
-| WJ14/WJ15 | No accidental enlistment | An unrelated append waits for an open transaction, and neither joins it nor is rolled back with it |
-| WJ16/WJ17 | Serialization | Operations on one handle never overlap; one cancelled while queued never reaches the connection |
-| WJ18/WJ19 | Concurrent creation | Compatible callers converge on one run; conflicting ones produce one winner and one conflict |
-| WJ20 | A second process | Restores the run and performs no recorded operation again |
+| WJ13/WJ14 | Teardown | Cleanup belonging to work the body started is inside the transaction when it commits, and rolls back with it when it fails |
+| WJ15 | Savepoint | Nested work rolls back inside a transaction that still commits |
+| WJ16/WJ17 | No accidental enlistment | An unrelated append waits for an open transaction, and neither joins it nor is rolled back with it |
+| WJ18/WJ19 | Serialization | Operations never overlap; one cancelled while queued never reaches the database |
+| WJ20/WJ21 | Two handles, one run | A second handle waits without stopping the host, and its work is not enlisted in the first's transaction |
+| WJ22/WJ23 | Concurrent creation | Compatible callers converge on one run; conflicting ones produce one winner and one conflict |
+| WJ24 | Two processes | Two real processes racing to create one run leave one winner and one conflict |
+| WJ25 | A second process | Restores the run, preserves journal order and identity, and performs no recorded operation again |
 
 ### Tier SL — Own-scope context updates
 

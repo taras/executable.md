@@ -581,7 +581,7 @@ describe("Tier WJ — a transaction a caller holds", () => {
 });
 
 describe("Tier WJ — one connection, one operation at a time", () => {
-  it("WJ14: an unrelated append waits for a transaction, and is not part of it", function* () {
+  it("WJ16: an unrelated append waits for a transaction, and is not part of it", function* () {
     const root = yield* useStorageRoot();
 
     const seen = yield* withStorage(root, function* () {
@@ -631,7 +631,7 @@ describe("Tier WJ — one connection, one operation at a time", () => {
     expect(names(seen.events)).toEqual(["in-transaction", "unrelated"]);
   });
 
-  it("WJ15: an unrelated append survives the rollback of a transaction it waited for", function* () {
+  it("WJ17: an unrelated append survives the rollback of a transaction it waited for", function* () {
     const root = yield* useStorageRoot();
 
     const events = yield* withStorage(root, function* () {
@@ -664,7 +664,7 @@ describe("Tier WJ — one connection, one operation at a time", () => {
     expect(names(events)).toEqual(["survivor"]);
   });
 
-  it("WJ16: operations on one handle run one at a time", function* () {
+  it("WJ18: operations on one handle run one at a time", function* () {
     const root = yield* useStorageRoot();
 
     const log = yield* withStorage(root, function* () {
@@ -700,7 +700,7 @@ describe("Tier WJ — one connection, one operation at a time", () => {
     }
   });
 
-  it("WJ17: a caller cancelled while queued never reaches the connection", function* () {
+  it("WJ19: a caller cancelled while queued never reaches the connection", function* () {
     const root = yield* useStorageRoot();
 
     const events = yield* withStorage(root, function* () {
@@ -736,7 +736,7 @@ describe("Tier WJ — one connection, one operation at a time", () => {
 });
 
 describe("Tier WJ — two handles on one run", () => {
-  it("WJ18: a second handle waits for the first, and the host keeps running", function* () {
+  it("WJ20: a second handle waits for the first, and the host keeps running", function* () {
     const root = yield* useStorageRoot();
 
     const seen = yield* withStorage(root, function* () {
@@ -801,7 +801,7 @@ describe("Tier WJ — two handles on one run", () => {
     ]);
   });
 
-  it("WJ19: a second handle's work is not enlisted in the first's transaction", function* () {
+  it("WJ21: a second handle's work is not enlisted in the first's transaction", function* () {
     const root = yield* useStorageRoot();
 
     const events = yield* withStorage(root, function* () {
@@ -838,7 +838,7 @@ describe("Tier WJ — two handles on one run", () => {
 });
 
 describe("Tier WJ — two callers creating at once", () => {
-  it("WJ20: compatible concurrent creation converges on one run", function* () {
+  it("WJ22: compatible concurrent creation converges on one run", function* () {
     const root = yield* useStorageRoot();
 
     const opened = yield* withStorage(root, function* () {
@@ -862,7 +862,7 @@ describe("Tier WJ — two callers creating at once", () => {
     }
   });
 
-  it("WJ21: conflicting concurrent creation produces one winner and one conflict", function* () {
+  it("WJ23: conflicting concurrent creation produces one winner and one conflict", function* () {
     const root = yield* useStorageRoot();
 
     const results = yield* withStorage(root, function* () {
@@ -879,7 +879,7 @@ describe("Tier WJ — two callers creating at once", () => {
 });
 
 describe("Tier WJ — surviving a process", () => {
-  it("WJ22: two processes racing to create one run leave one winner", function* () {
+  it("WJ24: two processes racing to create one run leave one winner", function* () {
     const root = yield* useStorageRoot();
     const marker = join(root, "marker.txt");
     writeFileSync(marker, "");
@@ -903,7 +903,7 @@ describe("Tier WJ — surviving a process", () => {
     expect(["main", "develop"]).toContain(created[0].base);
   });
 
-  it("WJ23: a second process restores the run and re-executes nothing", function* () {
+  it("WJ25: a second process restores the run and re-executes nothing", function* () {
     const root = yield* useStorageRoot();
     const marker = join(root, "marker.txt");
     writeFileSync(marker, "");
