@@ -90,6 +90,7 @@ import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { Stdio } from "@effectionx/process";
 import { useSecretDetection } from "./secrets/policy.ts";
+import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
 
 export interface ExecuteSettings {
@@ -566,7 +567,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
 
   const validatedProps = yield* ephemeral(validateProps("__root__", props, root.props));
 
-  const rootEnv: EvalEnv = { values: { ...validatedProps } };
+  const rootEnv: EvalEnv = propsEnvironment(validatedProps);
   liveEnvironment(rootEnv);
 
   // Per-root-segment emission loop (spec §9).

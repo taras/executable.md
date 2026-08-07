@@ -191,8 +191,8 @@ props:
 ```ts eval
 const content = yield* renderChildren();
 return content.trim().length > 0
-  ? `### ${heading}\n\n${content}`
-  : `### ${heading}\n\n${clean}`;
+  ? `### ${props.heading}\n\n${content}`
+  : `### ${props.heading}\n\n${props.clean}`;
 ```
 ````
 
@@ -215,12 +215,12 @@ props:
 ---
 
 ```ts eval
-const icon = severity === "error" ? "🔴" : "🟡";
+const icon = props.severity === "error" ? "🔴" : "🟡";
 ```
 
-<If condition={when}>
+<If condition={props.when}>
 
-{icon} {message}
+{icon} {props.message}
 
 </If>
 ````
@@ -243,7 +243,7 @@ const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
   return yield* next({
     ...context,
-    system,
+    system: props.system,
   });
 });
 ```
@@ -266,7 +266,7 @@ props:
 
 ```ts eval
 const content = yield* renderChildren();
-const body = marker + "\n" + content;
+const body = props.marker + "\n" + content;
 
 const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
@@ -284,7 +284,7 @@ const { json: comments } = yield* fetch(
 ).expect();
 
 const existing = comments.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
+  c.user.type === "Bot" && c.body.includes(props.marker)
 );
 
 if (existing) {
@@ -321,7 +321,7 @@ props:
 ```ts persist eval
 const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
+  if (context.model !== undefined && context.model !== props.model) {
     return yield* next(context);
   }
 
@@ -337,7 +337,7 @@ scope.around(Sample, function* ([context], next) {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${process.env.DEEPINFRA_TOKEN}`,
     },
-    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 4096 }),
+    body: JSON.stringify({ model: props.model, messages, temperature: 0, max_tokens: 4096 }),
   })
     .expect()
     .json();
@@ -368,7 +368,7 @@ props:
 ```ts persist eval
 const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
+  if (context.model !== undefined && context.model !== props.model) {
     return yield* next(context);
   }
 
@@ -378,10 +378,10 @@ scope.around(Sample, function* ([context], next) {
   }
   messages.push({ role: "user", content: context.content });
 
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
+  const result = yield* fetch(`${props.baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, temperature: 0 }),
+    body: JSON.stringify({ model: props.model, messages, temperature: 0 }),
   })
     .expect()
     .json();
@@ -423,14 +423,14 @@ props:
 
 ```ts eval
 const metrics = {
-  totalChanges: pr.stats.totalChanges,
-  totalFiles: pr.stats.totalFiles,
-  additions: pr.stats.additions,
-  deletions: pr.stats.deletions,
-  directories: pr.directories.size,
+  totalChanges: props.pr.stats.totalChanges,
+  totalFiles: props.pr.stats.totalFiles,
+  additions: props.pr.stats.additions,
+  deletions: props.pr.stats.deletions,
+  directories: props.pr.directories.size,
 };
 
-const actual = metrics[metric];
+const actual = metrics[props.metric];
 const ops = {
   ">":  (a, b) => a > b,
   ">=": (a, b) => a >= b,
@@ -439,9 +439,9 @@ const ops = {
   "==": (a, b) => a == b,
 };
 
-if (ops[op](actual, value)) {
-  const icon = severity === "error" ? "🔴" : "🟡";
-  return icon + " " + message
+if (ops[props.op](actual, props.value)) {
+  const icon = props.severity === "error" ? "🔴" : "🟡";
+  return icon + " " + props.message
     .replace("{actual}", String(actual))
     .replace("{value}", String(value));
 }
@@ -475,16 +475,16 @@ props:
 ---
 
 ```ts eval
-const re = new RegExp(pattern, "g");
-const lines = excludeTests
-  ? pr.added.filter(l => !l.isTest)
-  : pr.added;
+const re = new RegExp(props.pattern, "g");
+const lines = props.excludeTests
+  ? props.pr.added.filter(l => !l.isTest)
+  : props.pr.added;
 const matches = lines.filter(l => re.test(l.content));
 re.lastIndex = 0;
 
-if (matches.length >= min) {
-  const icon = severity === "error" ? "🔴" : "🟡";
-  return icon + " " + message
+if (matches.length >= props.min) {
+  const icon = props.severity === "error" ? "🔴" : "🟡";
+  return icon + " " + props.message
     .replace("{count}", String(matches.length));
 }
 ```
@@ -521,20 +521,20 @@ props:
 ---
 
 ```ts eval
-const numRe = new RegExp(numerator, "g");
-const denRe = new RegExp(denominator, "g");
-const lines = excludeTests
-  ? pr.added.filter(l => !l.isTest)
-  : pr.added;
+const numRe = new RegExp(props.numerator, "g");
+const denRe = new RegExp(props.denominator, "g");
+const lines = props.excludeTests
+  ? props.pr.added.filter(l => !l.isTest)
+  : props.pr.added;
 const source = lines.map(l => l.content).join("\n");
 
 const numCount = (source.match(numRe) ?? []).length;
 const denCount = (source.match(denRe) ?? []).length;
 
-if (denCount >= minDenominator && numCount / denCount > threshold) {
+if (denCount >= props.minDenominator && numCount / denCount > props.threshold) {
   const ratio = (numCount / denCount * 100).toFixed(1);
-  const icon = severity === "error" ? "🔴" : "🟡";
-  return icon + " " + message
+  const icon = props.severity === "error" ? "🔴" : "🟡";
+  return icon + " " + props.message
     .replace("{ratio}", ratio)
     .replace("{numeratorCount}", String(numCount))
     .replace("{denominatorCount}", String(denCount));
@@ -563,7 +563,7 @@ props:
 ---
 
 ```ts eval
-const lines = pr.added.filter(l =>
+const lines = props.pr.added.filter(l =>
   l.file.endsWith(".ts") || l.file.endsWith(".tsx")
 );
 const source = lines.map(l => l.content).join("\n");
@@ -573,7 +573,7 @@ const source = lines.map(l => l.content).join("\n");
 // whose `type` keyword sits inside braces rather than at the start of a
 // declaration.
 const declPattern = new RegExp(
-  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${construct}\\s+(\\w+)`
+  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${props.construct}\\s+(\\w+)`
 );
 
 const decls = [];
@@ -592,8 +592,8 @@ const unused = decls
   .filter(d => d.refs <= 1);
 
 const hasUnused = unused.length > 0;
-const icon = severity === "error" ? "🔴" : "🟡";
-const summary = icon + " " + message
+const icon = props.severity === "error" ? "🔴" : "🟡";
+const summary = icon + " " + props.message
   .replace("{names}", unused.map(u => u.name).join(", "))
   .replace("{count}", String(unused.length));
 ```
@@ -643,8 +643,8 @@ props:
   additionalProperties: false
 ---
 
-<Finding when={pr.meta.body.length < minLength}
-  severity={severity} message={message} />
+<Finding when={props.pr.meta.body.length < props.minLength}
+  severity={props.severity} message={props.message} />
 ```
 
 ### 5.6 `LinkedIssue.md`
@@ -670,11 +670,11 @@ props:
 ---
 
 ```ts eval
-const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(pr.meta.body);
+const hasIssue = /(?:#\d+|https:\/\/github\.com\/.*\/issues\/\d+)/.test(props.pr.meta.body);
 ```
 
-<Finding when={!hasIssue && pr.stats.totalChanges > whenLinesExceed}
-  severity={severity} message={message} />
+<Finding when={!hasIssue && props.pr.stats.totalChanges > props.whenLinesExceed}
+  severity={props.severity} message={props.message} />
 ````
 
 ### 5.7 `ConfigSourceMix.md`
@@ -700,14 +700,14 @@ props:
 ---
 
 ```ts eval
-const hasConfig = pr.files.some(f => f.isConfig);
-const hasSource = pr.files.some(f =>
+const hasConfig = props.pr.files.some(f => f.isConfig);
+const hasSource = props.pr.files.some(f =>
   !f.isConfig && !f.isTest && !f.isTypeDeclaration
 );
-const triggered = hasConfig && hasSource && pr.stats.totalFiles > minFiles;
+const triggered = hasConfig && hasSource && props.pr.stats.totalFiles > props.minFiles;
 ```
 
-<Finding when={triggered} severity={severity} message={message} />
+<Finding when={triggered} severity={props.severity} message={props.message} />
 ````
 
 ### 5.8 `AbstractionNames.md`
@@ -733,17 +733,17 @@ props:
 ---
 
 ```ts eval
-const re = new RegExp(pattern, "i");
-const suspicious = pr.created
+const re = new RegExp(props.pattern, "i");
+const suspicious = props.pr.created
   .filter(f => f.path.endsWith(".ts") && !f.isTest && !f.isTypeDeclaration)
   .filter(f => re.test(f.path));
 const triggered = suspicious.length > 0;
-const resolvedMessage = message.replace(
+const resolvedMessage = props.message.replace(
   "{names}", suspicious.map(f => f.path).join(", ")
 );
 ```
 
-<Finding when={triggered} severity={severity} message={resolvedMessage} />
+<Finding when={triggered} severity={props.severity} message={resolvedMessage} />
 ````
 
 ### 5.9 `NewDependencies.md`
@@ -766,14 +766,14 @@ props:
 ---
 
 ```ts eval
-const touchesPkg = pr.files.some(f =>
+const touchesPkg = props.pr.files.some(f =>
   f.path === "package.json" || f.path.endsWith("/package.json")
 );
-const mentionsDeps = pr.meta.body.toLowerCase().includes("dependenc");
+const mentionsDeps = props.pr.meta.body.toLowerCase().includes("dependenc");
 const triggered = touchesPkg && !mentionsDeps;
 ```
 
-<Finding when={triggered} severity={severity} message={message} />
+<Finding when={triggered} severity={props.severity} message={props.message} />
 ````
 
 ### 5.10 `CommentReview.md`
@@ -846,39 +846,39 @@ props:
 
 <ReviewSection heading="Scope" clean="✅ PR scope looks good.">
 
-<Threshold pr={pr} metric="totalChanges" op=">" value={800}
+<Threshold pr={props.pr} metric="totalChanges" op=">" value={800}
   severity="error"
   message="PR has {actual} lines changed. Split into focused PRs." />
 
-<Threshold pr={pr} metric="totalChanges" op=">" value={400}
+<Threshold pr={props.pr} metric="totalChanges" op=">" value={400}
   severity="warning"
   message="{actual} lines changed. PRs under {value} receive more thorough review." />
 
-<Threshold pr={pr} metric="totalFiles" op=">" value={20}
+<Threshold pr={props.pr} metric="totalFiles" op=">" value={20}
   severity="warning"
   message="{actual} files changed. Are all changes related?" />
 
-<Threshold pr={pr} metric="directories" op=">" value={5}
+<Threshold pr={props.pr} metric="directories" op=">" value={5}
   severity="warning"
   message="Changes span {actual} directories." />
 
-<DescriptionCheck pr={pr} minLength={50}
+<DescriptionCheck pr={props.pr} minLength={50}
   severity="error"
   message="PR description must explain what and why." />
 
-<LinkedIssue pr={pr} whenLinesExceed={200}
+<LinkedIssue pr={props.pr} whenLinesExceed={200}
   severity="warning"
   message="Large PR with no linked issue." />
 
-<ConfigSourceMix pr={pr} minFiles={5}
+<ConfigSourceMix pr={props.pr} minFiles={5}
   severity="warning"
   message="PR mixes config and source changes." />
 
-<AbstractionNames pr={pr}
+<AbstractionNames pr={props.pr}
   severity="warning"
   message="New abstraction files: {names}. Verify 3+ consumers." />
 
-<NewDependencies pr={pr}
+<NewDependencies pr={props.pr}
   severity="warning"
   message="package.json changed without dependency justification." />
 
@@ -900,15 +900,15 @@ props:
 
 <ReviewSection heading="Structural" clean="✅ No structural bloat detected.">
 
-<UnusedInDiff pr={pr} construct="type"
+<UnusedInDiff pr={props.pr} construct="type"
   severity="warning"
   message="Type declarations with no consumers: {names}." />
 
-<UnusedInDiff pr={pr} construct="interface"
+<UnusedInDiff pr={props.pr} construct="interface"
   severity="warning"
   message="Interface declarations with no consumers: {names}." />
 
-<Ratio pr={pr}
+<Ratio pr={props.pr}
   numerator=":\s*any\b"
   denominator=":\s*\w"
   threshold={0.05}
@@ -917,13 +917,13 @@ props:
   severity="warning"
   message="{numeratorCount} uses of `any` ({ratio}% of annotations)." />
 
-<Pattern pr={pr}
+<Pattern pr={props.pr}
   pattern="(?:function\s+\w+|=>\s*)\([^)]*\)\s*\{\s*\}"
   excludeTests={true}
   severity="warning"
   message="{count} empty function bodies." />
 
-<Pattern pr={pr}
+<Pattern pr={props.pr}
   pattern="console\.(log|debug|info|trace)\("
   excludeTests={true}
   severity="warning"
@@ -947,7 +947,7 @@ props:
 
 <ReviewSection heading="Verbosity" clean="✅ Comment quality looks reasonable.">
 
-<Ratio pr={pr}
+<Ratio pr={props.pr}
   numerator="^\s*(?://|/\*|\*)"
   denominator="^\s*\S"
   threshold={0.4}
@@ -956,7 +956,7 @@ props:
   severity="warning"
   message="Comment ratio is {ratio}%." />
 
-<CommentReview pr={pr} />
+<CommentReview pr={props.pr} />
 
 </ReviewSection>
 ```
@@ -974,14 +974,14 @@ props:
   additionalProperties: false
 ---
 
-<If condition={pr.stats.totalChanges > 20}>
+<If condition={props.pr.stats.totalChanges > 20}>
 
 <Sample>
 
 You are reviewing a TypeScript PR for EXTRANEOUS code only.
 
-PR: {pr.meta.title}
-Description: {pr.meta.body}
+PR: {props.pr.meta.title}
+Description: {props.pr.meta.body}
 
 Report ONLY:
 1. Scope creep — changes unrelated to stated purpose
@@ -996,7 +996,7 @@ For each finding: FILE, PATTERN, CONCERN, QUESTION for the author.
 If clean: "No extraneous code patterns detected."
 
 DIFF:
-{pr.diffPreview}
+{props.pr.diffPreview}
 
 </Sample>
 
@@ -1023,17 +1023,17 @@ props:
   additionalProperties: false
 ---
 
-## PR #{pr.meta.number}: {pr.meta.title}
+## PR #{props.pr.meta.number}: {props.pr.meta.title}
 
-**{pr.stats.totalFiles}** files, **+{pr.stats.additions}** / **-{pr.stats.deletions}**
+**{props.pr.stats.totalFiles}** files, **+{props.pr.stats.additions}** / **-{props.pr.stats.deletions}**
 
-<ScopeCheck pr={pr} />
+<ScopeCheck pr={props.pr} />
 
-<StructuralBloat pr={pr} />
+<StructuralBloat pr={props.pr} />
 
-<VerbosityCheck pr={pr} />
+<VerbosityCheck pr={props.pr} />
 
-<SemanticReview pr={pr} />
+<SemanticReview pr={props.pr} />
 ```
 
 Zero eval blocks.
