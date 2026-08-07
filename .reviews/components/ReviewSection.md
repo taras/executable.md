@@ -14,6 +14,6 @@ props:
 ```ts eval
 const content = yield* renderChildren();
 return content.trim().length > 0
-  ? `### ${heading}\n\n${content}`
-  : `### ${heading}\n\n${clean}`;
+  ? `### ${props.heading}\n\n${content}`
+  : `### ${props.heading}\n\n${props.clean}`;
 ```

@@ -18,8 +18,8 @@ VERDICT_DOC_LEAK never reaches the caller.
 
 ```ts eval
 const verdict = {
-  passed: findings.length === 0,
-  summary: findings.length === 0 ? "no findings" : `${findings.length} findings`,
+  passed: props.findings.length === 0,
+  summary: props.findings.length === 0 ? "no findings" : `${props.findings.length} findings`,
 };
 ```
 

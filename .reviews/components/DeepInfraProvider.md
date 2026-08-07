@@ -11,7 +11,7 @@ props:
 ```ts persist eval
 yield* Sample.around({
   *sample([context], next) {
-    if (context.model !== undefined && context.model !== model) {
+    if (context.model !== undefined && context.model !== props.model) {
       return yield* next(context);
     }
 
@@ -27,7 +27,7 @@ yield* Sample.around({
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.DEEPINFRA_TOKEN}`,
       },
-      body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 4096 }),
+      body: JSON.stringify({ model: props.model, messages, temperature: 0, max_tokens: 4096 }),
     })
       .expect()
       .json();
