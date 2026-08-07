@@ -32,6 +32,10 @@ const ROOT_PROPS = [
   "  type: object",
   "  properties:",
   "    name: { type: string }",
+  "    declaredOnly: { type: string }",
+  "    tags:",
+  "      type: array",
+  "      items: { type: string }",
   "    release:",
   "      type: object",
   "      properties:",
@@ -51,25 +55,27 @@ describe("props binding", () => {
         "root.md": [
           ROOT_PROPS,
           "",
-          "text={props.name} bare={name} dotted={props.release.version}",
+          "text={props.name} bare={name} dotted={props.release.version} tags={props.tags} missing={props.release.missing} escaped=\\{props.name}",
           "",
           "```js eval",
-          "return `eval=${props.name}`;",
+          "return `eval=${props.name} dotted=${props.release.version} bare=${typeof declaredOnly}`;",
           "```",
           "",
           "```bash exec",
-          "echo {props.name}",
+          "echo {props.name}/{props.release.version}",
           "```",
           "",
         ].join("\n"),
       },
-      { name: "Ada", release: { version: "1.2.3" } },
+      { name: "Ada", declaredOnly: "field", tags: ["a", "b"], release: { version: "1.2.3" } },
     );
 
     expect(result.ok).toBe(true);
-    expect(output).toContain("text=Ada bare={name} dotted=1.2.3");
-    expect(output).toContain("eval=Ada");
-    expect(output).toContain("Ada");
+    expect(output).toContain(
+      "text=Ada bare={name} dotted=1.2.3 tags=a, b missing= escaped={props.name}",
+    );
+    expect(output).toContain("eval=Ada dotted=1.2.3 bare=undefined");
+    expect(output).toContain("Ada/1.2.3");
   });
 
   it("keeps eval-created locals independent from props", function* () {
@@ -111,8 +117,12 @@ describe("props binding", () => {
         "root.md": [
           ROOT_PROPS,
           "",
-          '<Wrapper name="callee">',
+          "```js eval",
+          'const label = "caller";',
+          "```",
+          '<Wrapper name="callee" forwarded={props.name}>',
           "projected={props.name}",
+          "projected-label={label}",
           "<Child value={props.name} />",
           "```bash exec",
           "echo {props.name}",
@@ -126,13 +136,20 @@ describe("props binding", () => {
           "  type: object",
           "  properties:",
           "    name: { type: string }",
-          "  required: [name]",
+          "    forwarded: { type: string }",
+          "  required: [name, forwarded]",
           "  additionalProperties: false",
           "---",
-          "authored={props.name}",
+          "```js eval",
+          'const label = "callee";',
+          "```",
+          "authored={props.name} forwarded={props.forwarded} authored-label={label}",
+          "```bash exec",
+          "echo authored-exec={props.name}",
+          "```",
           "<Child value={props.name} />",
           "```js eval",
-          'return yield* render("rendered={props.name}");',
+          'return yield* render("rendered={props.name} label={label}");',
           "```",
           "<Content />",
           "",
@@ -155,8 +172,12 @@ describe("props binding", () => {
 
     expect(result.ok).toBe(true);
     expect(output).toContain("authored=callee");
-    expect(output).toContain("rendered=callee");
+    expect(output).toContain("forwarded=caller");
+    expect(output).toContain("authored-label=callee");
+    expect(output).toContain("authored-exec=callee");
+    expect(output).toContain("rendered=callee label=callee");
     expect(output).toContain("projected=caller");
+    expect(output).toContain("projected-label=callee");
     expect(output).toContain("child=caller");
     expect(output).toContain("caller");
     expect(output).not.toContain("ERROR");
@@ -168,7 +189,14 @@ describe("props binding", () => {
         "root.md": [
           ROOT_PROPS,
           "",
-          '<Each in={["shadow"]} let="props">{props}</Each>',
+          '<Each in={[{ name: "shadow" }]} let="props">text={props.name}',
+          "```js eval",
+          "return `eval=${props.name}`;",
+          "```",
+          "```bash exec",
+          "echo exec={props.name}",
+          "```",
+          "</Each>",
           "after={props.name}",
           '<Outer name="outer" />',
           "",
@@ -196,7 +224,9 @@ describe("props binding", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(output).toContain("shadow");
+    expect(output).toContain("text=shadow");
+    expect(output).toContain("eval=shadow");
+    expect(output).toContain("exec=shadow");
     expect(output).toContain("after=caller");
     expect(output).toContain("outer=outer");
     expect(output).toContain("inner=inner");
@@ -232,6 +262,108 @@ describe("props binding", () => {
     expect(output).toContain("mutated");
   });
 
+  it("uses defaults before root and Markdown-component body effects", function* () {
+    const { output, result } = yield* runDocument({
+      "root.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    name: { type: string, default: root-default }",
+        "  additionalProperties: false",
+        "---",
+        "root-text={props.name}",
+        "```bash exec",
+        "echo root-effect={props.name}",
+        "```",
+        "<Defaulted />",
+        "",
+      ].join("\n"),
+      "Defaulted.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    name: { type: string, default: component-default }",
+        "  additionalProperties: false",
+        "---",
+        "component-text={props.name}",
+        "```bash exec",
+        "echo component-effect={props.name}",
+        "```",
+        "",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(output).toContain("root-text=root-default");
+    expect(output).toContain("root-effect=root-default");
+    expect(output).toContain("component-text=component-default");
+    expect(output).toContain("component-effect=component-default");
+  });
+
+  it("does not begin a Markdown-component body effect for invalid props", function* () {
+    const { output, result } = yield* runDocument({
+      "root.md": "<Invalid name={42} />\n",
+      "Invalid.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    name: { type: string }",
+        "  required: [name]",
+        "  additionalProperties: false",
+        "---",
+        "```bash exec",
+        "echo INVALID_BODY_EFFECT",
+        "```",
+        "body={props.name}",
+        "",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(output).not.toContain("INVALID_BODY_EFFECT");
+    expect(output).not.toContain("body=");
+    expect(output).toContain("Invalid");
+  });
+
+  it("uses one shadowed props binding for text, eval, and exec, then restores it", function* () {
+    const { output, result } = yield* runDocument(
+      {
+        "root.md": [ROOT_PROPS, "", "<Shadow />", "after={props.name}", ""].join("\n"),
+        "Shadow.md": [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties: {}",
+          "  additionalProperties: false",
+          "---",
+          "```js eval",
+          'const props = { name: "shadow" };',
+          "return `eval=${props.name}`;",
+          "```",
+          "text={props.name}",
+          "```js eval",
+          "return `after-eval=${props.name}`;",
+          "```",
+          "```bash exec",
+          "echo exec={props.name}",
+          "```",
+          "",
+        ].join("\n"),
+      },
+      { name: "caller", release: { version: "1.2.3" } },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(output).toContain("eval=shadow");
+    expect(output).toContain("after-eval=shadow");
+    expect(output).toContain("text=shadow");
+    expect(output).toContain("exec=shadow");
+    expect(output).toContain("after=caller");
+  });
+
   it("allows an authored props binding to shadow the namespace locally", function* () {
     const { output, result } = yield* runDocument(
       {
@@ -246,6 +378,7 @@ describe("props binding", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(output).toContain("shadowed caller");
+    expect(output).toContain("shadowed");
+    expect(output).not.toContain("caller");
   });
 });

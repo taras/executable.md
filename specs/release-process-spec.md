@@ -71,9 +71,10 @@ they already satisfy the lockfile. Left alone they keep the previous release's
 number. Only the members whose `name` is an `@executablemd` package change; an
 unrelated dependency that happens to share the old version number must not.
 
-The bump touches nothing else. PR Review and Repo Analysis install
-the latest published release rather than a pinned version, so preparing a
-release never depends on a binary that release has not published yet.
+The bump touches nothing else. PR Review and Repo Analysis build the checked-out
+revision with the repository-pinned Deno version, so their executable documents
+always run against the source they review rather than against a published
+binary.
 
 ## 3. Workflows
 
@@ -84,6 +85,14 @@ release never depends on a binary that release has not published yet.
   version is already released, the draft's notes carry a warning banner saying
   the manifests need bumping; once bumped, the banner clears and the draft's
   tag and title default to the guard-passing `v<version>`.
+- **`review.yml`** (`pull_request`): checks out the pull request, installs the
+  repository-pinned Deno v2.9.5, runs `deno task deps`, and runs `deno task build`.
+  It executes the resulting `./dist/xmd` against `.reviews/ReviewPR.md`, with
+  the checked-out component documents and policies.
+- **`repo-analysis.yml`** (`workflow_dispatch`): checks out the requested ref,
+  installs the repository-pinned Deno v2.9.5, runs `deno task deps`, and runs
+  `deno task build`. It executes that ref's `./dist/xmd` against
+  `.reviews/AnalyzeRepoCI.md` rather than downloading a published release.
 - **`release.yml`** (`push: tags v*`): a preflight job validates the tag
   against `packages/cli/deno.json`; on mismatch it flags the just-published release on
   the Releases page — caution note in the notes, a failed title, and the

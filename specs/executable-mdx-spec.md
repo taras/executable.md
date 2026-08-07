@@ -1630,8 +1630,12 @@ Both closures are injected in `expandComponent()` (in `src/expand.ts`)
 after the component's `EvalEnv` is created but before `expandSegments`
 processes the component body. They capture explicit projection frames:
 `renderChildren()` and `useContent()` use the caller's metadata, validated
-props, hide set, and lexical environment; `render(markdown)` uses the
+props, hide set, and ordinary binding environment; `render(markdown)` uses the
 component-authored metadata, validated props, hide set, and environment.
+Structural `<Content />` projection preserves the caller's props object while
+retaining the existing ordinary-binding layering of the current authored
+frame. No projection surface promises that every caller ordinary binding is
+visible.
 
 Both use `parentEvalScope`, not `childEvalScope`. Children are
 caller-provided content and expand in the caller's scope context.
@@ -2888,12 +2892,15 @@ the once-only slot errors of §6.3.3 — and the resolved segments ride on the
 invocation's content scope (§4.4), so a resource projected content creates stops
 when that scope is halted, before the component releases its own.
 
-Only the resource scope moves. Projected content keeps the caller's lexical
-binding environment, metadata, validated props object, cycle-detection hide
-set, and block counter. Component-authored body content and `render(markdown)`
-keep the component frame. Expression props on projected children resolve
-against the caller's environment, while authored content resolves against the
-component's environment.
+Only the resource scope moves. Projected content keeps the caller's metadata,
+validated props object, cycle-detection hide set, and block counter. For
+ordinary bindings, `renderChildren()` and `useContent()` retain their caller
+environment, while structural `<Content />` layers the caller's props binding
+with the existing authored/current environment precedence. Component-authored
+body content and `render(markdown)` keep the component frame. Expression props
+on projected children resolve against the caller's environment, while authored
+content resolves against the component's environment. The props guarantee is
+deliberate; #305 does not broaden ordinary-binding lookup.
 
 The error mode travels with them. A content task does not inherit the
 documentation or `<Output>` frame the `<Content />` sits in, so the error mode is
@@ -2919,8 +2926,7 @@ the content scope.
 function substituteContent(
   bodySegments: Segment[],
   children: Segment[],
-  meta: Record<string, unknown>,
-  props: Record<string, Json>,
+  callerEnv: EvalEnv | undefined,
 ): Segment[] {
   const slots = partitionBySlot(children);
   return bodySegments.flatMap((segment) => {
@@ -2933,16 +2939,14 @@ function substituteContent(
       // Default slot projection
       return slots.default;
     }
-    if (segment.type === "text") {
-      return [{
-        ...segment,
-        content: interpolate(segment.content, meta, props),
-      }];
-    }
     return [segment];
   });
 }
 ```
+
+Text interpolation is deferred until the expansion frame is installed. This
+keeps a scoped authored binding named `props` authoritative for text just as it
+is for eval blocks and executable-block interpolation.
 
 #### 6.3.5 Reserved prop names
 
@@ -2983,7 +2987,7 @@ against the JSX props passed from the invocation site.
 function interpolate(
   text: string,
   meta: Record<string, unknown>,
-  props: Record<string, Json>,
+  props: unknown,
 ): string {
   return text.replace(/\{(meta|props)\.([^}]+)\}/g, (match, namespace, keyPath) => {
     const source = namespace === "meta" ? meta : props;
@@ -2994,11 +2998,13 @@ function interpolate(
   });
 }
 
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  return path.split(".").reduce(
-    (current, key) => (current as Record<string, unknown>)?.[key],
-    obj as unknown,
-  );
+function getNestedValue(obj: unknown, path: string): unknown {
+  let current = obj;
+  for (const key of path.split(".")) {
+    if (current === null || typeof current !== "object") return undefined;
+    current = Reflect.get(current, key);
+  }
+  return current;
 }
 ```
 
@@ -3020,7 +3026,7 @@ Text segments undergo two interpolation passes in sequence:
 ```
 text segment
   → remend (heal markdown)
-  → interpolate {meta.key}, {props.key}         ← first pass
+  → interpolate {meta.key}, {props.key} from the current frame ← first pass
   → interpolateEvalBindings {name}, {props.name} ← second pass
   → output
 ```
@@ -3042,14 +3048,14 @@ const dashboard = "https://status.example.test/staging";
 
 Renders: `staging status: https://status.example.test/staging.`
 
-**Precedence:** Text `{meta.*}` references resolve in the first pass.
-`{props.*}` references use the same validated object in that pass, while
-the second pass also supports `{props.*}` in executable block content and
-in text when the `props` root is present in `env.values`. A declared prop
-does not create `{title}`; bare `{title}` resolves only when an eval,
-capture, loop, or component-return binding named `title` exists.
-The `props` binding itself remains an ordinary binding name, so authored
-bindings named `props` follow normal scope, commit, and restoration rules.
+**Precedence:** Text `{meta.*}` references resolve from the dedicated metadata
+frame. Text `{props.*}` references, eval blocks, and executable-block content
+all read the current `env.values.props` binding when it exists; a frame's
+validated props object is the fallback for expansion without an environment.
+An authored binding named `props` therefore shadows the validated namespace in
+all three surfaces and normal scope, commit, and restoration rules apply. A
+declared prop does not create `{title}`; bare `{title}` resolves only when an
+eval, capture, loop, or component-return binding named `title` exists.
 
 **Escaping:** `\{name}` is left as literal `{name}` in the output.
 Both passes respect `\{` escaping — the backslash is consumed and
@@ -7169,7 +7175,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; lets a component's whole body be one conditional expression |
 | 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; provider-specific call helpers are not built-in modifier behavior |
 | 87 | `SampleContext` simplified to content-centric shape | Changed from exec-centric `{stdout, stderr, exitCode, command, language}` to content-centric `{content, model?, params?, system?, componentName?}`; providers build their own messages directly instead of relying on `buildDefaultMessages` |
-| 91 | Projected children carry the caller's lexical props frame | Children substituted via `<Content />` are tagged with `projectedEnv`; projected text, expression props, and executable content keep the caller's metadata, props object, and lexical environment, while authored content keeps the component frame. |
+| 91 | Projected children preserve caller props without changing ordinary lookup | Children substituted via `<Content />` preserve the caller's metadata, validated props object, hide set, and counter. Structural projection keeps the existing ordinary-binding layering of the authored/current frame; `renderChildren()` and `useContent()` retain the caller's ordinary environment. Authored content keeps the component frame. |
 | 92 | Multi-level projection preserves caller props | When `expandComponent` receives `projectedEnv`, it layers ordinary bindings while retaining the lexical caller's `props` object. Nested projections never replace caller props with the callee's initial namespace. |
 | 93 | AST-based user import extraction in eval blocks | `ImportDeclaration` nodes in eval blocks are extracted via acorn's `allowImportExportEverywhere` and hoisted to module top level by `compileBlock`. TypeScript `import type` normalized to spaces before parse, extracted from original source. |
 | 94 | `<Capture select>` uses CSS selectors via remark + `unist-util-select` | Standard CSS selector syntax on markdown AST (mdast); reuses existing remark dependency; supports attribute selectors, combinators, pseudo-classes; matches Web platform conventions for querying tree structures |

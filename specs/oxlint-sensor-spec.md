@@ -1285,11 +1285,15 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
 
-      - run: deno install
+      - name: Install dependencies
+        run: deno task deps
 
-      - run: npm install -g oxlint oxlint-tsgolint
+      - name: Build the checked-out xmd binary
+        run: deno task build
 
       - name: Run review
         env:
@@ -1300,7 +1304,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: deno task review --verbose
+        run: |
+          ./dist/xmd run .reviews/ReviewPR.md \
+            --component-dir .reviews/components \
+            --component-dir .reviews/policies \
+            --component-dir packages/core/components \
+            -j .reviews/journal.jsonl \
+            --verbose
 
       - name: Upload journal
         if: always()
@@ -1311,8 +1321,9 @@ jobs:
           retention-days: 30
 ```
 
-`deno install` creates `node_modules/` (required by tsgolint).
-`npm install -g oxlint oxlint-tsgolint` provides the binaries.
+The workflow builds `./dist/xmd` from the checked-out revision after
+`deno task deps` prepares its dependencies. This keeps the executable review
+documents and the binary on the same revision.
 
 ### Separate enforcement jobs (unchanged from base spec)
 

@@ -265,6 +265,12 @@ projected through nested Markdown components, the caller's `props` object stays
 lexical for projected content while the component's own body and
 `render(markdown)` use the callee's namespace.
 
+Text, direct eval, and executable-block interpolation all use the current
+`props` binding. An authored binding literally named `props` shadows the
+validated namespace in its scope and the validated binding is restored when
+that scope ends. This rule changes only the props root; existing ordinary
+binding lookup during projection remains unchanged.
+
 The core validation boundary applies to every host. Command-line parsing may
 report an error earlier, but it does not replace whole-object validation.
 

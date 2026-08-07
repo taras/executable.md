@@ -519,6 +519,7 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
 }
 
 const MAX_EXPANSION_DEPTH = 64;
+const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
 
 /**
  * Expand an array of segments, resolving components and executing code blocks.
@@ -594,16 +595,24 @@ export function* expandSegments(
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
         // Runs synchronously — no yield, no journal entry
         const healed = healSegment(segment.content);
+        const protectedEscapes = healed.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
+        const textEvalEnv = yield* env;
+        const textProps =
+          textEvalEnv !== undefined && "props" in textEvalEnv.values
+            ? textEvalEnv.values.props
+            : parentProps;
         // Interpolate {meta.key} and {props.key} — runtime, no journal
-        const interpolated = interpolate(healed, parentMeta, parentProps);
+        const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
         // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
         // Runs after meta/props interpolation so component contract takes
         // precedence. Only runs when a binding environment is in scope.
-        const textEvalEnv = yield* env;
         const final = textEvalEnv
           ? interpolateEvalBindings(interpolated, textEvalEnv.values)
           : interpolated;
-        result.push({ type: "text", content: final });
+        result.push({
+          type: "text",
+          content: final.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{"),
+        });
         break;
       }
 
@@ -2802,15 +2811,14 @@ function makeProjectFn(callerEnv: EvalEnv | undefined): ProjectFn {
 
 /**
  * Replace `<Content />` / `<Content slot="X" />` in a segment list with the
- * caller's children (partitioned by slot) and interpolate {meta}/{props} in
- * text. Slot validation errors are emitted once, at the first projection
- * point, tracked via the shared `state`.
+ * caller's children (partitioned by slot). Text interpolation waits until the
+ * expansion frame is installed, so a current binding named `props` is used.
+ * Slot validation errors are emitted once, at the first projection point,
+ * tracked via the shared `state`.
  */
 function substituteSegmentList(
   segments: Segment[],
   slots: SlotMap,
-  meta: Record<string, unknown>,
-  props: Record<string, Json>,
   project: ProjectFn,
   state: SubstitutionState,
   claim: ClaimFn,
@@ -2834,9 +2842,6 @@ function substituteSegmentList(
       const element: ComponentElement = { ...segment, children: projected, selfClosing: false };
       return [...pendingErrors, claim(element)];
     }
-    if (segment.type === "text") {
-      return [{ ...segment, content: interpolate(segment.content, meta, props) }];
-    }
     return [segment];
   });
 }
@@ -2844,7 +2849,6 @@ function substituteSegmentList(
 /**
  * Replace `<Content />` and `<Content slot="X" />` invocations with the
  * caller's children, partitioned by slot assignment.
- * Also interpolates {meta.key} and {props.key} in text segments.
  *
  * When no `slot` props are present anywhere, this behaves identically
  * to the original single-slot substituteContent.
@@ -2852,15 +2856,13 @@ function substituteSegmentList(
 function substituteContent(
   bodySegments: Segment[],
   children: Segment[],
-  meta: Record<string, unknown>,
-  props: Record<string, Json>,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn,
 ): Segment[] {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);
-  return substituteSegmentList(bodySegments, slots, meta, props, project, state, claim);
+  return substituteSegmentList(bodySegments, slots, project, state, claim);
 }
 
 interface BodyChunk {
@@ -3129,8 +3131,6 @@ function validateOutputProps(segment: ComponentElement): ErrorSegment | undefine
 function buildBody(
   bodySegments: Segment[],
   children: Segment[],
-  meta: Record<string, unknown>,
-  props: Record<string, Json>,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn,
   path: string,
@@ -3147,15 +3147,7 @@ function buildBody(
         chunks.push({ output: true, segments: [propsError], declaration: true });
         continue;
       }
-      const outputSegments = substituteSegmentList(
-        segment.children,
-        slots,
-        meta,
-        props,
-        project,
-        state,
-        claim,
-      );
+      const outputSegments = substituteSegmentList(segment.children, slots, project, state, claim);
       chunks.push({
         output: true,
         segments: outputSegments,
@@ -3164,7 +3156,7 @@ function buildBody(
       continue;
     }
 
-    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
+    const docSegments = substituteSegmentList([segment], slots, project, state, claim);
     chunks.push({ output: false, segments: docSegments, indexBase: index });
   }
 
@@ -3204,11 +3196,11 @@ export function* expandBody(
   path: string = "",
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
-    const substituted = substituteContent(bodySegments, children, meta, props, callerEnv, claim);
+    const substituted = substituteContent(bodySegments, children, callerEnv, claim);
     return yield* expandSegments(substituted, meta, props, hideSet, counter, owner, path);
   }
 
-  const chunks = buildBody(bodySegments, children, meta, props, callerEnv, claim, path);
+  const chunks = buildBody(bodySegments, children, callerEnv, claim, path);
   const output: Segment[] = owner ?? [];
 
   for (const chunk of chunks) {
@@ -3337,7 +3329,7 @@ function* expandValueBody(
       produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
       continue;
     }
-    const docSegments = substituteSegmentList([segment], slots, meta, props, project, state, claim);
+    const docSegments = substituteSegmentList([segment], slots, project, state, claim);
     yield* runDocumentation(docSegments, meta, props, hideSet, counter, path, index);
   }
 
