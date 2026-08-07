@@ -223,10 +223,47 @@ local references, and `additionalProperties`.
 Resolved properties have the same behavior at the root as props passed to an
 imported Markdown component:
 
-- `{props.name}` interpolates the property explicitly.
-- Root eval blocks receive each property as a binding.
-- Bare binding interpolation such as `{name}` reads the root evaluation
-  environment.
+- The validated, defaulted object is installed under one `props` binding.
+- `{props.name}` interpolates the property explicitly in text and executable
+  block content.
+- Root eval blocks read `props.name` directly.
+- A declaration does not create a bare `{name}` binding. Bare references read
+  only bindings authored by eval, capture, loop, or component-return behavior.
+
+The object under `props` is the exact object returned by validation. Defaults
+are present before the first body effect, and nested properties remain live
+references for the duration of the component invocation.
+
+For example, a root can use the namespace in every execution surface:
+
+````markdown
+---
+props:
+  type: object
+  properties:
+    name: { type: string }
+    release:
+      type: object
+      properties: { version: { type: string } }
+  required: [name, release]
+---
+
+Hello {props.name}, release {props.release.version}.
+
+```ts eval
+const greeting = `Hi ${props.name}`;
+```
+
+```bash exec
+echo {props.release.version}
+```
+````
+
+The declaration does not make `{name}` available. An authored `const name =
+...` or capture may create that independent bare binding. When content is
+projected through nested Markdown components, the caller's `props` object stays
+lexical for projected content while the component's own body and
+`render(markdown)` use the callee's namespace.
 
 The core validation boundary applies to every host. Command-line parsing may
 report an error earlier, but it does not replace whole-object validation.

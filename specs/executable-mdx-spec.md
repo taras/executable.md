@@ -1233,8 +1233,10 @@ export interface EvalEnv {
 }
 ```
 
-Created fresh at the start of component expansion. Each eval block reads
-bindings from `values` (via env preamble) and writes new bindings back
+Created fresh at the start of root or Markdown-component expansion. A root or
+Markdown component installs the exact validated, defaulted props object under
+the single `values.props` key; it does not spread properties into `values`.
+Each eval block reads bindings from `values` (via env preamble) and writes new bindings back
 (via env-write transforms). The current environment is read contextually
 via the `env` value (§5.5); the expansion engine provides it
 scope-locally around each component body, so eval blocks within a
@@ -1583,8 +1585,10 @@ const rendered = yield* render("# Dynamic heading\n\n<Note message='hello' />");
 
 Both closures are injected in `expandComponent()` (in `src/expand.ts`)
 after the component's `EvalEnv` is created but before `expandSegments`
-processes the component body. They capture the expansion context
-(meta, validated props, hide set, eval scope) at injection time.
+processes the component body. They capture explicit projection frames:
+`renderChildren()` and `useContent()` use the caller's metadata, validated
+props, hide set, and lexical environment; `render(markdown)` uses the
+component-authored metadata, validated props, hide set, and environment.
 
 Both use `parentEvalScope`, not `childEvalScope`. Children are
 caller-provided content and expand in the caller's scope context.
@@ -1598,10 +1602,10 @@ tree. Inner components create their own child scopes off
 `parentEvalScope`, and ancestor middleware is visible through
 Effection's scope prototype chain.
 
-Both install the caller's binding environment and eval scope as
-scope-local Component providers (§5.5) around their `expandSegments`
-calls, so the full expansion context is available regardless of which
-task the closure runs in (e.g., inside `evalScope.eval()`).
+Each installs its selected binding environment and eval scope as scope-local
+Component providers (§5.5) around its `expandSegments` call, so the full
+expansion context is available regardless of which task the closure runs in
+(e.g., inside `evalScope.eval()`).
 
 #### Non-serializable
 
@@ -2746,8 +2750,9 @@ Expanding a component invocation proceeds as:
   props are validated against the declared props (§6.3.5, §6.5).
 - **Body expansion.** The caller's children are substituted into `<Content />`
   positions (§6.3), and the body is expanded in a fresh binding environment
-  seeded with the validated props, exposing `renderChildren()` / `render()`
-  (§4.8) to eval blocks. Expression props resolve in the caller's scope. When
+  whose `props` binding points at the validated props object, exposing
+  `renderChildren()` / `render()` (§4.8) to eval blocks. Expression props
+  resolve in the caller's scope. When
   the component declares `<Output>`, its placement is validated before any body
   content executes and only its declared regions render (§6.9).
 - **Capture (`as=`).** With `as="binding"`, the rendered result is written to
@@ -2840,10 +2845,12 @@ the once-only slot errors of §6.3.3 — and the resolved segments ride on the
 invocation's content scope (§4.4), so a resource projected content creates stops
 when that scope is halted, before the component releases its own.
 
-Only the resource scope moves. The binding environment, `{meta.key}` /
-`{props.key}` inputs, cycle-detection hide set and block counter are the body's,
-exactly as they are for content spliced in place, and expression props on
-projected children still resolve against the caller's environment.
+Only the resource scope moves. Projected content keeps the caller's lexical
+binding environment, metadata, validated props object, cycle-detection hide
+set, and block counter. Component-authored body content and `render(markdown)`
+keep the component frame. Expression props on projected children resolve
+against the caller's environment, while authored content resolves against the
+component's environment.
 
 The error mode travels with them. A content task does not inherit the
 documentation or `<Output>` frame the `<Content />` sits in, so the error mode is
@@ -2971,14 +2978,15 @@ Text segments undergo two interpolation passes in sequence:
 text segment
   → remend (heal markdown)
   → interpolate {meta.key}, {props.key}         ← first pass
-  → interpolateEvalBindings {name}              ← second pass
+  → interpolateEvalBindings {name}, {props.name} ← second pass
   → output
 ```
 
 The second pass (`interpolateEvalBindings`) runs on text segments
 when an `EvalEnv` is present on the scope. It resolves bare `{name}`
-references from `env.values`. This allows eval block exports to flow
-into surrounding prose naturally:
+and dotted `{props.name}` references from `env.values`. This allows eval
+block exports and the validated props namespace to flow into surrounding
+prose naturally:
 
 ````markdown
 ```ts eval
@@ -2991,13 +2999,14 @@ Server running at {baseUrl} on port {port}.
 
 Renders: `Server running at http://127.0.0.1:49821 on port 49821.`
 
-**Precedence:** `{meta.*}` and `{props.*}` resolve first because they
-are the component's declared interface. If a component declares
-`props: { title: ... }` and an eval block also exports `title`, the
-prop wins (accessed via `{props.title}`). Bare `{title}` resolves via
-the second pass against `env.values`. There is no actual collision
-because the two passes match different syntax: dotted (`{ns.key}`) vs
-bare (`{identifier}`).
+**Precedence:** Text `{meta.*}` references resolve in the first pass.
+`{props.*}` references use the same validated object in that pass, while
+the second pass also supports `{props.*}` in executable block content and
+in text when the `props` root is present in `env.values`. A declared prop
+does not create `{title}`; bare `{title}` resolves only when an eval,
+capture, loop, or component-return binding named `title` exists.
+The `props` binding itself remains an ordinary binding name, so authored
+bindings named `props` follow normal scope, commit, and restoration rules.
 
 **Escaping:** `\{name}` is left as literal `{name}` in the output.
 Both passes respect `\{` escaping — the backslash is consumed and
@@ -3666,24 +3675,27 @@ substituted content is used to build the subprocess command.
 
 #### Interpolation syntax and precedence
 
-Bare `{name}` references use JavaScript identifier syntax:
+Eval-binding references use JavaScript identifier syntax with optional dotted
+paths:
 
 ```
-\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}
+\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}
 ```
 
-Namespaced references (`{meta.*}`, `{props.*}`) contain a `.` and
-are excluded — they are handled by the existing interpolation pass
-for text segments. Bare references only match against `env.values`.
-If `env.values` has no key `name`, the reference `{name}` is left
+`{meta.*}` is handled by the text interpolation pass. `{props.*}` is
+handled by that pass in text and by this pass in executable block content;
+both use the `props` root in `env.values`. If `env.values` has no matching
+root or an intermediate path is missing/null, the reference is left
 verbatim. Non-string values are converted via `String()`.
 
-Note: `{meta.*}` and `{props.*}` interpolation applies only to
-**text segments**, not to code block content. Code blocks receive
-only eval binding interpolation (`{name}`). To use a prop value in a
-code block, capture it into a binding via an `eval` block first.
-Text segments receive both passes: `{meta.*}`/`{props.*}` first,
-then bare `{name}` from `env.values`.
+Note: `{meta.*}` interpolation applies only to text segments. The
+validated `props` object is installed at `env.values.props`, so
+`{props.name}` uses the same dotted-path interpolation in executable block
+content and in text. Eval blocks read `props.name` directly through the env
+preamble. A prop does not create a bare `{name}` binding; use an eval,
+capture, loop, or component-return binding when bare interpolation is wanted.
+Text segments receive the text pass for `{meta.*}` and `{props.*}`, then the
+eval-binding pass.
 
 #### Where interpolation runs
 
@@ -3692,14 +3704,15 @@ Eval binding interpolation runs in `expandSegments` in two places:
 1. **Code blocks** — immediately before the modifier chain is composed
    for a `codeBlock` segment. By the time any modifier factory receives
    `ctx.content`, the content is already fully interpolated — modifiers
-   are not responsible for text preparation.
+   are not responsible for text preparation. This resolves `{props.name}`
+   from `env.values.props` without changing the modifier API.
 
 2. **Text segments** — after `{meta.*}`/`{props.*}` interpolation
-   (§6.4). The second pass resolves bare `{name}` references from
+   (§6.4). The second pass resolves bare and dotted references from
    `env.values` when an `EvalEnv` is present on the scope.
 
 Eval blocks skip interpolation entirely — they access bindings directly
-via the env preamble (`const { name } = env;`). Interpolating would
+via the env preamble (`const { props } = env;`). Interpolating would
 mangle JS template literals like `` `${name}` `` into `$<value>`.
 
 ```typescript
@@ -3710,8 +3723,17 @@ function interpolateEvalBindings(
   // Protect escaped braces: \{ → placeholder
   const escaped = content.replaceAll("\\{", PLACEHOLDER);
   const interpolated = escaped.replace(
-    /\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g,
-    (match, key) => key in bindings ? String(bindings[key]) : match,
+    /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g,
+    (match, key) => {
+      let value: unknown = bindings;
+      for (const part of key.split(".")) {
+        if (value == null || typeof value !== "object" || !(part in value)) {
+          return match;
+        }
+        value = value[part];
+      }
+      return String(value);
+    },
   );
   // Restore escaped braces: placeholder → literal {
   return interpolated.replaceAll(PLACEHOLDER, "{");
@@ -3753,7 +3775,7 @@ changes.
    bindings.
 3. An `eval` block that polls for readiness using `when`.
 4. An `eval` block that installs Sample Api middleware, closing over
-   `baseUrl` and `model`.
+   `baseUrl` and `props.model`.
 5. `<children />` — the subtree that uses the running process.
 
 #### `LlamafileProvider.md` — standard library component
@@ -3793,7 +3815,7 @@ const baseUrl = `http://127.0.0.1:${port}`;
 ```
 
 ```bash daemon exec
-{command} --port {port}
+{props.command} --port {port}
 ```
 
 ```ts eval
@@ -3804,12 +3826,12 @@ yield* when(function* () {
 
 ```ts eval
 // Install Sample Api middleware on the current component scope.
-// baseUrl and model are closed over here — no context lookup at call time.
+// baseUrl and props.model are closed over here — no context lookup at call time.
 // Routing: if context.model matches our model (or is unspecified), handle it.
 // Otherwise pass through to the next handler (an outer provider or the default).
 const scope = yield* useScope();
 scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
+  if (context.model !== undefined && context.model !== props.model) {
     return yield* next(context);
   }
 
@@ -3822,7 +3844,7 @@ scope.around(Sample, function* ([context], next) {
   const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 2048 }),
+    body: JSON.stringify({ model: props.model, messages, temperature: 0, max_tokens: 2048 }),
   })
     .expect()
     .json();
@@ -3834,26 +3856,25 @@ scope.around(Sample, function* ([context], next) {
 <children />
 ````
 
-#### Prop-to-binding requirement (DEC-EX-09)
+#### Props namespace (DEC-EX-09)
 
-Code block content uses bare `{name}` binding interpolation from
-`env.values` (§6.6). `{command}` in the daemon block and `model` in
-the middleware eval block must be present in `env.values` when those
-blocks run.
-
-Both are declared props, not eval results — so they are not
-automatically in `env.values`. The expansion engine must pre-populate
-`env.values` with all declared prop values at component invocation
-time, before any block executes:
+Root documents and Markdown components install one `props` binding whose
+value is the exact object returned by validation. They do not spread declared
+properties into `env.values`:
 
 ```typescript
-// In expandComponent(), before block execution:
-const componentEnv: EvalEnv = { values: { ...validatedProps } };
+const componentEnv: EvalEnv = { values: { props: validatedProps } };
 ```
 
-This makes all props available as bare bindings without any explicit
-capture step in the component body. It is consistent with how
-`findFreePort()` results enter `env.values`.
+Validation and defaults complete before this environment is installed or any
+body effect starts. Text interpolation continues to resolve `{props.command}`
+through the text pass. Executable block content resolves `{props.command}`
+through eval binding interpolation, and eval blocks read `props.model`
+directly. Eval-created values such as `port` and `baseUrl` remain ordinary
+bare bindings. A declaration of `model` therefore does not create `{model}`.
+
+Function components keep their separate contract: their function receives the
+validated object directly and does not receive the Markdown environment helper.
 
 #### Execution sequence
 
@@ -3863,8 +3884,8 @@ capture step in the component body. It is consistent with how
 
 **Block 2 — daemon spawn:**
 `{port}` is substituted from `env.values` into the command content
-before `buildCommand` runs. `{command}` is also substituted from
-`env.values` (populated from props via DEC-EX-09). The resulting
+before `buildCommand` runs. `{props.command}` is also substituted from
+`env.values.props` via DEC-EX-09. The resulting
 command is forked into the eval scope. Control returns immediately.
 No journal entry.
 
@@ -3875,7 +3896,7 @@ journals the result.
 **Block 4 — middleware install:**
 `Sample` and `fetch` are standard imports in the generated
 eval module (via `@executablemd/core` and `@effectionx/fetch`, §4.2). The
-middleware closes over `baseUrl` and `model` at install time and issues the
+middleware closes over `baseUrl` and `props.model` at install time and issues the
 `/v1/chat/completions` request inline. Routing:
 if `context.model` matches the provider's model (or is unspecified),
 handle it; otherwise pass through via `next()`.
@@ -4013,7 +4034,7 @@ props:
 
 ```js persist eval
 const childrenOutput = yield* renderChildren();
-const content = childrenOutput || prompt || '';
+const content = childrenOutput || props.prompt || '';
 
 const sampleResult = yield* Sample.operations.sample({
   stdout: content,
@@ -4021,9 +4042,9 @@ const sampleResult = yield* Sample.operations.sample({
   exitCode: 0,
   command: content,
   language: 'markdown',
-  params: params || undefined,
+  params: props.params || undefined,
   componentName: 'Sample',
-  model: model || undefined,
+  model: props.model || undefined,
 });
 
 output(sampleResult);
@@ -4034,7 +4055,7 @@ output(sampleResult);
 
 1. `renderChildren()` expands and renders the component's children.
    For self-closing invocations, this returns an empty string.
-2. `content` falls back to the `prompt` prop if children are empty.
+2. `content` falls back to the `props.prompt` value if children are empty.
 3. `Sample.operations.sample()` is called directly from the eval block. The
    enclosing eval operation journals the block result, including output.
 4. `output(sampleResult)` sets the block's rendered output to the
@@ -6042,7 +6063,7 @@ visible warning blocks, gather into a separate error report).
 | C6 | Mutual cycle | A→B→A → ErrorSegment |
 | C7 | Depth limit | 65 levels deep → ErrorSegment |
 | C8 | Frontmatter interpolation | `{meta.title}` → replaced with value |
-| C9 | Props interpolation | `{props.name}` → replaced with invocation prop |
+| C9 | Props namespace interpolation | `{props.name}` → replaced with the validated invocation prop in text, eval, and executable block content |
 | C10 | Missing interpolation key | `{meta.nonexistent}` → empty string |
 | C11 | Nested key access | `{meta.config.db.host}` → deep value |
 | C12 | No Content slot | Children silently discarded |
@@ -6082,6 +6103,8 @@ visible warning blocks, gather into a separate error report).
 | C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
 | C46 | **Nested default filled** | A row omitting `line` (declared `{ type: number, default: 0 }`) resolves with `line` set to `0` |
 | C47 | **Nested enum rejected** | A property with `enum: [a, b]` nested inside an object/array item rejects a value outside the set → PropValidationError |
+| C48 | **No bare prop binding** | Declaring `name` makes `{props.name}` available but leaves `{name}` verbatim until authored code creates that binding |
+| C49 | **Validated object identity** | The environment and function-component argument observe the exact defaulted object returned by validation |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -6273,11 +6296,11 @@ visible warning blocks, gather into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| K1 | Fresh env per component | Each component expansion gets its own `EvalEnv` |
+| K1 | Fresh env per Markdown component | Each root or Markdown component expansion gets its own `EvalEnv` with one `props` namespace; function components receive their argument directly |
 | K2 | Env shared across blocks in same component | Block 1 and block 2 in same component share `env.values` |
 | K3 | `serializeExports` filters non-JSON | Functions, symbols, circular refs excluded |
 | K4 | `serializeExports` preserves JSON values | Numbers, strings, objects, arrays round-trip correctly |
-| K5 | Eval merges serializable bindings | After the block, `env.values` contains current exports |
+| K5 | Eval merges serializable bindings | After the block, `env.values` contains current exports alongside `props`, without spreading prop fields |
 | K6 | Component `as` writes to invocation env | Binding is visible to downstream siblings at call site |
 | K7 | `<Capture>` is not a component boundary | Eval/exec inside `<Capture>` use parent env/scope and journal normally |
 
@@ -6627,7 +6650,7 @@ Defined in [Workflow runs](./workflow-spec.md).
 |---|------|--------|
 | P1 | Bare binding resolves from `env.values` | `{port}` with `env.values.port = 49821` → `"49821"` in content |
 | P2 | Bare binding with no env entry left verbatim | `{port}` with no `port` in `env.values` → `"{port}"` unchanged |
-| P3 | Bare binding does not match namespaced refs | `{meta.title}` and `{props.name}` not affected by eval binding pass |
+| P3 | Dotted props binding resolves | `{props.release.version}` traverses `env.values.props` and missing/null intermediate paths remain verbatim |
 | P4 | Multiple bindings in one content | `{host}:{port}` → both substituted |
 | P5 | Non-string binding converted via `String()` | `env.values.port = 49821` (number) → `"49821"` |
 | P6 | Binding interpolation runs before modifier chain | Resulting `ctx.content` in modifier contains substituted value |
@@ -7063,14 +7086,14 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 36 | `daemon` is a terminal modifier that ignores `next` | Process lifetime ≠ command result; `exec` in the chain satisfies the §3.2 detection rule without invoking `durableExec` |
 | 37 | `daemon` uses `evalScope`, not the durable run scope | Lifetime matches component expansion — daemon lives for `<children />` and dies with the component, not the whole document run |
 | 38 | `daemon` produces no journal entry | The process is an ephemeral resource and starts on every run |
-| 39 | Eval binding interpolation uses bare `{name}` syntax | Distinct from `{meta.key}` and `{props.key}` namespaces; local eval bindings are local variables, not namespaced data; regex excludes names containing `.` to avoid conflicts |
+| 39 | Eval binding interpolation uses authored binding syntax | Bare `{name}` resolves authored eval/capture/loop/return bindings; dotted `{props.name}` traverses the validated props namespace, while `{meta.key}` remains text interpolation |
 | 40 | Eval binding interpolation runs in the expansion engine, not inside modifier factories | Modifiers transform execution results — they are not responsible for preparing source text; one interpolation site in `expandSegments` is consistent with how text segment interpolation already works, and keeps modifier factories free of knowledge about the binding environment |
 | 41 | `findFreePort` is a standalone VM global using `node:net` | Port allocation is platform I/O; the function uses Effection's `once` + `race` for event handling and `try/finally` for guaranteed cleanup; exposed in the eval sandbox alongside other Effection globals |
 | 42 | `findFreePort` result journaled with its eval block | The port number is a scalar export; no separate journal-entry type is needed |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
 | 44 | Provider lifecycle expressed as a component, not an `ExecuteOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
 | 45 | Readiness check is a separate `eval` block, not internal to `daemon` | Auditable — strategy visible in the document; replaceable — different daemons have different readiness signals; composable with `when`'s configurable backoff |
-| 46 | Sample middleware reads `baseUrl` from `env.values` | Avoids a dedicated inference server context key; the binding environment is already the shared state carrier for within-component coordination; scope-correct because a fresh environment is provided per component expansion |
+| 46 | Sample middleware reads authored `baseUrl` from `env.values` | Avoids a dedicated inference server context key; the binding environment is already the shared state carrier for within-component coordination, while provider props are read as `props.model` and `props.baseUrl` |
 | 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
 | 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
 | 49 | `__output` stored alongside exports in journal | Avoids a separate journal entry; `__output` is extracted before merging into `env.values` to prevent namespace pollution |
@@ -7078,13 +7101,13 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 51 | `renderChildren`/`render` install the caller's environment and `parentEvalScope` as scope-local providers | Children are caller-provided content and expand in the caller's scope context; the component's `childEvalScope` sequential channel is for its own `persist eval` blocks, not for expanding caller content; children may create resources (nested components, daemons) but their lifecycle is bound by their place in the expansion tree; installing providers inside the closure ensures the correct context is visible regardless of which task it runs in |
 | 52 | `durableSample` routes through `EvalScope` | Sample Api middleware installed by `persist eval` blocks (e.g., `LlamafileProvider`'s `Sample.around()`) lives in the eval scope's task hierarchy; routing through `evalScope.eval()` ensures the middleware chain is found |
 | 53 | Sample component calls `Sample.operations.sample()` directly | The enclosing eval operation journals the complete block result |
-| 54 | Sample component props default to empty string, not undefined | `validateProps` omits optional props with no default from `env.values`, causing `ReferenceError` in eval blocks; empty-string defaults ensure the variables exist; `model \|\| undefined` converts empty to undefined for routing semantics |
+| 54 | Sample component props default to empty string, not undefined | Defaults remain part of the validated `props` object; `model \|\| undefined` and `params \|\| undefined` preserve routing semantics without creating bare prop bindings |
 | 55 | `daemon()` uses `shell: true` | Matches `bash exec` block semantics — the same command string passed to `bash -c` is passed to the shell; handles shell expansions and PATH lookups correctly |
-| 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `execute()` would execute in the outer scope at call time, where the binding environment has no `baseUrl`; middleware must close over `baseUrl` and `model` at the moment the provider becomes active |
+| 56 | Provider installs its own middleware, not a global `useLlamafileSample()` | A single global handler installed before `execute()` would execute in the outer scope at call time, where the binding environment has no `baseUrl`; middleware must close over `baseUrl` and `props.model` at the moment the provider becomes active |
 | 57 | Routing key is `model`, not a separate `name` prop | Model identity is the natural key — it unifies "which server to route to" with "which model to request"; a separate `name` prop would require keeping two values in sync with no added expressiveness |
 | 58 | `context.model === undefined` routes to innermost provider | Omitting a model is the common case for single-provider documents; innermost-wins matches how middleware chains work — handlers installed later sit higher in the chain and are traversed first |
 | 59 | `callLlamafile()` is a standard import in generated eval modules | Provider components are markdown files — eval blocks are compiled into `data:` URI modules that import executable.md globals from `@executablemd/core`; functions like `callLlamafile`, `callOllama`, `callAnthropic`, `Sample`, `findFreePort`, and `useContent` are available via this import |
-| 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
+| 60 | Props namespaced in `env.values` at root and Markdown-component invocation | Validation completes before the exact object is installed as `env.values.props`; text and executable content use `{props.name}`, eval blocks read `props.name`, and declared fields are not spread as bare bindings |
 | 61 | `callLlamafile()` uses `@effectionx/fetch` | The HTTP call is an Effection operation executed once per document run |
 | 62 | `LlamafileProvider.md` hardcodes `/health` endpoint | All major llamafile/llama.cpp-compatible servers use `/health`; the hardcoded path covers the supported targets |
 | 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the executable.md `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
@@ -7110,13 +7133,13 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 83 | Capture trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
 | 84 | Capture assignment is not independently journaled | Captured value is derived during current expansion; no extra journal entry is needed |
 | 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
-| 89 | `{meta.*}` / `{props.*}` resolve before bare `{name}` | Component contract (frontmatter) takes precedence over internal eval state; dotted vs bare syntax prevents actual collisions |
+| 89 | Lexical props namespace and authored binding precedence | `{props.*}` uses the validated component/root namespace, projected caller content keeps the caller's props object, authored component content uses the callee's frame, and a local binding named `props` follows normal shadow/restoration rules |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |
 | 85 | Eval block `return` as rendered output | Eval blocks can produce output via `return "text"` in addition to `output("text")`; `output()` wins if both used; null/undefined returns produce no output; lets a component's whole body be one conditional expression |
 | 86 | `sample` modifier removed | All LLM calls go through the `<Sample>` component; removes `sampleFactory`, `durableSample`, `callLlamafile`, `callOllama`, `callAnthropic`; simplifies the modifier chain to pure exec/eval concerns |
 | 87 | `SampleContext` simplified to content-centric shape | Changed from exec-centric `{stdout, stderr, exitCode, command, language}` to content-centric `{content, model?, params?, system?, componentName?}`; providers build their own messages directly instead of relying on `buildDefaultMessages` |
-| 91 | Projected children carry caller's eval env | Children substituted via `<Content />` are tagged with `projectedEnv`. Expression props on projected children resolve against merged env (caller + component), with component bindings taking precedence. Follows React's lexical scoping model. |
-| 92 | Multi-level projection env propagation | When `expandComponent` receives `projectedEnv`, it merges it with the current context env before tagging the next level's children. Creates a cumulative chain: Root → Provider → Instruction → ReviewBody all carry root bindings. Innermost-wins on collision. |
+| 91 | Projected children carry the caller's lexical props frame | Children substituted via `<Content />` are tagged with `projectedEnv`; projected text, expression props, and executable content keep the caller's metadata, props object, and lexical environment, while authored content keeps the component frame. |
+| 92 | Multi-level projection preserves caller props | When `expandComponent` receives `projectedEnv`, it layers ordinary bindings while retaining the lexical caller's `props` object. Nested projections never replace caller props with the callee's initial namespace. |
 | 93 | AST-based user import extraction in eval blocks | `ImportDeclaration` nodes in eval blocks are extracted via acorn's `allowImportExportEverywhere` and hoisted to module top level by `compileBlock`. TypeScript `import type` normalized to spaces before parse, extracted from original source. |
 | 94 | `<Capture select>` uses CSS selectors via remark + `unist-util-select` | Standard CSS selector syntax on markdown AST (mdast); reuses existing remark dependency; supports attribute selectors, combinators, pseudo-classes; matches Web platform conventions for querying tree structures |
 | 95 | `select` falls back to full content on no match | Non-destructive — authors can add `select` to existing Captures without breaking behavior if the selector doesn't match; avoids silent data loss |

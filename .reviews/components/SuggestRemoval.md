@@ -52,7 +52,7 @@ for (const review of botReviews) {
 }
 
 // 2. React 👍 on dismiss replies and resolve their threads
-if (dismissedReplies.length > 0) {
+if (props.dismissedReplies.length > 0) {
   // Fetch review threads via GraphQL to get thread node IDs
   const threadsQuery = `query($owner: String!, $name: String!, $pr: Int!) {
     repository(owner: $owner, name: $name) {
@@ -92,7 +92,7 @@ if (dismissedReplies.length > 0) {
     // If GraphQL fails, skip thread resolution — 👍 reaction still works
   }
 
-  for (const reply of dismissedReplies) {
+  for (const reply of props.dismissedReplies) {
     // React 👍
     if (reply.replyId) {
       try {
@@ -128,8 +128,8 @@ if (dismissedReplies.length > 0) {
 }
 
 // 3. Post new review with pending findings
-if (findings.length > 0) {
-  const comments = findings.map(f => ({
+if (props.findings.length > 0) {
+  const comments = props.findings.map(f => ({
     path: f.file,
     line: f.lineNumber,
     body: `Redundant comment — restates what the code does.\n\`\`\`suggestion\n\`\`\``,
@@ -141,7 +141,7 @@ if (findings.length > 0) {
     body: JSON.stringify({
       commit_id: headSha,
       event: "COMMENT",
-      body: `Found ${findings.length} redundant comment${findings.length === 1 ? "" : "s"}. Inline suggestions to remove them below.`,
+      body: `Found ${props.findings.length} redundant comment${props.findings.length === 1 ? "" : "s"}. Inline suggestions to remove them below.`,
       comments,
     }),
   }).expect();

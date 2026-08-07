@@ -69,7 +69,7 @@ for (const issue of existingIssues) {
 }
 
 // 4. Process top 5 clusters
-const topClusters = cleanupAnalysis.fileClusters.slice(0, TOP_N);
+const topClusters = props.cleanupAnalysis.fileClusters.slice(0, TOP_N);
 const topFiles = new Set(topClusters.map(c => c.file));
 
 let created = 0;

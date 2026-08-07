@@ -12,7 +12,7 @@ props:
 // GITHUB_TOKEN is read inline at each call site, never assigned to a binding:
 // eval bindings are journaled, and the journal is uploaded as a CI artifact.
 const content = yield* renderChildren();
-const body = marker + "\n" + content.trim();
+const body = props.marker + "\n" + content.trim();
 
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
@@ -29,7 +29,7 @@ const commentsResult = yield* fetch(`${api}/issues/${prNumber}/comments`, {
   .json();
 
 const existing = commentsResult.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
+  c.user.type === "Bot" && c.body.includes(props.marker)
 );
 
 if (existing) {
