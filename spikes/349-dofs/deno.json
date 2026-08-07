@@ -1,0 +1,15 @@
+{
+  "exclude": [
+    "vendor",
+    "vendor-build",
+    "dist"
+  ],
+  "nodeModulesDir": "manual",
+  "tasks": {
+    "all": "deno task vendor && deno task build && deno task test",
+    "vendor": "deno run --allow-all vendor.ts",
+    "build": "deno run --allow-all build.ts",
+    "test": "deno test --allow-all tests/",
+    "check": "deno check ."
+  }
+}
