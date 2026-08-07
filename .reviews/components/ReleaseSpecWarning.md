@@ -29,7 +29,7 @@ list when a file is added or removed.
 </Capture>
 
 ```ts eval
-const releaseChanged = files.filter((path) => releaseConfigFiles.includes(`- ${path}`));
+const releaseChanged = props.files.filter((path) => releaseConfigFiles.includes(`- ${path}`));
 const changedList = releaseChanged.join(", ");
 
 // TODO: evaluate whether the diff's changes are actually reflected in the
@@ -38,7 +38,7 @@ const changedList = releaseChanged.join(", ");
 
 <Output>
 
-<Show when={releaseChanged.length > 0 && !files.includes("specs/release-process-spec.md")}>
+<Show when={releaseChanged.length > 0 && !props.files.includes("specs/release-process-spec.md")}>
 
 > [!WARNING]
 > This PR changes release configuration ({changedList}) without touching

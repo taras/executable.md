@@ -12,15 +12,15 @@ props:
 
 <ReviewSection heading="Structural" clean="✅ No structural bloat detected.">
 
-<UnusedInDiff pr={pr} construct="type"
+<UnusedInDiff pr={props.pr} construct="type"
   severity="warning"
   message="Type declarations with no consumers: {names}." />
 
-<UnusedInDiff pr={pr} construct="interface"
+<UnusedInDiff pr={props.pr} construct="interface"
   severity="warning"
   message="Interface declarations with no consumers: {names}." />
 
-<Ratio pr={pr}
+<Ratio pr={props.pr}
   numerator=":\s*any\b"
   denominator=":\s*\w"
   threshold={0.05}
@@ -29,19 +29,19 @@ props:
   severity="warning"
   message="{numeratorCount} uses of `any` ({ratio}% of annotations)." />
 
-<Pattern pr={pr}
+<Pattern pr={props.pr}
   pattern="(?:function\s+\w+|=>\s*)\([^)]*\)\s*\{\s*\}"
   excludeTests={true}
   severity="warning"
   message="{count} empty function bodies." />
 
-<Pattern pr={pr}
+<Pattern pr={props.pr}
   pattern="console\.(log|debug|info|trace)\("
   excludeTests={true}
   severity="warning"
   message="{count} console statements." />
 
-<OxlintSignals groups={diagnostics.byCategory.structural}
+<OxlintSignals groups={props.diagnostics.byCategory.structural}
   label="structural signals" />
 
 </ReviewSection>

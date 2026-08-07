@@ -22,16 +22,16 @@ props:
 ---
 
 ```ts eval
-const re = new RegExp(pattern, "g");
-const lines = excludeTests
-  ? pr.added.filter(l => !l.isTest)
-  : pr.added;
+const re = new RegExp(props.pattern, "g");
+const lines = props.excludeTests
+  ? props.pr.added.filter(l => !l.isTest)
+  : props.pr.added;
 const matches = lines.filter(l => re.test(l.content));
 re.lastIndex = 0;
 
-if (matches.length >= min) {
-  const icon = severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
-  return icon + " " + message
+if (matches.length >= props.min) {
+  const icon = props.severity === "error" ? "\ud83d\udd34" : "\ud83d\udfe1";
+  return icon + " " + props.message
     .replace("{count}", String(matches.length));
 }
 ```

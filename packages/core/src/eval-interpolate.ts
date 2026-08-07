@@ -3,8 +3,9 @@
  *
  * Substitutes `{name}` and `{name.path.chain}` references in content
  * with values from the eval binding environment (`env.values`). This
- * runs in the expansion engine for both code block content and text
- * segments.
+ * runs in the expansion engine for both executable block content and text
+ * segments. When the environment contains the `props` root, dotted paths
+ * such as `{props.release.version}` are handled by the same traversal.
  *
  * References use JavaScript identifier syntax with optional dot paths:
  *   /\{([a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*)\}/g
@@ -13,9 +14,10 @@
  * Subsequent segments traverse nested properties. If any intermediate
  * value is null/undefined, the reference is left verbatim.
  *
- * No collision with `{meta.key}` / `{props.key}`: those are consumed
- * by the `interpolate()` pass which runs first. By the time this
- * function runs, namespaced references are already resolved.
+ * Text `{meta.key}` references are consumed by the `interpolate()` pass
+ * before this function runs. Text `{props.key}` uses the same current
+ * `env.values.props` binding as this function. Executable block content has
+ * no text pass, so `{props.key}` reaches this function directly.
  *
  * If `env.values` has no key matching the root reference, it is left
  * verbatim. Non-string values are converted via `String()`.
