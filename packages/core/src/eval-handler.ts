@@ -146,6 +146,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     };
 
     const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(evalEnv.values));
+    validateDurableExports(transformed.exports, liveEnvironment(evalEnv));
 
     const bindings = serializeExports(evalEnv.values, transformed.imports);
     const result = (yield createDurableOperation<Json>(
@@ -208,9 +209,6 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         }
 
         return { value: exports as unknown as Json } as Json;
-      },
-      {
-        validate: () => validateDurableExports(transformed.exports, liveEnvironment(evalEnv)),
       },
     )) as unknown as { value: Json };
 

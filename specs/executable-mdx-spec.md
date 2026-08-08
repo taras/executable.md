@@ -1273,8 +1273,15 @@ projected caller content.
 
 The two namespaces may not overlap. `service=<binding>` validates the binding
 name and checks both environments before attaching a process. Ordinary durable
-eval validates its declared exports against live names before execution or
-replay restoration and before appending an eval event. `ephemeral eval`
+eval first transforms the block to discover its declared exports, then validates
+them against live names before constructing its durable effect. An invalid eval
+is document validation: it never becomes a `DurableEffect` and appends no eval
+`Yield`. A valid partial replay performs the same validation before yielding an
+effect, so a diagnostic from the original run leaves later recorded effects
+aligned. If retained history instead contains a successful eval `Yield` that the
+current definition no longer yields, the existing replay guard, divergence and
+stale-input rules reject that incompatible history; validation never consumes
+the recorded result or substitutes an unjournaled error. `ephemeral eval`
 validates its exports against durable names before execution; it may atomically
 replace an existing live binding. A failed block publishes none of its exports.
 Values from the live overlay are never substituted into a durable effect's
@@ -1459,8 +1466,8 @@ processor. Instead:
 
 #### What is journaled
 
-`evalFactory` wraps execution in `createDurableOperation`. Diagnostic journal
-shape:
+After transformation and live-binding collision validation, `evalFactory` wraps
+execution in `createDurableOperation`. Diagnostic journal shape:
 
 ```json
 { "type": "eval", "name": "eval:root:0", "language": "js" }
@@ -1516,7 +1523,7 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/service-host.ts` | shared XMD service handshake observer and supervised host-process adapter |
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
-| `packages/workflow/src/service-denial.ts` | non-delegating workflow service denial middleware |
+| `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the tested non-delegating provider for future workflow start and resume scopes (#366) |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -5260,7 +5267,8 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `componentDirs?` — component search directories (default:
   `["components", "."]`)
 - `modifiers?` — custom modifier factories registered alongside the
-  built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
+  built-ins (`exec`, `silent`, `eval`, `ephemeral`, `persist`, `timeout`,
+  `daemon`, `service`)
 - `secretDetection?` — detect credentials before durable events persist
   (default: enabled)
 
@@ -6712,12 +6720,13 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | R2 | Live overlay hidden from interpolation | `{server}` remains literal rather than becoming an endpoint string |
 | R3 | `ephemeral eval` executes during partial replay | Live bindings and middleware are reconstructed without a journal entry |
 | R4 | Service publication collision | A durable or live binding with the requested name refuses attachment before spawn |
-| R5 | Durable export collides with a service | Live execution and partial replay both reject before execution or restoration and append no eval event |
+| R5 | Durable export collides with a service | Live execution and valid partial replay diagnose the block before constructing an eval effect; a later durable effect executes or restores in alignment, and no eval `Yield` appears |
 | R6 | Ephemeral export collides with durable state | The block is rejected before execution and publishes no partial export |
 | R7 | Ephemeral update of a live binding | A later ephemeral block may atomically replace an existing live name |
-| R8 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
-| R9 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
-| R10 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
+| R8 | Incompatible retained eval history | Genuine history from an earlier component definition fails fatally through the existing durability guard before restoring its now-incompatible eval result or running a later effect; no replacement `Yield` is appended |
+| R9 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
+| R10 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
+| R11 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
 
 ### Tier S — Provider component pattern (integration)
 

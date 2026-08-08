@@ -1,14 +1,13 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { resource, scoped, type Operation } from "effection";
-import {
-  InMemoryStream,
-  parseDurableEvent,
-  serializeDurableEvent,
-} from "@executablemd/durable-streams";
+import { DivergenceError, InMemoryStream } from "@executablemd/durable-streams";
 import { API, SERVICE_HOSTNAME } from "@executablemd/runtime";
 import type { ServiceEndpoint } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
+import { applyModifiers } from "../src/component-api.ts";
+import { registerComponents } from "../src/components/registration.ts";
+import type { ComponentRegistration } from "../src/components/registration.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
@@ -47,6 +46,54 @@ function* useServiceStub(
     },
     { at: "min" },
   );
+}
+
+function* useTrackedExec(executions: string[]): Operation<void> {
+  yield* API.Process.around({
+    // deno-lint-ignore require-yield
+    *exec([options]) {
+      const script = (options.command[2] ?? "").trim();
+      executions.push(script);
+      return {
+        exitCode: 0,
+        stdout: script.startsWith("echo ") ? `${script.slice(5)}\n` : "",
+        stderr: "",
+      };
+    },
+  });
+}
+
+function changingProvider(attachService: boolean): ComponentRegistration {
+  return {
+    name: "ChangingProvider",
+    origin: "ephemeral-service.test",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    *fn() {
+      if (attachService) {
+        yield* applyModifiers([{ name: "service", params: "server" }, { name: "exec" }], {
+          language: "bash",
+          content: "handshake-compatible-server",
+          blockId: "changing-service",
+          componentName: "ChangingProvider",
+        });
+      }
+      yield* applyModifiers([{ name: "eval" }], {
+        language: "js",
+        content: 'const server = "durable";',
+        blockId: "changing-eval",
+        componentName: "ChangingProvider",
+      });
+      return "";
+    },
+  };
+}
+
+function withoutClose(stream: InMemoryStream): InMemoryStream {
+  const events = stream.snapshot();
+  if (events.at(-1)?.type !== "close") {
+    throw new Error("expected completed history");
+  }
+  return new InMemoryStream(events.slice(0, -1));
 }
 
 describe("ephemeral eval and attached-service bindings", () => {
@@ -267,12 +314,14 @@ done
     }
   });
 
-  it("rejects a durable eval export that collides with an existing live binding", function* () {
+  it("prints a live durable-export collision, skips its Yield, and continues durably", function* () {
     const lifecycle = { starts: 0, stops: 0 };
     const stream = new InMemoryStream();
+    const executions: string[] = [];
     yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_100 }), lifecycle);
+    yield* useTrackedExec(executions);
     yield* useStubFs({
-      "doc.md": `<Output>
+      "doc.md": `
 
 \`\`\`bash service=server exec
 handshake-compatible-server
@@ -283,20 +332,21 @@ const partial = "must-not-commit";
 const server = "must-not-execute";
 \`\`\`
 
-</Output>
+\`\`\`bash exec
+echo after-collision
+\`\`\`
 `,
     });
 
-    let failure: unknown;
-    try {
+    const output = String(
       yield* scoped(function* () {
-        yield* collect(yield* execute({ path: "doc.md", stream }));
-      });
-    } catch (error) {
-      failure = error;
-    }
+        return yield* collect(yield* execute({ path: "doc.md", stream }));
+      }),
+    );
 
-    expect(String(failure)).toContain("collides with a live binding");
+    expect(output).toContain("collides with a live binding");
+    expect(output).toContain("after-collision");
+    expect(executions).toEqual(["echo after-collision"]);
     expect(
       stream
         .snapshot()
@@ -305,81 +355,103 @@ const server = "must-not-execute";
     expect(lifecycle).toEqual({ starts: 1, stops: 1 });
   });
 
-  it("rejects a colliding durable export before partial replay restoration", function* () {
+  it("prints the same collision on valid partial replay and restores the later effect", function* () {
     const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_101 });
     const lifecycle = { starts: 0, stops: 0 };
-    const legacy = new InMemoryStream();
+    const executions: string[] = [];
+    const live = new InMemoryStream();
     yield* useServiceStub(endpoint, lifecycle);
+    yield* useTrackedExec(executions);
     yield* useStubFs({
-      "doc.md": `<Output>
-
-\`\`\`bash service=other exec
-handshake-compatible-server
-\`\`\`
-
-\`\`\`js eval
-const server = "legacy-durable-value";
-\`\`\`
-
-tail
-
-</Output>
-`,
-    });
-    yield* scoped(function* () {
-      yield* collect(yield* execute({ path: "doc.md", stream: legacy }));
-    });
-
-    const events = legacy.snapshot().map((event) => {
-      const parsed = parseDurableEvent(
-        serializeDurableEvent(event).replaceAll("service=other", "service=server"),
-      );
-      if (!parsed.ok) {
-        throw parsed.error;
-      }
-      return parsed.value;
-    });
-    const evalYield = events.findIndex(
-      (event) => event.type === "yield" && event.description.type === "eval",
-    );
-    expect(evalYield).toBeGreaterThan(-1);
-    const partial = new InMemoryStream(events.slice(0, evalYield + 1));
-    const beforeEvalEvents = partial
-      .snapshot()
-      .filter((event) => event.type === "yield" && event.description.type === "eval").length;
-    yield* useStubFs({
-      "doc.md": `<Output>
+      "doc.md": `
 
 \`\`\`bash service=server exec
 handshake-compatible-server
 \`\`\`
 
 \`\`\`js eval
-const server = "legacy-durable-value";
+const partial = "must-not-commit";
+const server = "must-not-execute";
 \`\`\`
 
-tail
-
-</Output>
+\`\`\`bash exec
+echo after-collision
+\`\`\`
 `,
     });
-
-    let failure: unknown;
-    try {
+    const liveOutput = String(
       yield* scoped(function* () {
-        yield* collect(yield* execute({ path: "doc.md", stream: partial }));
-      });
-    } catch (error) {
-      failure = error;
-    }
+        return yield* collect(yield* execute({ path: "doc.md", stream: live }));
+      }),
+    );
+    expect(liveOutput).toContain("collides with a live binding");
+    expect(executions).toEqual(["echo after-collision"]);
 
-    expect(String(failure)).toContain("collides with a live binding");
+    const partial = withoutClose(live);
+    const before = partial.snapshot();
+    const replayOutput = String(
+      yield* scoped(function* () {
+        return yield* collect(yield* execute({ path: "doc.md", stream: partial }));
+      }),
+    );
+
+    expect(replayOutput).toContain("collides with a live binding");
+    expect(replayOutput).toContain("after-collision");
+    expect(executions).toEqual(["echo after-collision"]);
     expect(
       partial
         .snapshot()
         .filter((event) => event.type === "yield" && event.description.type === "eval").length,
-    ).toBe(beforeEvalEvents);
+    ).toBe(0);
+    expect(partial.snapshot().slice(0, before.length)).toEqual(before);
     expect(lifecycle).toEqual({ starts: 2, stops: 2 });
+  });
+
+  it("rejects incompatible retained component history through divergence", function* () {
+    const lifecycle = { starts: 0, stops: 0 };
+    const executions: string[] = [];
+    const history = new InMemoryStream();
+    yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_102 }), lifecycle);
+    yield* useTrackedExec(executions);
+    yield* useStubFs({
+      "doc.md": `<PrintErrors><ChangingProvider /></PrintErrors>
+
+\`\`\`bash exec
+echo after-provider
+\`\`\`
+`,
+    });
+    yield* registerComponents([changingProvider(false)]);
+    expect(String(yield* collect(yield* execute({ path: "doc.md", stream: history })))).toContain(
+      "after-provider",
+    );
+    expect(executions).toEqual(["echo after-provider"]);
+
+    const retained = withoutClose(history);
+    const before = retained.snapshot();
+    const replayExecutions: string[] = [];
+    let failure: unknown;
+    yield* scoped(function* () {
+      yield* useTrackedExec(replayExecutions);
+      yield* registerComponents([changingProvider(true)]);
+      try {
+        yield* collect(yield* execute({ path: "doc.md", stream: retained }));
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(failure).toBeInstanceOf(DivergenceError);
+    expect(String(failure)).not.toContain("collides with a live binding");
+    expect(replayExecutions).toEqual([]);
+    expect(retained.snapshot().slice(0, before.length)).toEqual(before);
+    expect(
+      retained
+        .snapshot()
+        .slice(before.length)
+        .filter((event) => event.type === "yield"),
+    ).toHaveLength(0);
+    expect(lifecycle).toEqual({ starts: 1, stops: 1 });
   });
 
   it("rejects ephemeral exports that collide with durable names before execution", function* () {
