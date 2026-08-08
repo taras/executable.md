@@ -62,7 +62,7 @@ import {
   useTransactionSavepoints,
 } from "./transaction.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
-import { translateSqliteError } from "./schema.ts";
+import { isSqliteForeignKeyConstraint, translateSqliteError } from "./schema.ts";
 
 const SELECT_RUN = "SELECT * FROM workflow_run WHERE id = 1";
 const UPDATE_RUN_STATE = `UPDATE workflow_run
@@ -319,16 +319,20 @@ function createHandle(connection: OpenConnection): Handle {
       const stoppedAt = now();
 
       return yield* write(() => {
-        const changed = database
-          .prepare(FINISH_EXECUTION)
-          .run(
-            stoppedAt,
-            completion.status,
-            columns.kind,
-            columns.code,
-            columns.eventId,
-            completion.executionId,
-          );
+        const changed = runStopReasonStatement(
+          () =>
+            database
+              .prepare(FINISH_EXECUTION)
+              .run(
+                stoppedAt,
+                completion.status,
+                columns.kind,
+                columns.code,
+                columns.eventId,
+                completion.executionId,
+              ),
+          path,
+        );
         if (changed.changes === 0) {
           throw new WorkflowDocumentExecutionError(completion.executionId);
         }
@@ -352,9 +356,13 @@ function createHandle(connection: OpenConnection): Handle {
       const updatedAt = now();
 
       const written = yield* write(() => {
-        database
-          .prepare(UPDATE_RUN_STATE)
-          .run(state.status, columns.kind, columns.code, columns.eventId, updatedAt);
+        runStopReasonStatement(
+          () =>
+            database
+              .prepare(UPDATE_RUN_STATE)
+              .run(state.status, columns.kind, columns.code, columns.eventId, updatedAt),
+          path,
+        );
         return readRunRow(database, path);
       });
       if (!written.ok) {
@@ -438,6 +446,20 @@ function inTransaction<T>(database: DatabaseSync, path: string, body: () => T): 
   } catch (error) {
     rollback(database);
     return Err(translateSqliteError(error, path));
+  }
+}
+
+function runStopReasonStatement<T>(body: () => T, path: string): T {
+  try {
+    return body();
+  } catch (error) {
+    if (isSqliteForeignKeyConstraint(error)) {
+      throw new WorkflowRequestError(
+        "the stop reason names a journal event this run does not hold. A journal reason " +
+          "points at an event that has already been appended and filtered.",
+      );
+    }
+    throw translateSqliteError(error, path);
   }
 }
 

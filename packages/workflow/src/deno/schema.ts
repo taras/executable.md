@@ -30,7 +30,6 @@ import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
   WorkflowIncompleteVersionOneError,
-  WorkflowRequestError,
   WorkflowSchemaVersionError,
 } from "../storage/errors.ts";
 import { initializeEmptyWorkspace, verifyEmptyWorkspace } from "./workspace/empty.ts";
@@ -452,6 +451,12 @@ export function verifySchema(database: DatabaseSync, path: string): void {
   }
 
   const version = readPragmaNumber(database, "user_version", path);
+  if (version === 0) {
+    throw new WorkflowDatabaseCorruptError(
+      path,
+      "it carries the XMD application identity without a complete version-1 schema",
+    );
+  }
   if (version !== SCHEMA_VERSION) {
     throw new WorkflowSchemaVersionError(path, version, SCHEMA_VERSION);
   }
@@ -605,7 +610,7 @@ const SQLITE_CORRUPT = 11;
 /** `SQLITE_NOTADB`: the bytes are not a SQLite database at all. */
 const SQLITE_NOTADB = 26;
 
-/** `SQLITE_CONSTRAINT_FOREIGNKEY`: a requested journal reference does not exist. */
+/** `SQLITE_CONSTRAINT_FOREIGNKEY`: one statement violated a foreign key. */
 const SQLITE_CONSTRAINT_FOREIGNKEY = 787;
 
 /**
@@ -621,14 +626,13 @@ export function translateSqliteError(error: unknown, path: string): unknown {
       return new WorkflowDatabaseFormatError(path, "SQLite does not recognize it as a database");
     case SQLITE_CORRUPT:
       return new WorkflowDatabaseCorruptError(path, "SQLite reported a damaged image");
-    case SQLITE_CONSTRAINT_FOREIGNKEY:
-      return new WorkflowRequestError(
-        "the stop reason names a journal event this run does not hold. A journal reason " +
-          "points at an event that has already been appended and filtered.",
-      );
     default:
       return error;
   }
+}
+
+export function isSqliteForeignKeyConstraint(error: unknown): boolean {
+  return sqliteErrorCode(error) === SQLITE_CONSTRAINT_FOREIGNKEY;
 }
 
 /** The SQLite result code behind a failure, when SQLite is what raised it. */
