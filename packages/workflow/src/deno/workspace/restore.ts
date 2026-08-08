@@ -1,6 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { clearBlobCache } from "../../../vendor/cloudflare-computer-dofs/generated/fs/blobCache.js";
-import { clearResolveCache } from "../../../vendor/cloudflare-computer-dofs/generated/fs/resolveCache.js";
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { RunConnection } from "../connections.ts";
 import { reading } from "../reading.ts";
@@ -40,11 +38,11 @@ export function restoreWorkspaceRoot(
   const { database, dofs, path, savepoints } = connection;
   verifyWorkspace(database, dofs, path);
   const selected = loadWorkspaceRoot(database, rootId, path);
-  clearCaches(connection);
+  connection.invalidateDofsCaches();
   try {
     return savepoints.synchronous(() => {
       rebuild(database, selected, path);
-      clearCaches(connection);
+      connection.invalidateDofsCaches();
       const restored = snapshotWorkspace(database, dofs, path, false);
       if (
         restored.rootId !== selected.rootId ||
@@ -60,12 +58,8 @@ export function restoreWorkspaceRoot(
       return selected;
     });
   } finally {
-    clearCaches(connection);
+    connection.invalidateDofsCaches();
   }
-}
-
-export function clearWorkspaceCaches(connection: RunConnection): void {
-  clearCaches(connection);
 }
 
 function rebuild(database: DatabaseSync, root: StoredWorkspaceRoot, databasePath: string): void {
@@ -182,11 +176,6 @@ function nextRevision(database: DatabaseSync, databasePath: string): number {
     corrupt(databasePath, "restoration did not establish a valid Workspace revision");
   }
   return revision;
-}
-
-function clearCaches(connection: RunConnection): void {
-  clearResolveCache(connection.dofs);
-  clearBlobCache(connection.dofs);
 }
 
 function equalStrings(left: readonly string[], right: readonly string[]): boolean {

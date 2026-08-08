@@ -10,7 +10,12 @@ import {
   WorkflowRunStorage,
 } from "../mod.ts";
 import { workflowRunConnection } from "../src/deno/database.ts";
-import { type StoredWorkspaceRoot } from "../src/deno/workspace/manifest.ts";
+import {
+  encodeWorkspaceManifest,
+  parseWorkspaceManifest,
+  type StoredWorkspaceRoot,
+  workspaceRootId,
+} from "../src/deno/workspace/manifest.ts";
 import {
   type PrivateWorkspaceTransaction,
   setPrivateWorkspaceClock,
@@ -542,6 +547,158 @@ describe("Tier WRR — private Workspace root restoration", () => {
     } finally {
       reopened.close();
     }
+  });
+
+  it("WRR10: outer failure rollback invalidates authoritative DOFS caches", function* () {
+    const storage = yield* useStorageRoot();
+
+    yield* withStorage(storage, function* () {
+      const database = yield* createRun({ runId: "rollback-cache" });
+      const baselineRoot = (yield* capture(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/kept.txt", "known retained bytes");
+      })).rootId;
+      yield* database.journal.append({
+        type: "close",
+        coroutineId: "root",
+        result: { status: "ok", value: "baseline" },
+      });
+      const baselineJournal = yield* database.journal.readAll();
+
+      const failed = yield* transactWorkspaceRoots(database, function* (workspace) {
+        yield* workspace.filesystem.remove("/kept.txt");
+        let missing: unknown;
+        try {
+          yield* workspace.filesystem.readTextFile("/kept.txt");
+        } catch (error) {
+          missing = error;
+        }
+        expect(missing).toBeInstanceOf(Error);
+        throw new Error("force the caller-owned transaction to roll back");
+      });
+      expect(failed.ok).toBe(false);
+
+      const observed = yield* transact(database, function* (workspace) {
+        return {
+          content: yield* workspace.filesystem.readTextFile("/kept.txt"),
+          root: yield* workspace.currentRoot(),
+        };
+      });
+      expect(observed).toEqual({ content: "known retained bytes", root: baselineRoot });
+      expect(yield* database.journal.readAll()).toEqual(baselineJournal);
+    });
+  });
+
+  it("WRR10b: outer cancellation rollback invalidates authoritative DOFS caches", function* () {
+    const storage = yield* useStorageRoot();
+
+    yield* withStorage(storage, function* () {
+      const database = yield* createRun({ runId: "cancel-cache" });
+      const baselineRoot = (yield* capture(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/kept.txt", "known retained bytes");
+      })).rootId;
+      yield* database.journal.append({
+        type: "close",
+        coroutineId: "root",
+        result: { status: "ok", value: "baseline" },
+      });
+      const baselineJournal = yield* database.journal.readAll();
+      const reached = withResolvers<void>();
+
+      const transacting = yield* spawn(function* () {
+        yield* transactWorkspaceRoots(database, function* (workspace) {
+          yield* workspace.filesystem.remove("/kept.txt");
+          let missing: unknown;
+          try {
+            yield* workspace.filesystem.readTextFile("/kept.txt");
+          } catch (error) {
+            missing = error;
+          }
+          expect(missing).toBeInstanceOf(Error);
+          reached.resolve();
+          yield* suspend();
+        });
+      });
+      yield* reached.operation;
+      yield* transacting.halt();
+
+      const observed = yield* transact(database, function* (workspace) {
+        return {
+          content: yield* workspace.filesystem.readTextFile("/kept.txt"),
+          root: yield* workspace.currentRoot(),
+        };
+      });
+      expect(observed).toEqual({ content: "known retained bytes", root: baselineRoot });
+      expect(yield* database.journal.readAll()).toEqual(baselineJournal);
+    });
+  });
+
+  it("WRR11: historical file sizes must agree with retained DOFS manifests", function* () {
+    const storage = yield* useStorageRoot();
+    const path = runPath(storage, "historical-size");
+    let historicalRoot = "";
+    let currentRootId = "";
+
+    yield* withStorage(storage, function* () {
+      const database = yield* createRun({ runId: "historical-size" });
+      historicalRoot = (yield* capture(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/historical.txt", "historical bytes");
+      })).rootId;
+      yield* database.journal.append({
+        type: "close",
+        coroutineId: "root",
+        result: { status: "ok", value: "historical" },
+      });
+      currentRootId = (yield* capture(database, function* (workspace) {
+        yield* workspace.filesystem.remove("/historical.txt");
+        yield* workspace.filesystem.writeFile("/current.txt", "current bytes");
+      })).rootId;
+    });
+
+    tamper(path, (database) => {
+      const stored = database
+        .prepare("SELECT manifest FROM workspace_roots WHERE root_id = ?")
+        .get(historicalRoot)?.["manifest"];
+      if (typeof stored !== "string") {
+        throw new Error("the historical Workspace root is missing");
+      }
+      const parsed = parseWorkspaceManifest(stored, path);
+      let changed = false;
+      const entries = parsed.entries.map((entry) => {
+        if (entry.kind !== "file") {
+          return entry;
+        }
+        changed = true;
+        return { ...entry, size: entry.size + 1 };
+      });
+      if (!changed) {
+        throw new Error("the historical Workspace root contains no file");
+      }
+      const manifest = encodeWorkspaceManifest(entries, path);
+      const rootId = workspaceRootId(manifest);
+
+      database.exec("PRAGMA foreign_keys = OFF");
+      database
+        .prepare("UPDATE workspace_roots SET root_id = ?, manifest = ? WHERE root_id = ?")
+        .run(rootId, manifest, historicalRoot);
+      database
+        .prepare("UPDATE workspace_root_manifest_refs SET root_id = ? WHERE root_id = ?")
+        .run(rootId, historicalRoot);
+      database
+        .prepare("UPDATE workspace_root_blob_refs SET root_id = ? WHERE root_id = ?")
+        .run(rootId, historicalRoot);
+      database
+        .prepare("UPDATE journal_events SET workspace_root_id = ? WHERE workspace_root_id = ?")
+        .run(rootId, historicalRoot);
+      expect(currentRoot(database)).toBe(currentRootId);
+    });
+
+    const before = readFileSync(path);
+    const result = yield* withStorage(storage, function* () {
+      return yield* WorkflowRunStorage.operations.lookup("historical-size");
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+    expect(readFileSync(path)).toEqual(before);
   });
 });
 

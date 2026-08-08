@@ -474,19 +474,30 @@ function rootFromManifest(
   parsed: ReturnType<typeof parseWorkspaceManifest>,
   databasePath: string,
 ): StoredWorkspaceRoot {
-  const manifests = new Set<string>();
+  const manifests = new Map<string, DofsManifest>();
   for (const entry of parsed.entries) {
     if (entry.kind === "file") {
-      manifests.add(entry.manifest);
+      let manifest = manifests.get(entry.manifest);
+      if (manifest === undefined) {
+        manifest = readDofsManifest(database, entry.manifest, databasePath);
+        manifests.set(entry.manifest, manifest);
+      }
+      if (entry.size !== manifest.size) {
+        corrupt(databasePath, "a retained file size differs from its DOFS manifest");
+      }
     }
   }
   const blobs = new Set<string>();
-  for (const hash of manifests) {
-    for (const chunk of readDofsManifest(database, hash, databasePath).chunks) {
+  for (const manifest of manifests.values()) {
+    for (const chunk of manifest.chunks) {
       blobs.add(chunk.hash);
     }
   }
-  return workspaceRoot(manifest, [...manifests].sort(compareUtf8), [...blobs].sort(compareUtf8));
+  return workspaceRoot(
+    manifest,
+    [...manifests.keys()].sort(compareUtf8),
+    [...blobs].sort(compareUtf8),
+  );
 }
 
 function validateFile(

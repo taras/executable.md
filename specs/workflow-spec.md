@@ -293,6 +293,11 @@ blobs. The normalized root-to-manifest and root-to-blob rows equal the exact
 transitive content of each root and prevent that content from being deleted
 while the root is retained.
 
+Each file entry's declared size equals the size in its referenced DOFS
+manifest. Recognition checks that agreement for every file in every retained
+root, including roots that are not current, while it validates the manifest's
+chunks and blobs transitively.
+
 ### 9.5 The journal
 
 `WorkflowRunDatabase.journal` is an ordinary `DurableStream`, so `durableRun`
@@ -367,6 +372,13 @@ Cloudflare's synchronous transactions use uniquely named SQLite savepoints on
 that same connection and only while XMD's caller-owned transaction is open.
 DOFS does not begin, commit or roll back a top-level transaction.
 
+If a caller-owned transaction does not commit, its finalizer attempts SQLite
+rollback and then invalidates both the resolution and blob caches on the
+authoritative DOFS wrapper before releasing the serialized connection turn.
+The same cleanup covers body failure, cancellation during the body or child
+teardown, final Workspace validation failure, and commit failure. Rolled-back
+topology therefore cannot survive as a positive or negative cache entry.
+
 Adapter-private root operations also run only inside this caller-owned
 transaction. Capture traverses and validates the complete live DOFS frontier,
 builds or reuses a canonical DOFS file manifest when ordered chunks do not yet
@@ -438,7 +450,8 @@ and exact manifest/blob reachability, validates every referenced manifest,
 blob, byte payload and live chunk, and requires the read-only live snapshot to
 equal the singleton current root. Malformed paths or topology, dangling or
 cyclic dirents, invalid hardlinks, corrupt hashes or sizes, inexact references,
-and a live/current mismatch are damage. Recognition performs no repair.
+a file entry whose declared size differs from its referenced DOFS manifest, and
+a live/current mismatch are damage. Recognition performs no repair.
 
 No message repeats a stored value — or a stored *name*. Props and journal
 payloads are retained history, and a member name can carry a credential as

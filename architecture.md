@@ -227,6 +227,11 @@ and run row are read through one explicit SQLite snapshot. This recognition
 transaction is not a caller-owned Workspace transaction and enables no DOFS
 savepoints.
 
+Recognition also requires every file entry in every retained root, including a
+historical root, to declare the size held by its referenced DOFS manifest. A
+root whose XMD identity and reference rows are internally consistent but whose
+file size disagrees with DOFS is corrupt and not restorable.
+
 Which status transitions are legal, and what a caller may do to a run in each
 of them, is lifecycle policy applied above storage.
 
@@ -425,6 +430,13 @@ clears the authoritative resolution and blob caches, and resnapshots to the
 selected identity before release. Private Workspace transaction bodies finish
 their child teardown before final live/current validation; a later effect
 coordinator finishes its mutation scope before it invokes capture.
+
+Every unsuccessful caller-owned transaction attempts SQLite rollback and then
+invalidates both caches on the provider-owned DOFS wrapper while it still holds
+the serialized connection turn. This includes body failure, cancellation,
+teardown or final-validation failure, and commit failure. The surviving wrapper
+therefore cannot answer from uncommitted positive or negative cache entries
+after SQLite has restored the prior frontier.
 
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider

@@ -220,6 +220,7 @@ function createHandle(connection: OpenConnection): Handle {
         connection.connection.transactionOpen = false;
         if (!committed) {
           rollback(database);
+          connection.connection.invalidateDofsCaches();
         }
       });
 
