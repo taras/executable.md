@@ -96,6 +96,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "the same Deno storage adapter, plus a restart proof that relaunches the run under the Deno executable; `node:sqlite` is behind --experimental-sqlite on Node 22",
     issue: DERIVED_SCOPE,
   },
+  {
+    path: "packages/workflow/tests/workspace-root.test.ts",
+    reason:
+      "exercises the Deno-private authoritative DOFS/SQLite adapter through node:sqlite, which remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
+  {
+    path: "packages/workflow/tests/workspace-root-restoration.test.ts",
+    reason:
+      "restores and corrupts real Deno-owned node:sqlite WorkflowRun databases; the provider mechanics are intentionally runtime-specific",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
 ];
 
 /**
