@@ -55,9 +55,23 @@ function groupedDiagnostics(raw: readonly OxlintDiagnostic[]): Map<string, Oxlin
 }
 
 function filesForGroup(instances: readonly OxlintDiagnostic[]): string[] {
-  return [
-    ...new Set(instances.map((diagnostic) => diagnostic.file).filter((file) => file.length > 0)),
-  ];
+  const files = new Set<string>();
+  for (const diagnostic of instances) {
+    if (diagnostic.file.length > 0) {
+      files.add(diagnostic.file);
+    }
+  }
+  return [...files];
+}
+
+function fileCountFor(raw: readonly OxlintDiagnostic[]): number {
+  const files = new Set<string>();
+  for (const diagnostic of raw) {
+    if (diagnostic.file.length > 0) {
+      files.add(diagnostic.file);
+    }
+  }
+  return files.size;
 }
 
 function diagnosticGroups(raw: readonly OxlintDiagnostic[]): DiagnosticGroup[] {
@@ -168,9 +182,7 @@ export function buildDiagnostics(
   const filtered = filteredDiagnostics(raw, doctor);
   const groups = diagnosticGroups(filtered);
   const total = filtered.length;
-  const fileCount = new Set(
-    filtered.map((diagnostic) => diagnostic.file).filter((file) => file.length > 0),
-  ).size;
+  const fileCount = fileCountFor(filtered);
   const density = densityFor(pr, total);
   return {
     groups,
