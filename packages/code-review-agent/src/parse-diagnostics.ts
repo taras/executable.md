@@ -61,14 +61,13 @@ function filesForGroup(instances: readonly OxlintDiagnostic[]): string[] {
 }
 
 function diagnosticGroups(raw: readonly OxlintDiagnostic[]): DiagnosticGroup[] {
-  return [...groupedDiagnostics(raw).entries()]
-    .map(([ruleId, instances]) => ({
-      ruleId,
-      count: instances.length,
-      files: filesForGroup(instances),
-      instances,
-    }))
-    .toSorted((left, right) => right.count - left.count);
+  const groups = [...groupedDiagnostics(raw).entries()].map(([ruleId, instances]) => ({
+    ruleId,
+    count: instances.length,
+    files: filesForGroup(instances),
+    instances,
+  }));
+  return groups.sort((left, right) => right.count - left.count);
 }
 
 function categorizedGroups(groups: readonly DiagnosticGroup[]): Diagnostics["byCategory"] {
