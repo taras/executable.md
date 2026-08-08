@@ -60,11 +60,14 @@ import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import {
   createWorkflowRunConnections,
   type RunConnection,
+  type RunTransaction,
   type WorkflowRunConnections,
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
 import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
+import { SavepointObservation } from "./savepoints.ts";
+import { usePrivateWorkspace } from "./workspace/private.ts";
 
 const INSERT_RUN = `INSERT INTO workflow_run
   (id, run_id, definition, base, props, status, created_at, updated_at)
@@ -104,10 +107,11 @@ export const WorkflowRunRecognition = createContext<WorkflowRunRecognitionProbe>
  */
 export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
   const root = authorizedRoot(options.root);
-  const connections = createWorkflowRunConnections();
+  const connections = createWorkflowRunConnections(yield* SavepointObservation.get());
   yield* ensure(() => {
     connections.close();
   });
+  yield* usePrivateWorkspace(connections);
 
   yield* WorkflowRunStorage.around(
     {
@@ -190,7 +194,7 @@ function* createWorkflowRun(
       return Err(new WorkflowRunConflictError(wanted.runId, differing));
     }
 
-    return Ok(yield* openWorkflowRunDatabase({ connection, record }));
+    return Ok(yield* openWorkflowRunDatabase({ connection, connections, record }));
   } catch (error) {
     return refusal(error, path);
   }
@@ -235,7 +239,7 @@ function* lookupWorkflowRun(
       return Err(new WorkflowRunIdMismatchError(runId, path));
     }
 
-    return Ok(yield* openWorkflowRunDatabase({ connection, record: record.value }));
+    return Ok(yield* openWorkflowRunDatabase({ connection, connections, record: record.value }));
   } catch (error) {
     return refusal(error, path);
   }
@@ -265,7 +269,13 @@ function establish(
     });
 
     database.exec("BEGIN IMMEDIATE");
-    connection.transactionOpen = true;
+    let transaction: RunTransaction;
+    try {
+      transaction = connection.beginTransaction();
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
     try {
       if (isUninitialized(database, path)) {
         const stamp = new Date().toISOString();
@@ -287,11 +297,14 @@ function establish(
 
       verifySchema(database, path, connection.dofs);
       const record = readRunRow(database, path);
-      connection.transactionOpen = false;
+      connection.validateTransaction(transaction);
+      connection.finishTransaction(transaction);
       database.exec("COMMIT");
       return Ok(record);
     } catch (error) {
-      connection.transactionOpen = false;
+      if (transaction.open) {
+        connection.finishTransaction(transaction);
+      }
       database.exec("ROLLBACK");
       throw error;
     }

@@ -6,7 +6,6 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { type Operation } from "effection";
 import type { WorkflowRunDatabase } from "../mod.ts";
-import { workflowRunConnection } from "../src/deno/database.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
   EMPTY_WORKSPACE_ROOT_ID,
@@ -83,7 +82,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
 
     yield* withStorage(storage, function* () {
       const database = yield* createRun({ runId: "canonical-a" });
-      setPrivateWorkspaceClock(database, () => 1_700_000_000_000);
+      yield* setPrivateWorkspaceClock(database, () => 1_700_000_000_000);
       first = yield* capture(database, function* (workspace) {
         yield* workspace.filesystem.mkdir("/tree", { mode: 0o750 });
         yield* workspace.filesystem.mkdir("/tree/nested", { mode: 0o700 });
@@ -92,12 +91,18 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
           "retained-only-in-dofs-blobs",
           0o640,
         );
-        workflowRunConnection(database)
-          .database.prepare("UPDATE vfs_nodes SET manifest_hash = NULL WHERE type = 'file'")
-          .run();
         yield* workspace.filesystem.link("/tree/nested/file.txt", "/tree/hardlink.txt");
         yield* workspace.filesystem.symlink("nested/file.txt", "/tree/current.txt");
       });
+
+      const materialization = new DatabaseSync(runPath(storage, "canonical-a"));
+      try {
+        materialization
+          .prepare("UPDATE vfs_nodes SET manifest_hash = NULL WHERE type = 'file'")
+          .run();
+      } finally {
+        materialization.close();
+      }
 
       const repeated = yield* transact(database, function* (workspace) {
         return yield* workspace.capture({ publish: true });
@@ -105,7 +110,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
       expect(repeated).toEqual(first);
 
       const other = yield* createRun({ runId: "canonical-b" });
-      setPrivateWorkspaceClock(other, () => 1_700_000_000_000);
+      yield* setPrivateWorkspaceClock(other, () => 1_700_000_000_000);
       independentlyBuilt = yield* capture(other, function* (workspace) {
         yield* workspace.filesystem.mkdir("/tree", { mode: 0o750 });
         yield* workspace.filesystem.mkdir("/tree/nested", { mode: 0o700 });
@@ -193,7 +198,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
     yield* withStorage(storage, function* () {
       const database = yield* createRun({ runId: "root-sequence" });
       let time = 100;
-      setPrivateWorkspaceClock(database, () => time);
+      yield* setPrivateWorkspaceClock(database, () => time);
 
       roots.push(
         yield* capture(database, function* (workspace) {

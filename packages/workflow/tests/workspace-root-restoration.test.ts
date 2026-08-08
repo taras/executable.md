@@ -9,7 +9,6 @@ import {
   type WorkflowRunDatabase,
   WorkflowRunStorage,
 } from "../mod.ts";
-import { workflowRunConnection } from "../src/deno/database.ts";
 import {
   encodeWorkspaceManifest,
   parseWorkspaceManifest,
@@ -54,12 +53,12 @@ function count(database: DatabaseSync, table: string): number {
 function* createCorruptionFixture(storage: string, runId: string): Operation<void> {
   yield* withStorage(storage, function* () {
     const database = yield* createRun({ runId });
-    setPrivateWorkspaceClock(database, () => 1_000);
+    yield* setPrivateWorkspaceClock(database, () => 1_000);
     yield* capture(database, function* (workspace) {
       yield* workspace.filesystem.mkdir("/dir");
       yield* workspace.filesystem.writeFile("/dir/file.txt", "first retained bytes", 0o640);
     });
-    setPrivateWorkspaceClock(database, () => 2_000);
+    yield* setPrivateWorkspaceClock(database, () => 2_000);
     yield* capture(database, function* (workspace) {
       yield* workspace.filesystem.writeFile("/dir/file.txt", "second retained bytes", 0o600);
     });
@@ -75,7 +74,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
 
     yield* withStorage(storage, function* () {
       const database = yield* createRun({ runId: "restore-history" });
-      setPrivateWorkspaceClock(database, () => 10_000);
+      yield* setPrivateWorkspaceClock(database, () => 10_000);
       historical = yield* capture(database, function* (workspace) {
         yield* workspace.filesystem.mkdir("/tree", { mode: 0o750 });
         yield* workspace.filesystem.writeFile("/tree/file.txt", "historical", 0o640);
@@ -83,7 +82,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
         yield* workspace.filesystem.symlink("file.txt", "/tree/current.txt");
       });
 
-      setPrivateWorkspaceClock(database, () => 20_000);
+      yield* setPrivateWorkspaceClock(database, () => 20_000);
       later = yield* capture(database, function* (workspace) {
         yield* workspace.filesystem.writeFile("/tree/file.txt", "later", 0o600);
         yield* workspace.filesystem.rename("/tree/file.txt", "/renamed.txt");
@@ -195,33 +194,31 @@ describe("Tier WRR — private Workspace root restoration", () => {
 
     yield* withStorage(storage, function* () {
       const database = yield* createRun({ runId: "restore-rollback" });
-      setPrivateWorkspaceClock(database, () => 100);
+      yield* setPrivateWorkspaceClock(database, () => 100);
       historical = (yield* capture(database, function* (workspace) {
         yield* workspace.filesystem.writeFile("/historical.txt", "historical");
       })).rootId;
-      setPrivateWorkspaceClock(database, () => 200);
+      yield* setPrivateWorkspaceClock(database, () => 200);
       current = (yield* capture(database, function* (workspace) {
         yield* workspace.filesystem.remove("/historical.txt");
         yield* workspace.filesystem.writeFile("/current.txt", "current");
       })).rootId;
 
-      const connection = workflowRunConnection(database);
+      const fault = new DatabaseSync(runPath(storage, "restore-rollback"));
+      fault.exec(`
+        CREATE TRIGGER fail_workspace_restore
+        BEFORE INSERT ON vfs_nodes
+        WHEN NEW.inode <> 1
+        BEGIN
+          SELECT raise(ABORT, 'restoration insertion refused');
+        END
+      `);
       yield* transact(database, function* (workspace) {
-        connection.database.exec(`
-          CREATE TEMP TRIGGER fail_workspace_restore
-          BEFORE INSERT ON vfs_nodes
-          WHEN NEW.inode <> 1
-          BEGIN
-            SELECT raise(ABORT, 'restoration insertion refused');
-          END
-        `);
         let failure: unknown;
         try {
           yield* workspace.restore(historical, { publish: true });
         } catch (error) {
           failure = error;
-        } finally {
-          connection.database.exec("DROP TRIGGER fail_workspace_restore");
         }
         expect(failure).toBeInstanceOf(Error);
         expect(yield* workspace.currentRoot()).toBe(current);
@@ -234,6 +231,8 @@ describe("Tier WRR — private Workspace root restoration", () => {
         }
         expect(historicalFile).toBeInstanceOf(Error);
       });
+      fault.exec("DROP TRIGGER fail_workspace_restore");
+      fault.close();
     });
 
     const sqlite = new DatabaseSync(runPath(storage, "restore-rollback"));
@@ -486,9 +485,10 @@ describe("Tier WRR — private Workspace root restoration", () => {
         result: { status: "ok", value: "baseline" },
       });
 
-      const connection = workflowRunConnection(database);
-      baselineRoots = count(connection.database, "workspace_roots");
-      baselineJournal = count(connection.database, "journal_events");
+      const observer = new DatabaseSync(path);
+      baselineRoots = count(observer, "workspace_roots");
+      baselineJournal = count(observer, "journal_events");
+      observer.close();
       const started = withResolvers<void>();
       const result = yield* transactWorkspaceRoots(database, function* (workspace) {
         yield* workspace.filesystem.writeFile("/captured.txt", "captured");
@@ -505,8 +505,10 @@ describe("Tier WRR — private Workspace root restoration", () => {
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-      expect(count(connection.database, "workspace_roots")).toBe(baselineRoots);
-      expect(count(connection.database, "journal_events")).toBe(baselineJournal);
+      const after = new DatabaseSync(path);
+      expect(count(after, "workspace_roots")).toBe(baselineRoots);
+      expect(count(after, "journal_events")).toBe(baselineJournal);
+      after.close();
 
       const observed = yield* transact(database, function* (workspace) {
         const missing: string[] = [];

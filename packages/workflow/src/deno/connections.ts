@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
+import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
+import { WorkflowTransactionError } from "../storage/errors.ts";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { WorkspaceFilesystem } from "../../vendor/cloudflare-computer-dofs/generated/fs/filesystem.js";
 import { clearBlobCache } from "../../vendor/cloudflare-computer-dofs/generated/fs/blobCache.js";
@@ -10,33 +12,85 @@ import type {
   SQLStorageLike,
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
 import { type ConnectionLock, createConnectionLock } from "./lock.ts";
-import { createSavepointManager, type SavepointManager } from "./savepoints.ts";
+import {
+  createSavepointManager,
+  type SavepointManager,
+  type SavepointObserver,
+  type SavepointTransaction,
+} from "./savepoints.ts";
+
+export class ConnectionGeneration {
+  #opaque = undefined;
+}
+
+export class TransactionIdentity {
+  #opaque = undefined;
+}
+
+export class WorkflowRunTransactionToken {
+  #opaque = undefined;
+}
+
+export interface RunConnectionLease {
+  readonly connection: RunConnection;
+  readonly generation: ConnectionGeneration;
+  readonly path: string;
+  readonly database: WorkflowRunDatabase;
+  open: boolean;
+}
+
+export interface RunTransaction extends SavepointTransaction {
+  readonly path: string;
+  readonly generation: ConnectionGeneration;
+  readonly identity: TransactionIdentity;
+  readonly lease: RunConnectionLease | undefined;
+  handle: WorkflowRunTransaction | undefined;
+  open: boolean;
+  failure: unknown | undefined;
+}
 
 export interface RunConnection {
   readonly path: string;
+  readonly generation: ConnectionGeneration;
   readonly database: DatabaseSync;
   readonly dofs: CloudflareDatabase;
   readonly filesystem: WorkspaceFilesystem;
   readonly lock: ConnectionLock;
   readonly savepoints: SavepointManager;
-  transactionOpen: boolean;
   invalidateDofsCaches(): void;
+  beginTransaction(lease?: RunConnectionLease): RunTransaction;
+  bindTransaction(transaction: RunTransaction, handle: WorkflowRunTransaction): void;
+  validateTransaction(transaction: RunTransaction): void;
+  finishTransaction(transaction: RunTransaction): void;
+  currentTransaction(): RunTransaction;
   setClock(now: () => number): void;
   close(): void;
 }
 
 export interface WorkflowRunConnections {
   at(path: string): RunConnection;
+  registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease;
+  closeLease(lease: RunConnectionLease): void;
+  validateLease(database: WorkflowRunDatabase): RunConnectionLease;
+  authorizeTransaction(
+    database: WorkflowRunDatabase,
+    transaction: WorkflowRunTransaction,
+  ): RunTransaction;
+  issueToken(
+    database: WorkflowRunDatabase,
+    transaction: WorkflowRunTransaction,
+  ): WorkflowRunTransactionToken;
+  validateToken(database: WorkflowRunDatabase, token: WorkflowRunTransactionToken): RunTransaction;
   close(): void;
 }
 
 class SqliteStorage implements SQLStorageLike {
   readonly database: DatabaseSync;
-  readonly savepoints: () => SavepointManager;
+  readonly connection: () => RunConnection;
 
-  constructor(database: DatabaseSync, savepoints: () => SavepointManager) {
+  constructor(database: DatabaseSync, connection: () => RunConnection) {
     this.database = database;
-    this.savepoints = savepoints;
+    this.connection = connection;
   }
 
   exec<Row extends object = Record<string, unknown>>(
@@ -53,7 +107,7 @@ class SqliteStorage implements SQLStorageLike {
   }
 }
 
-function createConnection(path: string): RunConnection {
+function createConnection(path: string, observeSavepoint: SavepointObserver): RunConnection {
   const database = new DatabaseSync(path);
   try {
     database.exec("PRAGMA foreign_keys = ON");
@@ -63,65 +117,192 @@ function createConnection(path: string): RunConnection {
     throw error;
   }
 
+  const generation = new ConnectionGeneration();
   let open = true;
-  const connection: {
-    savepoints: SavepointManager | undefined;
-    transactionOpen: boolean;
-  } = { savepoints: undefined, transactionOpen: false };
-  const storage = new SqliteStorage(database, () => {
-    const savepoints = connection.savepoints;
-    if (savepoints === undefined) {
-      throw new WorkflowConnectionStateError("the savepoint manager is not installed");
+  let active: RunTransaction | undefined;
+  let installed: RunConnection | undefined;
+
+  function validate(transaction: SavepointTransaction): void {
+    if (!open || active !== transaction || !transaction.open) {
+      throw new WorkflowTransactionError(
+        "the caller-owned workflow transaction is missing, foreign, stale, or already finished.",
+      );
     }
-    return savepoints;
+    if (active.path !== path || active.generation !== generation) {
+      throw new WorkflowTransactionError(
+        "the caller-owned workflow transaction does not belong to this connection generation.",
+      );
+    }
+    if (active.failure !== undefined) {
+      throw new WorkflowTransactionError(
+        "the caller-owned workflow transaction cannot continue after a savepoint failure.",
+      );
+    }
+  }
+
+  const savepoints = createSavepointManager(
+    database,
+    {
+      validate,
+      poison(transaction, failure): void {
+        if (active === transaction && transaction.open) {
+          active.failure = failure;
+        }
+      },
+    },
+    observeSavepoint,
+  );
+  const storage = new SqliteStorage(database, () => {
+    if (installed === undefined) {
+      throw new WorkflowConnectionStateError("the workflow connection is not installed");
+    }
+    return installed;
   });
   const durableStorage: DurableObjectStorageLike = {
     sql: storage,
     transactionSync<T>(closure: () => T): T {
-      return storage.savepoints().synchronous(closure);
+      const connection = storage.connection();
+      return connection.savepoints.synchronous(connection.currentTransaction(), closure);
     },
   };
   const dofs = new CloudflareDatabase(durableStorage);
-  const savepoints = createSavepointManager(database, () => connection.transactionOpen);
-  connection.savepoints = savepoints;
   let clock = Date.now;
 
-  return {
+  const connection: RunConnection = {
     path,
+    generation,
     database,
     dofs,
     filesystem: new WorkspaceFilesystem(dofs, { now: () => clock() }),
     lock: createConnectionLock(),
     savepoints,
-    get transactionOpen() {
-      return connection.transactionOpen;
+
+    beginTransaction(lease?: RunConnectionLease): RunTransaction {
+      if (!open || active !== undefined) {
+        throw new WorkflowTransactionError(
+          "the authoritative workflow connection cannot open another transaction.",
+        );
+      }
+      if (
+        lease !== undefined &&
+        (!lease.open || lease.connection !== connection || lease.generation !== generation)
+      ) {
+        throw new WorkflowTransactionError(
+          "the workflow database lease is foreign, stale, or already closed.",
+        );
+      }
+      const transaction: RunTransaction = {
+        path,
+        generation,
+        identity: new TransactionIdentity(),
+        lease,
+        handle: undefined,
+        open: true,
+        failure: undefined,
+      };
+      active = transaction;
+      return transaction;
     },
-    set transactionOpen(value: boolean) {
-      connection.transactionOpen = value;
+
+    bindTransaction(transaction: RunTransaction, handle: WorkflowRunTransaction): void {
+      validate(transaction);
+      if (transaction.lease === undefined || transaction.handle !== undefined) {
+        throw new WorkflowTransactionError(
+          "the caller-owned workflow transaction cannot be associated with this handle.",
+        );
+      }
+      transaction.handle = handle;
     },
+
     invalidateDofsCaches(): void {
       clearResolveCache(dofs);
       clearBlobCache(dofs);
     },
+
+    validateTransaction(transaction: RunTransaction): void {
+      validate(transaction);
+    },
+
+    finishTransaction(transaction: RunTransaction): void {
+      if (!open || active !== transaction || !transaction.open) {
+        throw new WorkflowTransactionError(
+          "the caller-owned workflow transaction is missing, foreign, stale, or already finished.",
+        );
+      }
+      transaction.open = false;
+      active = undefined;
+    },
+
+    currentTransaction(): RunTransaction {
+      if (active === undefined) {
+        throw new WorkflowTransactionError(
+          "a DOFS savepoint needs an active caller-owned workflow transaction.",
+        );
+      }
+      validate(active);
+      return active;
+    },
+
     setClock(now: () => number): void {
       clock = now;
     },
-    close() {
+
+    close(): void {
       if (open) {
         open = false;
+        if (active !== undefined) {
+          active.open = false;
+          active = undefined;
+        }
         database.close();
       }
     },
   };
+  installed = connection;
+  return connection;
 }
 
 export class WorkflowConnectionStateError extends Error {
   override name = "WorkflowConnectionStateError";
 }
 
-export function createWorkflowRunConnections(): WorkflowRunConnections {
+export function createWorkflowRunConnections(
+  observeSavepoint: SavepointObserver = () => {},
+): WorkflowRunConnections {
   const entries = new Map<string, RunConnection>();
+  const leases = new WeakMap<WorkflowRunDatabase, RunConnectionLease>();
+  const tokens = new WeakMap<WorkflowRunTransactionToken, RunTransaction>();
   let open = true;
+
+  function validateLease(database: WorkflowRunDatabase): RunConnectionLease {
+    const lease = leases.get(database);
+    if (
+      !open ||
+      lease === undefined ||
+      !lease.open ||
+      lease.connection.generation !== lease.generation ||
+      lease.connection.path !== lease.path
+    ) {
+      throw new WorkflowTransactionError(
+        "the WorkflowRun database handle is foreign, fabricated, stale, or already closed.",
+      );
+    }
+    return lease;
+  }
+
+  function authorizeTransaction(
+    database: WorkflowRunDatabase,
+    transaction: WorkflowRunTransaction,
+  ): RunTransaction {
+    const lease = validateLease(database);
+    const active = lease.connection.currentTransaction();
+    if (active.lease !== lease || active.handle !== transaction) {
+      throw new WorkflowTransactionError(
+        "the WorkflowRun transaction handle is missing, foreign, stale, or already finished.",
+      );
+    }
+    return active;
+  }
 
   return {
     at(path: string): RunConnection {
@@ -133,9 +314,58 @@ export function createWorkflowRunConnections(): WorkflowRunConnections {
       if (existing !== undefined) {
         return existing;
       }
-      const created = createConnection(canonical);
+      const created = createConnection(canonical, observeSavepoint);
       entries.set(canonical, created);
       return created;
+    },
+
+    registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease {
+      if (!open || entries.get(connection.path) !== connection) {
+        throw new WorkflowTransactionError(
+          "the WorkflowRun database cannot lease a foreign or stale connection.",
+        );
+      }
+      const lease: RunConnectionLease = {
+        connection,
+        generation: connection.generation,
+        path: connection.path,
+        database,
+        open: true,
+      };
+      leases.set(database, lease);
+      return lease;
+    },
+
+    closeLease(lease: RunConnectionLease): void {
+      lease.open = false;
+    },
+
+    validateLease,
+    authorizeTransaction,
+
+    issueToken(
+      database: WorkflowRunDatabase,
+      transaction: WorkflowRunTransaction,
+    ): WorkflowRunTransactionToken {
+      const active = authorizeTransaction(database, transaction);
+      const token = new WorkflowRunTransactionToken();
+      tokens.set(token, active);
+      return token;
+    },
+
+    validateToken(
+      database: WorkflowRunDatabase,
+      token: WorkflowRunTransactionToken,
+    ): RunTransaction {
+      const lease = validateLease(database);
+      const transaction = tokens.get(token);
+      if (transaction === undefined || transaction.lease !== lease) {
+        throw new WorkflowTransactionError(
+          "the WorkflowRun transaction token is foreign, fabricated, or stale.",
+        );
+      }
+      lease.connection.validateTransaction(transaction);
+      return transaction;
     },
 
     close(): void {

@@ -679,9 +679,11 @@ describe("Tier WJ — a transaction a caller holds", () => {
         yield* transaction.journal.append(yielded("kept", "kept"));
 
         try {
-          yield* savepoint(() => {
-            throw new Error("the nested mutation failed");
-          });
+          yield* savepoint(
+            (function* () {
+              throw new Error("the nested mutation failed");
+            })(),
+          );
         } catch {
           // The savepoint rolled back; the transaction around it continues.
         }
@@ -755,7 +757,11 @@ describe("Tier WJ — one connection, one operation at a time", () => {
   it("WJ15b: a savepoint outside any transaction is refused, not improvised", function* () {
     let raised: unknown;
     try {
-      yield* savepoint(() => "nothing to be inside");
+      yield* savepoint(
+        (function* () {
+          return "nothing to be inside";
+        })(),
+      );
     } catch (error) {
       raised = error;
     }

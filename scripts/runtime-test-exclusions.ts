@@ -108,6 +108,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "restores and corrupts real Deno-owned node:sqlite WorkflowRun databases; the provider mechanics are intentionally runtime-specific",
     issue: "https://github.com/taras/executable.md/issues/365",
   },
+  {
+    path: "packages/workflow/tests/workspace-transaction.test.ts",
+    reason:
+      "exercises Deno-private node:sqlite transaction identities and real SQLite savepoint failure behavior; node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
 ];
 
 /**
