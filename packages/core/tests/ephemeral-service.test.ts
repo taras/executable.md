@@ -1,7 +1,12 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { resource, scoped, type Operation } from "effection";
-import { DivergenceError, InMemoryStream } from "@executablemd/durable-streams";
+import {
+  DivergenceError,
+  InMemoryStream,
+  serializeDurableEvent,
+  TerminalDivergenceError,
+} from "@executablemd/durable-streams";
 import { API, SERVICE_HOSTNAME } from "@executablemd/runtime";
 import type { ServiceEndpoint } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -10,6 +15,7 @@ import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
+import { LiveBindingCollisionError } from "../src/live-env.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 
 const SAMPLE = `---
@@ -94,6 +100,10 @@ function withoutClose(stream: InMemoryStream): InMemoryStream {
     throw new Error("expected completed history");
   }
   return new InMemoryStream(events.slice(0, -1));
+}
+
+function serialized(stream: InMemoryStream): string {
+  return stream.snapshot().map(serializeDurableEvent).join("");
 }
 
 describe("ephemeral eval and attached-service bindings", () => {
@@ -429,6 +439,7 @@ echo after-provider
 
     const retained = withoutClose(history);
     const before = retained.snapshot();
+    const beforeBytes = serialized(retained);
     const replayExecutions: string[] = [];
     let failure: unknown;
     yield* scoped(function* () {
@@ -444,14 +455,52 @@ echo after-provider
     expect(failure).toBeInstanceOf(DivergenceError);
     expect(String(failure)).not.toContain("collides with a live binding");
     expect(replayExecutions).toEqual([]);
+    expect(retained.snapshot()).toEqual(before);
+    expect(serialized(retained)).toBe(beforeBytes);
+    expect(lifecycle).toEqual({ starts: 1, stops: 1 });
+  });
+
+  it("rejects incompatible retained history when collision validation terminates the root", function* () {
+    const lifecycle = { starts: 0, stops: 0 };
+    const history = new InMemoryStream();
+    yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_103 }), lifecycle);
+    yield* useStubFs({
+      "doc.md": `<Output><ChangingProvider /></Output>`,
+    });
+    yield* registerComponents([changingProvider(false)]);
+    yield* collect(yield* execute({ path: "doc.md", stream: history }));
+
+    const retained = withoutClose(history);
+    const before = retained.snapshot();
+    const beforeBytes = serialized(retained);
+    let failure: unknown;
+    yield* scoped(function* () {
+      yield* registerComponents([changingProvider(true)]);
+      try {
+        yield* collect(yield* execute({ path: "doc.md", stream: retained }));
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(failure).toBeInstanceOf(TerminalDivergenceError);
+    if (!(failure instanceof TerminalDivergenceError)) {
+      throw new Error("expected terminal divergence");
+    }
+    expect(failure.cause).toBeInstanceOf(LiveBindingCollisionError);
+    expect(String(failure)).not.toContain("collides with a live binding");
+    expect(retained.snapshot()).toEqual(before);
+    expect(serialized(retained)).toBe(beforeBytes);
+    expect(lifecycle).toEqual({ starts: 1, stops: 1 });
+
+    yield* collect(yield* execute({ path: "doc.md", stream: retained }));
     expect(retained.snapshot().slice(0, before.length)).toEqual(before);
     expect(
       retained
         .snapshot()
-        .slice(before.length)
-        .filter((event) => event.type === "yield"),
-    ).toHaveLength(0);
-    expect(lifecycle).toEqual({ starts: 1, stops: 1 });
+        .filter((event) => event.type === "yield" && event.description.type === "eval"),
+    ).toHaveLength(1);
+    expect(retained.snapshot().at(-1)?.type).toBe("close");
   });
 
   it("rejects ephemeral exports that collide with durable names before execution", function* () {

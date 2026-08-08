@@ -55,7 +55,7 @@ interface Yield {
 }
 ```
 
-**`Close`** is written when a coroutine terminates — whether it completed, threw an error, or was cancelled. Close events are load-bearing: they tell the runtime on restart which coroutines finished cleanly and which need re-execution.
+**`Close`** is written when a coroutine terminates — whether it completed, threw an error, or was cancelled — after replay has consumed every retained entry. Close events are load-bearing: they tell the runtime on restart which coroutines finished cleanly and which need re-execution. A termination that leaves replay entries unconsumed is divergence and appends no `Close`.
 
 ### What goes into the journal
 
@@ -292,12 +292,13 @@ During replay, every yielded effect is validated against its journal entry. Only
 // → DivergenceError
 ```
 
-Two additional terminal conditions are checked:
+Three additional terminal conditions are checked:
 
 - **Generator finishes early**: the code returns before consuming all journal entries — effects were removed.
+- **Generator fails early**: the code throws before consuming all journal entries — the ordinary failure cannot close over retained effects the current execution never reached.
 - **Generator continues past close**: the journal shows the coroutine closed, but the code keeps yielding — effects were added.
 
-Both indicate the code has changed in a way that makes the stored history invalid. The solution for intentional code changes is `versionCheck`:
+All indicate the code has changed in a way that makes the stored history invalid. Early return raises `EarlyReturnDivergenceError`; early failure raises `TerminalDivergenceError` with the ordinary failure as its cause. Neither appends a terminal `Close`, so a compatible definition can still replay the retained history. The solution for intentional code changes is `versionCheck`:
 
 ```typescript
 function* orderWorkflow(orderId: string): Workflow<void> {

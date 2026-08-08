@@ -135,23 +135,27 @@ Updated before completion of every phase and committed at the end of each phase.
   shape for `enter()` that will be aligned with Effection's exact Effect
   interface in Phase 1.
 
-## DEC-008: Three distinct divergence error types
+## DEC-008: Distinct divergence error types
 
 - **Phase:** 0 (Scaffolding)
 - **Date:** 2026-02-28
-- **Context:** Spec §6.2-6.3 defines three divergence conditions: description
-  mismatch, generator finishes early, generator continues past close.
+- **Context:** Spec §6.2-6.3 defines divergence at effect matching and at every
+  terminal boundary: return with retained effects, failure with retained
+  effects, and continuation past a recorded close.
 - **Options considered:**
   1. Single DivergenceError class with a `kind` field
-  2. Three separate error classes
-- **Decision:** Three classes: `DivergenceError`, `EarlyReturnDivergenceError`,
-  `ContinuePastCloseDivergenceError`. All share `name = "DivergenceError"`.
-- **Rationale:** Each carries different diagnostic fields (expected/actual
-  descriptions vs. consumed/total counts). Separate classes enable precise
-  `instanceof` checks in tests while sharing the same error name for catch-all
-  handling.
-- **Consequences:** Error handling code can match on the common name
-  `"DivergenceError"` or use instanceof for specific cases.
+  2. Separate error classes with a common terminal base
+- **Decision:** `DivergenceError` describes effect mismatch,
+  `TerminalDivergenceError` describes termination with unconsumed replay,
+  `EarlyReturnDivergenceError` specializes terminal divergence for a normal
+  return, and `ContinuePastCloseDivergenceError` describes continuation after a
+  recorded close.
+- **Rationale:** Effect mismatch carries expected/actual descriptions, while
+  terminal divergence carries consumed/total counts and may retain the active
+  execution failure as its cause. The common terminal base keeps the existing
+  early-return API compatible while covering exceptional termination honestly.
+- **Consequences:** No root `Close` is appended while replay entries remain
+  unconsumed. Error handling uses `instanceof` rather than matching names.
 
 ## DEC-009: Workflow<T> = Generator<DurableEffect<unknown>, T, unknown>
 

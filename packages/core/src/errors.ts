@@ -3,8 +3,8 @@ import type { Context, Operation } from "effection";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,
-  EarlyReturnDivergenceError,
   StaleInputError,
+  TerminalDivergenceError,
 } from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "./invocation.ts";
 import type { ErrorSegment } from "./types.ts";
@@ -186,7 +186,7 @@ export class ContentError extends Error {
 export type DurabilityFailure =
   | StaleInputError
   | DivergenceError
-  | EarlyReturnDivergenceError
+  | TerminalDivergenceError
   | ContinuePastCloseDivergenceError;
 
 /** A failure that ends the execution rather than becoming a printed error. */
@@ -287,7 +287,7 @@ function asDurabilityFailure(error: unknown): DurabilityFailure | undefined {
   if (
     error instanceof StaleInputError ||
     error instanceof DivergenceError ||
-    error instanceof EarlyReturnDivergenceError ||
+    error instanceof TerminalDivergenceError ||
     error instanceof ContinuePastCloseDivergenceError
   ) {
     return error;

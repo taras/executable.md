@@ -679,6 +679,11 @@ validates its declared exports against the live overlay before constructing its
 durable effect. A collision therefore has no eval `Yield`; compatible partial
 replay remains aligned, while retained history containing a now-incompatible
 successful eval is rejected by the existing replay guard or divergence path.
+The durable root checks for unconsumed replay entries before appending either a
+successful or failed `Close`. If collision handling terminates immediately,
+`TerminalDivergenceError` retains the collision as its cause and the history
+receives no terminal event; restoring the compatible definition can still
+replay it.
 
 #390 provides and tests the non-delegating `useWorkflowServiceDenial()` provider.
 #366 will install it in the future `xmd workflow start` and `xmd workflow resume`

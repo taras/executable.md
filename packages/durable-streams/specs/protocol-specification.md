@@ -549,13 +549,19 @@ divergence cases into run-live behavior for controlled migrations.
 
 ### 6.3 Terminal divergence cases
 
-Beyond per-effect matching, the reducer detects two additional
-divergence conditions:
+Beyond per-effect matching, the reducer detects terminal divergence before it
+appends a root `Close`:
 
 **Generator finishes early.** The generator returns `{ done: true }`
 while the replay index still has unconsumed entries for this coroutine.
 This means the current code produces fewer effects than the recorded
 run — effects were removed without a version gate.
+
+**Generator fails early.** The generator throws while the replay index still
+has unconsumed entries. The ordinary execution error does not describe a
+completed replay of the retained history. The runtime raises
+`TerminalDivergenceError`, retaining the execution error as its cause, and
+appends neither that ordinary error nor any root `Close`.
 
 **Journal exhausted with close but generator continues.** The replay
 index has a `Close` event for this coroutine but the generator has not
@@ -563,7 +569,8 @@ finished after consuming all recorded yields. This means the current
 code produces more effects than the recorded run — effects were added
 without a version gate.
 
-Both cases raise `DivergenceError`.
+All terminal divergence cases raise a durability error and leave the retained
+journal unchanged.
 
 ### 6.4 What is NOT checked
 
@@ -1043,7 +1050,8 @@ These tests MUST pass for the protocol to be considered implemented.
 | 10  | **Reordered steps**                | Record with v1. Replay with v2 that swaps two effects.                                | `DivergenceError` at first swapped position.                            |
 | 11  | **Type mismatch**                  | Record a `call` effect. Replay code yields `sleep` at same position.                  | `DivergenceError` citing type mismatch.                                 |
 | 12  | **Name mismatch**                  | Record `call("fetchOrder")`. Replay yields `call("chargeCard")`.                      | `DivergenceError` citing name mismatch.                                 |
-| 13  | **Generator finishes early**       | Record stream with 5 yields + close. Replay code produces only 3 yields then returns. | `DivergenceError`: generator completed with unconsumed journal entries. |
+| 13  | **Generator finishes early**       | Record a partial stream with 5 yields and no root close. Replay code produces only 3 yields then returns. | `EarlyReturnDivergenceError`; no root `Close` is appended. |
+| 13b | **Generator fails early** | Record a partial stream with a retained yield and no root close. Replay code throws before reaching it. | `TerminalDivergenceError`; the original error is its cause and no root `Close` is appended. |
 | 14  | **Generator continues past close** | Record stream with close after 3 yields. Replay code produces 5 yields.               | `DivergenceError`: journal shows close but generator hasn't finished.   |
 
 ### Tier 3 — Structured concurrency

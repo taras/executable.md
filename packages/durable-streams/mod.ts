@@ -46,6 +46,7 @@ export {
   EarlyReturnDivergenceError,
   MalformedDurableEventError,
   StaleInputError,
+  TerminalDivergenceError,
 } from "./errors.ts";
 
 // Divergence API — pluggable policy for replay mismatches (DEC-031)

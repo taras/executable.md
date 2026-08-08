@@ -946,8 +946,8 @@ use prototypal inheritance). Each child scope has its own `coroutineId` and
 
 Implemented in `run.ts`. Key implementation details beyond the
 original design: short-circuits on existing Close event (DEC-016),
-checks for early-return divergence after workflow completes, and
-emits Close(err) on exceptions.
+checks terminal replay alignment before either successful or exceptional
+closure, and emits Close(err) only when no replay entries remain unconsumed.
 
 The entry point creates a scope, builds the replay index, sets up the
 durable context, and runs the workflow:
@@ -978,36 +978,44 @@ async function durableRun<T extends Json | void>(
   scope.set(DurableCtx, { replayIndex, stream, coroutineId, childCounter: 0 });
 
   try {
-    // Workflow<T> is structurally assignable to Operation<T> — no cast needed
-    const task = scope.run(workflow);
-    const result = await task;
-
-    // §6.3: Check for early return divergence
-    const cursor = replayIndex.getCursor(coroutineId);
-    const totalYields = replayIndex.yieldCount(coroutineId);
-    if (cursor < totalYields) {
-      throw new EarlyReturnDivergenceError(coroutineId, cursor, totalYields);
-    }
-
-    await stream.append({
-      type: "close",
-      coroutineId,
-      result: { status: "ok", value: result as Json },
-    });
-    return result;
-  } catch (error) {
-    await stream.append({
-      type: "close",
-      coroutineId,
-      result: { status: "err", error: serializeError(error) },
-    });
-    throw error;
-  } finally {
     try {
-      await destroy();
-    } catch {
-      /* swallow scope cleanup errors */
+      const result = await scope.run(workflow);
+
+      const unconsumed = replayIndex.firstUnconsumed();
+      if (unconsumed) {
+        throw new EarlyReturnDivergenceError(
+          unconsumed.coroutineId,
+          unconsumed.cursor,
+          unconsumed.totalYields,
+        );
+      }
+
+      await stream.append({
+        type: "close",
+        coroutineId,
+        result: { status: "ok", value: result as Json },
+      });
+      return result;
+    } catch (error) {
+      const unconsumed = replayIndex.firstUnconsumed();
+      if (unconsumed) {
+        if (isDurabilityFailure(error)) throw error;
+        throw new TerminalDivergenceError(
+          unconsumed.coroutineId,
+          unconsumed.cursor,
+          unconsumed.totalYields,
+          { cause: error },
+        );
+      }
+      await stream.append({
+        type: "close",
+        coroutineId,
+        result: { status: "err", error: serializeError(error) },
+      });
+      throw error;
     }
+  } finally {
+    try { await destroy(); } catch { /* preserve the workflow outcome */ }
   }
 }
 ```
@@ -1028,7 +1036,13 @@ Key details:
 
 - **Early return divergence check.** After the workflow returns, checks
   if the replay index has unconsumed yields. If so, the generator finished
-  before replaying all journal entries — the code has changed (§6.3).
+  before replaying all journal entries — the code has changed (§6.3). The
+  check is outside the ordinary failure-to-Close path, so it appends no Close.
+
+- **Exceptional terminal divergence check.** Before an ordinary error becomes
+  `Close(err)`, checks the same replay state. Unconsumed entries produce
+  `TerminalDivergenceError`, with the ordinary error as its cause, and leave the
+  retained stream unchanged. An already-active durability failure is preserved.
 
 - **Swallowing destroy errors.** If the workflow threw, `destroy()` may
   also throw "halted". The `try { await destroy() } catch {}` in finally
@@ -1121,7 +1135,7 @@ Key validations:
 | Persist-before-resume strategy       | ✅ Resolved | Strategy B — async append + deferred resolve (DEC-017)                                 |
 | Serialization boundary               | ✅ Resolved | `T extends Json` type constraint (DEC-018)                                             |
 | DurableStream interface              | ✅ Resolved | `readAll()` + `append()`, InMemoryStream for tests, HttpDurableStream for production   |
-| Terminal divergence detection        | ✅ Resolved | Both cases implemented with 3 error classes (DEC-008)                                  |
+| Terminal divergence detection        | ✅ Resolved | All terminal paths use the `TerminalDivergenceError` family (DEC-008)                   |
 | durableSpawn implementation          | ✅ Resolved | Operations using Effection's native spawn/all/race                                     |
 | HTTP backend adapter                 | ✅ Resolved | Raw fetch writes, promise chain serialization, epoch fencing (DEC-026–029)             |
 | Batch persistence                    | ⏳ Deferred | Optimization for concurrent children, not blocking correctness. See §15.1              |
@@ -1323,20 +1337,25 @@ with the buffer flushed at the end of each reduce cycle.
 
 ### 12.5 Terminal divergence detection (resolved)
 
-Both cases from §6.3 are implemented and tested (DEC-008):
+All cases from §6.3 are implemented and tested (DEC-008):
 
 1. **Generator finishes early.** Detected in `durableRun()` after the
    workflow returns — if `cursor < totalYields`, throws
-   `EarlyReturnDivergenceError`. Tested in divergence test 9 and 13.
+   `EarlyReturnDivergenceError` without appending a `Close`. Tested in
+   divergence test 9 and 13.
 
-2. **Generator continues past close.** Detected in
+2. **Generator fails early.** Detected in `durableRun()` before an exceptional
+   termination is journaled. Unconsumed replay entries raise
+   `TerminalDivergenceError`, preserve the original failure as the cause and
+   append no `Close`. Tested in divergence test 13b.
+
+3. **Generator continues past close.** Detected in
    `createDurableEffect.enter()` — when `peekYield()` returns undefined
    but `hasClose()` returns true, throws
    `ContinuePastCloseDivergenceError`. Tested in divergence test 14.
 
-Three distinct error classes share `name = "DivergenceError"` for
-catch-all handling but carry different diagnostic fields for precise
-`instanceof` checks.
+The terminal errors carry consumed and total counts; exceptional termination
+also carries the execution failure as its cause.
 
 ### 12.6 Durable `each()` — design and implementation plan
 

@@ -66,24 +66,48 @@ export class DivergenceError extends Error {
 }
 
 /**
- * Raised when the generator finishes (returns) while the replay index
- * still has unconsumed entries for this coroutine. See spec §6.3.
+ * Raised when a workflow terminates while replay still has unconsumed entries.
+ * The retained journal describes effects that the current execution did not
+ * reach, so no terminal Close may be appended over that history.
  */
-export class EarlyReturnDivergenceError extends Error {
-  override name = "EarlyReturnDivergenceError";
+export class TerminalDivergenceError extends Error {
+  override name = "TerminalDivergenceError";
 
   coroutineId: CoroutineId;
   consumedCount: number;
   totalCount: number;
 
-  constructor(coroutineId: CoroutineId, consumedCount: number, totalCount: number) {
+  constructor(
+    coroutineId: CoroutineId,
+    consumedCount: number,
+    totalCount: number,
+    options: { cause?: unknown; message?: string } = {},
+  ) {
     super(
-      `Divergence: generator ${coroutineId} returned after ${consumedCount} yields, ` +
-        `but journal has ${totalCount} yield entries`,
+      options.message ??
+        `Divergence: workflow ${coroutineId} terminated after ${consumedCount} yields, ` +
+          `but journal has ${totalCount} yield entries`,
+      { cause: options.cause },
     );
     this.coroutineId = coroutineId;
     this.consumedCount = consumedCount;
     this.totalCount = totalCount;
+  }
+}
+
+/**
+ * Raised when the generator finishes (returns) while the replay index
+ * still has unconsumed entries for this coroutine. See spec §6.3.
+ */
+export class EarlyReturnDivergenceError extends TerminalDivergenceError {
+  override name = "EarlyReturnDivergenceError";
+
+  constructor(coroutineId: CoroutineId, consumedCount: number, totalCount: number) {
+    super(coroutineId, consumedCount, totalCount, {
+      message:
+        `Divergence: generator ${coroutineId} returned after ${consumedCount} yields, ` +
+        `but journal has ${totalCount} yield entries`,
+    });
   }
 }
 

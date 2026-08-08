@@ -16,12 +16,34 @@
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { DurableCtx } from "./context.ts";
-import { EarlyReturnDivergenceError } from "./errors.ts";
+import {
+  ContinuePastCloseDivergenceError,
+  DivergenceError,
+  EarlyReturnDivergenceError,
+  StaleInputError,
+  TerminalDivergenceError,
+} from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
 import type { Close, DurableEvent, Json, Workflow, WorkflowValue } from "./types.ts";
+
+function unconsumedReplay(replayIndex: ReplayIndex, coroutineId: string) {
+  if (replayIndex.isReplayDisabled(coroutineId)) {
+    return undefined;
+  }
+  return replayIndex.firstUnconsumed();
+}
+
+function isDurabilityFailure(error: Error): boolean {
+  return (
+    error instanceof StaleInputError ||
+    error instanceof DivergenceError ||
+    error instanceof TerminalDivergenceError ||
+    error instanceof ContinuePastCloseDivergenceError
+  );
+}
 
 /**
  * Run the ReplayGuard check phase over all Yield events.
@@ -59,7 +81,8 @@ export interface DurableRunOptions {
  * 3. Runs the workflow — replayed effects resolve synchronously from
  *    the index; live effects execute and persist before resuming.
  * 4. On completion, appends a Close event to the stream.
- * 5. On error, appends a Close(err) event.
+ * 5. On error, appends a Close(err) event unless replay entries remain
+ *    unconsumed, in which case it rejects the incompatible history unchanged.
  *
  * Returns the workflow's result value.
  *
@@ -117,20 +140,13 @@ export function* durableRun<T extends WorkflowValue>(
     // yield* accepts it directly — no cast needed.
     const result: T = yield* workflow();
 
-    // §6.3: Check for early return divergence.
-    // If the generator returned but the replay index has unconsumed yields,
-    // the workflow has diverged. Skip this check when replay has been
-    // disabled (run-live mode) — the workflow intentionally diverged and
-    // the Divergence API already approved it.
-    if (!replayIndex.isReplayDisabled(coroutineId)) {
-      const unconsumed = replayIndex.firstUnconsumed();
-      if (unconsumed) {
-        throw new EarlyReturnDivergenceError(
-          unconsumed.coroutineId,
-          unconsumed.cursor,
-          unconsumed.totalYields,
-        );
-      }
+    const unconsumed = unconsumedReplay(replayIndex, coroutineId);
+    if (unconsumed) {
+      throw new EarlyReturnDivergenceError(
+        unconsumed.coroutineId,
+        unconsumed.cursor,
+        unconsumed.totalYields,
+      );
     }
 
     const closeEvent: Close = {
@@ -143,10 +159,20 @@ export function* durableRun<T extends WorkflowValue>(
 
     return result;
   } catch (error) {
-    // Normalize the error once — use the same Error object for both the
-    // Close event and the rethrow so that live runs and replayed Close
-    // events carry identical error shapes.
     const primary = error instanceof Error ? error : new Error(String(error));
+    const unconsumed = unconsumedReplay(replayIndex, coroutineId);
+    if (unconsumed) {
+      if (isDurabilityFailure(primary)) {
+        throw primary;
+      }
+      throw new TerminalDivergenceError(
+        unconsumed.coroutineId,
+        unconsumed.cursor,
+        unconsumed.totalYields,
+        { cause: primary },
+      );
+    }
+
     const closeEvent: Close = {
       type: "close",
       coroutineId,
