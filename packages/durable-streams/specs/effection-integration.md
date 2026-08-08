@@ -458,8 +458,10 @@ function createDurableEffect<T>(desc: EffectDescription, execute: Executor): Dur
 `resolve()` is called inside the `.then()` callback of the stream append.
 The generator does not advance until the durable write completes. This is
 the spec's "Strategy B: buffered write with deferred resume." If the
-append rejects, the error is delivered through Effection's normal error
-channel to avoid hanging the generator.
+append rejects, `DurablePersistenceError` is delivered through Effection's
+error channel and recorded in the shared durable context. Root and child
+terminal handling therefore cannot reinterpret it as a workflow failure or
+append a compensating `Close(err)`.
 
 **Transparency (§4.3).** During replay, `resolve()` is called synchronously
 with the stored result (converted via `protocolToEffection()`). The reducer
@@ -660,66 +662,28 @@ This is an `Operation<T>` meant to run inside a `spawn()`:
 
 ```typescript
 function* runDurableChild<T extends Json | void>(
-  childWorkflow: () => Workflow<T> | Operation<T>,
+  childWorkflow: () => Workflow<T>,
   childId: string,
   parentCtx: DurableContext,
 ): Operation<T> {
-  const { replayIndex, stream } = parentCtx;
+  parentCtx.replayIndex.claim(childId);
 
-  // Short-circuit: child already completed in a previous run
-  if (replayIndex.hasClose(childId)) {
-    const closeEvent = replayIndex.getClose(childId)!;
-    if (closeEvent.result.status === "ok") {
-      return closeEvent.result.value as T;
-    } else if (closeEvent.result.status === "err") {
-      throw deserializeError(closeEvent.result.error);
-    } else {
-      // Cancelled in previous run — suspend until parent cancels us
-      yield* suspend();
-      return undefined as T; // unreachable
-    }
+  if (parentCtx.replayIndex.hasClose(childId)) {
+    return yield* restoreChildClose(childId, parentCtx);
   }
 
-  // Set child's DurableContext
-  const scope = yield* useScope();
-  scope.set(DurableCtx, {
-    replayIndex,
-    stream,
-    coroutineId: childId,
-    childCounter: 0,
-  });
-
-  let closeEvent: Close | undefined;
+  const childCtx = installChildContext(childId, parentCtx);
   try {
-    const result: T = yield* childWorkflow();
-    closeEvent = {
-      type: "close",
-      coroutineId: childId,
-      result: { status: "ok", value: result as Json },
-    };
+    const result = yield* childWorkflow();
+    throwIfDurabilityFailed(childCtx);
+    assertSubtreeAligned(childCtx.replayIndex, childId, "return");
+    yield* appendChildClose(childCtx, closeOk(childId, result));
     return result;
   } catch (error) {
-    closeEvent = {
-      type: "close",
-      coroutineId: childId,
-      result: {
-        status: "err",
-        error: serializeError(error instanceof Error ? error : new Error(String(error))),
-      },
-    };
+    throwIfDurabilityFailed(childCtx, error);
+    assertSubtreeAligned(childCtx.replayIndex, childId, "error", error);
+    yield* appendChildClose(childCtx, closeError(childId, error));
     throw error;
-  } finally {
-    if (!closeEvent) {
-      closeEvent = {
-        type: "close",
-        coroutineId: childId,
-        result: { status: "cancelled" },
-      };
-    }
-    // Don't re-emit if journal already has this Close
-    if (!replayIndex.hasClose(childId)) {
-      yield* call(() => stream.append(closeEvent!));
-    }
   }
 }
 ```
@@ -727,25 +691,26 @@ function* runDurableChild<T extends Json | void>(
 Key design decisions in this helper:
 
 **Short-circuit on existing Close.** If the journal already has a Close for
-this child, `runDurableChild` never runs the workflow. For `ok` and `err`,
+this child, `runDurableChild` claims the child identity but never runs the
+workflow. For `ok` and `err`,
 it returns/throws immediately. For `cancelled`, it uses `yield* suspend()`
 (see §8.4).
 
-**Close events via try/catch/finally.** The `closeEvent` variable starts
-undefined. Normal completion sets it in the try block. Errors set it in
-catch. If both are skipped (cancellation via `iterator.return()`), it
-stays undefined and finally assigns `cancelled`. This covers all three
-terminal states with plain JavaScript.
+**The same terminal policy as the root.** Normal return, ordinary error, and
+cancellation all check the child's retained subtree before a `Close`. A stale
+input, divergence, terminal divergence, or journal persistence failure
+suppresses the child close and propagates to the root without becoming a root
+close.
 
 **No re-emission guard.** The `if (!replayIndex.hasClose(childId))` check
 in finally prevents writing a duplicate Close when replaying a child that
 was already completed. Without this, a fully-replayed child that short-
 circuits would emit a second Close event.
 
-**`yield* call()` for stream append.** The finally block uses Effection's
-`call()` to await the stream append within generator context, rather than
-raw `await`. This keeps the code within Effection's structured concurrency
-model.
+**Shared persistence state.** Root and child contexts share the first active
+durability failure. If a child append fails while sibling teardown runs, no
+sibling can serialize the persistence failure as its own cancellation or
+ordinary error outcome.
 
 ### 8.2 durableSpawn
 
@@ -947,76 +912,29 @@ use prototypal inheritance). Each child scope has its own `coroutineId` and
 Implemented in `run.ts`. Key implementation details beyond the
 original design: short-circuits on existing Close event (DEC-016),
 checks terminal replay alignment before either successful or exceptional
-closure, and emits Close(err) only when no replay entries remain unconsumed.
+closure, and emits `Close(err)` only for an ordinary workflow failure after the
+whole retained coroutine tree is aligned. Durability and persistence failures
+never become terminal events.
 
 The entry point creates a scope, builds the replay index, sets up the
 durable context, and runs the workflow:
 
 ```typescript
-interface DurableRunOptions {
-  stream: DurableStream;
-  coroutineId?: string;
-}
+const ctx = { replayIndex, stream, coroutineId, childCounter: 0, durability: {} };
+scope.set(DurableCtx, ctx);
+replayIndex.claim(coroutineId);
 
-async function durableRun<T extends Json | void>(
-  workflow: () => Workflow<T> | Operation<T>,
-  options: DurableRunOptions,
-): Promise<T> {
-  const { stream, coroutineId = "root" } = options;
-  const events = await stream.readAll();
-  const replayIndex = new ReplayIndex(events);
-
-  // Short-circuit: root already completed in a previous run
-  if (replayIndex.hasClose(coroutineId)) {
-    const closeEvent = replayIndex.getClose(coroutineId)!;
-    if (closeEvent.result.status === "ok") return closeEvent.result.value as T;
-    if (closeEvent.result.status === "err") throw deserializeError(closeEvent.result.error);
-    throw new Error("Workflow was cancelled");
-  }
-
-  const [scope, destroy] = createScope();
-  scope.set(DurableCtx, { replayIndex, stream, coroutineId, childCounter: 0 });
-
-  try {
-    try {
-      const result = await scope.run(workflow);
-
-      const unconsumed = replayIndex.firstUnconsumed();
-      if (unconsumed) {
-        throw new EarlyReturnDivergenceError(
-          unconsumed.coroutineId,
-          unconsumed.cursor,
-          unconsumed.totalYields,
-        );
-      }
-
-      await stream.append({
-        type: "close",
-        coroutineId,
-        result: { status: "ok", value: result as Json },
-      });
-      return result;
-    } catch (error) {
-      const unconsumed = replayIndex.firstUnconsumed();
-      if (unconsumed) {
-        if (isDurabilityFailure(error)) throw error;
-        throw new TerminalDivergenceError(
-          unconsumed.coroutineId,
-          unconsumed.cursor,
-          unconsumed.totalYields,
-          { cause: error },
-        );
-      }
-      await stream.append({
-        type: "close",
-        coroutineId,
-        result: { status: "err", error: serializeError(error) },
-      });
-      throw error;
-    }
-  } finally {
-    try { await destroy(); } catch { /* preserve the workflow outcome */ }
-  }
+try {
+  const result = yield* workflow();
+  throwIfDurabilityFailed(ctx);
+  assertSubtreeAligned(replayIndex, coroutineId, "return");
+  yield* appendDurableEvent(ctx, closeOk(coroutineId, result));
+  return result;
+} catch (error) {
+  throwIfDurabilityFailed(ctx, error);
+  assertSubtreeAligned(replayIndex, coroutineId, "error", error);
+  yield* appendDurableEvent(ctx, closeError(coroutineId, error));
+  throw error;
 }
 ```
 
@@ -1034,19 +952,23 @@ Key details:
   where users pass a raw Operation at the top level. Structural compatibility
   means no cast is needed at the `scope.run()` call site.
 
-- **Early return divergence check.** After the workflow returns, checks
-  if the replay index has unconsumed yields. If so, the generator finished
-  before replaying all journal entries — the code has changed (§6.3). The
-  check is outside the ordinary failure-to-Close path, so it appends no Close.
+- **Subtree alignment.** The root claims its own identity, and every durable
+  child claims its identity before using a retained `Close`. Before root
+  termination, the index rejects unconsumed yields and retained completed
+  children that the current definition never claimed.
 
 - **Exceptional terminal divergence check.** Before an ordinary error becomes
-  `Close(err)`, checks the same replay state. Unconsumed entries produce
+  `Close(err)`, checks the same subtree state. Unaligned entries produce
   `TerminalDivergenceError`, with the ordinary error as its cause, and leave the
-  retained stream unchanged. An already-active durability failure is preserved.
+  retained stream unchanged. An already-active durability failure is preserved
+  even if it consumed the last retained yield.
 
-- **Swallowing destroy errors.** If the workflow threw, `destroy()` may
-  also throw "halted". The `try { await destroy() } catch {}` in finally
-  prevents masking the original error.
+- **Backing persistence is outside workflow outcomes.** Every backing append
+  failure records a shared `DurablePersistenceError` before it reaches root or
+  child terminal handling. A failed yield never resumes successfully, and a
+  failed successful close is not retried as `Close(err)`. A
+  `guardDurableStream` gate rejection is marked separately and remains the
+  gate's ordinary workflow failure.
 
 ---
 
@@ -1345,7 +1267,7 @@ All cases from §6.3 are implemented and tested (DEC-008):
    divergence test 9 and 13.
 
 2. **Generator fails early.** Detected in `durableRun()` before an exceptional
-   termination is journaled. Unconsumed replay entries raise
+   termination is journaled. Unaligned replay entries raise
    `TerminalDivergenceError`, preserve the original failure as the cause and
    append no `Close`. Tested in divergence test 13b.
 
@@ -1354,8 +1276,15 @@ All cases from §6.3 are implemented and tested (DEC-008):
    but `hasClose()` returns true, throws
    `ContinuePastCloseDivergenceError`. Tested in divergence test 14.
 
-The terminal errors carry consumed and total counts; exceptional termination
-also carries the execution failure as its cause.
+4. **Completed child is abandoned.** Each child identity is claimed before its
+   retained `Close` is restored. Root and child termination scan the whole
+   retained subtree, so a completed child absent from the current definition
+   raises terminal divergence and appends no `Close`.
+
+The same checks run at child termination. The terminal errors carry consumed
+and total counts; exceptional termination also carries the execution failure
+as its cause. An already-active durability failure bypasses ordinary terminal
+serialization even when no unconsumed yield remains.
 
 ### 12.6 Durable `each()` — design and implementation plan
 

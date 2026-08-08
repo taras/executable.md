@@ -20,6 +20,8 @@ export interface DurableContext {
   coroutineId: CoroutineId;
   /** Counter for assigning child IDs. */
   childCounter: number;
+  /** Protocol failure shared by the root and every durable child. */
+  durability?: { failure?: Error };
 }
 
 /**

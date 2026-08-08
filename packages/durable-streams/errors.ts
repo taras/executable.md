@@ -5,6 +5,21 @@
 import type { CoroutineId, EffectDescription } from "./types.ts";
 
 /**
+ * Raised when a durable event cannot be persisted.
+ *
+ * Persistence failures are protocol failures, not workflow outcomes. The
+ * adapter error remains available as the cause, and no compensating Close is
+ * written over the unpersisted event.
+ */
+export class DurablePersistenceError extends Error {
+  override name = "DurablePersistenceError";
+
+  constructor(eventType: "yield" | "close", cause: unknown) {
+    super(`Failed to persist durable ${eventType} event`, { cause });
+  }
+}
+
+/**
  * Raised when a persisted record does not describe a `DurableEvent`.
  *
  * `path` locates the offending member within the record, such as

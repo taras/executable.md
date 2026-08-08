@@ -626,7 +626,12 @@ through middleware; waiting itself is never raised.
 ### 8. Durability failures are outside the model
 
 A durability failure (§6.11) says the journal no longer describes the document
-execution. No middleware sees it; it is never the document's own outcome.
+execution. No middleware sees it; it is never the document's own outcome. A
+backing-journal append failure is the same kind of boundary failure: it
+preserves the adapter error as its cause, resumes no consumer with an
+unpersisted success, and never triggers a compensating `Close`. A
+pre-persistence policy rejection remains the policy's ordinary document
+failure; the guarded stream marks that boundary before the backing append.
 
 ## Attempts
 
@@ -679,8 +684,12 @@ validates its declared exports against the live overlay before constructing its
 durable effect. A collision therefore has no eval `Yield`; compatible partial
 replay remains aligned, while retained history containing a now-incompatible
 successful eval is rejected by the existing replay guard or divergence path.
-The durable root checks for unconsumed replay entries before appending either a
-successful or failed `Close`. If collision handling terminates immediately,
+Every root and child termination checks its retained subtree before appending a
+`Close`. The replay index tracks which coroutine identities the current
+definition claims, so a completed retained child is not mistaken for aligned
+history merely because it already has a `Close`. Durability failures take
+precedence over ordinary termination even after the last retained `Yield` was
+consumed. If collision handling terminates immediately,
 `TerminalDivergenceError` retains the collision as its cause and the history
 receives no terminal event; restoring the compatible definition can still
 replay it.

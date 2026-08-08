@@ -18,6 +18,45 @@ import type { Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
+const EVENT_REJECTION = Symbol.for("@effectionx/durable-streams/event-rejection");
+
+class WrappedDurableEventRejection extends Error {
+  constructor(readonly rejection: unknown) {
+    super(rejection instanceof Error ? rejection.message : String(rejection), {
+      cause: rejection,
+    });
+  }
+}
+
+function markEventRejection(error: unknown): Error {
+  const rejection = error instanceof Error ? error : new Error(String(error));
+  if (
+    Reflect.defineProperty(rejection, EVENT_REJECTION, {
+      value: true,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    })
+  ) {
+    return rejection;
+  }
+  return new WrappedDurableEventRejection(error);
+}
+
+export function isDurableEventRejection(error: unknown): boolean {
+  if (error instanceof WrappedDurableEventRejection) {
+    return true;
+  }
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return false;
+  }
+  return Reflect.get(error, EVENT_REJECTION) === true;
+}
+
+export function unwrapDurableEventRejection(error: unknown): unknown {
+  return error instanceof WrappedDurableEventRejection ? error.rejection : error;
+}
+
 /**
  * A check that runs before a durable event is persisted.
  *
@@ -50,7 +89,11 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       // The gate sees a copy so "inspect or reject" is enforced rather than
       // merely documented: the backend always receives the event the effect
       // produced, whatever the gate did to the one it was handed.
-      yield* gate(structuredClone(event));
+      try {
+        yield* gate(structuredClone(event));
+      } catch (error) {
+        throw markEventRejection(error);
+      }
       yield* stream.append(event);
     },
   };

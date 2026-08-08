@@ -13,6 +13,7 @@ import { scoped } from "effection";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,
+  DurablePersistenceError,
   EarlyReturnDivergenceError,
   StaleInputError,
   TerminalDivergenceError,
@@ -75,6 +76,7 @@ const DURABILITY_FAILURES: Array<() => Error> = [
   () => new EarlyReturnDivergenceError("root", 2, 5),
   () => new TerminalDivergenceError("root", 2, 5, { cause: new Error("document failed") }),
   () => new ContinuePastCloseDivergenceError("root", 5),
+  () => new DurablePersistenceError("yield", new Error("journal unavailable")),
 ];
 
 describe("Tier FA — Fatal error discovery", () => {

@@ -23,6 +23,7 @@
 import type { Operation } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
 import { Divergence } from "./divergence.ts";
+import { appendDurableEvent, rememberDurabilityFailure } from "./durability.ts";
 import { StaleInputError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
@@ -110,6 +111,7 @@ function checkReplay<T>(
         ]);
 
         if (decision.type === "throw") {
+          rememberDurabilityFailure(ctx, decision.error);
           resolve({ ok: false, error: decision.error });
           return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
         }
@@ -137,6 +139,7 @@ function checkReplay<T>(
             coroutineId: ctx.coroutineId,
             description: desc,
           });
+        rememberDurabilityFailure(ctx, error);
         resolve({ ok: false, error });
         return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
       }
@@ -161,6 +164,7 @@ function checkReplay<T>(
       ]);
 
       if (decision.type === "throw") {
+        rememberDurabilityFailure(ctx, decision.error);
         resolve({ ok: false, error: decision.error });
         return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
       }
@@ -227,7 +231,7 @@ export function createDurableEffect<T>(
         // down, the append is cancelled.
         routine.scope.run(function* () {
           try {
-            yield* ctx.stream.append(event);
+            yield* appendDurableEvent(ctx, event);
             resolve(protocolToEffection<T>(result));
           } catch (err) {
             resolve({
@@ -333,7 +337,7 @@ export function createDurableOperation<T extends Json>(
         };
 
         try {
-          yield* ctx.stream.append(event);
+          yield* appendDurableEvent(ctx, event);
           resolve(protocolToEffection<T>(result));
         } catch (err) {
           resolve({

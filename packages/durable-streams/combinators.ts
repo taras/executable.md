@@ -28,7 +28,13 @@ import {
 } from "effection";
 import type { Operation, Task } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
+import {
+  activeDurabilityFailure,
+  appendDurableEvent,
+  rememberDurabilityFailure,
+} from "./durability.ts";
 import { ephemeral } from "./ephemeral.ts";
+import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
 
@@ -53,6 +59,7 @@ function* runDurableChild<T extends WorkflowValue>(
   parentCtx: DurableContext,
 ): Operation<T> {
   const { replayIndex, stream } = parentCtx;
+  replayIndex.claim(childId);
 
   // Short-circuit: child already completed in a previous run.
   // NOTE: Replay guard validation is not bypassed here — the check phase
@@ -87,19 +94,40 @@ function* runDurableChild<T extends WorkflowValue>(
 
   // Set child's DurableContext on this scope
   const scope = yield* useScope();
-  scope.set(DurableCtx, {
+  parentCtx.durability ??= {};
+  const childCtx: DurableContext = {
     replayIndex,
     stream,
     coroutineId: childId,
     childCounter: 0,
-  });
+    durability: parentCtx.durability,
+  };
+  scope.set(DurableCtx, childCtx);
 
   let closeEvent: Close | undefined;
+  let suppressClose = false;
 
   yield* ensure(function* () {
+    if (suppressClose || activeDurabilityFailure(childCtx)) {
+      return;
+    }
+
     // closeEvent still undefined means the child was cancelled before the
     // normal-return or catch path ran.
     if (!closeEvent) {
+      const unaligned = replayIndex.firstUnaligned(childId);
+      if (unaligned) {
+        const failure = new TerminalDivergenceError(
+          unaligned.coroutineId,
+          unaligned.cursor,
+          unaligned.totalYields,
+          {
+            message: `Divergence: coroutine ${childId} was cancelled before retained history was exhausted`,
+          },
+        );
+        rememberDurabilityFailure(childCtx, failure);
+        throw failure;
+      }
       closeEvent = {
         type: "close",
         coroutineId: childId,
@@ -110,7 +138,7 @@ function* runDurableChild<T extends WorkflowValue>(
     // Don't re-emit a Close event if one already exists in the journal
     // (e.g., a cancelled child being replayed via suspend()).
     if (!replayIndex.hasClose(childId)) {
-      yield* stream.append(closeEvent!);
+      yield* appendDurableEvent(childCtx, closeEvent);
     }
   });
 
@@ -118,6 +146,24 @@ function* runDurableChild<T extends WorkflowValue>(
     // Run the child workflow. DurableEffects inside the child read
     // DurableCtx from the scope, so they'll use childId.
     const result: T = yield* childWorkflow();
+
+    const durabilityFailure = activeDurabilityFailure(childCtx);
+    if (durabilityFailure) {
+      suppressClose = true;
+      throw durabilityFailure;
+    }
+
+    const unaligned = replayIndex.firstUnaligned(childId);
+    if (unaligned) {
+      suppressClose = true;
+      const failure = new EarlyReturnDivergenceError(
+        unaligned.coroutineId,
+        unaligned.cursor,
+        unaligned.totalYields,
+      );
+      rememberDurabilityFailure(childCtx, failure);
+      throw failure;
+    }
 
     closeEvent = {
       type: "close",
@@ -127,16 +173,36 @@ function* runDurableChild<T extends WorkflowValue>(
 
     return result;
   } catch (error) {
+    const primary = error instanceof Error ? error : new Error(String(error));
+    const durabilityFailure = activeDurabilityFailure(childCtx, primary);
+    if (durabilityFailure) {
+      suppressClose = true;
+      throw durabilityFailure;
+    }
+
+    const unaligned = replayIndex.firstUnaligned(childId);
+    if (unaligned) {
+      suppressClose = true;
+      const failure = new TerminalDivergenceError(
+        unaligned.coroutineId,
+        unaligned.cursor,
+        unaligned.totalYields,
+        { cause: primary },
+      );
+      rememberDurabilityFailure(childCtx, failure);
+      throw failure;
+    }
+
     closeEvent = {
       type: "close",
       coroutineId: childId,
       result: {
         status: "err",
-        error: serializeError(error instanceof Error ? error : new Error(String(error))),
+        error: serializeError(primary),
       },
     };
 
-    throw error;
+    throw primary;
   }
 }
 

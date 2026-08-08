@@ -3,6 +3,7 @@ import type { Context, Operation } from "effection";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,
+  DurablePersistenceError,
   StaleInputError,
   TerminalDivergenceError,
 } from "@executablemd/durable-streams";
@@ -186,6 +187,7 @@ export class ContentError extends Error {
 export type DurabilityFailure =
   | StaleInputError
   | DivergenceError
+  | DurablePersistenceError
   | TerminalDivergenceError
   | ContinuePastCloseDivergenceError;
 
@@ -287,6 +289,7 @@ function asDurabilityFailure(error: unknown): DurabilityFailure | undefined {
   if (
     error instanceof StaleInputError ||
     error instanceof DivergenceError ||
+    error instanceof DurablePersistenceError ||
     error instanceof TerminalDivergenceError ||
     error instanceof ContinuePastCloseDivergenceError
   ) {

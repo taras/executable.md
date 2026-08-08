@@ -154,22 +154,23 @@ describe("guardDurableStream", () => {
 
   it("keeps a rejected event out of an in-memory backend", function* () {
     const timeline: string[] = [];
+    const rejection = new Error("rejected");
     const guarded = guardDurableStream(
       recordingStream(timeline),
       // deno-lint-ignore require-yield
       function* () {
-        throw new Error("rejected");
+        throw rejection;
       },
     );
 
-    let failure: Error | undefined;
+    let failure: unknown;
     try {
       yield* guarded.append(EVENT);
     } catch (error) {
-      failure = error instanceof Error ? error : new Error(String(error));
+      failure = error;
     }
 
-    expect(failure?.message).toBe("rejected");
+    expect(failure).toBe(rejection);
     expect(backendAppends(timeline)).toEqual([]);
   });
 
@@ -197,6 +198,36 @@ describe("guardDurableStream", () => {
 
     expect(failure?.message).toBe("rejected");
     expect(yield* exists(journalPath)).toBe(false);
+  });
+
+  it("keeps gate rejection distinct from backing-stream failure", function* () {
+    const backend = new InMemoryStream();
+    const rejection = new Error("policy rejected the event");
+    const guarded = guardDurableStream(
+      backend,
+      // deno-lint-ignore require-yield
+      function* (event) {
+        if (event.type === "yield") {
+          throw rejection;
+        }
+      },
+    );
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          return yield* durableCall("step", waited(0, "value"));
+        },
+        { stream: guarded },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBe(rejection);
+    expect(backend.snapshot()).toHaveLength(1);
+    expect(backend.snapshot()[0]?.type).toBe("close");
   });
 
   it("hands the gate a copy, so mutating it cannot change what is persisted", function* () {

@@ -458,6 +458,13 @@ the protocol.
 > resume the generator. Violation of this invariant creates
 > unrecoverable replay gaps.
 
+If backing persistence fails, the implementation MUST raise a durability
+failure that retains the backend error as its cause. It MUST NOT resume the
+consumer with an unjournaled success or append a compensating `Close(err)`. A
+failed terminal `Close` append follows the same rule. A pre-persistence gate
+rejection is distinct: the rejected event does not reach the backend, and the
+gate's ordinary failure may be recorded by a separately admitted `Close(err)`.
+
 ### 5.1 Why this is a hard invariant
 
 If the generator advances past a yield point whose resolution is not in
@@ -550,7 +557,7 @@ divergence cases into run-live behavior for controlled migrations.
 ### 6.3 Terminal divergence cases
 
 Beyond per-effect matching, the reducer detects terminal divergence before it
-appends a root `Close`:
+appends any root or child `Close`:
 
 **Generator finishes early.** The generator returns `{ done: true }`
 while the replay index still has unconsumed entries for this coroutine.
@@ -563,14 +570,22 @@ completed replay of the retained history. The runtime raises
 `TerminalDivergenceError`, retaining the execution error as its cause, and
 appends neither that ordinary error nor any root `Close`.
 
+**Retained child is not claimed.** A retained child coroutine has completed,
+but the current definition terminates its parent without reaching that child
+identity. Its `Close` proves only that the earlier child completed; it does not
+make the current coroutine tree aligned.
+
 **Journal exhausted with close but generator continues.** The replay
 index has a `Close` event for this coroutine but the generator has not
 finished after consuming all recorded yields. This means the current
 code produces more effects than the recorded run — effects were added
 without a version gate.
 
-All terminal divergence cases raise a durability error and leave the retained
-journal unchanged.
+Terminal alignment covers the whole terminating coroutine subtree. All
+terminal divergence cases raise a durability error and leave the retained
+journal unchanged. A durability failure discovered after the last replay entry
+was consumed remains a durability failure and is never serialized as
+`Close(err)`.
 
 ### 6.4 What is NOT checked
 
@@ -1039,6 +1054,7 @@ These tests MUST pass for the protocol to be considered implemented.
 | 4   | **Crash at position N**                | Provide first N events from golden stream.                                    | First N effects replayed (not re-executed); remaining execute live; same result.        |
 | 5   | **Crash after last effect**            | Provide all `Yield` events but no `Close` events.                             | All effects replayed; close events written; same result.                                |
 | 6   | **Persist-before-resume verification** | Inject crash between effect resolution and `iterator.next()`.                 | On resume, the resolved effect is in the stream; no replay gap; no duplicate execution. |
+| 6b  | **Fail-once persistence** | Fail the first `Yield` append and, separately, the successful root `Close` append. | The adapter failure remains the cause; no compensating `Close` is appended and an unpersisted effect never resumes successfully. |
 | 7   | **Actor handoff**                      | Process A writes first N events, terminates. Process B reads stream, resumes. | B replays N events (none re-executed), continues live; correct result.                  |
 
 ### Tier 2 — Divergence detection
@@ -1052,6 +1068,7 @@ These tests MUST pass for the protocol to be considered implemented.
 | 12  | **Name mismatch**                  | Record `call("fetchOrder")`. Replay yields `call("chargeCard")`.                      | `DivergenceError` citing name mismatch.                                 |
 | 13  | **Generator finishes early**       | Record a partial stream with 5 yields and no root close. Replay code produces only 3 yields then returns. | `EarlyReturnDivergenceError`; no root `Close` is appended. |
 | 13b | **Generator fails early** | Record a partial stream with a retained yield and no root close. Replay code throws before reaching it. | `TerminalDivergenceError`; the original error is its cause and no root `Close` is appended. |
+| 13c | **Completed child removed** | Record a child `Yield` and `Close`, omit the root `Close`, then remove the child from the current definition. | Root return and root failure both reject the unchanged prefix; the compatible definition still replays it. |
 | 14  | **Generator continues past close** | Record stream with close after 3 yields. Replay code produces 5 yields.               | `DivergenceError`: journal shows close but generator hasn't finished.   |
 
 ### Tier 3 — Structured concurrency
@@ -1067,6 +1084,7 @@ These tests MUST pass for the protocol to be considered implemented.
 | 21  | **Error boundary**                                 | Child error caught by parent `try/catch`.                                      | Parent catches error; siblings NOT cancelled; execution continues.                            |
 | 22  | **Race — winner cancels losers**                   | `race([op1, op2])`, op1 wins.                                                  | op2 receives `Close(cancelled)`; race returns op1's result.                                   |
 | 23  | **Race replay with partial loser**                 | Replay race where loser partially executed.                                    | Loser's partial yields replayed, then cancelled at correct point.                             |
+| 23b | **Child durability failure** | Make replay stale or divergent inside a retained child. | Neither the child nor root appends `Close`; the exact durability failure escapes and the prefix remains unchanged. |
 
 ### Tier 4 — Deterministic identity
 

@@ -1283,9 +1283,11 @@ current definition no longer yields, the existing replay guard, divergence and
 stale-input rules reject that incompatible history; validation never consumes
 the recorded result or substitutes an unjournaled error. If collision handling
 terminates the document before another durable effect is reached, the durable
-root detects the unconsumed eval `Yield` before writing `Close(err)`, raises
+root detects the unaligned eval `Yield` before writing `Close(err)`, raises
 `TerminalDivergenceError` with the collision as its cause, and leaves the
-retained journal unchanged. A compatible definition can still replay it.
+retained journal unchanged. Root and child termination apply this check to the
+whole retained coroutine subtree, including completed children the current
+definition never claimed. A compatible definition can still replay it.
 `ephemeral eval`
 validates its exports against durable names before execution; it may atomically
 replace an existing live binding. A failed block publishes none of its exports.
@@ -4463,6 +4465,14 @@ journal actually stopped describing the run. Every one of these is discovered
 through the same cycle-safe cause traversal, so what the caller receives is the
 failure itself rather than the wrapper it travelled in.
 
+**Backing-journal persistence failures are rethrown on the same terms.** A
+failed `Yield` append raises `DurablePersistenceError` before the effect
+consumer can resume successfully. A failed `Close` append raises the same
+error. Its cause is the storage adapter's error, and neither case writes a
+compensating `Close(err)` that would misstate the persistence failure as a
+document outcome. Pre-persistence policy rejection remains the policy's
+ordinary failure and may be recorded by a separately admitted `Close(err)`.
+
 **Durability discovery traverses the whole cause graph.** No wrapper keeps a
 durability failure from being found, including a content failure a component
 recovered from (§5.1.2). Recovery settles which failure the *document* reports,
@@ -6423,13 +6433,13 @@ visible warning blocks, gather into a separate error report).
 | FA6 | Both at once | A fatal error is still found when the wrapper holding it is itself cyclic |
 | FA7 | Documentation failures | A `DocumentationError` is discovered the same way |
 | FA8 | Ordinary errors are unaffected | A cyclic ordinary error is printed and the next block still runs |
-| FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `TerminalDivergenceError`, `EarlyReturnDivergenceError`, and `ContinuePastCloseDivergenceError` are each discovered as fatal, bare and wrapped |
-| FA10 | Precedence, either order | Each of the five outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
+| FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `TerminalDivergenceError`, `EarlyReturnDivergenceError`, `ContinuePastCloseDivergenceError`, and `DurablePersistenceError` are each discovered as fatal, bare and wrapped |
+| FA10 | Precedence, either order | Each durability failure outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
 | FA11 | Precedence through a teardown | The same holds for an `InvocationTeardownError`'s stage failures |
 | FA12 | Precedence at any depth | Nesting either one deeper than the other does not change the answer |
 | FA13 | No durability failure | A `DocumentationError` is reported when the graph holds none, and `durabilityFailure` finds nothing |
 | FA14 | Precedence with a cycle | A mixed graph that is also cyclic still reports the durability failure |
-| FA15 | A content failure hides nothing fatal | A durability failure beneath a `ContentError` — set by a subclass and by assignment — is found by both `durabilityFailure` and `fatalCause`, for each of the five kinds |
+| FA15 | A content failure hides nothing fatal | A durability failure beneath a `ContentError` — set by a subclass and by assignment — is found by both `durabilityFailure` and `fatalCause`, for every kind |
 | FA16 | Wherever the content failure sits | The same holds beneath an ordinary cause, inside an `AggregateError`, inside an `InvocationTeardownError`, and through all three at once |
 | FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
 | FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |

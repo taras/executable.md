@@ -43,6 +43,7 @@ export type { HttpDurableStreamHandle, HttpDurableStreamOptions } from "./http-s
 export {
   ContinuePastCloseDivergenceError,
   DivergenceError,
+  DurablePersistenceError,
   EarlyReturnDivergenceError,
   MalformedDurableEventError,
   StaleInputError,

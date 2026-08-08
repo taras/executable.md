@@ -154,8 +154,10 @@ Updated before completion of every phase and committed at the end of each phase.
   terminal divergence carries consumed/total counts and may retain the active
   execution failure as its cause. The common terminal base keeps the existing
   early-return API compatible while covering exceptional termination honestly.
-- **Consequences:** No root `Close` is appended while replay entries remain
-  unconsumed. Error handling uses `instanceof` rather than matching names.
+- **Consequences:** No root or child `Close` is appended while its retained
+  subtree is unaligned. Reaching a completed child claims its retained subtree;
+  abandoning that child is terminal divergence. Error handling uses
+  `instanceof` rather than matching names.
 
 ## DEC-009: Workflow<T> = Generator<DurableEffect<unknown>, T, unknown>
 
@@ -312,16 +314,17 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Date:** 2026-02-28
 - **Context:** The spec §5 defines the persist-before-resume invariant with
   three strategies. Need to choose one for the Effection integration.
-- **Decision:** Strategy B — the effect's `enter()` calls `stream.append(event)`
-  and places `resolve()` inside the `.then()` callback. The generator does
-  not advance until the durable write completes.
+- **Decision:** Strategy B — the effect's live operation appends the event and
+  calls `resolve()` only after that operation completes. The generator does not
+  advance successfully until the durable write completes.
 - **Rationale:** This is the natural fit for Effection's async resolve model.
   The reducer waits for `resolve()` to be called, so deferring it until after
   the append guarantees persist-before-resume. Verified by the ordering test
   (execute → persist → resume for each step).
 - **Consequences:** Live execution has one async hop per effect (the stream
-  append). During replay, `resolve()` is called synchronously — zero async
-  overhead.
+  append). A rejected backing append raises `DurablePersistenceError`, retains
+  the adapter error as its cause, and cannot produce a compensating `Close`.
+  During replay, `resolve()` is called synchronously — zero async overhead.
 
 ## DEC-018: durableCall constrains T extends Json for serializability
 
