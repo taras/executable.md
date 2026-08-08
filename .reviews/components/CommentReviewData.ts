@@ -1,7 +1,7 @@
 import type { Operation } from "effection";
 import { fetch } from "@effectionx/fetch";
-import { env as runtimeEnv } from "@executablemd/runtime";
 import type { PR } from "@executablemd/code-review-agent";
+import { env as runtimeEnv } from "@executablemd/runtime";
 
 export const props = {
   type: "object",
@@ -116,7 +116,7 @@ interface ReviewData {
   pairs: Pair[];
   hasPairs: boolean;
   pairsText: string;
-  previousFindings: Array<{ file: string; lineNumber: number }>;
+  previousFindings: { file: string; lineNumber: number }[];
   dismissedReplies: Reply[];
   repliesForClassification: Reply[];
   hasRepliesToClassify: boolean;
@@ -129,26 +129,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
-  return typeof value === "string" ? value : undefined;
+  if (typeof value === "string") {
+    return value;
+  }
+  return undefined;
 }
 
 function numberValue(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" ? value : undefined;
+  if (typeof value === "number") {
+    return value;
+  }
+  return undefined;
 }
 
 function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry) => isRecord(entry));
+}
+
+function nonEmpty(value: string | undefined): value is string {
+  return value !== undefined && value.length > 0;
 }
 
 function userLogin(record: Record<string, unknown>): string | undefined {
-  const user = record.user;
-  return isRecord(user) ? stringValue(user, "login") : undefined;
+  const { user } = record;
+  if (isRecord(user)) {
+    return stringValue(user, "login");
+  }
+  return undefined;
 }
 
 function userType(record: Record<string, unknown>): string | undefined {
-  const user = record.user;
-  return isRecord(user) ? stringValue(user, "type") : undefined;
+  const { user } = record;
+  if (isRecord(user)) {
+    return stringValue(user, "type");
+  }
+  return undefined;
 }
 
 function isBotReview(record: Record<string, unknown>): boolean {
@@ -159,7 +178,7 @@ function isBotReview(record: Record<string, unknown>): boolean {
 }
 
 function commentPayload(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value) || !value.every(isRecord)) {
+  if (!Array.isArray(value) || !value.every((entry) => isRecord(entry))) {
     throw new Error("GitHub comments response was not an array");
   }
   return value;
@@ -169,25 +188,28 @@ function* githubApi(): Operation<string | undefined> {
   const token = yield* runtimeEnv("GITHUB_TOKEN");
   const repository = yield* runtimeEnv("GITHUB_REPOSITORY");
   const number = yield* runtimeEnv("PR_NUMBER");
-  if (!token || !repository || !number) {
+  if (!nonEmpty(token) || !nonEmpty(repository) || !nonEmpty(number)) {
     return undefined;
   }
   const [owner, name] = repository.split("/");
-  return owner && name ? `https://api.github.com/repos/${owner}/${name}` : undefined;
+  if (nonEmpty(owner) && nonEmpty(name)) {
+    return `https://api.github.com/repos/${owner}/${name}`;
+  }
+  return undefined;
 }
 
 function pairsFor(pr: PR): Pair[] {
   const pairs: Pair[] = [];
   const lines = pr.added.filter((line) => !line.isTest);
-  for (let i = 0; i < lines.length - 1; i++) {
-    const current = lines[i].content.trim();
-    const next = lines[i + 1].content.trim();
+  for (let index = 0; index < lines.length - 1; index++) {
+    const current = lines[index].content.trim();
+    const next = lines[index + 1].content.trim();
     if (current.startsWith("//") && !next.startsWith("//") && next.length > 0) {
       pairs.push({
         comment: current,
         code: next,
-        file: lines[i].file,
-        lineNumber: lines[i].lineNumber,
+        file: lines[index].file,
+        lineNumber: lines[index].lineNumber,
       });
     }
   }
@@ -215,84 +237,189 @@ function* collectReplies(
   const dismissed: Reply[] = [];
   const pending: Reply[] = [];
   for (const reply of comments) {
-    const parentId = numberValue(reply, "in_reply_to_id");
-    const location = parentId === undefined ? undefined : botCommentMap.get(parentId);
-    if (!location || userType(reply) === "Bot") {
-      continue;
-    }
-    const replyText = stringValue(reply, "body");
-    const replyId = numberValue(reply, "id");
-    if (!replyText || replyId === undefined) {
-      continue;
-    }
-    const entry: Reply = { ...location, botCommentId: parentId, replyText, replyId };
-    if (yield* fetchReplyReactions(api, entry)) {
-      dismissed.push({ ...entry, alreadyProcessed: true });
-    } else {
-      pending.push(entry);
+    const entry = yield* replyForClassification(api, reply, botCommentMap);
+    if (entry !== undefined) {
+      if (entry.alreadyProcessed) {
+        dismissed.push(entry);
+      } else {
+        pending.push(entry);
+      }
     }
   }
   return { dismissed, pending };
 }
 
-export default function* CommentReviewData({ pr }: CommentReviewProps): Operation<ReviewData> {
-  const pairs = pairsFor(pr);
-  const api = yield* githubApi();
-  const previousFindings: Array<{ file: string; lineNumber: number }> = [];
-  const dismissedReplies: Reply[] = [];
-  const repliesForClassification: Reply[] = [];
+function replyLocation(
+  reply: Record<string, unknown>,
+  botCommentMap: Map<number, Location>,
+): Location | undefined {
+  const parentId = numberValue(reply, "in_reply_to_id");
+  if (parentId === undefined) {
+    return undefined;
+  }
+  return botCommentMap.get(parentId);
+}
 
-  if (api) {
-    const number = yield* runtimeEnv("PR_NUMBER");
-    const comments = commentPayload(
-      yield* fetch(`${api}/pulls/${number}/comments?per_page=100`).expect().json(),
-    );
-    const botComments = comments.filter(isBotReview);
-    const botCommentMap = new Map<number, Location>();
-    for (const comment of botComments) {
-      const id = numberValue(comment, "id");
-      const path = stringValue(comment, "path");
-      const lineNumber = numberValue(comment, "original_line") ?? numberValue(comment, "line");
-      if (id === undefined || !path || lineNumber === undefined) {
-        continue;
-      }
-      const diffHunk = stringValue(comment, "diff_hunk") ?? "";
-      const commentLine =
-        diffHunk
-          .split("\n")
-          .filter((line) => line.startsWith("+"))
-          .pop() ?? "";
-      const location = {
-        file: path,
-        lineNumber,
-        comment: commentLine.replace(/^\+\s*/, "").trim(),
-      };
-      botCommentMap.set(id, location);
-      previousFindings.push({ file: path, lineNumber });
-    }
-    const replies = yield* collectReplies(api, comments, botCommentMap);
-    dismissedReplies.push(...replies.dismissed);
-    repliesForClassification.push(...replies.pending);
+function* replyForClassification(
+  api: string,
+  reply: Record<string, unknown>,
+  botCommentMap: Map<number, Location>,
+): Operation<Reply | undefined> {
+  const parentId = numberValue(reply, "in_reply_to_id");
+  const location = replyLocation(reply, botCommentMap);
+  const replyText = stringValue(reply, "body");
+  const replyId = numberValue(reply, "id");
+  if (
+    location === undefined ||
+    userType(reply) === "Bot" ||
+    replyText === undefined ||
+    replyId === undefined
+  ) {
+    return undefined;
   }
 
+  const entry: Reply = { ...location, botCommentId: parentId, replyText, replyId };
+  if (yield* fetchReplyReactions(api, entry)) {
+    return { ...entry, alreadyProcessed: true };
+  }
+  return entry;
+}
+
+interface CommentLocations {
+  botCommentMap: Map<number, Location>;
+  previousFindings: { file: string; lineNumber: number }[];
+}
+
+interface CommentLocationEntry {
+  id: number;
+  location: Location;
+}
+
+function commentLine(diffHunk: string): string {
+  const addedLine = diffHunk
+    .split("\n")
+    .filter((line) => line.startsWith("+"))
+    .pop();
+  return addedLine?.replace(/^\+\s*/u, "").trim() ?? "";
+}
+
+function commentLocation(comment: Record<string, unknown>): CommentLocationEntry | undefined {
+  if (!isBotReview(comment)) {
+    return undefined;
+  }
+  const id = numberValue(comment, "id");
+  const path = stringValue(comment, "path");
+  const lineNumber = numberValue(comment, "original_line") ?? numberValue(comment, "line");
+  if (id === undefined || !nonEmpty(path) || lineNumber === undefined) {
+    return undefined;
+  }
+  return {
+    id,
+    location: {
+      file: path,
+      lineNumber,
+      comment: commentLine(stringValue(comment, "diff_hunk") ?? ""),
+    },
+  };
+}
+
+function commentLocations(comments: Record<string, unknown>[]): CommentLocations {
+  const entries = comments
+    .map((comment) => commentLocation(comment))
+    .filter((entry): entry is CommentLocationEntry => entry !== undefined);
+  const botCommentMap = new Map<number, Location>();
+  for (const entry of entries) {
+    botCommentMap.set(entry.id, entry.location);
+  }
+  return {
+    botCommentMap,
+    previousFindings: entries.map(({ location }) => ({
+      file: location.file,
+      lineNumber: location.lineNumber,
+    })),
+  };
+}
+
+function formatPairs(pairs: Pair[], hasPairs: boolean): string {
+  if (!hasPairs) {
+    return "";
+  }
+  return pairs
+    .map((pair, index) => `[${index}] COMMENT: ${pair.comment}\nCODE: ${pair.code}`)
+    .join("\n---\n");
+}
+
+function formatReplies(replies: Reply[]): string {
+  return replies
+    .map(
+      (reply, index) =>
+        `[${index}] FILE: ${reply.file}:${reply.lineNumber}\nREPLY: "${reply.replyText}"`,
+    )
+    .join("\n---\n");
+}
+
+interface ReviewDataParts {
+  pairs: Pair[];
+  previousFindings: { file: string; lineNumber: number }[];
+  dismissedReplies: Reply[];
+  repliesForClassification: Reply[];
+}
+
+function reviewData({
+  pairs,
+  previousFindings,
+  dismissedReplies,
+  repliesForClassification,
+}: ReviewDataParts): ReviewData {
   const hasPairs = pairs.length >= 3;
   return {
     pairs,
     hasPairs,
-    pairsText: hasPairs
-      ? pairs
-          .map((pair, index) => `[${index}] COMMENT: ${pair.comment}\nCODE: ${pair.code}`)
-          .join("\n---\n")
-      : "",
+    pairsText: formatPairs(pairs, hasPairs),
     previousFindings,
     dismissedReplies,
     repliesForClassification,
     hasRepliesToClassify: repliesForClassification.length > 0,
-    repliesText: repliesForClassification
-      .map(
-        (reply, index) =>
-          `[${index}] FILE: ${reply.file}:${reply.lineNumber}\nREPLY: "${reply.replyText}"`,
-      )
-      .join("\n---\n"),
+    repliesText: formatReplies(repliesForClassification),
   };
+}
+
+function emptyReviewData(pairs: Pair[]): ReviewData {
+  return reviewData({
+    pairs,
+    previousFindings: [],
+    dismissedReplies: [],
+    repliesForClassification: [],
+  });
+}
+
+function* fetchedReviewData(api: string, number: string, pairs: Pair[]): Operation<ReviewData> {
+  const comments = commentPayload(
+    yield* fetch(`${api}/pulls/${number}/comments?per_page=100`).expect().json(),
+  );
+  const locations = commentLocations(comments);
+  const replies = yield* collectReplies(api, comments, locations.botCommentMap);
+  return reviewData({
+    pairs,
+    previousFindings: locations.previousFindings,
+    dismissedReplies: replies.dismissed,
+    repliesForClassification: replies.pending,
+  });
+}
+
+function* reviewDataFor(pr: PR): Operation<ReviewData> {
+  const pairs = pairsFor(pr);
+  const api = yield* githubApi();
+  if (api === undefined) {
+    return emptyReviewData(pairs);
+  }
+  const number = yield* runtimeEnv("PR_NUMBER");
+  if (!nonEmpty(number)) {
+    return emptyReviewData(pairs);
+  }
+  return yield* fetchedReviewData(api, number, pairs);
+}
+
+export default function* CommentReviewData({ pr }: CommentReviewProps): Operation<ReviewData> {
+  return yield* reviewDataFor(pr);
 }

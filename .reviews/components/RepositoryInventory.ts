@@ -1,5 +1,5 @@
-import type { Operation } from "effection";
 import { glob, readTextFile } from "@executablemd/runtime";
+import type { Operation } from "effection";
 
 export const props = {
   type: "object",
@@ -25,7 +25,29 @@ interface RepositoryInventoryValue {
 }
 
 function lineCount(source: string): number {
-  return source.length === 0 ? 0 : source.split(/\r?\n/).length - (source.endsWith("\n") ? 1 : 0);
+  if (source.length === 0) {
+    return 0;
+  }
+  const lines = source.split(/\r?\n/u);
+  if (source.endsWith("\n")) {
+    return lines.length - 1;
+  }
+  return lines.length;
+}
+
+function filePaths(entries: { isFile: boolean; path: string }[]): string[] {
+  return entries
+    .filter((entry) => entry.isFile)
+    .map((entry) => entry.path)
+    .toSorted();
+}
+
+function* totalLineCount(paths: string[]): Operation<number> {
+  let total = 0;
+  for (const path of paths) {
+    total += lineCount(yield* readTextFile(path));
+  }
+  return total;
 }
 
 export default function* RepositoryInventory(
@@ -36,13 +58,7 @@ export default function* RepositoryInventory(
     patterns: ["durable-effects/**/*.ts", "packages/**/*.ts"],
     exclude: ["**/*.test.ts", "**/*.spec.ts", "**/node_modules/**"],
   });
-  const fileList = entries
-    .filter((entry) => entry.isFile)
-    .map((entry) => entry.path)
-    .sort();
-  let totalLines = 0;
-  for (const path of fileList) {
-    totalLines += lineCount(yield* readTextFile(path));
-  }
+  const fileList = filePaths(entries);
+  const totalLines = yield* totalLineCount(fileList);
   return { fileList, fileCount: fileList.length, lineCount: totalLines };
 }

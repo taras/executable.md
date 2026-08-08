@@ -1,34 +1,75 @@
 import type { OxlintDiagnostic } from "./types.ts";
 
+const RULE_CODE_PATTERN = /\((?<ruleId>[^)]+)\)/u;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function stringValue(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
-  return typeof value === "string" ? value : undefined;
+  if (typeof value === "string") {
+    return value;
+  }
+  return undefined;
 }
 
 function numberValue(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return undefined;
 }
 
 function firstSpan(record: Record<string, unknown>): Record<string, unknown> | undefined {
-  const labels = record.labels;
+  const { labels } = record;
   if (!Array.isArray(labels)) {
     return undefined;
   }
-  const label = labels[0];
+  const [label] = labels;
   if (!isRecord(label) || !isRecord(label.span)) {
     return undefined;
   }
   return label.span;
 }
 
+function spanNumber(span: Record<string, unknown> | undefined, key: string): number | undefined {
+  if (span === undefined) {
+    return undefined;
+  }
+  return numberValue(span, key);
+}
+
 function ruleIdFromCode(code: string): string {
-  const match = /\(([^)]+)\)/.exec(code);
-  return match?.[1] ?? code;
+  const match = RULE_CODE_PATTERN.exec(code);
+  return match?.groups?.ruleId ?? code;
+}
+
+function ruleIdFor(value: Record<string, unknown>, code: string | undefined): string {
+  const explicitRuleId = stringValue(value, "ruleId");
+  if (explicitRuleId !== undefined) {
+    return explicitRuleId;
+  }
+  if (code !== undefined) {
+    return ruleIdFromCode(code);
+  }
+  return "unknown";
+}
+
+function severityFor(value: string | undefined): "error" | "warning" {
+  if (value === "error") {
+    return "error";
+  }
+  return "warning";
+}
+
+function positionFor(
+  value: Record<string, unknown>,
+  span: Record<string, unknown> | undefined,
+  key: string,
+): number {
+  return numberValue(value, key) ?? spanNumber(span, key) ?? 0;
 }
 
 /** Convert one Oxlint object to the bounded representation used by reviews. */
@@ -39,13 +80,15 @@ export function normalizeDiagnostic(value: unknown): OxlintDiagnostic | undefine
 
   const code = stringValue(value, "code");
   const span = firstSpan(value);
+  const severity = stringValue(value, "severity");
+  const file = stringValue(value, "file") ?? stringValue(value, "filename") ?? "";
   return {
     message: stringValue(value, "message") ?? "",
-    ruleId: stringValue(value, "ruleId") ?? (code ? ruleIdFromCode(code) : "unknown"),
-    severity: stringValue(value, "severity") === "error" ? "error" : "warning",
-    file: stringValue(value, "file") ?? stringValue(value, "filename") ?? "",
-    line: numberValue(value, "line") ?? numberValue(span ?? {}, "line") ?? 0,
-    column: numberValue(value, "column") ?? numberValue(span ?? {}, "column") ?? 0,
+    ruleId: ruleIdFor(value, code),
+    severity: severityFor(severity),
+    file,
+    line: positionFor(value, span, "line"),
+    column: positionFor(value, span, "column"),
   };
 }
 
@@ -57,7 +100,7 @@ function diagnosticEntries(value: unknown): unknown[] | undefined {
     return undefined;
   }
 
-  const diagnostics = value.diagnostics;
+  const { diagnostics } = value;
   if (Array.isArray(diagnostics)) {
     return diagnostics;
   }
@@ -65,6 +108,27 @@ function diagnosticEntries(value: unknown): unknown[] | undefined {
     return diagnostics.diagnostics;
   }
   return undefined;
+}
+
+function parseOxlintJson(stdout: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    return parsed;
+  } catch (error) {
+    let message = String(error);
+    if (error instanceof Error) {
+      const { message: errorMessage } = error;
+      message = errorMessage;
+    }
+    throw new Error(`Oxlint returned malformed JSON: ${message}`, { cause: error });
+  }
+}
+
+function changedFiles(files: readonly string[] | undefined): Set<string> | undefined {
+  if (files === undefined) {
+    return undefined;
+  }
+  return new Set(files);
 }
 
 /**
@@ -75,24 +139,15 @@ export function normalizeOxlintOutput(
   stdout: string,
   files?: readonly string[],
 ): OxlintDiagnostic[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch (error) {
-    throw new Error(
-      `Oxlint returned malformed JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
-  const entries = diagnosticEntries(parsed);
-  if (!entries) {
+  const entries = diagnosticEntries(parseOxlintJson(stdout));
+  if (entries === undefined) {
     throw new Error("Oxlint JSON did not contain a diagnostics array");
   }
 
-  const changed = files ? new Set(files) : undefined;
+  const changed = changedFiles(files);
   return entries.flatMap((entry) => {
     const diagnostic = normalizeDiagnostic(entry);
-    if (!diagnostic || (changed && !changed.has(diagnostic.file))) {
+    if (diagnostic === undefined || (changed !== undefined && !changed.has(diagnostic.file))) {
       return [];
     }
     return [diagnostic];

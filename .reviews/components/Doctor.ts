@@ -1,12 +1,19 @@
-import type { Operation } from "effection";
 import {
+  type DoctorEnvironment,
+  type DoctorResult,
+  type OxlintDiagnostic,
   buildDoctorResult,
   isOxlintCrash,
   normalizeOxlintOutput,
   summarizeDoctorProbe,
 } from "@executablemd/code-review-agent";
-import type { DoctorResult, OxlintDiagnostic } from "@executablemd/code-review-agent";
 import { exec, glob, readTextFile, stat } from "@executablemd/runtime";
+import type { Operation } from "effection";
+
+const OXLINT_PATH = ".reviews/.oxlint/oxlint";
+const TSGOLINT_PATH = ".reviews/.oxlint/tsgolint";
+const OXLINT_CONFIG = ".reviews/.oxlintrc.json";
+const NATIVE_SPECIFIER_PATTERN = /^\s*(?:import|export)\s.*?from\s+["'](?<scheme>jsr:|npm:)/u;
 
 export const props = {
   type: "object",
@@ -75,7 +82,71 @@ interface DoctorProps {
 
 function* version(command: string[]): Operation<string> {
   const result = yield* exec({ command });
-  return result.exitCode === 0 ? result.stdout.trim() : "";
+  if (result.exitCode === 0) {
+    return result.stdout.trim();
+  }
+  return "";
+}
+
+interface NativeSpecifierCounts {
+  jsr: number;
+  npm: number;
+}
+
+function nativeSpecifierCounts(source: string): NativeSpecifierCounts {
+  const counts = { jsr: 0, npm: 0 };
+  for (const line of source.split(/\r?\n/u)) {
+    const scheme = NATIVE_SPECIFIER_PATTERN.exec(line)?.groups?.scheme;
+    if (scheme === "jsr:") {
+      counts.jsr++;
+    }
+    if (scheme === "npm:") {
+      counts.npm++;
+    }
+  }
+  return counts;
+}
+
+interface NativeSpecifierFile {
+  path: string;
+  counts: NativeSpecifierCounts;
+}
+
+function* nativeSpecifierFile(entry: {
+  isFile: boolean;
+  path: string;
+}): Operation<NativeSpecifierFile | undefined> {
+  if (!entry.isFile) {
+    return undefined;
+  }
+  return { path: entry.path, counts: nativeSpecifierCounts(yield* readTextFile(entry.path)) };
+}
+
+function nativeSpecifierValue(files: NativeSpecifierFile[]): DoctorResult["nativeSpecifiers"] {
+  let jsr = 0;
+  let npm = 0;
+  const paths: string[] = [];
+  for (const file of files) {
+    jsr += file.counts.jsr;
+    npm += file.counts.npm;
+    if (file.counts.jsr + file.counts.npm > 0) {
+      paths.push(file.path);
+    }
+  }
+  return { count: jsr + npm, files: [...new Set(paths)], jsr, npm };
+}
+
+function* nativeSpecifierFiles(
+  entries: { isFile: boolean; path: string }[],
+): Operation<NativeSpecifierFile[]> {
+  const files: NativeSpecifierFile[] = [];
+  for (const entry of entries) {
+    const file = yield* nativeSpecifierFile(entry);
+    if (file !== undefined) {
+      files.push(file);
+    }
+  }
+  return files;
 }
 
 function* nativeSpecifierSummary(): Operation<DoctorResult["nativeSpecifiers"]> {
@@ -84,28 +155,37 @@ function* nativeSpecifierSummary(): Operation<DoctorResult["nativeSpecifiers"]> 
     patterns: ["packages/**/*.ts", "durable-effects/**/*.ts"],
     exclude: ["**/*.test.ts", "**/*.spec.ts", "**/node_modules/**"],
   });
-  const files: string[] = [];
-  let jsr = 0;
-  let npm = 0;
-  for (const entry of entries) {
-    if (!entry.isFile) {
-      continue;
-    }
-    const source = yield* readTextFile(entry.path);
-    for (const line of source.split(/\r?\n/)) {
-      const match = /^\s*(?:import|export)\s.*?from\s+["'](jsr:|npm:)/.exec(line);
-      if (!match) {
-        continue;
-      }
-      files.push(entry.path);
-      if (match[1] === "jsr:") {
-        jsr++;
-      } else {
-        npm++;
-      }
-    }
+  return nativeSpecifierValue(yield* nativeSpecifierFiles(entries));
+}
+
+function probeCommand(tsconfigPath: string): string[] {
+  return [
+    OXLINT_PATH,
+    "--config",
+    OXLINT_CONFIG,
+    "--type-aware",
+    "--tsconfig",
+    tsconfigPath,
+    "--format",
+    "json",
+  ];
+}
+
+function probeFailure(exitCode: number, stdout: string, stderr: string): Error | undefined {
+  if (exitCode > 1 && !isOxlintCrash(stderr)) {
+    return new Error(stderr || `Oxlint probe failed with exit code ${exitCode}`);
   }
-  return { count: jsr + npm, files: [...new Set(files)], jsr, npm };
+  if (stdout.trim().length === 0 && exitCode !== 0 && !isOxlintCrash(stderr)) {
+    return new Error(stderr || "Oxlint probe returned no JSON output");
+  }
+  return undefined;
+}
+
+function probeDiagnostics(stdout: string): OxlintDiagnostic[] {
+  if (stdout.trim().length === 0) {
+    return [];
+  }
+  return normalizeOxlintOutput(stdout);
 }
 
 function* probeTypeAware(canProbe: boolean, tsconfigPath: string) {
@@ -114,26 +194,14 @@ function* probeTypeAware(canProbe: boolean, tsconfigPath: string) {
   }
 
   const result = yield* exec({
-    command: [
-      ".reviews/.oxlint/oxlint",
-      "--config",
-      ".reviews/.oxlintrc.json",
-      "--type-aware",
-      "--tsconfig",
-      tsconfigPath,
-      "--format",
-      "json",
-    ],
-    env: { OXLINT_TSGOLINT_PATH: ".reviews/.oxlint/tsgolint" },
+    command: probeCommand(tsconfigPath),
+    env: { OXLINT_TSGOLINT_PATH: TSGOLINT_PATH },
   });
-  if (result.exitCode > 1 && !isOxlintCrash(result.stderr)) {
-    throw new Error(result.stderr || `Oxlint probe failed with exit code ${result.exitCode}`);
+  const failure = probeFailure(result.exitCode, result.stdout, result.stderr);
+  if (failure !== undefined) {
+    throw failure;
   }
-  if (result.stdout.trim().length === 0 && result.exitCode !== 0 && !isOxlintCrash(result.stderr)) {
-    throw new Error(result.stderr || "Oxlint probe returned no JSON output");
-  }
-  const diagnostics: OxlintDiagnostic[] =
-    result.stdout.trim().length === 0 ? [] : normalizeOxlintOutput(result.stdout);
+  const diagnostics = probeDiagnostics(result.stdout);
   return summarizeDoctorProbe({
     diagnostics,
     stderr: result.stderr,
@@ -141,31 +209,39 @@ function* probeTypeAware(canProbe: boolean, tsconfigPath: string) {
   });
 }
 
+function* toolVersion(path: string): Operation<string> {
+  const result = yield* stat(path);
+  if (!result.isFile) {
+    return "";
+  }
+  return yield* version([path, "--version"]);
+}
+
+function* doctorEnvironment(tsconfigPath: string): Operation<DoctorEnvironment> {
+  const oxlint = yield* stat(OXLINT_PATH);
+  const tsgolint = yield* stat(TSGOLINT_PATH);
+  const tsconfig = yield* stat(tsconfigPath);
+  const nodeModules = yield* stat("node_modules");
+  return {
+    oxlintInstalled: oxlint.isFile,
+    oxlintVersion: yield* toolVersion(OXLINT_PATH),
+    tsgolintInstalled: tsgolint.isFile,
+    tsgolintVersion: yield* toolVersion(TSGOLINT_PATH),
+    tsconfigExists: tsconfig.isFile,
+    nodeModulesExists: nodeModules.isDirectory,
+    nativeSpecifiers: yield* nativeSpecifierSummary(),
+  };
+}
+
 export default function* Doctor({
   tsconfigPath = ".reviews/tsconfig.oxlint.json",
 }: DoctorProps): Operation<DoctorResult> {
-  const oxlint = yield* stat(".reviews/.oxlint/oxlint");
-  const tsgolint = yield* stat(".reviews/.oxlint/tsgolint");
-  const tsconfig = yield* stat(tsconfigPath);
-  const nodeModules = yield* stat("node_modules");
-  const oxlintVersion = oxlint.isFile
-    ? yield* version([".reviews/.oxlint/oxlint", "--version"])
-    : "";
-  const tsgolintVersion = tsgolint.isFile
-    ? yield* version([".reviews/.oxlint/tsgolint", "--version"])
-    : "";
-  const canProbe = oxlint.isFile && tsgolint.isFile && tsconfig.isFile && nodeModules.isDirectory;
+  const environment = yield* doctorEnvironment(tsconfigPath);
+  const canProbe =
+    environment.oxlintInstalled &&
+    environment.tsgolintInstalled &&
+    environment.tsconfigExists &&
+    environment.nodeModulesExists;
   const probe = yield* probeTypeAware(canProbe, tsconfigPath);
-  return buildDoctorResult(
-    {
-      oxlintInstalled: oxlint.isFile,
-      oxlintVersion,
-      tsgolintInstalled: tsgolint.isFile,
-      tsgolintVersion,
-      tsconfigExists: tsconfig.isFile,
-      nodeModulesExists: nodeModules.isDirectory,
-      nativeSpecifiers: yield* nativeSpecifierSummary(),
-    },
-    probe,
-  );
+  return buildDoctorResult(environment, probe);
 }

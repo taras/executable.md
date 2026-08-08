@@ -1072,10 +1072,15 @@ output. All rules at `"warn"` — Oxlint collects signals, not verdicts.
 
 ### 13.1 Sensor configuration
 
-`.reviews/.oxlintrc.json` — committed config with `pedantic: "warn"`
-and `style: "warn"` enabled (14 bloat-relevant rules). All oxlint
-invocations in capture blocks reference this config via
-`--config .reviews/.oxlintrc.json`.
+`.reviews/.oxlintrc.json` — committed review-sensor config with
+`pedantic: "warn"` and `style: "warn"` enabled. All oxlint invocations
+reference this config via `--config .reviews/.oxlintrc.json`. The sensor
+turns off rule families that conflict with repository conventions: component
+filename casing, named-export and export-order rules, generator/function
+style rules, and mechanical import/key-order and magic-number rules. The normal
+repository lint configuration remains authoritative for those rules; this
+review-only exclusion prevents the advisory report from treating required
+component structure as a finding.
 
 ### 13.2 Environment detection (`Doctor.ts`)
 

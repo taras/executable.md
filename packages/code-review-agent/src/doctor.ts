@@ -1,5 +1,5 @@
-import { TYPE_AWARE_RULES } from "./categories.ts";
 import type { DoctorResult, OxlintDiagnostic } from "./types.ts";
+import { TYPE_AWARE_RULES } from "./categories.ts";
 
 const BLOAT_RULES = [
   "no-unused-vars",
@@ -15,6 +15,8 @@ const BLOAT_RULES = [
   ...TYPE_AWARE_RULES,
 ];
 const TYPE_AWARE_RULE_SET = new Set<string>(TYPE_AWARE_RULES);
+const IMPORT_NOISE_RATIO = 0.3;
+const OXLINT_CRASH_PATTERN = /panic|oom|out of memory|fatal|segmentation fault/iu;
 
 export interface DoctorProbeSummary {
   typeAwareAvailable: boolean;
@@ -32,6 +34,39 @@ export interface DoctorProbeInput {
   exitCode: number;
 }
 
+function bloatRulesFor(typeAwareAvailable: boolean): {
+  available: string[];
+  missing: string[];
+} {
+  if (typeAwareAvailable) {
+    return { available: [...BLOAT_RULES], missing: [] };
+  }
+  return {
+    available: BLOAT_RULES.filter((rule) => !TYPE_AWARE_RULE_SET.has(rule)),
+    missing: [...TYPE_AWARE_RULES],
+  };
+}
+
+function recommendationFor(
+  typeAwareAvailable: boolean,
+  ratio: number,
+): DoctorResult["recommendation"] {
+  if (!typeAwareAvailable) {
+    return "syntax-only";
+  }
+  if (ratio < IMPORT_NOISE_RATIO) {
+    return "type-aware";
+  }
+  return "type-aware-filtered";
+}
+
+function noiseRatio(total: number, importNoise: number): number {
+  if (total === 0) {
+    return 0;
+  }
+  return importNoise / total;
+}
+
 function isImportNoise(diagnostic: OxlintDiagnostic): boolean {
   return (
     diagnostic.message.includes("Cannot find module") ||
@@ -41,7 +76,7 @@ function isImportNoise(diagnostic: OxlintDiagnostic): boolean {
 }
 
 export function isOxlintCrash(stderr: string): boolean {
-  return /panic|oom|out of memory|fatal|segmentation fault/i.test(stderr);
+  return OXLINT_CRASH_PATTERN.test(stderr);
 }
 
 /** Summarize a bounded type-aware probe without retaining its raw output. */
@@ -50,23 +85,17 @@ export function summarizeDoctorProbe(input: DoctorProbeInput): DoctorProbeSummar
   const files = new Set(input.diagnostics.map((diagnostic) => diagnostic.file).filter(Boolean));
   const skippedFiles = new Set(importNoise.map((diagnostic) => diagnostic.file).filter(Boolean));
   const available = input.exitCode <= 1 && !isOxlintCrash(input.stderr);
-  const ratio = input.diagnostics.length === 0 ? 0 : importNoise.length / input.diagnostics.length;
-  const recommendation = !available
-    ? "syntax-only"
-    : ratio < 0.3
-      ? "type-aware"
-      : "type-aware-filtered";
+  const ratio = noiseRatio(input.diagnostics.length, importNoise.length);
+  const rules = bloatRulesFor(available);
 
   return {
     typeAwareAvailable: available,
     filesAnalyzed: files.size,
     filesSkipped: skippedFiles.size,
     importErrors: importNoise.length,
-    bloatRulesAvailable: available
-      ? [...BLOAT_RULES]
-      : BLOAT_RULES.filter((rule) => !TYPE_AWARE_RULE_SET.has(rule)),
-    bloatRulesMissing: available ? [] : [...TYPE_AWARE_RULES],
-    recommendation,
+    bloatRulesAvailable: rules.available,
+    bloatRulesMissing: rules.missing,
+    recommendation: recommendationFor(available, ratio),
   };
 }
 

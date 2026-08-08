@@ -1,7 +1,10 @@
-import type { Operation } from "effection";
-import { normalizeOxlintOutput } from "@executablemd/code-review-agent";
-import type { OxlintDiagnostic } from "@executablemd/code-review-agent";
+import { type OxlintDiagnostic, normalizeOxlintOutput } from "@executablemd/code-review-agent";
 import { exec } from "@executablemd/runtime";
+import type { Operation } from "effection";
+
+const OXLINT_PATH = ".reviews/.oxlint/oxlint";
+const OXLINT_CONFIG = ".reviews/.oxlintrc.json";
+const OXLINT_CRASH_PATTERN = /panic|oom|out of memory|fatal|segmentation fault/iu;
 
 export const props = {
   type: "object",
@@ -37,38 +40,57 @@ interface OxlintDiagnosticsProps {
   tsconfigPath?: string;
 }
 
-export default function* OxlintDiagnostics({
-  files,
-  typeAware = false,
-  tsconfigPath = ".reviews/tsconfig.oxlint.json",
-}: OxlintDiagnosticsProps): Operation<OxlintDiagnostic[]> {
-  if (files.length === 0) {
-    return [];
-  }
+interface OxlintCommand {
+  command: string[];
+  environment: Record<string, string>;
+}
 
-  const command = [
-    ".reviews/.oxlint/oxlint",
-    "--config",
-    ".reviews/.oxlintrc.json",
-    "--format",
-    "json",
-  ];
+function oxlintCommand(files: string[], typeAware: boolean, tsconfigPath: string): OxlintCommand {
+  const command = [OXLINT_PATH, "--config", OXLINT_CONFIG, "--format", "json"];
   const environment: Record<string, string> = {};
   if (typeAware) {
     command.push("--type-aware", "--tsconfig", tsconfigPath);
     environment.OXLINT_TSGOLINT_PATH = ".reviews/.oxlint/tsgolint";
   }
   command.push(...files);
+  return { command, environment };
+}
 
+function oxlintFailure(exitCode: number, stdout: string, stderr: string): Error | undefined {
+  if (exitCode > 1) {
+    return new Error(stderr || `Oxlint failed with exit code ${exitCode}`);
+  }
+  if (OXLINT_CRASH_PATTERN.test(stderr)) {
+    return new Error(stderr);
+  }
+  if (stdout.trim().length === 0) {
+    return new Error(stderr || "Oxlint returned no JSON output");
+  }
+  return undefined;
+}
+
+function* runOxlint(
+  files: string[],
+  typeAware: boolean,
+  tsconfigPath: string,
+): Operation<OxlintDiagnostic[]> {
+  if (files.length === 0) {
+    return [];
+  }
+
+  const { command, environment } = oxlintCommand(files, typeAware, tsconfigPath);
   const result = yield* exec({ command, env: environment });
-  if (result.exitCode > 1) {
-    throw new Error(result.stderr || `Oxlint failed with exit code ${result.exitCode}`);
-  }
-  if (/panic|oom|out of memory|fatal|segmentation fault/i.test(result.stderr)) {
-    throw new Error(result.stderr);
-  }
-  if (result.stdout.trim().length === 0) {
-    throw new Error(result.stderr || "Oxlint returned no JSON output");
+  const failure = oxlintFailure(result.exitCode, result.stdout, result.stderr);
+  if (failure !== undefined) {
+    throw failure;
   }
   return normalizeOxlintOutput(result.stdout, files);
+}
+
+export default function* OxlintDiagnostics({
+  files,
+  typeAware = false,
+  tsconfigPath = ".reviews/tsconfig.oxlint.json",
+}: OxlintDiagnosticsProps): Operation<OxlintDiagnostic[]> {
+  return yield* runOxlint(files, typeAware, tsconfigPath);
 }

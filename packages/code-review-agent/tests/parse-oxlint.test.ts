@@ -37,7 +37,17 @@ describe("Oxlint normalization", () => {
   });
 
   it("rejects malformed or unsupported output", function* () {
-    expect(() => normalizeOxlintOutput("not json")).toThrow("malformed JSON");
+    let caught: unknown;
+    try {
+      normalizeOxlintOutput("not json");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    if (caught instanceof Error) {
+      expect(caught.message).toContain("malformed JSON");
+      expect(caught.cause).toBeInstanceOf(SyntaxError);
+    }
     expect(() => normalizeOxlintOutput(JSON.stringify({ output: [] }))).toThrow(
       "diagnostics array",
     );

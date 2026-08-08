@@ -252,8 +252,8 @@ is `"error"`. Oxlint always exits 0.
   "categories": {
     "correctness": "warn",
     "suspicious": "warn",
-    "pedantic": "off",
-    "style": "off"
+    "pedantic": "warn",
+    "style": "warn"
   },
 
   "rules": {
@@ -275,6 +275,18 @@ is `"error"`. Oxlint always exits 0.
     "eslint/no-console": ["warn", { "allow": ["warn", "error"] }],
     "eslint/no-debugger": "warn",
 
+    "eslint/func-style": "off",
+    "eslint/no-magic-numbers": "off",
+    "eslint/require-yield": "off",
+    "eslint/sort-keys": "off",
+    "eslint/sort-imports": "off",
+    "import/exports-last": "off",
+    "import/group-exports": "off",
+    "import/no-named-export": "off",
+    "import/prefer-default-export": "off",
+    "import/consistent-type-specifier-style": "off",
+    "unicorn/filename-case": "off",
+
     "typescript/no-unnecessary-type-arguments": "warn",
     "typescript/no-unnecessary-type-assertion": "warn",
     "typescript/no-redundant-type-constituents": "warn",
@@ -295,7 +307,13 @@ is `"error"`. Oxlint always exits 0.
 
 ### 4.2 Rule catalog
 
-14 bloat-relevant rules, split into two groups by whether they
+The sensor collects the bloat-relevant rules that are compatible with the
+repository's component and generator conventions. It excludes filename-case,
+named-export, export-order, function-style, generator-yield, import-order,
+key-order, and magic-number rules from its advisory report. These exclusions apply only to
+the review sensor; the normal lint gate remains unchanged.
+
+The remaining bloat-relevant rules are split into two groups by whether they
 require type information:
 
 **Syntax-only (10 rules, always available):**
