@@ -6565,6 +6565,24 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | WJ24 | Two processes | Two real processes racing to create one run leave one winner and one conflict |
 | WJ25 | A second process | Restores the run, preserves journal order and identity, and performs no recorded operation again |
 
+### Tier WRR — Immutable retained Workspace roots
+
+Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
+
+| # | Test | Verify |
+|---|------|--------|
+| WRR1 | Canonical empty root | Fresh complete-v1 storage retains the exact root-only canonical manifest and its content-addressed identity |
+| WRR2 | Complete canonical topology | Paths, metadata, symlinks and deterministic hardlinks form canonical bytes; DOFS manifests and blobs are retained exactly without copied file bytes |
+| WRR3 | Mutation-derived roots | Create, overwrite, delete, rename, directory, mode, symlink and hardlink changes produce the corresponding immutable roots |
+| WRR4 | Historical restoration | An older root restores exact topology and content, resnapshots to its identity and clears authoritative negative caches |
+| WRR5 | Restoration rollback | A restoration failure rolls back its savepoint and preserves the prior live frontier and current-root pointer |
+| WRR6 | Read-only corruption | Root, reference, content, chunk, topology and live/current corruption is refused without changing the database |
+| WRR7 | Bigint-safe corruption | Maximum-width SQLite integers produce a redacted `WorkflowDatabaseCorruptError`, never a raw or value-leaking conversion failure |
+| WRR8 | Teardown before validation | Child cleanup finishes before final live/current validation, and a stale capture cannot commit |
+| WRR9 | No unsafe garbage collection | The production closure neither exposes nor invokes Cloudflare DOFS garbage collection |
+| WRR10/WRR10b | Outer rollback cache coherence | Failure and cancellation after an uncommitted removal and negative lookup roll back and invalidate both authoritative DOFS caches |
+| WRR11 | Historical file size | Every historical file entry's declared size agrees with its retained DOFS manifest during read-only recognition |
+
 ### Tier SL — Own-scope context updates
 
 | # | Test | Verify |

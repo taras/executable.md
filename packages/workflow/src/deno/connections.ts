@@ -2,6 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { WorkspaceFilesystem } from "../../vendor/cloudflare-computer-dofs/generated/fs/filesystem.js";
+import { clearBlobCache } from "../../vendor/cloudflare-computer-dofs/generated/fs/blobCache.js";
+import { clearResolveCache } from "../../vendor/cloudflare-computer-dofs/generated/fs/resolveCache.js";
 import type {
   DurableObjectStorageLike,
   SQLCursorLike,
@@ -18,6 +20,8 @@ export interface RunConnection {
   readonly lock: ConnectionLock;
   readonly savepoints: SavepointManager;
   transactionOpen: boolean;
+  invalidateDofsCaches(): void;
+  setClock(now: () => number): void;
   close(): void;
 }
 
@@ -80,12 +84,13 @@ function createConnection(path: string): RunConnection {
   const dofs = new CloudflareDatabase(durableStorage);
   const savepoints = createSavepointManager(database, () => connection.transactionOpen);
   connection.savepoints = savepoints;
+  let clock = Date.now;
 
   return {
     path,
     database,
     dofs,
-    filesystem: new WorkspaceFilesystem(dofs),
+    filesystem: new WorkspaceFilesystem(dofs, { now: () => clock() }),
     lock: createConnectionLock(),
     savepoints,
     get transactionOpen() {
@@ -93,6 +98,13 @@ function createConnection(path: string): RunConnection {
     },
     set transactionOpen(value: boolean) {
       connection.transactionOpen = value;
+    },
+    invalidateDofsCaches(): void {
+      clearResolveCache(dofs);
+      clearBlobCache(dofs);
+    },
+    setClock(now: () => number): void {
+      clock = now;
     },
     close() {
       if (open) {

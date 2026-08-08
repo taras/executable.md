@@ -275,9 +275,28 @@ version domains.
 A fresh database contains one content-addressed Workspace root whose canonical
 manifest describes only `/` as a directory. Its retained manifest and blob
 reference sets are empty, its current-root pointer names that root, and its DOFS
-frontier contains only the corresponding root directory. This implementation
-recognizes that canonical empty frontier and rejects any other live frontier as
-corruption. It exposes no Workspace mutation through the storage handle.
+frontier contains only the corresponding root directory.
+
+Every later retained root is a complete canonical filesystem checkpoint. Root
+format 1 uses fixed-key-order UTF-8 JSON containing `/` and every reachable
+absolute POSIX path sorted by UTF-8 bytes. Each entry records its kind, mode and
+observable mtime; files also record size, their DOFS manifest identity and a
+deterministic hardlink group when shared; symbolic links record their verbatim
+target. Paths are not Unicode-normalized. Mutable DOFS inode numbers, revisions,
+tombstones, caches and synchronization bookkeeping are not part of root
+identity.
+
+The lowercase root ID is SHA-256 over
+`xmd-workspace-root\0v1\0 || canonical_manifest_bytes`. Reusing an ID requires
+the stored format and bytes to be identical. File bytes remain only in DOFS
+blobs. The normalized root-to-manifest and root-to-blob rows equal the exact
+transitive content of each root and prevent that content from being deleted
+while the root is retained.
+
+Each file entry's declared size equals the size in its referenced DOFS
+manifest. Recognition checks that agreement for every file in every retained
+root, including roots that are not current, while it validates the manifest's
+chunks and blobs transitively.
 
 ### 9.5 The journal
 
@@ -314,6 +333,12 @@ connection queue and one synchronous savepoint allocator. It remains alive
 until provider-scope teardown, after the provider's child scopes finish.
 Different database paths have independent entries.
 
+Opening existing storage performs structural recognition, retained-root and
+content validation, the live/current comparison and the singleton run-row read
+inside one explicit SQLite read transaction. Those dependent reads therefore
+describe one committed version. Recognition does not mark the connection as a
+caller-owned Workspace transaction and does not permit DOFS savepoints.
+
 Operations through every lease on one entry are serialized, and each runs
 inside a transaction. A caller that needs several statements published
 together holds the transaction itself:
@@ -346,6 +371,38 @@ the host. Contention between processes remains SQLite's own.
 Cloudflare's synchronous transactions use uniquely named SQLite savepoints on
 that same connection and only while XMD's caller-owned transaction is open.
 DOFS does not begin, commit or roll back a top-level transaction.
+
+If a caller-owned transaction does not commit, its finalizer attempts SQLite
+rollback and then invalidates both the resolution and blob caches on the
+authoritative DOFS wrapper before releasing the serialized connection turn.
+The same cleanup covers body failure, cancellation during the body or child
+teardown, final Workspace validation failure, and commit failure. Rolled-back
+topology therefore cannot survive as a positive or negative cache entry.
+
+Adapter-private root operations also run only inside this caller-owned
+transaction. Capture traverses and validates the complete live DOFS frontier,
+builds or reuses a canonical DOFS file manifest when ordered chunks do not yet
+have one, retains the immutable root and exact reference sets, and optionally
+sets it current. Read-only recognition never builds a manifest or changes
+last-seen metadata. The supplied private Workspace body runs in an inner scope,
+and final live/current validation waits for that scope's children and resources
+to finish teardown.
+
+Successful effect coordination finishes its mutation scope before capturing
+the root. The provider-level coordinator that orders mutation teardown, root
+capture and filtered journal publication is not part of this storage layer.
+
+The private restoration materializer loads a fully validated retained root and
+rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink
+relationships inside a nested savepoint. It establishes valid mutable revision
+state, clears the authoritative DOFS resolution and blob caches, and requires a
+read-only resnapshot to reproduce the selected root ID before the savepoint is
+released. A failure restores the prior live frontier and current-root pointer.
+
+Immutable roots are authoritative checkpoints and DOFS tables are the current
+live materialization. Every retained root remains indefinitely. The production
+closure neither exposes nor invokes Cloudflare garbage collection; root-aware
+deletion and collection are separate lifecycle behavior.
 
 A transaction opened inside another on the same database is refused rather than
 nested, and so is an ordinary operation called from inside a body — that call
@@ -388,6 +445,14 @@ genuinely unsupported nonzero version remains a schema-version refusal.
 Rows are held to what they mean and not only to their column types: a timestamp
 is an instant, an identity is not the empty string, and props are an object.
 
+Semantic recognition parses every retained root canonically, recomputes its ID
+and exact manifest/blob reachability, validates every referenced manifest,
+blob, byte payload and live chunk, and requires the read-only live snapshot to
+equal the singleton current root. Malformed paths or topology, dangling or
+cyclic dirents, invalid hardlinks, corrupt hashes or sizes, inexact references,
+a file entry whose declared size differs from its referenced DOFS manifest, and
+a live/current mismatch are damage. Recognition performs no repair.
+
 No message repeats a stored value — or a stored *name*. Props and journal
 payloads are retained history, and a member name can carry a credential as
 readily as a member value, so an unexpected member is refused without being
@@ -404,7 +469,8 @@ also left unchanged.
 ## 10. Intentionally excluded
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
-leases and stale-owner recovery; Workspace mutations, nonempty retained roots
-and restoration; provider-level Workspace effect publication; history
-checkpoints and forks; workflow-owned worktrees; and deterministic Git and
-GitHub effects.
+leases and stale-owner recovery; public Workspace mutation and filesystem
+effects; provider-level atomic Workspace effect/journal publication; public
+root selection, history checkpoints and forks; `<File>` integration;
+workflow-owned worktrees; and deterministic Git and GitHub effects. Retained
+roots and private restoration do not expose any of those behaviors.

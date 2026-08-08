@@ -206,8 +206,31 @@ Workspace-root tables, current-root state, and a non-null Workspace-root
 association on every journal event. A fresh run starts with one
 content-addressed root manifest describing only the root directory, empty
 retained manifest and blob reference sets, and the corresponding root-only DOFS
-frontier. This storage layer recognizes that canonical empty frontier; it does
-not publish nonempty roots or Workspace mutations.
+frontier.
+
+A Workspace root is a complete, immutable filesystem checkpoint. Its canonical
+format-1 JSON includes `/` and every reachable absolute POSIX path in UTF-8 byte
+order, with kind, mode, observable mtime, file size and DOFS manifest identity,
+symbolic-link target, and deterministic file-hardlink groups. The root ID is
+the lowercase SHA-256 of `xmd-workspace-root\0v1\0` followed by those exact
+canonical bytes. Mutable inode numbers, revisions, tombstones and cache state
+do not participate in the identity.
+
+The root tables are authoritative checkpoints; the DOFS node, dirent and chunk
+tables are the live materialization of the current root. Files remain solely in
+DOFS content-addressed blobs. Normalized root-to-manifest and root-to-blob rows
+equal the root's transitive content exactly and prevent retained content from
+being deleted. Opening a run validates every root and referenced manifest and
+blob, then snapshots the live frontier read-only and requires it to equal
+`current_root`. The schema structure, retained content, live/current comparison
+and run row are read through one explicit SQLite snapshot. This recognition
+transaction is not a caller-owned Workspace transaction and enables no DOFS
+savepoints.
+
+Recognition also requires every file entry in every retained root, including a
+historical root, to declare the size held by its referenced DOFS manifest. A
+root whose XMD identity and reference rows are internally consistent but whose
+file size disagrees with DOFS is corrupt and not restorable.
 
 Which status transitions are legal, and what a caller may do to a run in each
 of them, is lifecycle policy applied above storage.
@@ -244,7 +267,9 @@ A transaction commits only once the work inside it has finished, including work
 that is still unwinding when the body returns. Cleanup belonging to that work
 appends through the same transaction, and a commit that happened first would
 leave those appends to publish themselves outside it. Failure and cancellation
-roll back everything the transaction did.
+roll back everything the transaction did. Adapter-private Workspace work also
+waits for its supplied scope to finish teardown before it performs the final
+live/current validation.
 
 A transaction opened inside another on the same storage is refused rather than
 nested, as is an ordinary operation called from inside a transaction body.
@@ -345,6 +370,11 @@ before their parent's effect begins. Declarative Git operations, including
 staging, switching and committing, operate on the same transactional Workspace
 rather than invoking an untracked native Git side effect.
 
+Successful effect coordination finishes the mutation scope, including child
+cleanup, before capturing the resulting root. The provider-level coordinator
+that performs this ordering and journal publication is not installed at this
+layer.
+
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the
 provider to perform or reconcile that identity, then append one local result
@@ -393,8 +423,25 @@ second long-lived DOFS connection is not a coherent reader because provider
 caches may retain negative entries across another connection's commit.
 
 Complete schema version 1 retains the canonical empty Workspace root and its
-root-only live frontier. The provider exposes no Workspace mutation operation
-and publishes no nonempty retained root at this layer.
+root-only live frontier initially. It retains arbitrary canonical roots and can
+materialize one privately through the authoritative connection. Capture runs
+inside the caller-owned transaction. Restoration runs in a nested savepoint,
+clears the authoritative resolution and blob caches, and resnapshots to the
+selected identity before release. Private Workspace transaction bodies finish
+their child teardown before final live/current validation; a later effect
+coordinator finishes its mutation scope before it invokes capture.
+
+Every unsuccessful caller-owned transaction attempts SQLite rollback and then
+invalidates both caches on the provider-owned DOFS wrapper while it still holds
+the serialized connection turn. This includes body failure, cancellation,
+teardown or final-validation failure, and commit failure. The surviving wrapper
+therefore cannot answer from uncommitted positive or negative cache entries
+after SQLite has restored the prior frontier.
+
+Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
+collection is not in the production closure and is never invoked. The provider
+exposes no public Workspace mutation effect, history selection or fork
+operation at this layer.
 
 The initial topology requires neither writable FUSE nor native subprocess
 access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed
@@ -683,7 +730,7 @@ Status is measured against main.
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
-| workflow run storage | creates or compatibly finds one run by public run ID, and retains its identity, state, document executions, filtered journal and canonical empty Workspace root through one provider-owned connection entry | built on the #365 stack; Workspace mutation publication is unbuilt |
+| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; Workspace effect publication is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
@@ -694,7 +741,7 @@ Status is measured against main.
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path and recognizes the complete-v1 canonical empty frontier | built on the #365 stack; nonempty roots and effect-transaction integration are unbuilt |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, and privately restores them with cache-coherent savepoints | built on the #365 stack; public mutation and effect-transaction integration are unbuilt |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
