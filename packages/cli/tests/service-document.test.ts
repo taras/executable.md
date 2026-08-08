@@ -102,6 +102,60 @@ function fixturePids(stderr: string[]): number[] {
   return [...stderr.join("").matchAll(/service pid:(\d+)/g)].map((match) => Number(match[1]));
 }
 
+function fixtureEndpoints(stderr: string[]): Array<{
+  nonce: string;
+  hostname: string;
+  port: number;
+}> {
+  return [...stderr.join("").matchAll(/service endpoint:([^:\n]+):([^:\n]+):(\d+)/g)].map(
+    (match) => {
+      const [, nonce, hostname, port] = match;
+      if (nonce === undefined || hostname === undefined || port === undefined) {
+        throw new Error("malformed cooperative-service endpoint log");
+      }
+      return { nonce, hostname, port: Number(port) };
+    },
+  );
+}
+
+function endpointAt(
+  endpoints: Array<{ nonce: string; hostname: string; port: number }>,
+  index: number,
+): { nonce: string; hostname: string; port: number } {
+  const endpoint = endpoints[index];
+  if (endpoint === undefined) {
+    throw new Error(`missing cooperative-service endpoint at index ${index}`);
+  }
+  return endpoint;
+}
+
+function expectPingPongJournal(
+  stream: InMemoryStream,
+  tokens: string[],
+  endpoints: Array<{ nonce: string; hostname: string; port: number }>,
+): void {
+  const journal = JSON.stringify(stream.snapshot());
+  expect(journal).toContain("ping→pong→ping");
+  for (const forbidden of [
+    "XMD_SERVICE_READY",
+    "service pid:",
+    "service endpoint:",
+    "service request:",
+    "service stdout",
+    "service stderr",
+    "service stopping:",
+  ]) {
+    expect(journal).not.toContain(forbidden);
+  }
+  for (const token of tokens) {
+    expect(journal).not.toContain(token);
+  }
+  for (const endpoint of endpoints) {
+    expect(journal).not.toContain(String(endpoint.port));
+    expect(journal).not.toContain(`${endpoint.hostname}:${endpoint.port}`);
+  }
+}
+
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -182,6 +236,109 @@ describe("cooperative service document integration", () => {
       const completed = yield* runDocument(full);
       expect(completed).toBe(first);
       expect(tokenCalls).toBe(2);
+    });
+  });
+
+  it("keeps a two-service ping-pong chain live across partial replay", function* () {
+    const full = new InMemoryStream();
+    const stderr: string[] = [];
+    const tokens: string[] = [];
+
+    yield* scoped(function* () {
+      yield* installHostService({
+        token() {
+          const token = (tokens.length + 1).toString(16).padStart(64, "0");
+          tokens.push(token);
+          return token;
+        },
+        environment: () => inheritedEnvironment(process.env),
+        stdout() {},
+        stderr(bytes) {
+          stderr.push(new TextDecoder().decode(bytes));
+        },
+      });
+      yield* useStubFs({
+        "doc.md": "<Provider><Sample /></Provider>\n",
+        "components/Provider.md": `---
+meta:
+  componentName: Provider
+---
+
+\`\`\`bash service=ping exec
+${command("ping-pong", "ping")}
+\`\`\`
+
+\`\`\`bash service=pong exec
+${command("ping-pong", "pong")}
+\`\`\`
+
+\`\`\`js persist ephemeral eval
+const pingEndpoint = ping;
+const pongEndpoint = pong;
+if (pingEndpoint.port === pongEndpoint.port) {
+  throw new Error("ping and pong must have distinct endpoints");
+}
+yield* Sample.around({
+  *sample() {
+    const peerHostname = encodeURIComponent(pongEndpoint.hostname);
+    const peerPort = encodeURIComponent(String(pongEndpoint.port));
+    const response = yield* fetch(
+      \`http://\${pingEndpoint.hostname}:\${pingEndpoint.port}/?peerHostname=\${peerHostname}&peerPort=\${peerPort}&origin=ping\`,
+    ).expect();
+    return yield* response.text();
+  },
+});
+\`\`\`
+
+<Content />
+`,
+        "components/Sample.md": SAMPLE,
+      });
+
+      const first = yield* runDocument(full);
+      expect(first).toContain("ping→pong→ping");
+      expect(tokens).toHaveLength(2);
+      const firstEndpoints = fixtureEndpoints(stderr);
+      expect(firstEndpoints).toHaveLength(2);
+      expect(firstEndpoints.map(({ nonce }) => nonce)).toEqual(["ping", "pong"]);
+      const firstPing = endpointAt(firstEndpoints, 0);
+      const firstPong = endpointAt(firstEndpoints, 1);
+      expect(firstPing.port).not.toBe(firstPong.port);
+      expect(stderr.join("")).toContain("service request:ping");
+      expect(stderr.join("")).toContain("service request:pong");
+      yield* expectGone(fixturePids(stderr));
+
+      expectPingPongJournal(full, tokens, firstEndpoints);
+
+      yield* occupy(firstPing.port);
+      yield* occupy(firstPong.port);
+      const events = full.snapshot();
+      const firstYield = events.findIndex((event) => event.type === "yield");
+      const partial = new InMemoryStream(events.slice(0, firstYield + 1));
+      const resumed = yield* runDocument(partial);
+
+      expect(resumed).toBe(first);
+      expect(tokens).toHaveLength(4);
+      const allEndpoints = fixtureEndpoints(stderr);
+      expect(allEndpoints).toHaveLength(4);
+      const resumedEndpoints = allEndpoints.slice(2);
+      expect(resumedEndpoints.map(({ nonce }) => nonce)).toEqual(["ping", "pong"]);
+      const resumedPing = endpointAt(resumedEndpoints, 0);
+      const resumedPong = endpointAt(resumedEndpoints, 1);
+      expect(resumedPing.port).not.toBe(resumedPong.port);
+      expect(resumedEndpoints.map(({ port }) => port)).not.toContain(firstPing.port);
+      expect(resumedEndpoints.map(({ port }) => port)).not.toContain(firstPong.port);
+      expect(stderr.join("").match(/service request:ping/g)).toHaveLength(2);
+      expect(stderr.join("").match(/service request:pong/g)).toHaveLength(2);
+      yield* expectGone(fixturePids(stderr));
+
+      expectPingPongJournal(partial, tokens, allEndpoints);
+
+      const completed = yield* runDocument(full);
+      expect(completed).toBe(first);
+      expect(tokens).toHaveLength(4);
+      expect(fixtureEndpoints(stderr)).toHaveLength(4);
+      expect(fixturePids(stderr)).toHaveLength(4);
     });
   });
 

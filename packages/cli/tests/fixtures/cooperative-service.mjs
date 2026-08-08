@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, get } from "node:http";
 
 const [mode = "normal", nonce = "none"] = process.argv.slice(2);
 const host = process.env.XMD_SERVICE_HOST;
@@ -17,8 +17,48 @@ if (mode === "non-cooperative") {
   process.stdout.write("service stdout before readiness\n");
   process.stderr.write("service stderr before readiness\n");
 
-  const server = createServer((_request, response) => {
+  const server = createServer((request, response) => {
     process.stderr.write(`service request:${nonce}\n`);
+
+    if (mode === "ping-pong") {
+      const requestUrl = new URL(request.url ?? "/", `http://${host}`);
+      const peerHostname = requestUrl.searchParams.get("peerHostname");
+      const peerPort = Number(requestUrl.searchParams.get("peerPort"));
+      const origin = requestUrl.searchParams.get("origin");
+
+      if (peerHostname && Number.isInteger(peerPort) && peerPort > 0 && origin) {
+        const peerRequest = get(
+          {
+            hostname: peerHostname,
+            port: peerPort,
+            path: `/?origin=${encodeURIComponent(origin)}`,
+          },
+          (peerResponse) => {
+            let peerBody = "";
+            peerResponse.setEncoding("utf8");
+            peerResponse.on("data", (chunk) => {
+              peerBody += chunk;
+            });
+            peerResponse.on("end", () => response.end(`${nonce}→${peerBody}`));
+          },
+        );
+        peerRequest.on("error", (error) => {
+          response.statusCode = 502;
+          response.end(`peer request failed: ${error.message}`);
+        });
+        return;
+      }
+
+      if (origin) {
+        response.end(`${nonce}→${origin}`);
+        return;
+      }
+
+      response.statusCode = 400;
+      response.end("missing ping-pong peer");
+      return;
+    }
+
     response.end(`service:${nonce}`);
     if (mode === "exit-on-request") {
       setTimeout(() => process.exit(19), 10);
@@ -42,6 +82,7 @@ if (mode === "non-cooperative") {
       hostname: host,
       port: address.port,
     };
+    process.stderr.write(`service endpoint:${nonce}:${host}:${address.port}\n`);
     if (mode === "malformed") {
       process.stdout.write(`XMD_SERVICE_READY:{not-json}\n`);
       return;
