@@ -204,8 +204,23 @@ Workspace-root tables, current-root state, and a non-null Workspace-root
 association on every journal event. A fresh run starts with one
 content-addressed root manifest describing only the root directory, empty
 retained manifest and blob reference sets, and the corresponding root-only DOFS
-frontier. This storage layer recognizes that canonical empty frontier; it does
-not publish nonempty roots or Workspace mutations.
+frontier.
+
+A Workspace root is a complete, immutable filesystem checkpoint. Its canonical
+format-1 JSON includes `/` and every reachable absolute POSIX path in UTF-8 byte
+order, with kind, mode, observable mtime, file size and DOFS manifest identity,
+symbolic-link target, and deterministic file-hardlink groups. The root ID is
+the lowercase SHA-256 of `xmd-workspace-root\0v1\0` followed by those exact
+canonical bytes. Mutable inode numbers, revisions, tombstones and cache state
+do not participate in the identity.
+
+The root tables are authoritative checkpoints; the DOFS node, dirent and chunk
+tables are the live materialization of the current root. Files remain solely in
+DOFS content-addressed blobs. Normalized root-to-manifest and root-to-blob rows
+equal the root's transitive content exactly and prevent retained content from
+being deleted. Opening a run validates every root and referenced manifest and
+blob, then snapshots the live frontier read-only and requires it to equal
+`current_root`.
 
 Which status transitions are legal, and what a caller may do to a run in each
 of them, is lifecycle policy applied above storage.
@@ -391,8 +406,16 @@ second long-lived DOFS connection is not a coherent reader because provider
 caches may retain negative entries across another connection's commit.
 
 Complete schema version 1 retains the canonical empty Workspace root and its
-root-only live frontier. The provider exposes no Workspace mutation operation
-and publishes no nonempty retained root at this layer.
+root-only live frontier initially. It retains arbitrary canonical roots and can
+materialize one privately through the authoritative connection. Capture runs
+inside the caller-owned transaction. Restoration runs in a nested savepoint,
+clears the authoritative resolution and blob caches, and resnapshots to the
+selected identity before release.
+
+Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
+collection is not in the production closure and is never invoked. The provider
+exposes no public Workspace mutation effect, history selection or fork
+operation at this layer.
 
 The initial topology requires neither writable FUSE nor native subprocess
 access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed
@@ -658,14 +681,14 @@ Status is measured against main.
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
-| workflow run storage | creates or compatibly finds one run by public run ID, and retains its identity, state, document executions, filtered journal and canonical empty Workspace root through one provider-owned connection entry | built on the #365 stack; Workspace mutation publication is unbuilt |
+| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; Workspace effect publication is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI | defined in `specs/workflow-workspace-spec.md`, unbuilt; the lookup it resumes through is built |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | defined in `specs/workflow-workspace-spec.md`, unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path and recognizes the complete-v1 canonical empty frontier | built on the #365 stack; nonempty roots and effect-transaction integration are unbuilt |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, and privately restores them with cache-coherent savepoints | built on the #365 stack; public mutation and effect-transaction integration are unbuilt |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |

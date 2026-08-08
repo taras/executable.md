@@ -48,7 +48,7 @@ import {
   EMPTY_WORKSPACE_MANIFEST,
   EMPTY_WORKSPACE_ROOT_ID,
   WORKSPACE_ROOT_FORMAT,
-} from "../src/deno/workspace/empty.ts";
+} from "../src/deno/workspace/manifest.ts";
 import {
   createRun,
   definition,

@@ -210,7 +210,7 @@ function* lookupWorkflowRun(
     const record = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
       yield* lock.hold();
       try {
-        verifySchema(database, path);
+        verifySchema(database, path, connection.dofs);
         return Ok(readRunRow(database, path));
       } catch (error) {
         return refusal(error, path);
@@ -246,7 +246,7 @@ function establish(
   const { database } = connection;
   try {
     if (!isUninitialized(database, path)) {
-      verifySchema(database, path);
+      verifySchema(database, path, connection.dofs);
     }
 
     database.exec("BEGIN IMMEDIATE");
@@ -267,10 +267,10 @@ function establish(
             );
         });
       } else {
-        verifySchema(database, path);
+        verifySchema(database, path, connection.dofs);
       }
 
-      verifySchema(database, path);
+      verifySchema(database, path, connection.dofs);
       const record = readRunRow(database, path);
       connection.transactionOpen = false;
       database.exec("COMMIT");
