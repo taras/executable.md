@@ -254,6 +254,16 @@ scope.around(Sample, function* ([context], next) {
 
 ### 4.4 `GitHubComment.md`
 
+CI roots place this component inside `<GitHubAuth>` and `<Output>`. `GitHubAuth`
+reads `GITHUB_TOKEN` once in a private generator closure and installs
+`@effectionx/fetch`'s `FetchApi` middleware around its projected content. It
+adds authorization only to HTTPS requests whose exact hostname is
+`api.github.com`, preserves request headers and bodies, and forwards the
+`shouldExpect` argument unchanged. Missing credentials and non-GitHub requests
+delegate unchanged. `GitHubComment` therefore keeps only request-specific
+headers such as `Content-Type`; it requires repository and PR metadata instead
+of silently returning an empty report.
+
 ````markdown
 ---
 props:
@@ -269,20 +279,14 @@ props:
 const content = yield* renderChildren();
 const body = marker + "\n" + content;
 
-const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
 const [owner, name] = repo.split("/");
 const api = `https://api.github.com/repos/${owner}/${name}`;
 
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-};
-
-const { json: comments } = yield* fetch(
-  `${api}/issues/${prNumber}/comments`, { headers }
-).expect();
+const comments = yield* fetch(
+  `${api}/issues/${prNumber}/comments`
+).expect().json();
 
 const existing = comments.find(c =>
   c.user.type === "Bot" && c.body.includes(marker)
@@ -291,13 +295,13 @@ const existing = comments.find(c =>
 if (existing) {
   yield* fetch(`${api}/issues/comments/${existing.id}`, {
     method: "PATCH",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 } else {
   yield* fetch(`${api}/issues/${prNumber}/comments`, {
     method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 }
@@ -779,54 +783,28 @@ const triggered = touchesPkg && !mentionsDeps;
 
 ### 5.10 `CommentReview.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
+`CommentReview.md` keeps the authored `<Sample>`, `<Capture>`, and `<Show>`
+composition. `CommentReviewData.ts` performs pair extraction and bounded
+GitHub response parsing, while `CommentReviewState.ts` parses model responses
+and constructs the checklist and pending findings. Both are typed function
+components with explicit schemas; no procedural eval block crosses the
+Markdown boundary.
 
-```ts eval
-const pairs = [];
-const lines = pr.added.filter(l => !l.isTest);
-
-for (let i = 0; i < lines.length - 1; i++) {
-  const current = lines[i].content.trim();
-  const next = lines[i + 1].content.trim();
-  if (current.startsWith("//") && !next.startsWith("//") && next.length > 0) {
-    pairs.push({ comment: current, code: next });
-  }
-}
-
-const hasPairs = pairs.length >= 3;
-const pairsText = hasPairs
-  ? pairs.slice(0, 20).map(p =>
-      `COMMENT: ${p.comment}\nCODE: ${p.code}`
-    ).join("\n---\n")
-  : "";
+```markdown
+<CommentReviewData pr={pr} as="reviewData" />
+<Capture as="sampleResult">
+  <Show when={reviewData.hasPairs}>
+    <Sample>{reviewData.pairsText}</Sample>
+  </Show>
+</Capture>
+<CommentReviewState
+  pr={pr}
+  data={reviewData}
+  classificationResult={classificationResult}
+  sampleResult={sampleResult}
+  as="state"
+ />
 ```
-
-<If condition={hasPairs}>
-
-<Sample>
-
-Review these comment/code pairs. List ONLY obvious/redundant ones
-where the comment restates what the code does.
-
-Format: "- `<comment>` — restates `<code pattern>`"
-
-If none are obvious: "No obvious comments found."
-
-{pairsText}
-
-</Sample>
-
-</If>
-````
 
 ---
 
@@ -1258,7 +1236,9 @@ These block merges. The executable.md review is advisory.
     ConfigSourceMix.md           Config + source mixing
     AbstractionNames.md          Suspicious file names
     NewDependencies.md           Dependency justification
-    CommentReview.md             Pair extraction + LLM review
+    CommentReview.md             Prompt composition for comment review
+    CommentReviewData.ts         Pair extraction + GitHub response parsing
+    CommentReviewState.ts        Model-response and checklist state
 
     # Policy documents (zero JavaScript)
     ScopeCheck.md                Composes Threshold, Finding checks
@@ -1289,18 +1269,20 @@ These block merges. The executable.md review is advisory.
 | `ConfigSourceMix.md` | 1 | File classification for `<Finding>` |
 | `AbstractionNames.md` | 1 | Name pattern for `<Finding>` |
 | `NewDependencies.md` | 1 | Dependency check for `<Finding>` |
-| `CommentReview.md` | 1 | Pair extraction |
+| `CommentReview.md` | 0 | Prompt and capture composition |
+| `CommentReviewData.ts` | 0 | Pair extraction and GitHub response parsing |
+| `CommentReviewState.ts` | 0 | Model-response and checklist state |
 | **`ScopeCheck.md`** | **0** | |
 | **`StructuralBloat.md`** | **0** | |
 | **`VerbosityCheck.md`** | **0** | |
 | **`SemanticReview.md`** | **0** | |
 | **`ReviewBody.md`** | **0** | |
-| `ReviewPR.md` | 2 | Env vars + parseDiff |
-| `ReviewPR.local.md` | 2 | Env vars + parseDiff |
+| `ReviewPR.md` | 2 | Changed-file selection + diagnostic grouping |
+| `ReviewPR.local.md` | 2 | Changed-file selection + diagnostic grouping |
 
-17 eval blocks across 17 reusable components. 5 policy documents
-and `ReviewBody` have zero. The documents a team edits day-to-day
-contain no JavaScript.
+The authored Markdown keeps the review prompts and policy composition. The
+procedural components are typed TypeScript modules, while only short binding
+adapters remain in the two root documents.
 
 ---
 
@@ -1334,24 +1316,21 @@ and `style: "warn"` enabled (14 bloat-relevant rules). All oxlint
 invocations in capture blocks reference this config via
 `--config .reviews/.oxlintrc.json`.
 
-### 13.2 Environment detection (`Doctor.md`)
+### 13.2 Environment detection (`Doctor.ts`)
 
 The Doctor component probes the environment before oxlint runs:
 oxlint binary, tsgolint binary, `node_modules/`, tsconfig, scheme
 specifier scan (`jsr:`, `npm:`), and a type-aware test run. Outputs
 a recommendation: `type-aware`, `type-aware-filtered`, or
-`syntax-only`. Includes prose narration for local visibility.
-Its JSON output is wrapped in a `` ```json `` code fence and
-extracted via `<Capture select="code[lang=json]">` (see executable.md spec
-§6.5), isolating the structured data from surrounding narration.
+`syntax-only`. The typed function component returns the bounded Doctor
+object directly; raw process output never becomes a document binding.
 
 ### 13.3 PR-scoped analysis
 
-PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) scope oxlint
-to changed `.ts`/`.tsx` files only via `git diff --name-only` +
-`xargs`. Density against `pr.stats.additions` is only meaningful
-when diagnostics come from the same files the additions are in.
-Repo analysis entry points run on everything.
+PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) pass the parsed changed
+`.ts`/`.tsx` paths to the typed `OxlintDiagnostics` component. Density against
+`pr.stats.additions` is only meaningful when diagnostics come from the same
+files the additions are in. Repo analysis entry points run on everything.
 
 ### 13.4 Density calibration
 
@@ -1422,3 +1401,36 @@ Local runs skip issue creation (no `GITHUB_TOKEN` → return empty).
 lint-plugins/
   no-scheme-specifiers.ts          Deno lint plugin
 ```
+
+## 14. Current review-infrastructure boundary
+
+The CI entrypoints are declarative compositions. Their executable shape is:
+
+```markdown
+<Output>
+  <GitHubAuth>
+    <ReviewSetup />
+    <ReviewContext as="context" />
+    <Doctor pr={context.pr} as="doctor" />
+    <OxlintDiagnostics files={changedTsFiles} as="diagnostics" />
+    <!-- provider and policy composition -->
+  </GitHubAuth>
+</Output>
+```
+
+`Doctor`, `ReviewContext`, `RepositoryInventory`, and `OxlintDiagnostics` are
+typed function components. They use contextual runtime operations directly;
+their props and return schemas stay explicit at the module boundary. Git and
+GitHub calls use argument-array `exec` and the fluent
+`fetch().expect().json()` operations. The code-review-agent package owns diff,
+Oxlint normalization, Doctor classification, and structured result
+construction. Raw process output, response objects, and credentials remain
+inside generator-local variables; only bounded values become document
+bindings. Markdown remains responsible for the visible composition and
+provider hierarchy.
+
+The review workflow runs `deno task setup` and then `./dist/xmd`, so the binary
+and executable Markdown are from the same checkout. The two CI roots use
+`<Output>` error mode: execution failures return a failed document result and a
+nonzero CLI exit, while ordinary finding text remains successful output. The
+journal is uploaded with `if: always()` and is not parsed by Actions.
