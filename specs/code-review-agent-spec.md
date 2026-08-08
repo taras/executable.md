@@ -1077,8 +1077,9 @@ output. All rules at `"warn"` — Oxlint collects signals, not verdicts.
 reference this config via `--config .reviews/.oxlintrc.json`. The sensor
 turns off rule families that conflict with repository conventions: component
 filename casing, named-export and export-order rules, generator/function
-style rules, and mechanical import/key-order and magic-number rules. The normal
-repository lint configuration remains authoritative for those rules; this
+style rules, and mechanical import/key-order and magic-number rules (including
+`sort-imports`, `sort-keys`, and `no-magic-numbers`). The normal repository
+lint configuration remains authoritative for those rules; this
 review-only exclusion prevents the advisory report from treating required
 component structure as a finding.
 
