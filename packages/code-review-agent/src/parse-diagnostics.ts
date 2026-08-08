@@ -45,11 +45,11 @@ function groupedDiagnostics(raw: readonly OxlintDiagnostic[]): Map<string, Oxlin
   for (const diagnostic of raw) {
     const { ruleId } = diagnostic;
     const group = groups.get(ruleId);
-    if (group === undefined) {
-      groups.set(ruleId, [diagnostic]);
-    } else {
-      groups.set(ruleId, [...group, diagnostic]);
+    let next = [diagnostic];
+    if (group !== undefined) {
+      next = [...group, diagnostic];
     }
+    groups.set(ruleId, next);
   }
   return groups;
 }
