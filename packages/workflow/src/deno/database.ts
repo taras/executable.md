@@ -110,6 +110,27 @@ interface Handle {
   close(): void;
 }
 
+const DENO_CONNECTION = Symbol("executablemd.workflow.deno.connection");
+
+interface DenoWorkflowRunDatabase extends WorkflowRunDatabase {
+  readonly [DENO_CONNECTION]: RunConnection;
+}
+
+export function workflowRunConnection(database: WorkflowRunDatabase): RunConnection {
+  if (!isDenoWorkflowRunDatabase(database)) {
+    throw new WorkflowTransactionError(
+      "the WorkflowRun database is not owned by this Deno storage provider.",
+    );
+  }
+  return database[DENO_CONNECTION];
+}
+
+function isDenoWorkflowRunDatabase(
+  database: WorkflowRunDatabase,
+): database is DenoWorkflowRunDatabase {
+  return DENO_CONNECTION in database;
+}
+
 function createHandle(connection: OpenConnection): Handle {
   const { database, path, lock } = connection.connection;
 
@@ -245,7 +266,9 @@ function createHandle(connection: OpenConnection): Handle {
     },
   };
 
-  const handle: WorkflowRunDatabase = {
+  const handle: DenoWorkflowRunDatabase = {
+    [DENO_CONNECTION]: connection.connection,
+
     get record() {
       return record;
     },

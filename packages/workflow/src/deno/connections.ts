@@ -18,6 +18,7 @@ export interface RunConnection {
   readonly lock: ConnectionLock;
   readonly savepoints: SavepointManager;
   transactionOpen: boolean;
+  setClock(now: () => number): void;
   close(): void;
 }
 
@@ -80,12 +81,13 @@ function createConnection(path: string): RunConnection {
   const dofs = new CloudflareDatabase(durableStorage);
   const savepoints = createSavepointManager(database, () => connection.transactionOpen);
   connection.savepoints = savepoints;
+  let clock = Date.now;
 
   return {
     path,
     database,
     dofs,
-    filesystem: new WorkspaceFilesystem(dofs),
+    filesystem: new WorkspaceFilesystem(dofs, { now: () => clock() }),
     lock: createConnectionLock(),
     savepoints,
     get transactionOpen() {
@@ -93,6 +95,9 @@ function createConnection(path: string): RunConnection {
     },
     set transactionOpen(value: boolean) {
       connection.transactionOpen = value;
+    },
+    setClock(now: () => number): void {
+      clock = now;
     },
     close() {
       if (open) {

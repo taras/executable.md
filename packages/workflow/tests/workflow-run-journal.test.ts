@@ -39,7 +39,7 @@ import {
   WorkflowTransactionError,
 } from "../mod.ts";
 import { NoOpenTransactionError, savepoint } from "../src/deno/transaction.ts";
-import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/empty.ts";
+import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/manifest.ts";
 import {
   allowJournalInserts,
   committedEventCount,

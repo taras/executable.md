@@ -32,7 +32,7 @@ import {
   WorkflowIncompleteVersionOneError,
   WorkflowSchemaVersionError,
 } from "../storage/errors.ts";
-import { initializeEmptyWorkspace, verifyEmptyWorkspace } from "./workspace/empty.ts";
+import { initializeEmptyWorkspace, verifyWorkspace } from "./workspace/root.ts";
 
 /**
  * The bytes `XMD1` as a 32-bit integer, written into the SQLite header.
@@ -433,7 +433,7 @@ export function isUninitialized(database: DatabaseSync, path: string): boolean {
  * Structure only. Whether the rows describe the run that was asked for is a
  * separate question, asked after this one succeeds.
  */
-export function verifySchema(database: DatabaseSync, path: string): void {
+export function verifySchema(database: DatabaseSync, path: string, dofs: CloudflareDatabase): void {
   checkIntegrity(database, path);
 
   const applicationId = readPragmaNumber(database, "application_id", path);
@@ -463,7 +463,7 @@ export function verifySchema(database: DatabaseSync, path: string): void {
 
   verifyStructure(database, path);
   checkForeignKeys(database, path);
-  verifyEmptyWorkspace(database, path);
+  verifyWorkspace(database, dofs, path);
 }
 
 /**
