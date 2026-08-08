@@ -159,8 +159,8 @@ function summaryFor({
 
 function appendDoctorNotes(lines: string[], doctor: DoctorResult): void {
   if (doctor.bloatRulesMissing.length > 0) {
-    lines.push("");
     lines.push(
+      "",
       `Note: ${doctor.bloatRulesMissing.length} type-aware rules unavailable (${doctor.bloatRulesMissing.join(", ")}). Density may be understated.`,
     );
   }
