@@ -556,6 +556,34 @@ describe("Tier WS — what a run retains", () => {
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
   });
 
+  it("WS11c: an execution stop reason naming a missing event is refused", function* () {
+    const root = yield* useStorageRoot();
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const started = yield* database.beginDocumentExecution();
+      if (!started.ok) {
+        throw started.error;
+      }
+
+      const result = yield* database.finishDocumentExecution({
+        executionId: started.value.executionId,
+        status: "failed",
+        reason: { kind: "journal", eventId: "an-event-that-was-never-appended" },
+      });
+      const executions = yield* database.readDocumentExecutions();
+      if (!executions.ok) {
+        throw executions.error;
+      }
+      return { result, execution: executions.value[0] };
+    });
+
+    expect(seen.result.ok).toBe(false);
+    expect(!seen.result.ok && seen.result.error).toBeInstanceOf(WorkflowRequestError);
+    expect(seen.execution.stoppedAt).toBeUndefined();
+    expect(seen.execution.stopStatus).toBeUndefined();
+  });
+
   it("WS12: a stop reason is parsed on the way in, not only type-checked", function* () {
     const root = yield* useStorageRoot();
 
@@ -882,29 +910,63 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseFormatError);
   });
 
-  it("WS21: neither an older nor a newer schema version is read or migrated", function* () {
+  it("WS21: an unsupported schema version is not read or migrated", function* () {
     const root = yield* useStorageRoot();
+    const path = runPath(root, "run-2");
 
-    for (const version of [0, 2]) {
-      const path = runPath(root, `run-${version}`);
+    const result = yield* withStorage(root, function* () {
+      yield* createRun({ runId: "run-2" });
+      tamper(path, (database) => {
+        database.exec("PRAGMA user_version = 2");
+      });
+      return yield* lookup("run-2");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowSchemaVersionError);
+
+    tamper(path, (database) => {
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+      expect(database.prepare("PRAGMA application_id").get()?.["application_id"]).toBe(
+        APPLICATION_ID,
+      );
+    });
+  });
+
+  it("WS21a: XMD-identified version zero is partial initialization", function* () {
+    const root = yield* useStorageRoot();
+    const partials: Array<[string, (database: DatabaseSync) => void]> = [
+      [
+        "identified-v0",
+        (database) => {
+          database.exec(`PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = 0`);
+        },
+      ],
+      [
+        "identified-v0-dofs",
+        (database) => {
+          database.exec(`
+            PRAGMA application_id = ${APPLICATION_ID};
+            PRAGMA user_version = 0;
+            CREATE TABLE vfs_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+          `);
+        },
+      ],
+    ];
+
+    for (const [runId, initialize] of partials) {
+      const path = runPath(root, runId);
+      tamper(path, initialize);
+      const before = readFileSync(path);
 
       const result = yield* withStorage(root, function* () {
-        yield* createRun({ runId: `run-${version}` });
-        tamper(path, (database) => {
-          database.exec(`PRAGMA user_version = ${version}`);
-        });
-        return yield* lookup(`run-${version}`);
+        return yield* lookup(runId);
       });
 
       expect(result.ok).toBe(false);
-      expect(!result.ok && result.error).toBeInstanceOf(WorkflowSchemaVersionError);
-
-      tamper(path, (database) => {
-        expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(version);
-        expect(database.prepare("PRAGMA application_id").get()?.["application_id"]).toBe(
-          APPLICATION_ID,
-        );
-      });
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+      expect(!result.ok && result.error).not.toBeInstanceOf(WorkflowSchemaVersionError);
+      expect(readFileSync(path)).toEqual(before);
     }
   });
 

@@ -152,9 +152,11 @@ imports them or detects the active runtime. The absence of a provider is
 reported rather than answered with an empty store: a run that appears to start
 and retains nothing has not started.
 
-A storage handle is owned by the scope that opened it. Its connection closes
-through ordinary teardown, and a call after that scope closes fails rather than
-reopening anything.
+A storage handle is a lease owned by the scope that opened it. Lease teardown
+makes that handle unusable without closing the run's physical connection or
+invalidating another handle. The Deno provider owns the authoritative
+SQLite/DOFS connection for each canonical workflow-run database path and closes
+it at provider-scope teardown after its child scopes finish.
 
 ### Identity is separate from retrieval
 
@@ -198,6 +200,15 @@ A stop reason is a categorical host code or a reference to an already-filtered
 journal event. Arbitrary exception text is never duplicated outside the journal
 that filtered it.
 
+WorkflowRun schema version 1 is complete in place. It contains the run records,
+filtered journal, pinned Cloudflare DOFS version-5 structure, immutable
+Workspace-root tables, current-root state, and a non-null Workspace-root
+association on every journal event. A fresh run starts with one
+content-addressed root manifest describing only the root directory, empty
+retained manifest and blob reference sets, and the corresponding root-only DOFS
+frontier. This storage layer recognizes that canonical empty frontier; it does
+not publish nonempty roots or Workspace mutations.
+
 Which status transitions are legal, and what a caller may do to a run in each
 of them, is lifecycle policy applied above storage.
 
@@ -215,10 +226,13 @@ public identifier.
 ### One database at a time, and a transaction a caller can hold
 
 Operations on one run's storage are serialized, and each runs inside a
-transaction. Turns belong to the storage a run lives in rather than to a handle
-on it, so two handles for one run take turns instead of contending — a host
-whose storage is reached synchronously would otherwise stop while a second
-handle waited for a transaction the first one cannot resume to finish.
+transaction. The Deno provider's per-path entry owns the one physical SQLite
+connection, the one Cloudflare DOFS wrapper and Workspace filesystem, the
+cooperative connection queue, and the savepoint allocator. Turns belong to that
+entry rather than to a handle, so two leases for one run take turns instead of
+contending — a host whose storage is reached synchronously would otherwise stop
+while a second handle waited for a transaction the first one cannot resume to
+finish. Different workflow-run paths have independent entries.
 
 A caller that must publish several changes together holds the transaction
 itself and receives a handle for taking part in it. Enlistment travels with
@@ -252,6 +266,10 @@ not reading the names of its parts. Storage whose own header claims a version
 it is not shaped like is damage rather than a version this build has not
 learned. Storage is initialized only when it is pristine: something that merely
 looks unused is not.
+
+Complete version 1 is the first XMD schema. A database carrying the XMD
+application identity with schema version zero is a partial initialization and
+therefore damage, not a supported historical version.
 
 Records are held to what they mean and not only to the types they are stored
 in. A retained timestamp is an instant, a retained identity is not empty, and
@@ -366,12 +384,17 @@ again.
 ## Local Workspace topology
 
 The local workflow host owns SQLite directly in Deno and reuses Cloudflare's
-DOFS filesystem layer behind the provider-neutral Workspace boundary. The
-journal and DOFS adapter share the operation-scoped transaction. One
-authoritative host-owned DOFS connection serves each workflow database, and the
-host serializes its Workspace-local effect transactions. A second long-lived
-DOFS connection is not a coherent reader because provider caches may retain
-negative entries across another connection's commit.
+DOFS filesystem layer behind the provider-neutral Workspace boundary. One
+authoritative provider-owned connection entry serves each canonical workflow
+database path until provider teardown. The journal and DOFS adapter use that
+same SQLite connection; Cloudflare's synchronous initialization transactions
+become uniquely named savepoints inside XMD's caller-owned transaction. A
+second long-lived DOFS connection is not a coherent reader because provider
+caches may retain negative entries across another connection's commit.
+
+Complete schema version 1 retains the canonical empty Workspace root and its
+root-only live frontier. The provider exposes no Workspace mutation operation
+and publishes no nonempty retained root at this layer.
 
 The initial topology requires neither writable FUSE nor native subprocess
 access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed
@@ -660,7 +683,7 @@ Status is measured against main.
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
-| workflow run storage | creates or compatibly finds one run by public run ID, and retains its identity, state, document executions and filtered journal | built on main |
+| workflow run storage | creates or compatibly finds one run by public run ID, and retains its identity, state, document executions, filtered journal and canonical empty Workspace root through one provider-owned connection entry | built on the #365 stack; Workspace mutation publication is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
@@ -671,7 +694,7 @@ Status is measured against main.
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | stores the authoritative local Workspace in SQLite | persistence POC complete; effect-transaction integration unbuilt |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path and recognizes the complete-v1 canonical empty frontier | built on the #365 stack; nonempty roots and effect-transaction integration are unbuilt |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |
