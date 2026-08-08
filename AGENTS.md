@@ -50,7 +50,7 @@ then runs every build phase offline — including a release compile for
 the content and modes of `node_modules`, the cache's dependency roots, and
 `deno.lock` after each one. It then changes `site/` in that clone on purpose,
 takes the changed tree as its baseline, and runs the battery once with the site
-pair applying — all ten commands together, selected by a real change rather
+pair applying — every command together, selected by a real change rather
 than by a fixture.
 
 Builds and checks are held to different claims there. A build is cache-pure:
@@ -131,11 +131,13 @@ here:
   root `deno.json`. Its `exclude` list holds the paths that must stay
   unchecked: the deliberately-malformed `scripts/tests/fixtures`; `.xmd-eval`,
   where a running document writes the `.ts` files its eval blocks compile to;
-  and `**/npm`, the dnt build's output, which a test rewrites while the battery
-  runs. All three are generated and belong to whichever command is producing
-  them — type-checking one mid-write fails on a partial file, and fails the
-  whole workspace check for a file nobody committed. The same output is skipped
-  by `lint` and `fmt`, for the same reason.
+  `**/npm`, the dnt build's output, which a test rewrites while the battery
+  runs; and the pinned Cloudflare DOFS TypeScript inputs and declarations whose
+  deterministic JavaScript and declaration output is checked instead. Generated
+  paths belong to whichever command is producing them — type-checking one
+  mid-write fails on a partial file, and fails the whole workspace check for a
+  file nobody committed. The exact Cloudflare DOFS snapshot is skipped by
+  `lint` and `fmt` because its drift verifier owns byte identity.
 - `test:node` and `test:bun` derive the same corpus through
   `scripts/lib/test-files.ts`, which walks `tests/` beneath each workspace
   member plus `scripts/tests/` — that boundary, and nothing else. A new

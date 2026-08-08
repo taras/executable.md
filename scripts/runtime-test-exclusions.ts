@@ -37,6 +37,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/cloudflare-dofs-vendor.test.ts",
+    reason:
+      "runs the no-network vendored-source verifier under the Deno executable against altered temporary snapshots",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
+  {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
       "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
