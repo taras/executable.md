@@ -26,7 +26,6 @@
  */
 
 import { dirname, isAbsolute } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { ensureDir, exists } from "@effectionx/fs";
 import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
 import {
@@ -57,18 +56,13 @@ import {
 } from "../storage/members.ts";
 import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
-import { type ConnectionLocks, createConnectionLocks } from "./lock.ts";
+import {
+  createWorkflowRunConnections,
+  type RunConnection,
+  type WorkflowRunConnections,
+} from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
-
-/**
- * How long a connection waits for another host's write lock.
- *
- * SQLite is reached synchronously, so this is also how long the thread can
- * stop. Long enough for a transaction that is committing, short enough that a
- * host holding a lock it will never release is reported rather than waited on.
- */
-const BUSY_TIMEOUT_MS = 5_000;
 
 const INSERT_RUN = `INSERT INTO workflow_run
   (id, run_id, definition, base, props, status, created_at, updated_at)
@@ -100,15 +94,18 @@ export interface WorkflowRunStorageOptions {
  */
 export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
   const root = authorizedRoot(options.root);
-  const locks = createConnectionLocks();
+  const connections = createWorkflowRunConnections();
+  yield* ensure(() => {
+    connections.close();
+  });
 
   yield* WorkflowRunStorage.around(
     {
       *create([request]) {
-        return yield* createWorkflowRun(root, locks, request);
+        return yield* createWorkflowRun(root, connections, request);
       },
       *lookup([runId]) {
-        return yield* lookupWorkflowRun(root, locks, runId);
+        return yield* lookupWorkflowRun(root, connections, runId);
       },
     },
     { at: "min" },
@@ -144,7 +141,7 @@ interface CheckedRequest {
 
 function* createWorkflowRun(
   root: string,
-  locks: ConnectionLocks,
+  connections: WorkflowRunConnections,
   request: CreateWorkflowRunRequest,
 ): Operation<Result<WorkflowRunDatabase>> {
   const checked = checkRequest(request);
@@ -158,15 +155,15 @@ function* createWorkflowRun(
     yield* ensureDir(dirname(path));
   }
 
-  const lock = locks.at(path);
-
-  return yield* withConnection(path, function* (database): Operation<Result<WorkflowRunDatabase>> {
+  try {
+    const connection = connections.at(path);
+    const { lock } = connection;
     // Held across initialization, so a second caller creating the same run
     // waits here rather than inside a synchronous `BEGIN IMMEDIATE` that
     // would stop the host while the first one is still committing.
     const stored = yield* scoped(function* () {
       yield* lock.hold();
-      return establish(database, path, wanted);
+      return establish(connection, path, wanted);
     });
     if (!stored.ok) {
       return stored;
@@ -182,13 +179,15 @@ function* createWorkflowRun(
       return Err(new WorkflowRunConflictError(wanted.runId, differing));
     }
 
-    return Ok(yield* openWorkflowRunDatabase({ database, path, record, lock }));
-  });
+    return Ok(yield* openWorkflowRunDatabase({ connection, record }));
+  } catch (error) {
+    return refusal(error, path);
+  }
 }
 
 function* lookupWorkflowRun(
   root: string,
-  locks: ConnectionLocks,
+  connections: WorkflowRunConnections,
   runId: string,
 ): Operation<Result<WorkflowRunDatabase>> {
   const checked = checkRunId(runId);
@@ -205,9 +204,9 @@ function* lookupWorkflowRun(
     return Err(new WorkflowRunNotFoundError(wanted));
   }
 
-  const lock = locks.at(path);
-
-  return yield* withConnection(path, function* (database): Operation<Result<WorkflowRunDatabase>> {
+  try {
+    const connection = connections.at(path);
+    const { database, lock } = connection;
     const record = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
       yield* lock.hold();
       try {
@@ -225,81 +224,10 @@ function* lookupWorkflowRun(
       return Err(new WorkflowRunIdMismatchError(runId, path));
     }
 
-    return Ok(yield* openWorkflowRunDatabase({ database, path, record: record.value, lock }));
-  });
-}
-
-/**
- * Open the file, and close it again unless a handle takes ownership.
- *
- * A refused database must not leave a connection open on a file the caller is
- * about to be told is unusable — that connection would hold a lock nothing was
- * going to release until the process ended. That includes a refusal raised on
- * the way to producing the handle: reading a row while the handle is being
- * built is as capable of finding an unreadable record as reading one later.
- *
- * Between opening the file and handing it to a handle there is checking to do,
- * and a caller may be cancelled during it. The connection is therefore given
- * up through ordinary teardown as well, so an interrupted open closes what it
- * opened rather than leaving the file locked by a connection nobody holds.
- */
-function* withConnection(
-  path: string,
-  body: (database: DatabaseSync) => Operation<Result<WorkflowRunDatabase>>,
-): Operation<Result<WorkflowRunDatabase>> {
-  let database: DatabaseSync;
-  try {
-    database = new DatabaseSync(path);
+    return Ok(yield* openWorkflowRunDatabase({ connection, record: record.value }));
   } catch (error) {
     return refusal(error, path);
   }
-
-  let adopted = false;
-  let released = false;
-
-  function release(): void {
-    if (adopted || released) {
-      return;
-    }
-    released = true;
-    database.close();
-  }
-
-  // Registered immediately, before the connection is even configured: from
-  // here on there is an open file handle, and every way out of this function —
-  // a failing pragma, a refusal, cancellation part-way through the checking —
-  // has to close it. Once a handle owns the connection this is a no-op and the
-  // handle's own teardown closes it.
-  yield* ensure(release);
-
-  try {
-    // Connection settings, not changes to the file. Without a busy timeout
-    // SQLite refuses a contended write lock immediately, so a second host
-    // reaching the same run would be told the database is busy rather than
-    // waiting the moment it takes the first one to commit. Foreign keys are
-    // off by default and per connection, and without them a stop reason could
-    // name a journal event that is not there.
-    database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    database.exec("PRAGMA foreign_keys = ON");
-  } catch (error) {
-    release();
-    return refusal(error, path);
-  }
-
-  let result: Result<WorkflowRunDatabase>;
-  try {
-    result = yield* body(database);
-  } catch (error) {
-    release();
-    return refusal(error, path);
-  }
-
-  if (result.ok) {
-    adopted = true;
-  } else {
-    release();
-  }
-  return result;
 }
 
 /**
@@ -311,38 +239,44 @@ function* withConnection(
  * run in between.
  */
 function establish(
-  database: DatabaseSync,
+  connection: RunConnection,
   path: string,
   request: CheckedRequest,
 ): Result<WorkflowRunRecord> {
+  const { database } = connection;
   try {
     if (!isUninitialized(database, path)) {
       verifySchema(database, path);
     }
 
     database.exec("BEGIN IMMEDIATE");
+    connection.transactionOpen = true;
     try {
       if (isUninitialized(database, path)) {
         const stamp = new Date().toISOString();
-        initializeSchema(database);
-        database
-          .prepare(INSERT_RUN)
-          .run(
-            request.runId,
-            canonicalJson(definitionToJson(request.definition)),
-            request.base,
-            canonicalJson(request.props),
-            stamp,
-            stamp,
-          );
+        initializeSchema(database, connection.dofs, () => {
+          database
+            .prepare(INSERT_RUN)
+            .run(
+              request.runId,
+              canonicalJson(definitionToJson(request.definition)),
+              request.base,
+              canonicalJson(request.props),
+              stamp,
+              stamp,
+            );
+        });
       } else {
         verifySchema(database, path);
       }
 
+      verifySchema(database, path);
       const record = readRunRow(database, path);
+      connection.transactionOpen = false;
       database.exec("COMMIT");
       return Ok(record);
     } catch (error) {
+      connection.transactionOpen = false;
       database.exec("ROLLBACK");
       throw error;
     }

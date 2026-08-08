@@ -17,8 +17,8 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import { type Context, createContext, type Operation } from "effection";
-import type { DatabaseSync } from "node:sqlite";
 import { WorkflowTransactionError } from "../storage/errors.ts";
+import type { SavepointManager } from "./savepoints.ts";
 
 /**
  * Every database the current scope holds a transaction on.
@@ -100,11 +100,9 @@ export const savepoint: TransactionApi["savepoint"] = Transaction.operations.sav
 
 /** What the open transaction installs so `savepoint()` can answer. */
 export function useTransactionSavepoints(
-  database: DatabaseSync,
+  savepoints: SavepointManager,
   isOpen: () => boolean,
 ): Operation<void> {
-  let depth = 0;
-
   return Transaction.around(
     {
       // deno-lint-ignore require-yield
@@ -115,20 +113,7 @@ export function useTransactionSavepoints(
           );
         }
 
-        const name = `xmd_savepoint_${depth}`;
-        depth += 1;
-        database.exec(`SAVEPOINT ${name}`);
-        try {
-          const value = body();
-          database.exec(`RELEASE ${name}`);
-          return value;
-        } catch (error) {
-          database.exec(`ROLLBACK TO ${name}`);
-          database.exec(`RELEASE ${name}`);
-          throw error;
-        } finally {
-          depth -= 1;
-        }
+        return savepoints.synchronous(body);
       },
     },
     { at: "min" },

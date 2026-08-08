@@ -178,9 +178,10 @@ after an interruption. The Deno host installs its own with
 entrypoint is the only place SQLite, run-id hashing, filesystem paths and host
 behavior appear. Shared modules import none of them and detect no runtime.
 
-A handle belongs to the scope that asked for it. Its connection closes through
-ordinary teardown, and every later call answers with a closed-handle failure
-rather than reopening the file.
+A handle is a lease belonging to the scope that asked for it. Lease teardown
+makes that handle unusable, and every later call answers with a closed-handle
+failure rather than reopening the file. It does not close the run's physical
+connection or invalidate another lease.
 
 ### 9.1 What identifies a run
 
@@ -264,6 +265,20 @@ collision or tampering, reported as its own failure and left unchanged.
   it was last cleared.
 - The filtered journal.
 
+Complete WorkflowRun schema version 1 also contains the pinned Cloudflare DOFS
+version-5 tables and indexes, immutable Workspace-root tables, exact root-to-
+manifest and root-to-blob reference tables, singleton current-root state, and a
+non-null Workspace-root association on every journal event. XMD schema version
+1, DOFS schema version 5 and Workspace-root format version 1 are independent
+version domains.
+
+A fresh database contains one content-addressed Workspace root whose canonical
+manifest describes only `/` as a directory. Its retained manifest and blob
+reference sets are empty, its current-root pointer names that root, and its DOFS
+frontier contains only the corresponding root directory. This implementation
+recognizes that canonical empty frontier and rejects any other live frontier as
+corruption. It exposes no Workspace mutation through the storage handle.
+
 ### 9.5 The journal
 
 `WorkflowRunDatabase.journal` is an ordinary `DurableStream`, so `durableRun`
@@ -276,6 +291,10 @@ An event's opaque id is stored separately from its physical position. The id is
 stable once written and is what a journal stop reason points at; the position
 is what ordering uses and is not a public identifier.
 
+Every journal row also names the retained Workspace root current when the row
+is inserted. Existing non-Workspace appends use the canonical empty current
+root and otherwise retain their established behavior.
+
 Events arrive already filtered:
 
 ```text
@@ -286,11 +305,18 @@ Storage performs no filtering of its own — a second policy in a second place i
 a second thing to keep in agreement with the first — and a gate that rejects or
 is cancelled leaves no row at all.
 
-### 9.6 One connection, one operation
+### 9.6 One authoritative connection, one operation
 
-Operations on one handle are serialized, and each runs inside a transaction. A
-caller that needs several statements published together holds the transaction
-itself:
+The Deno provider maps each canonical workflow-run database path to one
+authoritative entry. The entry owns one physical SQLite connection, one
+Cloudflare DOFS database wrapper, one Workspace filesystem, one cooperative
+connection queue and one synchronous savepoint allocator. It remains alive
+until provider-scope teardown, after the provider's child scopes finish.
+Different database paths have independent entries.
+
+Operations through every lease on one entry are serialized, and each runs
+inside a transaction. A caller that needs several statements published
+together holds the transaction itself:
 
 ```ts
 yield* database.transact(function* (transaction) {
@@ -312,10 +338,14 @@ committing first would leave those appends to publish themselves, outside the
 transaction that was meant to decide about them. The transaction is closed to
 further appends before the commit rather than after it.
 
-Turns are taken per database rather than per handle. Two handles on one run
-share them, so a second handle waits while the first holds the database instead
-of entering SQLite and stopping the host. Contention between processes remains
-SQLite's own.
+Turns are taken through the authoritative entry rather than per handle. Two
+leases on one run share them, so a second lease waits cooperatively while the
+first holds the connection instead of entering synchronous SQLite and stopping
+the host. Contention between processes remains SQLite's own.
+
+Cloudflare's synchronous transactions use uniquely named SQLite savepoints on
+that same connection and only while XMD's caller-owned transaction is open.
+DOFS does not begin, commit or roll back a top-level transaction.
 
 A transaction opened inside another on the same database is refused rather than
 nested, and so is an ordinary operation called from inside a body — that call
@@ -351,6 +381,10 @@ A database is initialized only when it is pristine — no application id, no
 schema version and not one object anybody created. A file carrying a version
 but no tables, or tables belonging to something else, is not empty.
 
+Complete version 1 is the first XMD schema. An XMD-identified database carrying
+schema version zero is a partial initialization and is reported as corrupt. A
+genuinely unsupported nonzero version remains a schema-version refusal.
+
 Rows are held to what they mean and not only to their column types: a timestamp
 is an instant, an identity is not the empty string, and props are an object.
 
@@ -363,12 +397,14 @@ An incompatible or damaged database is described and left exactly as it was
 found. Nothing initializes, migrates, truncates, deletes or replaces one, and a
 lookup that finds nothing creates no file.
 
-Version 1 reads and writes version 1. An older version with no implemented
-migration, and every newer version, are refused without the file being touched.
+Version 1 reads and writes version 1. Unsupported versions are refused without
+the file being touched; partial version-1 initialization is corruption and is
+also left unchanged.
 
 ## 10. Intentionally excluded
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
-leases and stale-owner recovery; Workspace filesystem storage and its
-transactions; history checkpoints and forks; workflow-owned worktrees; and
-deterministic Git and GitHub effects.
+leases and stale-owner recovery; Workspace mutations, nonempty retained roots
+and restoration; provider-level Workspace effect publication; history
+checkpoints and forks; workflow-owned worktrees; and deterministic Git and
+GitHub effects.

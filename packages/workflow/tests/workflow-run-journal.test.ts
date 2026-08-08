@@ -32,12 +32,14 @@ import { createSecretScanner, SecretDetectedError } from "@executablemd/core";
 import { all, ensure, type Operation, race, sleep, spawn, suspend, withResolvers } from "effection";
 import {
   WorkflowRecordMalformedError,
+  WorkflowRequestError,
   WorkflowRunConflictError,
   WorkflowRunStorage,
   type WorkflowRunTransaction,
   WorkflowTransactionError,
 } from "../mod.ts";
 import { NoOpenTransactionError, savepoint } from "../src/deno/transaction.ts";
+import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/empty.ts";
 import {
   allowJournalInserts,
   committedEventCount,
@@ -154,6 +156,25 @@ describe("Tier WJ — appending and replaying the journal", () => {
 
     expect(stored).toEqual([event]);
     expect(serializeDurableEvent(stored[0])).toBe(serializeDurableEvent(event));
+  });
+
+  it("WJ2b: every ordinary journal append records the current retained root", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* database.journal.append(yielded("first", "one"));
+      yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("second", "two"));
+      });
+    });
+
+    tamper(path, (database) => {
+      expect(
+        database.prepare("SELECT DISTINCT workspace_root_id FROM journal_events").all(),
+      ).toEqual([{ workspace_root_id: EMPTY_WORKSPACE_ROOT_ID }]);
+    });
   });
 
   it("WJ3: an event keeps its opaque id, across reads and across processes", function* () {
@@ -341,6 +362,41 @@ describe("Tier WJ — what reaches SQLite", () => {
     expect(seen.result.ok).toBe(false);
     // The accepted append went away with the refused one.
     expect(seen.events).toEqual([]);
+  });
+
+  it("WJ5e: a retained-manifest FK failure stays a storage failure", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    const seen = yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      tamper(path, (raw) => {
+        raw.exec(`
+          CREATE TRIGGER fail_second_journal_insert
+          BEFORE INSERT ON journal_events
+          WHEN (SELECT COUNT(*) FROM journal_events) = 1
+          BEGIN
+            INSERT INTO workspace_root_manifest_refs (root_id, manifest_hash)
+            VALUES ('${EMPTY_WORKSPACE_ROOT_ID}', X'00');
+          END;
+        `);
+      });
+
+      const result = yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(yielded("companion", "companion"));
+        yield* transaction.journal.append(yielded("fails-on-manifest-fk", "doomed"));
+      });
+
+      return { result, events: yield* database.journal.readAll() };
+    });
+
+    expect(seen.result.ok).toBe(false);
+    expect(!seen.result.ok && seen.result.error).toBeInstanceOf(Error);
+    expect(!seen.result.ok && seen.result.error).not.toBeInstanceOf(WorkflowRequestError);
+    expect(seen.events).toEqual([]);
+    tamper(path, (database) => {
+      expect(database.prepare("SELECT * FROM workspace_root_manifest_refs").all()).toEqual([]);
+    });
   });
 
   it("WJ6: a gate cancelled mid-scan produces no row either", function* () {
