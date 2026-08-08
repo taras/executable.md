@@ -124,6 +124,19 @@ export class WorkflowDatabaseCorruptError extends WorkflowStorageError {
   }
 }
 
+/** The unsupported pre-release schema that claimed the now-complete version 1. */
+export class WorkflowIncompleteVersionOneError extends WorkflowDatabaseCorruptError {
+  override name = "WorkflowIncompleteVersionOneError";
+
+  constructor(path: string) {
+    super(path, "it contains the incomplete pre-release version-1 structure");
+    this.message =
+      `The workflow-run database at ${path} contains the unsupported incomplete ` +
+      "pre-release version-1 structure. It is not migrated or changed. Delete and recreate " +
+      "this pre-release database with the complete version-1 provider.";
+  }
+}
+
 /** A stored row does not describe what its column claims to hold. */
 export class WorkflowRecordMalformedError extends WorkflowStorageError {
   override name = "WorkflowRecordMalformedError";
