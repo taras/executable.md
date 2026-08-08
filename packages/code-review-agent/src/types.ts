@@ -95,6 +95,7 @@ export interface DoctorResult {
   filesAnalyzed: number;
   filesSkipped: number;
   importErrors: number;
+  availableRuleIds: string[];
   bloatRulesAvailable: string[];
   bloatRulesMissing: string[];
   recommendation: "type-aware" | "type-aware-filtered" | "syntax-only";

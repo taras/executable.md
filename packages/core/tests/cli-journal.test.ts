@@ -151,4 +151,71 @@ describe("CLI journal integration", () => {
       (yield* readJournal(journalPath)).some((event) => event.description?.type === "exec"),
     ).toBe(true);
   });
+
+  it("CJ7: a review-style Output root exits zero for ordinary finding text", function* () {
+    const tmpDir = makeTmpDir();
+    const documentPath = path.join(tmpDir, "review.md");
+    const journalPath = path.join(tmpDir, "review.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+
+    yield* writeTextFile(
+      documentPath,
+      [
+        "<Output>",
+        "",
+        "<!-- ERROR: an ordinary review finding, not an execution error -->",
+        "",
+        "🔴 Finding text is report content, not an execution failure.",
+        "",
+        "</Output>",
+      ].join("\n"),
+    );
+
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).expect();
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Finding text is report content");
+  });
+
+  it("CJ8: an execution error beneath Output exits nonzero without postflight parsing", function* () {
+    const tmpDir = makeTmpDir();
+    const documentPath = path.join(tmpDir, "review.md");
+    const journalPath = path.join(tmpDir, "review.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+
+    yield* writeTextFile(
+      documentPath,
+      ["<Output>", "", "<MissingReviewComponent />", "", "</Output>"].join("\n"),
+    );
+
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).join();
+
+    expect(result.code).not.toBe(0);
+  });
+
+  it("CJ9: a failed Output run leaves its configured journal available", function* () {
+    const tmpDir = makeTmpDir();
+    const documentPath = path.join(tmpDir, "review.md");
+    const journalPath = path.join(tmpDir, "review.jsonl");
+    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
+
+    yield* writeTextFile(
+      documentPath,
+      ["<Output>", "", "<MissingReviewComponent />", "", "</Output>"].join("\n"),
+    );
+
+    const result = yield* runCli(
+      ["run", documentPath, `--journal=${journalPath}`, "--raw"],
+      RUN,
+    ).join();
+
+    expect(result.code).not.toBe(0);
+    expect(yield* exists(journalPath)).toBe(true);
+  });
 });

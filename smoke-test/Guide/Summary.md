@@ -39,7 +39,7 @@ cat <<'TABLE'
 | attached-service provider | persist ephemeral eval scopes middleware |
 | provider pattern          | StubProvider installs Sample middleware  |
 | per-component eval scope  | Each provider gets isolated middleware   |
-| props in env.values       | model prop available in eval blocks     |
+| props namespace in env.values | `props.model` available in eval blocks |
 | Sample component          | <Sample prompt>, <Sample> with children |
 | output() function         | Sample component calls output()         |
 | renderChildren() closure  | Sample component captures children      |

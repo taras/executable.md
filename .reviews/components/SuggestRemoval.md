@@ -12,12 +12,19 @@ props:
 ---
 
 ```ts eval
-const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
 const headSha = process.env.HEAD_SHA;
 
-if (!token || !repo || !prNumber || !headSha) {
+function githubHeaders() {
+  return {
+    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+    "Accept": "application/vnd.github+json",
+    "Content-Type": "application/json",
+  };
+}
+
+if (!process.env.GITHUB_TOKEN || !repo || !prNumber || !headSha) {
   return "";
 }
 
@@ -25,14 +32,8 @@ const [owner, name] = repo.split("/");
 const api = `https://api.github.com/repos/${owner}/${name}`;
 const graphql = "https://api.github.com/graphql";
 
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-  "Content-Type": "application/json",
-};
-
 const existingReviews = yield* fetch(
-  `${api}/pulls/${prNumber}/reviews`, { headers }
+  `${api}/pulls/${prNumber}/reviews`, { headers: githubHeaders() }
 ).expect().json();
 
 const botReviews = existingReviews.filter(r =>
@@ -44,7 +45,7 @@ for (const review of botReviews) {
   try {
     yield* fetch(`${api}/pulls/${prNumber}/reviews/${review.id}`, {
       method: "DELETE",
-      headers,
+      headers: githubHeaders(),
     }).expect();
   } catch {
     // Review may already be submitted (can't delete submitted reviews).
@@ -52,7 +53,7 @@ for (const review of botReviews) {
 }
 
 // 2. React 👍 on dismiss replies and resolve their threads
-if (dismissedReplies.length > 0) {
+if (props.dismissedReplies.length > 0) {
   // Fetch review threads via GraphQL to get thread node IDs
   const threadsQuery = `query($owner: String!, $name: String!, $pr: Int!) {
     repository(owner: $owner, name: $name) {
@@ -74,7 +75,7 @@ if (dismissedReplies.length > 0) {
   try {
     const threadsResult = yield* fetch(graphql, {
       method: "POST",
-      headers,
+      headers: githubHeaders(),
       body: JSON.stringify({
         query: threadsQuery,
         variables: { owner, name, pr: parseInt(prNumber, 10) },
@@ -92,13 +93,13 @@ if (dismissedReplies.length > 0) {
     // If GraphQL fails, skip thread resolution — 👍 reaction still works
   }
 
-  for (const reply of dismissedReplies) {
+  for (const reply of props.dismissedReplies) {
     // React 👍
     if (reply.replyId) {
       try {
         yield* fetch(`${api}/pulls/comments/${reply.replyId}/reactions`, {
           method: "POST",
-          headers,
+          headers: githubHeaders(),
           body: JSON.stringify({ content: "+1" }),
         }).expect();
       } catch {}
@@ -111,7 +112,7 @@ if (dismissedReplies.length > 0) {
         try {
           yield* fetch(graphql, {
             method: "POST",
-            headers,
+            headers: githubHeaders(),
             body: JSON.stringify({
               query: `mutation($threadId: ID!) {
                 resolveReviewThread(input: { threadId: $threadId }) {
@@ -128,8 +129,8 @@ if (dismissedReplies.length > 0) {
 }
 
 // 3. Post new review with pending findings
-if (findings.length > 0) {
-  const comments = findings.map(f => ({
+if (props.findings.length > 0) {
+  const comments = props.findings.map(f => ({
     path: f.file,
     line: f.lineNumber,
     body: `Redundant comment — restates what the code does.\n\`\`\`suggestion\n\`\`\``,
@@ -137,11 +138,11 @@ if (findings.length > 0) {
 
   yield* fetch(`${api}/pulls/${prNumber}/reviews`, {
     method: "POST",
-    headers,
+    headers: githubHeaders(),
     body: JSON.stringify({
       commit_id: headSha,
       event: "COMMENT",
-      body: `Found ${findings.length} redundant comment${findings.length === 1 ? "" : "s"}. Inline suggestions to remove them below.`,
+      body: `Found ${props.findings.length} redundant comment${props.findings.length === 1 ? "" : "s"}. Inline suggestions to remove them below.`,
       comments,
     }),
   }).expect();

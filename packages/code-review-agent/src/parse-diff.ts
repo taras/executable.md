@@ -8,7 +8,7 @@
 
 import type { PR, DiffFile, DiffHunk, DiffLine } from "./types.ts";
 
-const DIFF_PREVIEW_MAX = 80_000;
+const DIFF_PREVIEW_MAX = 40_000;
 
 const EXTENSION_LANGUAGE: Record<string, string> = {
   ".ts": "typescript",

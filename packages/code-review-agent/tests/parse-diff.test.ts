@@ -145,7 +145,7 @@ describe("parseDiff", () => {
     expect(pr.files[0].isTypeDeclaration).toBe(true);
   });
 
-  it("truncates diffPreview at 80K chars", function* () {
+  it("truncates diffPreview at 40K chars", function* () {
     const longLine = "x".repeat(100_000);
     const rawDiff = [
       "diff --git a/big.ts b/big.ts",
@@ -160,7 +160,7 @@ describe("parseDiff", () => {
     const pr = parseDiff(rawDiff, rawFiles, META);
 
     expect(pr.addedSource.length).toBe(100_000);
-    expect(pr.diffPreview.length).toBe(80_000);
+    expect(pr.diffPreview.length).toBe(40_000);
   });
 
   it("computes directories at depth 2", function* () {

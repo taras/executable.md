@@ -35,6 +35,7 @@ function makeDoctor(overrides: Partial<DoctorResult> = {}): DoctorResult {
     filesAnalyzed: 10,
     filesSkipped: 0,
     importErrors: 0,
+    availableRuleIds: [],
     bloatRulesAvailable: [],
     bloatRulesMissing: [],
     recommendation: "type-aware",

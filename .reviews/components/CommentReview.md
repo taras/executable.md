@@ -12,7 +12,7 @@ props:
 // ---------------------------------------------------------------------------
 // 1. Build comment/code pairs with file/line metadata
 const pairs = [];
-const lines = pr.added.filter(l => !l.isTest);
+const lines = props.pr.added.filter(l => !l.isTest);
 
 for (let i = 0; i < lines.length - 1; i++) {
   const current = lines[i].content.trim();
@@ -39,24 +39,26 @@ let checklistMd = "";
 
 // ---------------------------------------------------------------------------
 // 2. Fetch previous bot review comments and human replies
-const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 const prNumber = process.env.PR_NUMBER;
+
+function githubHeaders() {
+  return {
+    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+    "Accept": "application/vnd.github+json",
+  };
+}
 
 let previousFindings = [];
 let dismissedReplies = [];
 let repliesForClassification = [];
 
-if (token && repo && prNumber) {
+if (process.env.GITHUB_TOKEN && repo && prNumber) {
   const [owner, name] = repo.split("/");
   const api = `https://api.github.com/repos/${owner}/${name}`;
-  const headers = {
-    "Authorization": `Bearer ${token}`,
-    "Accept": "application/vnd.github+json",
-  };
 
   const allComments = yield* fetch(
-    `${api}/pulls/${prNumber}/comments?per_page=100`, { headers }
+    `${api}/pulls/${prNumber}/comments?per_page=100`, { headers: githubHeaders() }
   ).expect().json();
 
   const botComments = allComments.filter(c =>
@@ -94,7 +96,7 @@ if (token && repo && prNumber) {
     };
     try {
       const reactions = yield* fetch(
-        `${api}/pulls/comments/${reply.id}/reactions`, { headers }
+        `${api}/pulls/comments/${reply.id}/reactions`, { headers: githubHeaders() }
       ).expect().json();
       const alreadyAcked = reactions.some(r =>
         r.user.login === "github-actions[bot]" && r.content === "+1"
@@ -168,7 +170,7 @@ const dismissedSet = new Set(
 );
 
 const addedLineSet = new Set(
-  pr.added.map(l => `${l.file}:${l.lineNumber}`)
+  props.pr.added.map(l => `${l.file}:${l.lineNumber}`)
 );
 const appliedFindings = previousFindings.filter(pf =>
   pf.lineNumber && !addedLineSet.has(`${pf.file}:${pf.lineNumber}`) &&
