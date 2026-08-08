@@ -1,4 +1,4 @@
-/** Cooperative service terminal modifier. */
+/** Attached service terminal modifier. */
 
 import { ephemeral } from "@executablemd/durable-streams";
 import { unbox } from "@effectionx/scope-eval";
@@ -18,27 +18,29 @@ export const serviceFactory: ModifierFactory = (params) => (_args, _next) =>
       *[Symbol.iterator]() {
         const durable = yield* env;
         if (!durable) {
-          throw new Error("service requires a component binding environment; none is in scope.");
+          throw new Error(
+            "attached service requires a component binding environment; none is in scope.",
+          );
         }
         const live = liveEnvironment(durable);
         const binding = validateServiceBinding(params, durable, live);
 
         const scope = yield* evalScope;
         if (!scope) {
-          throw new Error("service requires a component eval scope; none is in scope.");
+          throw new Error("attached service requires a component eval scope; none is in scope.");
         }
 
         const directory = yield* cwd();
         const startupTimeout = yield* timeout;
-        const acquired = yield* scope.eval(function* () {
-          const service = yield* startService({
+        const attachment = yield* scope.eval(function* () {
+          const serviceAttachment = yield* startService({
             command: ctx.content,
             cwd: directory,
             startupTimeout,
           });
-          return service.endpoint;
+          return serviceAttachment.endpoint;
         });
-        live.values[binding] = unbox(acquired);
+        live.values[binding] = unbox(attachment);
         return { output: "", exitCode: 0, stderr: "" };
       },
     };

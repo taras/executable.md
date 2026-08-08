@@ -548,17 +548,17 @@ only a nullish return value, and calling `output()` is an error. The modifier is
 valid only directly around the terminal `eval`; `persist ephemeral eval` keeps
 installed middleware in the invocation eval scope.
 
-**`service=<binding>`** is a terminal service-acquisition modifier. The code
+**`service=<binding>`** is a terminal service-attachment modifier. The code
 block content is the shell command passed to `startService()`, and the required
 parameter is the live binding that receives the frozen
 `{ hostname: "127.0.0.1", port }` endpoint. Binding syntax and collisions are
-validated before process acquisition. The modifier produces no output or
-journal entry, and the acquired service remains supervised until the component
-invocation closes.
+validated before process attachment. The modifier produces no output or
+journal entry, and the service attachment remains supervised until the
+component invocation closes.
 
 ````markdown
 ```bash service=server exec
-./server --cooperative
+./handshake-compatible-server
 ```
 
 ```ts persist ephemeral eval
@@ -592,8 +592,8 @@ the info string is purely syntactic: it satisfies the detection rule
 and signals to readers that this block runs a command.
 
 `daemon` is for fixed-configuration background processes. It does not allocate
-or publish a dynamic endpoint and does not establish readiness; cooperative
-network services use `service=<binding>`.
+or publish a dynamic endpoint and does not perform the XMD service handshake;
+attached network services use `service=<binding>`.
 
 | Property | `exec` | `daemon` |
 |---|---|---|
@@ -1152,7 +1152,7 @@ of the same name cannot collide.
 The exact list lives in the `STANDARD_IMPORTS` constant, which both
 compilers share (`src/data-uri-compiler.ts`, `src/temp-file-compiler.ts`).
 
-#### Cooperative service API
+#### Attached service API
 
 `@executablemd/runtime` exports provider-neutral `API.Service` under the stable
 context-api name `runtime.service`, and its ordinary operation as
@@ -1170,12 +1170,12 @@ interface ServiceStartOptions {
   readonly startupTimeout?: number;
 }
 
-interface ServiceResource {
+interface ServiceAttachment {
   readonly endpoint: Readonly<ServiceEndpoint>;
 }
 
 interface ServiceHandler {
-  start(options: ServiceStartOptions): Operation<ServiceResource>;
+  start(options: ServiceStartOptions): Operation<ServiceAttachment>;
 }
 ```
 
@@ -1198,8 +1198,8 @@ yield* when(function* () {
 
 `fetch().expect()` from `@effectionx/fetch` throws `HttpError` on non-2xx
 responses. `when` catches it and retries until the assertion passes or the
-timeout expires. Cooperative-service startup readiness is established by the
-host protocol, not by polling from a document.
+timeout expires. Attached-service startup is established by the XMD service
+handshake protocol, not by polling from a document.
 
 #### Compiling blocks
 
@@ -1270,7 +1270,7 @@ projected caller content.
 | journal serialization and replay restore | yes | no |
 
 The two namespaces may not overlap. `service=<binding>` validates the binding
-name and checks both environments before acquiring a process. Ordinary durable
+name and checks both environments before attaching a process. Ordinary durable
 eval validates its declared exports against live names before execution or
 replay restoration and before appending an eval event. `ephemeral eval`
 validates its exports against durable names before execution; it may atomically
@@ -1502,16 +1502,16 @@ run but are absent from the diagnostic trace.
 | `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/modifiers/ephemeral.ts` | `ephemeralFactory` — replay-safe live eval wrapper |
-| `src/modifiers/service.ts` | `serviceFactory` — scoped cooperative-service acquisition |
+| `src/modifiers/service.ts` | `serviceFactory` — scoped service attachment |
 | `src/sample-api.ts` | `Sample` Api definition (§3.4) — LLM middleware surface |
-| `packages/runtime/service.ts` | provider-neutral `API.Service`, readiness protocol types and `startService()` resource |
+| `packages/runtime/service.ts` | provider-neutral `API.Service`, XMD service handshake types and `startService()` attachment |
 | `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
 | `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
-| `packages/cli/src/service-host.ts` | shared authenticated readiness observer and supervised host-process adapter |
+| `packages/cli/src/service-host.ts` | shared XMD service handshake observer and supervised host-process adapter |
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
 | `packages/workflow/src/service-denial.ts` | non-delegating workflow service denial middleware |
@@ -3781,15 +3781,16 @@ and strings.
 
 ### 6.7 Provider component pattern
 
-A **provider component** is a regular markdown component whose body acquires a
-cooperative service and installs middleware for its subtree. It composes
+A **provider component** is a regular markdown component whose body starts an
+attached service and installs middleware for its subtree. It composes
 `service=<binding>` + `persist ephemeral eval` + `<Content />`; the host, not
-the document, owns endpoint allocation and authenticated readiness.
+the document, owns endpoint allocation and the authenticated XMD service
+handshake.
 
 #### Structure
 
-1. A `service=<binding>` block starts the cooperative command and waits for an
-   authenticated readiness record.
+1. A `service=<binding>` block starts the handshake-compatible command and waits
+   for an authenticated handshake record.
 2. A `persist ephemeral eval` block reads the live endpoint and installs
    provider middleware in the component eval scope.
 3. `<Content />` expands the subtree while the supervised process and
@@ -3829,7 +3830,7 @@ yield* Sample.around({
 
 The executable receives `XMD_SERVICE_HOST`, `XMD_SERVICE_PORT` and a
 cryptographically random `XMD_SERVICE_TOKEN`. It binds exactly the supplied
-loopback host and port, then writes one newline-terminated readiness record to
+loopback host and port, then writes one newline-terminated handshake record to
 stdout:
 
 ```text
@@ -3839,21 +3840,21 @@ XMD_SERVICE_READY:{"version":1,"token":"<token>","hostname":"127.0.0.1","port":4
 The host installs its byte-level stdout observer before spawn. At each line
 start it retains only bytes that can still match `XMD_SERVICE_READY:`; on the
 first mismatch it forwards those bytes and all subsequent ordinary bytes
-immediately, without waiting for a newline. Only an actual protocol candidate
+immediately, without waiting for a newline. Only an actual handshake candidate
 is buffered, under a finite bound. The observer suppresses valid and invalid
-protocol records and accepts readiness only when the JSON object has exactly
-those fields and matches the expected version, token, host and port. Malformed,
-forged, duplicate or late records fail the service without exposing the token
-or raw protocol line.
-Startup races readiness against process exit, protocol failure and the
-contextual startup timeout. After readiness the host continues supervising
-process exit and duplicate records until acquisition ends. An observable host
+handshake records and accepts the handshake only when the JSON object has
+exactly those fields and matches the expected version, token, host and port.
+Malformed, forged, duplicate or late records fail the attached service without
+exposing the token or raw handshake line.
+Startup races the handshake against process exit, handshake failure and the
+contextual startup timeout. After the handshake the host continues supervising
+process exit and duplicate records until the attachment ends. An observable host
 process teardown failure becomes `ServiceTeardownError`; when execution is
 already failing, the invocation teardown aggregate preserves that execution
 failure first and keeps the service failure reachable through its teardown
 member.
 
-The service binding is live, so only the `ephemeral eval` block can read it.
+The attached-service binding is live, so only the `ephemeral eval` block can read it.
 The block installs middleware in the invocation scope through `persist`; plain
 eval, interpolation and the journal cannot observe the endpoint. Partial replay
 runs both blocks again to reconstruct a current process and middleware chain.
@@ -3872,7 +3873,7 @@ scope boundary:
 </LocalProvider>
 ```
 
-Each acquisition receives a distinct host-selected endpoint and token. Both
+Each service attachment receives a distinct host-selected endpoint and token. Both
 services remain live while the nested report expands; the inner service tears
 down before the outer in standard structured-concurrency order.
 
@@ -3959,9 +3960,10 @@ All three props are optional with empty-string defaults:
 
 #### Repeated-run behavior of the provider pattern
 
-Every run allocates a current free port, starts the daemon, performs readiness
-polling and child operations, then terminates the daemon when the component
-closes. A previous diagnostic trace does not suppress any of these actions.
+Every run allocates a current free port, creates the service attachment,
+performs the XMD service handshake and child operations, then terminates the
+attached service when the component closes. A previous diagnostic trace does
+not suppress any of these actions.
 
 ### 6.8.1 When a function component fails
 
@@ -5563,7 +5565,7 @@ yield* runXmd(args, useDenoService);
 ```
 
 The installer is invoked only for `xmd run` and `xmd test`, immediately before
-`execute()`. Help, inspection and agent-worker paths never install or acquire a
+`execute()`. Help, inspection and agent-worker paths never install or attach a
 service. Each adapter supplies host randomness, inherited environment and
 stdout/stderr writers to the shared service host; production adapters reject a
 non-loopback requested host before spawning.
@@ -5698,7 +5700,7 @@ Given a document:
 ```markdown
 # Title
 
-<LocalProvider command="./cooperative-server">
+<LocalProvider command="./handshake-compatible-server">
   <AnalyzeTests />
 </LocalProvider>
 
@@ -6641,7 +6643,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | R1 | Live overlay hidden from plain eval | A service binding is absent from the ordinary eval preamble |
 | R2 | Live overlay hidden from interpolation | `{server}` remains literal rather than becoming an endpoint string |
 | R3 | `ephemeral eval` executes during partial replay | Live bindings and middleware are reconstructed without a journal entry |
-| R4 | Service publication collision | A durable or live binding with the requested name refuses acquisition before spawn |
+| R4 | Service publication collision | A durable or live binding with the requested name refuses attachment before spawn |
 | R5 | Durable export collides with a service | Live execution and partial replay both reject before execution or restoration and append no eval event |
 | R6 | Ephemeral export collides with durable state | The block is rejected before execution and publishes no partial export |
 | R7 | Ephemeral update of a live binding | A later ephemeral block may atomically replace an existing live name |
@@ -6655,22 +6657,23 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 |---|------|--------|
 | S1 | Full provider golden run | service → persistent ephemeral middleware → children → cleanup |
 | S2 | Endpoint flows to ephemeral middleware | `server` is an exact frozen loopback endpoint available only to ephemeral eval |
-| S3 | Children can call sample after protocol readiness | `sample` calls in children reach the acquired endpoint |
-| S4 | Cancellation after readiness | The child exits and its listener can be rebound after its owning task is halted |
-| S5 | Startup failures | Exit, timeout and invalid readiness records produce dedicated errors without leaking protocol data |
+| S3 | Children can call sample after the handshake | `sample` calls in children reach the attached-service endpoint |
+| S4 | Cancellation after handshake | The child exits and its listener can be rebound after its owning task is halted |
+| S5 | Startup failures | Exit, timeout and invalid handshake records produce dedicated errors without leaking handshake data |
 | S6 | Provider exits during projected content | The projected request reaches the ready process, its unexpected exit fails the document, and it is not restarted |
 | S7 | Nested real providers | Outer + inner processes both start and inner teardown finishes before outer teardown |
 | S8 | Nested providers, no model | Innermost provider handles sample call |
 | S9 | Nested providers, explicit model matching outer | Inner passes through, outer handles |
 | S10 | Nested providers, explicit model matching inner | Inner handles regardless of nesting depth |
 | S11 | Unmatched model | Chain exhausted → descriptive error naming the model |
-| S12 | Partial replay | Service acquisition and ephemeral middleware execute again after the recorded prefix |
+| S12 | Partial replay | Service attachment and ephemeral middleware execute again after the recorded prefix |
 | S13 | Completed replay | Completed document returns without process spawn or token allocation |
-| S14 | Concurrent service acquisitions | Two owners acquire at the same time and receive distinct live endpoints |
+| S14 | Concurrent service attachments | Two owners attach at the same time and receive distinct live endpoints |
 | S15 | Incremental ordinary stdout | Unterminated and chunk-split ordinary bytes are forwarded before teardown, byte for byte |
-| S16 | Incremental protocol records | Split readiness is suppressed, duplicate supervision remains active, and invalid candidates are bounded and suppressed |
+| S16 | Incremental handshake records | A split handshake is suppressed, duplicate supervision remains active, and invalid candidates are bounded and suppressed |
 | S17 | Service teardown failures | A lone observable process teardown failure becomes `ServiceTeardownError`; an active execution failure remains first in the invocation aggregate |
 | S18 | Projected failure cleanup | A prompt projected-content failure tears down both retained real services and starts neither again |
+| S19 | Compiled-binary attached-service ping-pong | A smoke document attaches two real services, closes both endpoints into ephemeral middleware, journals only the ordinary filtered `Sample` result and completes `ping→pong→ping` |
 
 ### Tier EO — eval output() function
 
@@ -7058,7 +7061,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 42 | Service endpoints are live bindings | The endpoint identifies an execution-owned process and is reconstructed during partial replay, so it cannot enter durable eval, interpolation or the journal |
 | 43 | `when` (from `@effectionx/converge`) is the polling VM global | `when` is the exported name from the package; the sandbox already contains it; no rename or addition needed |
 | 44 | Provider lifecycle expressed as a component, not an `ExecuteOptions` field | Scope boundary is visible in the document tree; composable — multiple providers nest naturally via structured concurrency; no framework-level lifecycle hooks required |
-| 45 | Cooperative readiness is an authenticated stdout protocol | The host observes from before spawn, verifies version/token/host/port exactly and supervises the process continuously without a close-and-rebind race |
+| 45 | The XMD service handshake protocol is authenticated stdout | The host observes from before spawn, verifies version/token/host/port exactly and supervises the attached service continuously without a close-and-rebind race |
 | 46 | Provider middleware reads an endpoint from the live overlay | The current endpoint is available to `ephemeral eval` while remaining invisible to durable effects and interpolation |
 | 47 | Each component gets a fresh `EvalEnv` | The component's environment is installed as a scope-local `env` provider around body expansion, so eval blocks within a component share bindings but don't leak into parent or sibling components; critical for provider isolation |
 | 48 | `output()` is a plain function, not `yield*` | Output is a synchronous side effect (mutating a ref), not an Effection operation; making it a function keeps the API simple and avoids requiring generator context just to set output text |
@@ -7075,7 +7078,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 59 | Provider components use ordinary generated-module imports | Provider-specific client functions may be imported explicitly; executable.md supplies `Sample`, `when`, `fetch` and the contextual document bindings |
 | 60 | Props pre-populated into `env.values` at component invocation | Code block content uses bare `{name}` binding interpolation from `env.values`; props must enter `env.values` at invocation time to be accessible in code blocks; consistent with how eval bindings work |
 | 61 | Provider HTTP calls use `@effectionx/fetch` | Calls remain Effection operations under structured cancellation and the provider's lexical middleware |
-| 62 | Protocol readiness and application health are separate | The readiness record proves the cooperative process owns the assigned endpoint; an application may still use `when` for a later domain-specific condition |
+| 62 | The XMD service handshake and application health are separate | The handshake record proves the attached service owns the assigned endpoint; an application may still use `when` for a later domain-specific condition |
 | 63 | `stdio: "inherit"` is the default for `daemon()` | During development, seeing server logs in the terminal is valuable; production deployments can pass `stdio: "ignore"`; the executable.md `daemonFactory` passes no stdio option, defaulting to `"inherit"` |
 | 64 | `DocumentOutput` Api with single `output` operation | Extensible to progress/printed errors; middleware-composable via `scope.around`; single Api surface for all output concerns |
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |

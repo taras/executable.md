@@ -811,7 +811,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         },
       });
 
-      // The discard provider is the base so a cooperative-service observer can
+      // The discard provider is the base so an attached-service observer can
       // authenticate and forward its own process output without unsilencing
       // unrelated document subprocesses.
       yield* Stdio.around(

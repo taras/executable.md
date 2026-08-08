@@ -12,7 +12,7 @@ Use these helpers when a test needs:
 - an in-memory filesystem instead of real files
 - a simple `exec` stub for `echo`-style command output
 - a predictable failing `exec` for error-path assertions
-- a scoped cooperative-service endpoint without a real host process
+- a scoped service attachment without a real host process
 
 Use raw `API.*.around()` directly when a test needs custom behavior that the
 shared helpers do not provide.
@@ -81,8 +81,8 @@ yield * useFailingExec(127, "command not found");
 
 Installs a provider-neutral scoped `API.Service` stub. It reconstructs an exact
 frozen loopback endpoint and rejects any non-loopback hostname or invalid port.
-Use the production host adapters when testing protocol, process, output or
-teardown behavior.
+Use the production host adapters when testing the XMD service handshake,
+process, output or teardown behavior.
 
 ## Composition
 

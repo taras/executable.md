@@ -169,7 +169,7 @@ Built-in modifiers:
 - `persist` - keep resources created by an eval block alive for the component lifetime.
 - `timeout=30s` - cancel a long-running block.
 - `daemon` - start an arbitrary fixed-configuration subprocess tied to the component scope.
-- `service=name` - start a cooperative service and publish its live loopback endpoint.
+- `service=name` - start an attached service and publish its live loopback endpoint.
 - `ephemeral` - reconstruct live eval state without writing a journal event.
 
 LLM sampling is not a fence modifier — it happens through the `<Sample>` component installed by provider middleware (see [Provider components](#provider-components)).
@@ -180,7 +180,7 @@ Plain `eval` blocks run in a shared durable binding environment for the current 
 
 ````md
 ```bash service=server exec
-node cooperative-server.js
+node handshake-compatible-server.js
 ```
 
 ```ts persist ephemeral eval
@@ -202,7 +202,7 @@ Highlights:
 - `output("...")` lets an eval block render text into the document.
 - `renderChildren()` and `render(markdown)` let eval blocks render nested content intentionally.
 - `ephemeral eval` reruns during live execution and partial replay, exports only invocation-local live bindings, and cannot render output.
-- Live service endpoints are available only to `ephemeral eval`; they never enter interpolation, durable effect descriptions, or the journal.
+- Attached-service endpoints are available only to `ephemeral eval`; they never enter interpolation, durable effect descriptions, or the journal.
 
 ## Provider components
 
@@ -213,7 +213,7 @@ The repo includes reusable markdown components (in `packages/core/components/`) 
 - `Sample.md`
 - `Instruction.md`
 
-These components combine eval and `Sample` middleware so a document can talk to a cloud or already-running local model server without custom runtime wiring. A local process provider uses authenticated cooperative startup through `service=<binding>`.
+These components combine eval and `Sample` middleware so a document can talk to a cloud or already-running local model server without custom runtime wiring. A local process provider attaches a handshake-compatible command through `service=<binding>` and authenticates it with the XMD service handshake protocol.
 
 [`packages/core/examples/hello-world.md`](packages/core/examples/hello-world.md) shows the pattern combining a cloud model (Claude) and a local model (Ollama). Provider docs currently need the built-in components on the search path:
 

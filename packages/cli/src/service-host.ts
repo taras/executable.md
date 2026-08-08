@@ -1,4 +1,4 @@
-/** Shared mechanics for the runtime-named cooperative service adapters. */
+/** Shared mechanics for the runtime-named attached-service adapters. */
 
 import { ensure, race, resource, scoped, withResolvers, type Operation } from "effection";
 import { daemon, Stdio, type Daemon } from "@effectionx/process";
@@ -16,7 +16,11 @@ import {
   parseServiceReadyRecord,
   timeout,
 } from "@executablemd/runtime";
-import type { ServiceEndpoint, ServiceResource, ServiceStartOptions } from "@executablemd/runtime";
+import type {
+  ServiceAttachment,
+  ServiceEndpoint,
+  ServiceStartOptions,
+} from "@executablemd/runtime";
 
 interface HostServiceAdapter {
   token(): string;
@@ -25,34 +29,34 @@ interface HostServiceAdapter {
   stderr(bytes: Uint8Array): void;
 }
 
-export interface ProtocolObserver {
+export interface HandshakeObserver {
   stdout(bytes: Uint8Array): Operation<void>;
   flush(): Operation<void>;
 }
 
 const encoder = new TextEncoder();
 const prefixBytes = encoder.encode(SERVICE_READY_PREFIX);
-const MAX_PROTOCOL_RECORD_BYTES = 1_024;
+const MAX_HANDSHAKE_RECORD_BYTES = 1_024;
 
 export function createProtocolObserver(options: {
   token: string;
   ready(endpoint: ServiceEndpoint): void;
   fail(error: Error): void;
   forward(bytes: Uint8Array): void;
-}): ProtocolObserver {
-  let state: "prefix" | "ordinary" | "protocol" | "suppressed" = "prefix";
+}): HandshakeObserver {
+  let state: "prefix" | "ordinary" | "handshake" | "suppressed" = "prefix";
   let possiblePrefix: number[] = [];
-  let protocolRecord: number[] = [];
-  let readinessSeen = false;
+  let handshakeRecord: number[] = [];
+  let handshakeSeen = false;
 
   function beginLine(): void {
     state = "prefix";
     possiblePrefix = [];
-    protocolRecord = [];
+    handshakeRecord = [];
   }
 
-  function consumeProtocolRecord(): void {
-    if (readinessSeen) {
+  function consumeHandshakeRecord(): void {
+    if (handshakeSeen) {
       options.fail(new ServiceProtocolDuplicateError());
       return;
     }
@@ -60,7 +64,7 @@ export function createProtocolObserver(options: {
     let payload: string;
     try {
       payload = new TextDecoder("utf-8", { fatal: true }).decode(
-        Uint8Array.from(protocolRecord.slice(prefixBytes.byteLength)),
+        Uint8Array.from(handshakeRecord.slice(prefixBytes.byteLength)),
       );
     } catch {
       options.fail(new ServiceProtocolMalformedError());
@@ -69,22 +73,22 @@ export function createProtocolObserver(options: {
 
     try {
       const endpoint = parseServiceReadyRecord(payload, options.token);
-      readinessSeen = true;
+      handshakeSeen = true;
       options.ready(endpoint);
     } catch (error) {
       options.fail(error instanceof Error ? error : new ServiceProtocolMalformedError());
     }
   }
 
-  function appendProtocol(bytes: Uint8Array, start: number, end: number): boolean {
-    if (protocolRecord.length + end - start > MAX_PROTOCOL_RECORD_BYTES) {
-      protocolRecord = [];
+  function appendHandshake(bytes: Uint8Array, start: number, end: number): boolean {
+    if (handshakeRecord.length + end - start > MAX_HANDSHAKE_RECORD_BYTES) {
+      handshakeRecord = [];
       state = "suppressed";
       options.fail(new ServiceProtocolMalformedError());
       return false;
     }
     for (let index = start; index < end; index += 1) {
-      protocolRecord.push(bytes[index]!);
+      handshakeRecord.push(bytes[index]!);
     }
     return true;
   }
@@ -99,9 +103,9 @@ export function createProtocolObserver(options: {
             possiblePrefix.push(byte);
             index += 1;
             if (possiblePrefix.length === prefixBytes.byteLength) {
-              protocolRecord = [...possiblePrefix];
+              handshakeRecord = [...possiblePrefix];
               possiblePrefix = [];
-              state = "protocol";
+              state = "handshake";
             }
             continue;
           }
@@ -127,17 +131,17 @@ export function createProtocolObserver(options: {
           continue;
         }
 
-        if (state === "protocol") {
+        if (state === "handshake") {
           const newline = bytes.indexOf(10, index);
           const end = newline === -1 ? bytes.byteLength : newline;
-          if (!appendProtocol(bytes, index, end)) {
+          if (!appendHandshake(bytes, index, end)) {
             index = end;
             continue;
           }
           if (newline === -1) {
             index = bytes.byteLength;
           } else {
-            consumeProtocolRecord();
+            consumeHandshakeRecord();
             index = newline + 1;
             beginLine();
           }
@@ -156,7 +160,7 @@ export function createProtocolObserver(options: {
     *flush(): Operation<void> {
       if (state === "prefix" && possiblePrefix.length > 0) {
         options.forward(Uint8Array.from(possiblePrefix));
-      } else if (state === "protocol") {
+      } else if (state === "handshake") {
         beginLine();
         throw new ServiceProtocolMalformedError();
       }
@@ -167,7 +171,7 @@ export function createProtocolObserver(options: {
 
 function validTimeout(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error("service startup timeout must be a positive finite number");
+    throw new Error("attached service startup timeout must be a positive finite number");
   }
   return value;
 }
@@ -182,11 +186,11 @@ function exitFacts(status: { code?: number; signal?: string }): {
   };
 }
 
-function* waitForStartup(options: {
+function* waitForHandshake(options: {
   ready: Operation<ServiceEndpoint>;
-  protocolFailure: Operation<never>;
+  handshakeFailure: Operation<never>;
   process: { join(): Operation<{ code?: number; signal?: string }> };
-  observer: ProtocolObserver;
+  observer: HandshakeObserver;
   startupTimeout: number;
 }): Operation<ServiceEndpoint> {
   const result = yield* timebox(options.startupTimeout, () =>
@@ -198,7 +202,7 @@ function* waitForStartup(options: {
         throw new ServiceProcessExitBeforeReadyError(exitFacts(status));
       })(),
       (function* (): Operation<ServiceEndpoint> {
-        return yield* options.protocolFailure;
+        return yield* options.handshakeFailure;
       })(),
     ]),
   );
@@ -237,19 +241,19 @@ function serviceProcess(options: {
 function startHostService(
   options: ServiceStartOptions,
   adapter: HostServiceAdapter,
-): Operation<ServiceResource> {
+): Operation<ServiceAttachment> {
   return resource(function* (provide) {
     const token = adapter.token();
     if (!/^[0-9a-f]{64}$/.test(token)) {
-      throw new Error("host service adapter returned an invalid authentication token");
+      throw new Error("attached service host returned an invalid handshake token");
     }
     const startupTimeout = validTimeout(options.startupTimeout ?? (yield* timeout));
     const ready = withResolvers<ServiceEndpoint>();
-    const protocolFailure = withResolvers<never>();
+    const handshakeFailure = withResolvers<never>();
     const observer = createProtocolObserver({
       token,
       ready: ready.resolve,
-      fail: protocolFailure.reject,
+      fail: handshakeFailure.reject,
       forward: adapter.stdout,
     });
 
@@ -278,9 +282,9 @@ function startHostService(
       cwd: options.cwd,
       environment,
     });
-    const endpoint = yield* waitForStartup({
+    const endpoint = yield* waitForHandshake({
       ready: ready.operation,
-      protocolFailure: protocolFailure.operation,
+      handshakeFailure: handshakeFailure.operation,
       process,
       observer,
       startupTimeout,
@@ -293,7 +297,7 @@ function startHostService(
         yield* observer.flush();
         throw new ServiceUnexpectedExitError(exitFacts(status));
       })(),
-      protocolFailure.operation,
+      handshakeFailure.operation,
     ]);
   });
 }

@@ -49,7 +49,7 @@ function* useServiceStub(
   );
 }
 
-describe("ephemeral eval and service bindings", () => {
+describe("ephemeral eval and attached-service bindings", () => {
   beforeAll(() => useTempFileCompiler());
 
   it("reconstructs live bindings without exposing them to durable consumers", function* () {
@@ -102,7 +102,7 @@ yield* Sample.around({
     expect(evalEvents).toHaveLength(2);
   });
 
-  it("publishes the exact frozen service endpoint only to ephemeral eval", function* () {
+  it("publishes the exact frozen attached-service endpoint only to ephemeral eval", function* () {
     const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 43_210 });
     const lifecycle = { starts: 0, stops: 0 };
     const stream = new InMemoryStream();
@@ -124,7 +124,7 @@ meta:
 ---
 
 \`\`\`bash service=server exec
-cooperative-server
+handshake-compatible-server
 \`\`\`
 
 endpoint:{server.port}
@@ -164,13 +164,13 @@ yield* Sample.around({
     ).toBe(false);
   });
 
-  it("completed replay starts neither services nor ephemeral eval", function* () {
+  it("completed replay starts neither attached services nor ephemeral eval", function* () {
     const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 41_001 });
     const lifecycle = { starts: 0, stops: 0 };
     const stream = new InMemoryStream();
     const files = {
       "doc.md": `\`\`\`bash service=server exec
-cooperative-server
+handshake-compatible-server
 \`\`\`
 
 \`\`\`js ephemeral eval
@@ -229,7 +229,7 @@ done
     }
   });
 
-  it("validates service binding collisions before spawning", function* () {
+  it("validates attached-service binding collisions before spawning", function* () {
     const cases: Array<[string, string, number]> = [
       ["service", "requires a binding name", 0],
       ["service=bad-name", "must be a valid JavaScript identifier", 0],
@@ -275,7 +275,7 @@ done
       "doc.md": `<Output>
 
 \`\`\`bash service=server exec
-cooperative-server
+handshake-compatible-server
 \`\`\`
 
 \`\`\`js eval
@@ -314,7 +314,7 @@ const server = "must-not-execute";
       "doc.md": `<Output>
 
 \`\`\`bash service=other exec
-cooperative-server
+handshake-compatible-server
 \`\`\`
 
 \`\`\`js eval
@@ -351,7 +351,7 @@ tail
       "doc.md": `<Output>
 
 \`\`\`bash service=server exec
-cooperative-server
+handshake-compatible-server
 \`\`\`
 
 \`\`\`js eval

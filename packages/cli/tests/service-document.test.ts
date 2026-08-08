@@ -12,7 +12,7 @@ import { SERVICE_HOSTNAME, ServiceUnexpectedExitError } from "@executablemd/runt
 import { useStubFs } from "@executablemd/runtime/test";
 import { inheritedEnvironment, installHostService } from "../src/service-host.ts";
 
-const fixture = new URL("./fixtures/cooperative-service.mjs", import.meta.url).pathname;
+const fixture = new URL("./fixtures/attached-service.mjs", import.meta.url).pathname;
 
 function command(mode: string, nonce: string): string {
   return `node ${JSON.stringify(fixture)} ${mode} ${nonce}`;
@@ -111,7 +111,7 @@ function fixtureEndpoints(stderr: string[]): Array<{
     (match) => {
       const [, nonce, hostname, port] = match;
       if (nonce === undefined || hostname === undefined || port === undefined) {
-        throw new Error("malformed cooperative-service endpoint log");
+        throw new Error("malformed attached-service endpoint log");
       }
       return { nonce, hostname, port: Number(port) };
     },
@@ -124,9 +124,30 @@ function endpointAt(
 ): { nonce: string; hostname: string; port: number } {
   const endpoint = endpoints[index];
   if (endpoint === undefined) {
-    throw new Error(`missing cooperative-service endpoint at index ${index}`);
+    throw new Error(`missing attached-service endpoint at index ${index}`);
   }
   return endpoint;
+}
+
+function containsEndpoint(value: unknown, endpoint: { hostname: string; port: number }): boolean {
+  if (typeof value === "string") {
+    return value.includes(`${endpoint.hostname}:${endpoint.port}`);
+  }
+  if (Array.isArray(value)) {
+    return value.some((member) => containsEndpoint(member, endpoint));
+  }
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  if (
+    "hostname" in value &&
+    "port" in value &&
+    value.hostname === endpoint.hostname &&
+    value.port === endpoint.port
+  ) {
+    return true;
+  }
+  return Object.values(value).some((member) => containsEndpoint(member, endpoint));
 }
 
 function expectPingPongJournal(
@@ -151,8 +172,7 @@ function expectPingPongJournal(
     expect(journal).not.toContain(token);
   }
   for (const endpoint of endpoints) {
-    expect(journal).not.toContain(String(endpoint.port));
-    expect(journal).not.toContain(`${endpoint.hostname}:${endpoint.port}`);
+    expect(containsEndpoint(stream.snapshot(), endpoint)).toBe(false);
   }
 }
 
@@ -189,10 +209,10 @@ function hasUnexpectedExit(error: unknown): boolean {
   return error instanceof Error && error.cause !== undefined && hasUnexpectedExit(error.cause);
 }
 
-describe("cooperative service document integration", () => {
+describe("attached service document integration", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("reconstructs a real service on partial replay and skips completed replay", function* () {
+  it("reconstructs a real attached service on partial replay and skips completed replay", function* () {
     const full = new InMemoryStream();
     let tokenCalls = 0;
 
@@ -239,7 +259,7 @@ describe("cooperative service document integration", () => {
     });
   });
 
-  it("keeps a two-service ping-pong chain live across partial replay", function* () {
+  it("keeps a two-attachment ping-pong chain live across partial replay", function* () {
     const full = new InMemoryStream();
     const stderr: string[] = [];
     const tokens: string[] = [];
@@ -275,7 +295,10 @@ ${command("ping-pong", "pong")}
 \`\`\`js persist ephemeral eval
 const pingEndpoint = ping;
 const pongEndpoint = pong;
-if (pingEndpoint.port === pongEndpoint.port) {
+if (
+  pingEndpoint.hostname === pongEndpoint.hostname &&
+  pingEndpoint.port === pongEndpoint.port
+) {
   throw new Error("ping and pong must have distinct endpoints");
 }
 yield* Sample.around({
@@ -342,7 +365,7 @@ yield* Sample.around({
     });
   });
 
-  it("supervises a ready service that exits during projected content without restarting it", function* () {
+  it("supervises an attached service that exits during projected content without restarting it", function* () {
     const stderr: string[] = [];
     let tokenCalls = 0;
     yield* scoped(function* () {
@@ -399,7 +422,7 @@ yield* Sample.around({
     yield* expectGone(fixturePids(stderr));
   });
 
-  it("fails projected content promptly, tears down retained services, and does not restart", function* () {
+  it("fails projected content promptly, tears down retained service attachments, and does not restart", function* () {
     const stderr: string[] = [];
     let tokenCalls = 0;
     yield* scoped(function* () {
@@ -467,7 +490,7 @@ throw new Error("projected content failure");
     yield* expectGone(pids);
   });
 
-  it("tears down nested provider services from inner lifetime to outer lifetime", function* () {
+  it("tears down nested service attachments from inner lifetime to outer lifetime", function* () {
     const stderr: string[] = [];
     let tokenCalls = 0;
     yield* scoped(function* () {

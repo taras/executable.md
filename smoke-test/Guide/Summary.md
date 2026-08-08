@@ -35,8 +35,8 @@ cat <<'TABLE'
 | eval binding interpolation| {label} in exec block from eval binding |
 | daemon modifier           | bash daemon exec starts background proc |
 | daemon fixed configuration| Arbitrary process stays scope-owned     |
-| service modifier          | Cooperative process publishes live endpoint |
-| cooperative provider      | persist ephemeral eval scopes middleware |
+| service modifier          | Attached service publishes live endpoint |
+| attached-service provider | persist ephemeral eval scopes middleware |
 | provider pattern          | StubProvider installs Sample middleware  |
 | per-component eval scope  | Each provider gets isolated middleware   |
 | props in env.values       | model prop available in eval blocks     |

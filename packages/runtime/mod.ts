@@ -13,7 +13,7 @@
  * - `API.Env` — the host: variables, platform info, the command that invokes
  *   this xmd, and eval-block compilation
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
- * - `API.Service` — scoped cooperative service startup (`startService`)
+ * - `API.Service` — scoped attached service startup (`startService`)
  * - `Config` — shared execution config (`timeout`)
  *
  * See `apis.ts` for architecture rationale.
@@ -59,7 +59,7 @@ export {
 export type {
   ServiceEndpoint,
   ServiceHandler,
-  ServiceResource,
+  ServiceAttachment,
   ServiceStartOptions,
 } from "./service.ts";
 export { Config, timeout } from "./config.ts";

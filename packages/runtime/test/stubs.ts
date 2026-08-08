@@ -26,7 +26,7 @@ import type { StatResult } from "../apis.ts";
 import { SERVICE_HOSTNAME } from "../service.ts";
 import type { ServiceEndpoint } from "../service.ts";
 
-/** Install a provider-neutral scoped service endpoint stub. */
+/** Install a provider-neutral scoped service attachment stub. */
 export function* useStubService(endpoint: ServiceEndpoint): Operation<void> {
   if (endpoint.hostname !== SERVICE_HOSTNAME) {
     throw new Error("stub service endpoint must use 127.0.0.1");

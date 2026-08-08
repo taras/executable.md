@@ -42,8 +42,8 @@
  *   use `.around()` to mock platform/env for deterministic replay; an
  *   entrypoint installs its `command` and `compile` with `{ at: "min" }` so
  *   ordinary middleware can wrap them.
- * - **Service** — scoped cooperative-service acquisition. Its terminal handler
- *   requires an explicit host provider and never detects or imports a runtime.
+ * - **Service** — scoped service attachment. Its terminal handler requires an
+ *   explicit host provider and never detects or imports a runtime.
  *
  * ## Middleware
  *

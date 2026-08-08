@@ -6,7 +6,7 @@
  * - `useStubFs(files)` — in-memory filesystem
  * - `useEchoExec()` — simple echo-based exec
  * - `useFailingExec(exitCode, stderr)` — always-failing exec
- * - `useStubService(endpoint)` — scoped provider-neutral service endpoint
+ * - `useStubService(endpoint)` — scoped provider-neutral service attachment
  */
 
 export { useStubFs, useEchoExec, useFailingExec, useStubService } from "./stubs.ts";

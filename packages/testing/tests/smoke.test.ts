@@ -53,7 +53,7 @@ const EMBEDDED_TESTS = [
   "Eval bindings interpolate into exec blocks",
   "Ephemeral eval reconstructs live bindings without rendering",
   "A daemon stays alive until its scope closes",
-  "A cooperative service publishes a scoped live endpoint",
+  "An attached service publishes a scoped live endpoint",
   "A standalone Thing's resource outlives it",
   "An empty paired Thing renders nothing and keeps nothing",
   "A paired Thing's resource is live only while its content expands",

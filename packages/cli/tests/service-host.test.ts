@@ -37,7 +37,7 @@ import { createServer } from "node:http";
 import process from "node:process";
 
 const TOKEN = "12".repeat(32);
-const fixture = new URL("./fixtures/cooperative-service.mjs", import.meta.url).pathname;
+const fixture = new URL("./fixtures/attached-service.mjs", import.meta.url).pathname;
 
 function command(mode: string, nonce = "nonce"): string {
   return `node ${JSON.stringify(fixture)} ${mode} ${nonce}`;
@@ -146,8 +146,8 @@ function* useTeardownFailure(failure: Error): Operation<void> {
   });
 }
 
-describe("cooperative host service adapter", () => {
-  it("forwards split ordinary bytes immediately and suppresses split protocol records", function* () {
+describe("attached service host adapter", () => {
+  it("forwards split ordinary bytes immediately and suppresses split handshake records", function* () {
     const forwarded: number[] = [];
     const endpoints: Array<{ hostname: string; port: number }> = [];
     const failures: Error[] = [];
@@ -187,7 +187,7 @@ describe("cooperative host service adapter", () => {
     expect(forwarded).toEqual([10]);
   });
 
-  it("bounds and suppresses an invalid protocol candidate", function* () {
+  it("bounds and suppresses an invalid handshake candidate", function* () {
     const forwarded: number[] = [];
     const failures: Error[] = [];
     const observer = createProtocolObserver({
@@ -207,7 +207,7 @@ describe("cooperative host service adapter", () => {
     expect(String(failures[0])).not.toContain(TOKEN);
   });
 
-  it("starts genuinely concurrent isolated services and suppresses readiness", function* () {
+  it("starts genuinely concurrent service attachments and suppresses handshake records", function* () {
     const stdout: string[] = [];
     const stderr: string[] = [];
 
@@ -249,17 +249,17 @@ describe("cooperative host service adapter", () => {
       yield* secondOwner;
     });
 
-    expect(stdout.join("")).toContain("service stdout before readiness");
-    expect(stdout.join("")).toContain("service stdout after readiness");
-    expect(stderr.join("")).toContain("service stderr before readiness");
-    expect(stderr.join("")).toContain("service stderr after readiness");
+    expect(stdout.join("")).toContain("service stdout before handshake");
+    expect(stdout.join("")).toContain("service stdout after handshake");
+    expect(stderr.join("")).toContain("service stderr before handshake");
+    expect(stderr.join("")).toContain("service stderr after handshake");
     expect(stdout.join("")).not.toContain("XMD_SERVICE_READY");
     expect(stdout.join("")).not.toContain(TOKEN);
     expect(fixturePids(stderr)).toHaveLength(2);
     yield* expectGone(fixturePids(stderr));
   });
 
-  it("categorizes startup failures without exposing protocol records", function* () {
+  it("categorizes startup failures without exposing handshake records", function* () {
     const cases: Array<[string, { prototype: Error }, number]> = [
       ["exit-before", ServiceProcessExitBeforeReadyError, 2_000],
       ["malformed", ServiceProtocolMalformedError, 2_000],
@@ -269,7 +269,7 @@ describe("cooperative host service adapter", () => {
       ["wrong-host", ServiceProtocolHostnameMismatchError, 2_000],
       ["extra-member", ServiceProtocolMalformedError, 2_000],
       ["partial-record", ServiceProtocolMalformedError, 2_000],
-      ["non-cooperative", ServiceStartupTimeoutError, 75],
+      ["not-handshake-compatible", ServiceStartupTimeoutError, 75],
     ];
 
     for (const [mode, ErrorType, startupTimeout] of cases) {
@@ -293,7 +293,7 @@ describe("cooperative host service adapter", () => {
     }
   });
 
-  it("cancels startup and releases the child before readiness", function* () {
+  it("cancels startup and releases the child before the handshake", function* () {
     const pidPublished = withResolvers<number>();
     const decoder = new TextDecoder();
     let pid = 0;
@@ -318,7 +318,7 @@ describe("cooperative host service adapter", () => {
     yield* expectGone([pid]);
   });
 
-  it("cancels after readiness and releases the child listener", function* () {
+  it("cancels after the handshake and releases the child listener", function* () {
     const stderr: string[] = [];
     const ready = withResolvers<{ hostname: string; port: number }>();
     let endpoint = { hostname: "127.0.0.1", port: 0 };
@@ -343,7 +343,7 @@ describe("cooperative host service adapter", () => {
     });
   });
 
-  it("forwards unterminated ordinary stdout while the service is still active", function* () {
+  it("forwards unterminated ordinary stdout while the attached service is active", function* () {
     const stdout: string[] = [];
     const stderr: string[] = [];
 
@@ -418,7 +418,7 @@ describe("cooperative host service adapter", () => {
     expect(serviceTeardown.cause).toBe(teardown);
   });
 
-  it("fails the owning scope when a ready process exits or repeats readiness", function* () {
+  it("fails the owning scope when an attached process exits or repeats the handshake", function* () {
     const cases: Array<[string, { prototype: Error }]> = [
       ["exit-after", ServiceUnexpectedExitError],
       ["duplicate", ServiceProtocolDuplicateError],

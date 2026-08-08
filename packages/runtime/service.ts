@@ -1,8 +1,9 @@
 /**
- * Provider-neutral cooperative service lifecycle.
+ * Provider-neutral attached-service lifecycle.
  *
- * The shared runtime owns the protocol shape and validation. A runtime-named
- * host adapter supplies process startup through `API.Service` middleware.
+ * The shared runtime owns the XMD service handshake shape and validation. A
+ * runtime-named host adapter supplies process startup through `API.Service`
+ * middleware.
  */
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
@@ -22,12 +23,12 @@ export interface ServiceStartOptions {
   readonly startupTimeout?: number;
 }
 
-export interface ServiceResource {
+export interface ServiceAttachment {
   readonly endpoint: Readonly<ServiceEndpoint>;
 }
 
 export interface ServiceHandler {
-  start(options: ServiceStartOptions): Operation<ServiceResource>;
+  start(options: ServiceStartOptions): Operation<ServiceAttachment>;
 }
 
 export class ServiceProviderError extends Error {
@@ -35,7 +36,7 @@ export class ServiceProviderError extends Error {
 
   constructor() {
     super(
-      "service startup requires a host provider; install runtime.service middleware before execution",
+      "attached service startup requires a host provider; install runtime.service middleware before execution",
     );
   }
 }
@@ -44,7 +45,7 @@ export class ServiceProtocolMalformedError extends Error {
   override name = "ServiceProtocolMalformedError";
 
   constructor() {
-    super("service emitted a malformed cooperative readiness record");
+    super("attached service emitted a malformed XMD service handshake record");
   }
 }
 
@@ -52,7 +53,7 @@ export class ServiceProtocolIncompatibleError extends Error {
   override name = "ServiceProtocolIncompatibleError";
 
   constructor() {
-    super("service emitted an incompatible cooperative readiness record");
+    super("attached service emitted an incompatible XMD service handshake record");
   }
 }
 
@@ -60,7 +61,7 @@ export class ServiceProtocolTokenMismatchError extends Error {
   override name = "ServiceProtocolTokenMismatchError";
 
   constructor() {
-    super("service readiness authentication failed");
+    super("XMD service handshake authentication failed");
   }
 }
 
@@ -68,7 +69,7 @@ export class ServiceProtocolHostnameMismatchError extends Error {
   override name = "ServiceProtocolHostnameMismatchError";
 
   constructor() {
-    super("service readiness hostname is not authorized");
+    super("XMD service handshake hostname is not authorized");
   }
 }
 
@@ -76,7 +77,7 @@ export class ServiceProtocolDuplicateError extends Error {
   override name = "ServiceProtocolDuplicateError";
 
   constructor() {
-    super("service emitted more than one cooperative readiness record");
+    super("attached service emitted more than one XMD service handshake record");
   }
 }
 
@@ -84,7 +85,7 @@ export class ServiceStartupTimeoutError extends Error {
   override name = "ServiceStartupTimeoutError";
 
   constructor(timeout: number) {
-    super(`service did not become ready within ${timeout}ms`);
+    super(`attached service handshake did not complete within ${timeout}ms`);
   }
 }
 
@@ -107,7 +108,7 @@ export class ServiceProcessExitBeforeReadyError extends Error {
   override name = "ServiceProcessExitBeforeReadyError";
 
   constructor(status: ServiceExitStatus) {
-    super(`service process exited before readiness with ${exitDescription(status)}`);
+    super(`attached service process exited before handshake with ${exitDescription(status)}`);
   }
 }
 
@@ -115,7 +116,7 @@ export class ServiceUnexpectedExitError extends Error {
   override name = "ServiceUnexpectedExitError";
 
   constructor(status: ServiceExitStatus) {
-    super(`service process exited after readiness with ${exitDescription(status)}`);
+    super(`attached service process exited after handshake with ${exitDescription(status)}`);
   }
 }
 
@@ -123,7 +124,7 @@ export class ServiceTeardownError extends Error {
   override name = "ServiceTeardownError";
 
   constructor(options?: { cause?: unknown }) {
-    super("service process failed to terminate cleanly", options);
+    super("attached service process failed to terminate cleanly", options);
   }
 }
 
@@ -142,7 +143,7 @@ function hasExactMembers(record: Record<string, unknown>): boolean {
   );
 }
 
-/** Parse and authenticate one prefix-stripped v1 readiness payload. */
+/** Parse and authenticate one prefix-stripped v1 handshake payload. */
 export function parseServiceReadyRecord(payload: string, expectedToken: string): ServiceEndpoint {
   let parsed: unknown;
   try {
@@ -177,7 +178,7 @@ export function parseServiceReadyRecord(payload: string, expectedToken: string):
 
 export const Service: Api<ServiceHandler> = createApi<ServiceHandler>("runtime.service", {
   // deno-lint-ignore require-yield
-  *start(_options: ServiceStartOptions): Operation<ServiceResource> {
+  *start(_options: ServiceStartOptions): Operation<ServiceAttachment> {
     throw new ServiceProviderError();
   },
 });

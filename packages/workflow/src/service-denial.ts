@@ -1,4 +1,4 @@
-/** Workflow authority boundary for native service startup. */
+/** Workflow authority boundary for native service attachment. */
 
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
@@ -7,7 +7,7 @@ export class WorkflowServiceDeniedError extends Error {
   override name = "WorkflowServiceDeniedError";
 
   constructor() {
-    super("workflow execution is not authorized to start a native service");
+    super("workflow execution is not authorized to attach a native service");
   }
 }
 

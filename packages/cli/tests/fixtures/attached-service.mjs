@@ -11,11 +11,11 @@ if (mode === "exit-before") {
   process.exit(17);
 }
 
-if (mode === "non-cooperative") {
+if (mode === "not-handshake-compatible") {
   setInterval(() => {}, 1_000);
 } else {
-  process.stdout.write("service stdout before readiness\n");
-  process.stderr.write("service stderr before readiness\n");
+  process.stdout.write("service stdout before handshake\n");
+  process.stderr.write("service stderr before handshake\n");
 
   const server = createServer((request, response) => {
     process.stderr.write(`service request:${nonce}\n`);
@@ -121,8 +121,8 @@ if (mode === "non-cooperative") {
 
     const line = `XMD_SERVICE_READY:${JSON.stringify(ready)}\n`;
     process.stdout.write(line);
-    process.stdout.write("service stdout after readiness\n");
-    process.stderr.write("service stderr after readiness\n");
+    process.stdout.write("service stdout after handshake\n");
+    process.stderr.write("service stderr after handshake\n");
 
     if (mode === "unterminated-live-output") {
       process.stdout.write("unterminated-live-output");

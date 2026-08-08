@@ -5,7 +5,7 @@ import { NextCard } from "../../components/NextCard.tsx";
 const CHAIN = "```bash silent timeout=30s exec\ngit diff --stat\n```";
 
 const EVAL = `\`\`\`bash service=server exec
-node cooperative-server.js
+node handshake-compatible-server.js
 \`\`\`
 
 \`\`\`ts persist ephemeral eval
@@ -57,8 +57,7 @@ export default define.page(function ExecEval() {
         </li>
         <li>
           <code>service=name</code>{" "}
-          — start a cooperative service and publish its invocation-local
-          endpoint.
+          — start an attached service and publish its invocation-local endpoint.
         </li>
         <li>
           <code>ephemeral</code>{" "}
@@ -106,7 +105,9 @@ export default define.page(function ExecEval() {
         down by structured concurrency when the component invocation completes —
         no manual cleanup. It remains the primitive for processes whose fixed
         configuration the document or host manages explicitly. Dynamic service
-        endpoints use the authenticated <code>service=name</code> protocol.
+        endpoints use <code>service=name</code>{" "}
+        with a handshake-compatible command and the XMD service handshake
+        protocol.
       </p>
 
       <NextCard href="/docs/providers" label="LLM providers" />
