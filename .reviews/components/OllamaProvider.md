@@ -32,7 +32,11 @@ yield* Sample.around({
       .expect()
       .json();
 
-    return result.choices[0].message.content;
+    const content = result.choices?.[0]?.message?.content;
+    if (typeof content !== "string") {
+      throw new Error("Ollama response did not contain model content");
+    }
+    return content;
   },
 }, { at: 'min' });
 ```

@@ -11,30 +11,34 @@ props:
 ---
 
 ```ts persist eval
-const token = process.env.GITHUB_TOKEN;
-const repo = process.env.GITHUB_REPOSITORY;
+import { env as runtimeEnv } from "@executablemd/runtime";
 
-if (!token || !repo) {
+function* githubConfiguration() {
+  const token = yield* runtimeEnv("GITHUB_TOKEN");
+  const repo = yield* runtimeEnv("GITHUB_REPOSITORY");
+  if (!token || !repo) {
+    return undefined;
+  }
+  const [owner, repoName] = repo.split("/");
+  return { api: `https://api.github.com/repos/${owner}/${repoName}` };
+}
+
+const github = yield* githubConfiguration();
+if (!github) {
   return "";
 }
 
-const [owner, repoName] = repo.split("/");
-const api = `https://api.github.com/repos/${owner}/${repoName}`;
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-  "Content-Type": "application/json",
-};
+const { api } = github;
 
 const LABEL = "cleanup";
 const TOP_N = 5;
 
 // 1. Ensure label exists
-const labelResponse = yield* fetch(`${api}/labels/${LABEL}`, { headers });
+const labelResponse = yield* fetch(`${api}/labels/${LABEL}`);
 if (labelResponse.status === 404) {
   yield* fetch(`${api}/labels`, {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: LABEL,
       description: "Auto-generated cleanup finding from repo analysis",
@@ -49,7 +53,6 @@ let page = 1;
 while (true) {
   const batch = yield* fetch(
     `${api}/issues?labels=${LABEL}&state=open&per_page=100&page=${page}`,
-    { headers },
   ).expect().json();
 
   if (!Array.isArray(batch) || batch.length === 0) break;
@@ -108,14 +111,14 @@ for (const cluster of topClusters) {
   if (existing) {
     yield* fetch(api + "/issues/" + existing.number, {
       method: "PATCH",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title, body }),
     }).expect();
     updated++;
   } else {
     yield* fetch(api + "/issues", {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title,
         body,
@@ -131,7 +134,7 @@ for (const [file, issue] of issuesByFile.entries()) {
   if (!topFiles.has(file)) {
     yield* fetch(api + "/issues/" + issue.number + "/comments", {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         body: "Resolved — file no longer in top-5 cleanup targets. Closing automatically.",
       }),
@@ -139,7 +142,7 @@ for (const [file, issue] of issuesByFile.entries()) {
 
     yield* fetch(api + "/issues/" + issue.number, {
       method: "PATCH",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ state: "closed" }),
     }).expect();
     closed++;

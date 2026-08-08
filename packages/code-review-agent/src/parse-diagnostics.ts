@@ -7,124 +7,17 @@
  */
 
 import { categorizeRule } from "./categories.ts";
+import { normalizeOxlintOutput } from "./parse-oxlint.ts";
 import type { Diagnostics, DiagnosticGroup, DoctorResult, OxlintDiagnostic, PR } from "./types.ts";
 
-function emptyDiagnostics(): Diagnostics {
-  return {
-    groups: [],
-    total: 0,
-    fileCount: 0,
-    ruleCount: 0,
-    byCategory: {
-      structural: [],
-      verbosity: [],
-      typeAware: [],
-      other: [],
-    },
-    summary: "",
-    density: 0,
-  };
-}
-
-function extractDiagnosticsArray(parsed: unknown): unknown[] {
-  if (Array.isArray(parsed)) {
-    return parsed;
-  }
-
-  if (parsed && typeof parsed === "object") {
-    const direct = (parsed as { diagnostics?: unknown }).diagnostics;
-    if (Array.isArray(direct)) {
-      return direct;
-    }
-
-    if (direct && typeof direct === "object") {
-      const nested = (direct as { diagnostics?: unknown }).diagnostics;
-      if (Array.isArray(nested)) {
-        return nested;
-      }
-    }
-  }
-
-  return [];
-}
-
-function parseRuleId(code: string): string {
-  const match = /\(([^)]+)\)/.exec(code);
-  return match?.[1] ?? code;
-}
-
-function normalizeDiagnostic(entry: unknown): OxlintDiagnostic | null {
-  if (!entry || typeof entry !== "object") {
-    return null;
-  }
-
-  const diagnostic = entry as Record<string, unknown>;
-
-  const ruleId =
-    typeof diagnostic.ruleId === "string"
-      ? diagnostic.ruleId
-      : typeof diagnostic.code === "string"
-        ? parseRuleId(diagnostic.code)
-        : "unknown";
-
-  const severity = diagnostic.severity === "error" ? "error" : "warning";
-  const message = typeof diagnostic.message === "string" ? diagnostic.message : "";
-
-  const file =
-    typeof diagnostic.file === "string"
-      ? diagnostic.file
-      : typeof diagnostic.filename === "string"
-        ? diagnostic.filename
-        : "";
-
-  const firstLabel = Array.isArray(diagnostic.labels) ? diagnostic.labels[0] : undefined;
-  const firstSpan =
-    firstLabel && typeof firstLabel === "object"
-      ? (firstLabel as { span?: unknown }).span
-      : undefined;
-
-  const line =
-    typeof diagnostic.line === "number"
-      ? diagnostic.line
-      : firstSpan &&
-          typeof firstSpan === "object" &&
-          typeof (firstSpan as { line?: unknown }).line === "number"
-        ? (firstSpan as { line: number }).line
-        : 0;
-
-  const column =
-    typeof diagnostic.column === "number"
-      ? diagnostic.column
-      : firstSpan &&
-          typeof firstSpan === "object" &&
-          typeof (firstSpan as { column?: unknown }).column === "number"
-        ? (firstSpan as { column: number }).column
-        : 0;
-
-  return {
-    ruleId,
-    severity,
-    message,
-    file,
-    line,
-    column,
-  };
-}
-
 /**
- * Parse raw Oxlint JSON output into structured diagnostics.
+ * Group bounded Oxlint diagnostics for review policies.
  */
-export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
-  let raw: OxlintDiagnostic[];
-  try {
-    const parsed = JSON.parse(rawJson);
-    raw = extractDiagnosticsArray(parsed)
-      .map((entry) => normalizeDiagnostic(entry))
-      .filter((entry): entry is OxlintDiagnostic => entry !== null);
-  } catch {
-    return emptyDiagnostics();
-  }
-
+export function buildDiagnostics(
+  raw: readonly OxlintDiagnostic[],
+  pr: PR,
+  doctor: DoctorResult,
+): Diagnostics {
   const filtered =
     doctor.recommendation === "type-aware-filtered"
       ? raw.filter((d) => {
@@ -213,4 +106,11 @@ export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult):
     summary: lines.join("\n"),
     density,
   };
+}
+
+/**
+ * Parse raw Oxlint JSON output into structured diagnostics.
+ */
+export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
+  return buildDiagnostics(normalizeOxlintOutput(rawJson), pr, doctor);
 }
