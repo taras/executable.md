@@ -1,7 +1,11 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { resource, scoped, type Operation } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import {
+  InMemoryStream,
+  parseDurableEvent,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import { API, SERVICE_HOSTNAME } from "@executablemd/runtime";
 import type { ServiceEndpoint } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -261,5 +265,199 @@ done
       expect(lifecycle.starts).toBe(expectedStarts);
       expect(lifecycle.stops).toBe(expectedStarts);
     }
+  });
+
+  it("rejects a durable eval export that collides with an existing live binding", function* () {
+    const lifecycle = { starts: 0, stops: 0 };
+    const stream = new InMemoryStream();
+    yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_100 }), lifecycle);
+    yield* useStubFs({
+      "doc.md": `<Output>
+
+\`\`\`bash service=server exec
+cooperative-server
+\`\`\`
+
+\`\`\`js eval
+const partial = "must-not-commit";
+const server = "must-not-execute";
+\`\`\`
+
+</Output>
+`,
+    });
+
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        yield* collect(yield* execute({ path: "doc.md", stream }));
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(String(failure)).toContain("collides with a live binding");
+    expect(
+      stream
+        .snapshot()
+        .some((event) => event.type === "yield" && event.description.type === "eval"),
+    ).toBe(false);
+    expect(lifecycle).toEqual({ starts: 1, stops: 1 });
+  });
+
+  it("rejects a colliding durable export before partial replay restoration", function* () {
+    const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_101 });
+    const lifecycle = { starts: 0, stops: 0 };
+    const legacy = new InMemoryStream();
+    yield* useServiceStub(endpoint, lifecycle);
+    yield* useStubFs({
+      "doc.md": `<Output>
+
+\`\`\`bash service=other exec
+cooperative-server
+\`\`\`
+
+\`\`\`js eval
+const server = "legacy-durable-value";
+\`\`\`
+
+tail
+
+</Output>
+`,
+    });
+    yield* scoped(function* () {
+      yield* collect(yield* execute({ path: "doc.md", stream: legacy }));
+    });
+
+    const events = legacy.snapshot().map((event) => {
+      const parsed = parseDurableEvent(
+        serializeDurableEvent(event).replaceAll("service=other", "service=server"),
+      );
+      if (!parsed.ok) {
+        throw parsed.error;
+      }
+      return parsed.value;
+    });
+    const evalYield = events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "eval",
+    );
+    expect(evalYield).toBeGreaterThan(-1);
+    const partial = new InMemoryStream(events.slice(0, evalYield + 1));
+    const beforeEvalEvents = partial
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.type === "eval").length;
+    yield* useStubFs({
+      "doc.md": `<Output>
+
+\`\`\`bash service=server exec
+cooperative-server
+\`\`\`
+
+\`\`\`js eval
+const server = "legacy-durable-value";
+\`\`\`
+
+tail
+
+</Output>
+`,
+    });
+
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        yield* collect(yield* execute({ path: "doc.md", stream: partial }));
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(String(failure)).toContain("collides with a live binding");
+    expect(
+      partial
+        .snapshot()
+        .filter((event) => event.type === "yield" && event.description.type === "eval").length,
+    ).toBe(beforeEvalEvents);
+    expect(lifecycle).toEqual({ starts: 2, stops: 2 });
+  });
+
+  it("rejects ephemeral exports that collide with durable names before execution", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "doc.md": `<Output>
+
+\`\`\`js eval
+const shared = "durable";
+\`\`\`
+
+\`\`\`js ephemeral eval
+const partial = "must-not-commit";
+const shared = "must-not-execute";
+\`\`\`
+
+</Output>
+`,
+    });
+
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        yield* collect(yield* execute({ path: "doc.md", stream }));
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(String(failure)).toContain("collides with a durable binding");
+    expect(
+      stream
+        .snapshot()
+        .filter((event) => event.type === "yield" && event.description.type === "eval"),
+    ).toHaveLength(1);
+  });
+
+  it("allows a later ephemeral eval to update an existing live binding", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "doc.md": `<Provider><Sample /></Provider>\n`,
+      "components/Provider.md": `---
+meta:
+  componentName: Provider
+---
+
+\`\`\`js ephemeral eval
+const live = "first";
+\`\`\`
+
+\`\`\`js ephemeral eval
+const live = "second";
+\`\`\`
+
+\`\`\`js persist ephemeral eval
+const captured = live;
+yield* Sample.around({
+  *sample() { return captured; },
+});
+\`\`\`
+
+<Content />
+`,
+      "components/Sample.md": SAMPLE,
+    });
+
+    const output = String(
+      yield* scoped(function* () {
+        return yield* collect(
+          yield* execute({
+            path: "doc.md",
+            stream,
+            componentDirs: ["components", "."],
+          }),
+        );
+      }),
+    );
+
+    expect(output).toContain("second");
   });
 });

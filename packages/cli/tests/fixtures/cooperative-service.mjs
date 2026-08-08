@@ -18,7 +18,16 @@ if (mode === "non-cooperative") {
   process.stderr.write("service stderr before readiness\n");
 
   const server = createServer((_request, response) => {
+    process.stderr.write(`service request:${nonce}\n`);
     response.end(`service:${nonce}`);
+    if (mode === "exit-on-request") {
+      setTimeout(() => process.exit(19), 10);
+    }
+  });
+
+  process.on("SIGTERM", () => {
+    process.stderr.write(`service stopping:${nonce}\n`);
+    server.close(() => process.exit(0));
   });
 
   server.listen(requestedPort, host, () => {
@@ -73,6 +82,11 @@ if (mode === "non-cooperative") {
     process.stdout.write(line);
     process.stdout.write("service stdout after readiness\n");
     process.stderr.write("service stderr after readiness\n");
+
+    if (mode === "unterminated-live-output") {
+      process.stdout.write("unterminated-live-output");
+      process.stderr.write("unterminated live output written\n");
+    }
 
     if (mode === "duplicate") {
       setTimeout(() => process.stdout.write(line), 10);

@@ -127,6 +127,16 @@ export function validateLiveExports(exports: string[], durable: EvalEnv): void {
   }
 }
 
+/** Refuse a durable operation before it can execute or restore a colliding export. */
+export function validateDurableExports(exports: string[], live: LiveEnv): void {
+  const collision = exports.find((name) => name in live.values);
+  if (collision !== undefined) {
+    throw new LiveBindingCollisionError(
+      `durable eval export "${collision}" collides with a live binding`,
+    );
+  }
+}
+
 /** Refuse a durable value added after a live binding of the same name. */
 export function validateLiveOverlay(durable: EvalEnv, live: LiveEnv): void {
   const collision = Object.keys(live.values).find((name) => name in durable.values);

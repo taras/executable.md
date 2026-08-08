@@ -1270,10 +1270,13 @@ projected caller content.
 | journal serialization and replay restore | yes | no |
 
 The two namespaces may not overlap. `service=<binding>` validates the binding
-name and checks both environments before acquiring a process. `ephemeral eval`
-validates all exports against durable and existing live names before committing
-any of them. A failed block publishes nothing. Values from the live overlay are
-never substituted into a durable effect's source and never serialized.
+name and checks both environments before acquiring a process. Ordinary durable
+eval validates its declared exports against live names before execution or
+replay restoration and before appending an eval event. `ephemeral eval`
+validates its exports against durable names before execution; it may atomically
+replace an existing live binding. A failed block publishes none of its exports.
+Values from the live overlay are never substituted into a durable effect's
+source and never serialized.
 
 **Each evaluation runs against a snapshot, and commits its exports.** A block
 receives a plain object holding the bindings as they stood when it started. Its
@@ -3833,14 +3836,22 @@ stdout:
 XMD_SERVICE_READY:{"version":1,"token":"<token>","hostname":"127.0.0.1","port":43210}
 ```
 
-The host installs its byte-level stdout observer before spawn. It suppresses
-the matching record, forwards every other stdout byte unchanged, and accepts
-readiness only when the JSON object has exactly those fields and matches the
-expected version, token, host and port. Malformed, forged, duplicate or late
-records fail the service without exposing the token or raw protocol line.
+The host installs its byte-level stdout observer before spawn. At each line
+start it retains only bytes that can still match `XMD_SERVICE_READY:`; on the
+first mismatch it forwards those bytes and all subsequent ordinary bytes
+immediately, without waiting for a newline. Only an actual protocol candidate
+is buffered, under a finite bound. The observer suppresses valid and invalid
+protocol records and accepts readiness only when the JSON object has exactly
+those fields and matches the expected version, token, host and port. Malformed,
+forged, duplicate or late records fail the service without exposing the token
+or raw protocol line.
 Startup races readiness against process exit, protocol failure and the
 contextual startup timeout. After readiness the host continues supervising
-process exit and duplicate records until acquisition ends.
+process exit and duplicate records until acquisition ends. An observable host
+process teardown failure becomes `ServiceTeardownError`; when execution is
+already failing, the invocation teardown aggregate preserves that execution
+failure first and keeps the service failure reachable through its teardown
+member.
 
 The service binding is live, so only the `ephemeral eval` block can read it.
 The block installs middleware in the invocation scope through `persist`; plain
@@ -6630,9 +6641,13 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | R1 | Live overlay hidden from plain eval | A service binding is absent from the ordinary eval preamble |
 | R2 | Live overlay hidden from interpolation | `{server}` remains literal rather than becoming an endpoint string |
 | R3 | `ephemeral eval` executes during partial replay | Live bindings and middleware are reconstructed without a journal entry |
-| R4 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
-| R5 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
-| R6 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
+| R4 | Service publication collision | A durable or live binding with the requested name refuses acquisition before spawn |
+| R5 | Durable export collides with a service | Live execution and partial replay both reject before execution or restoration and append no eval event |
+| R6 | Ephemeral export collides with durable state | The block is rejected before execution and publishes no partial export |
+| R7 | Ephemeral update of a live binding | A later ephemeral block may atomically replace an existing live name |
+| R8 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
+| R9 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
+| R10 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
 
 ### Tier S — Provider component pattern (integration)
 
@@ -6641,17 +6656,21 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | S1 | Full provider golden run | service → persistent ephemeral middleware → children → cleanup |
 | S2 | Endpoint flows to ephemeral middleware | `server` is an exact frozen loopback endpoint available only to ephemeral eval |
 | S3 | Children can call sample after protocol readiness | `sample` calls in children reach the acquired endpoint |
-| S4 | Service terminated after children expand | After `execute` completes, process is not running |
-| S5 | Process exits before readiness | Startup fails with a dedicated exit-before-ready error |
-| S6 | Provider crashes during children | Supervision failure propagates and teardown completes |
-| S7 | Nested providers | Outer + inner provider → both start, inner tears down first |
+| S4 | Cancellation after readiness | The child exits and its listener can be rebound after its owning task is halted |
+| S5 | Startup failures | Exit, timeout and invalid readiness records produce dedicated errors without leaking protocol data |
+| S6 | Provider exits during projected content | The projected request reaches the ready process, its unexpected exit fails the document, and it is not restarted |
+| S7 | Nested real providers | Outer + inner processes both start and inner teardown finishes before outer teardown |
 | S8 | Nested providers, no model | Innermost provider handles sample call |
 | S9 | Nested providers, explicit model matching outer | Inner passes through, outer handles |
 | S10 | Nested providers, explicit model matching inner | Inner handles regardless of nesting depth |
 | S11 | Unmatched model | Chain exhausted → descriptive error naming the model |
 | S12 | Partial replay | Service acquisition and ephemeral middleware execute again after the recorded prefix |
 | S13 | Completed replay | Completed document returns without process spawn or token allocation |
-| S14 | Multiple provider instances | Two provider siblings → two processes, distinct endpoints and tokens |
+| S14 | Concurrent service acquisitions | Two owners acquire at the same time and receive distinct live endpoints |
+| S15 | Incremental ordinary stdout | Unterminated and chunk-split ordinary bytes are forwarded before teardown, byte for byte |
+| S16 | Incremental protocol records | Split readiness is suppressed, duplicate supervision remains active, and invalid candidates are bounded and suppressed |
+| S17 | Service teardown failures | A lone observable process teardown failure becomes `ServiceTeardownError`; an active execution failure remains first in the invocation aggregate |
+| S18 | Projected failure cleanup | A prompt projected-content failure tears down both retained real services and starts neither again |
 
 ### Tier EO — eval output() function
 

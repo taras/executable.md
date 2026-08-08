@@ -1,8 +1,21 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, suspend, until, withResolvers, type Operation } from "effection";
+import {
+  createSignal,
+  race,
+  resource,
+  scoped,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+  type Operation,
+} from "effection";
 import { when } from "@effectionx/converge";
+import { once } from "@effectionx/node/events";
 import { timebox } from "@effectionx/timebox";
+import { ProcessApi, Stdio, type Daemon } from "@effectionx/process";
+import { withInvocation, InvocationTeardownError } from "@executablemd/core";
 import {
   ServiceProcessExitBeforeReadyError,
   ServiceProtocolDuplicateError,
@@ -11,10 +24,16 @@ import {
   ServiceProtocolMalformedError,
   ServiceProtocolTokenMismatchError,
   ServiceStartupTimeoutError,
+  ServiceTeardownError,
   ServiceUnexpectedExitError,
   startService,
 } from "@executablemd/runtime";
-import { inheritedEnvironment, installHostService } from "../src/service-host.ts";
+import {
+  createProtocolObserver,
+  inheritedEnvironment,
+  installHostService,
+} from "../src/service-host.ts";
+import { createServer } from "node:http";
 import process from "node:process";
 
 const TOKEN = "12".repeat(32);
@@ -62,31 +81,172 @@ function* expectGone(pids: number[]): Operation<void> {
   expect(result.timeout).toBe(false);
 }
 
+function occupy(port: number): Operation<void> {
+  return resource(function* (provide) {
+    const server = createServer((_request, response) => response.end("foreign"));
+    const listening = once(server, "listening");
+    const failed = once<[Error]>(server, "error");
+    server.listen(port, "127.0.0.1");
+    yield* race([
+      listening,
+      (function* () {
+        const [error] = yield* failed;
+        throw error;
+      })(),
+    ]);
+    try {
+      yield* provide();
+    } finally {
+      server.close();
+    }
+  });
+}
+
+function* useTeardownFailure(failure: Error): Operation<void> {
+  yield* ProcessApi.around({
+    *daemon() {
+      return yield* resource(function* (provide) {
+        const stdout = createSignal<Uint8Array, void>();
+        const stderr = createSignal<Uint8Array, void>();
+        const exited = withResolvers<{ code?: number; signal?: string }>();
+        const process = {
+          pid: 42,
+          stdin: { send(_data: string) {} },
+          stdout,
+          stderr,
+          *join() {
+            return yield* exited.operation;
+          },
+          *expect() {
+            return yield* exited.operation;
+          },
+          *around(...args: Parameters<typeof Stdio.around>): ReturnType<typeof Stdio.around> {
+            return yield* Stdio.around(...args);
+          },
+          *[Symbol.iterator]() {
+            yield* suspend();
+          },
+        } satisfies Daemon;
+        const record = JSON.stringify({
+          version: 1,
+          token: TOKEN,
+          hostname: "127.0.0.1",
+          port: 41_234,
+        });
+        yield* Stdio.operations.stdout(new TextEncoder().encode(`XMD_SERVICE_READY:${record}\n`));
+        try {
+          yield* provide(process);
+        } finally {
+          stdout.close();
+          stderr.close();
+          throw failure;
+        }
+      });
+    },
+  });
+}
+
 describe("cooperative host service adapter", () => {
-  it("starts real isolated services, forwards live output, and suppresses readiness", function* () {
+  it("forwards split ordinary bytes immediately and suppresses split protocol records", function* () {
+    const forwarded: number[] = [];
+    const endpoints: Array<{ hostname: string; port: number }> = [];
+    const failures: Error[] = [];
+    const observer = createProtocolObserver({
+      token: TOKEN,
+      ready: (endpoint) => endpoints.push(endpoint),
+      fail: (error) => failures.push(error),
+      forward: (bytes) => forwarded.push(...bytes),
+    });
+    const ordinary = Uint8Array.from([88, 77, 111, 114, 100, 105, 110, 97, 114, 121, 0, 255]);
+    yield* observer.stdout(ordinary.slice(0, 2));
+    yield* observer.stdout(ordinary.slice(2, 7));
+    yield* observer.stdout(ordinary.slice(7));
+    expect(forwarded).toEqual([...ordinary]);
+
+    forwarded.length = 0;
+    const record = new TextEncoder().encode(
+      `\nXMD_SERVICE_READY:${JSON.stringify({
+        version: 1,
+        token: TOKEN,
+        hostname: "127.0.0.1",
+        port: 41_235,
+      })}\n`,
+    );
+    yield* observer.stdout(record.slice(0, 5));
+    yield* observer.stdout(record.slice(5, 19));
+    yield* observer.stdout(record.slice(19, 47));
+    yield* observer.stdout(record.slice(47));
+
+    expect(forwarded).toEqual([10]);
+    expect(endpoints).toEqual([{ hostname: "127.0.0.1", port: 41_235 }]);
+    expect(failures).toEqual([]);
+
+    yield* observer.stdout(record.slice(1));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(ServiceProtocolDuplicateError);
+    expect(forwarded).toEqual([10]);
+  });
+
+  it("bounds and suppresses an invalid protocol candidate", function* () {
+    const forwarded: number[] = [];
+    const failures: Error[] = [];
+    const observer = createProtocolObserver({
+      token: TOKEN,
+      ready() {},
+      fail: (error) => failures.push(error),
+      forward: (bytes) => forwarded.push(...bytes),
+    });
+    const secret = `${TOKEN}${"x".repeat(1_024)}`;
+    const bytes = new TextEncoder().encode(`XMD_SERVICE_READY:${secret}\nordinary`);
+
+    yield* observer.stdout(bytes);
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(ServiceProtocolMalformedError);
+    expect(new TextDecoder().decode(Uint8Array.from(forwarded))).toBe("ordinary");
+    expect(String(failures[0])).not.toContain(TOKEN);
+  });
+
+  it("starts genuinely concurrent isolated services and suppresses readiness", function* () {
     const stdout: string[] = [];
     const stderr: string[] = [];
 
     yield* scoped(function* () {
       yield* installHostService(adapter(stdout, stderr));
-      const first = yield* startService({ command: command("normal", "first") });
-      const second = yield* startService({ command: command("normal", "second") });
+      const release = withResolvers<void>();
+      const firstReady = withResolvers<{ hostname: string; port: number }>();
+      const secondReady = withResolvers<{ hostname: string; port: number }>();
+      const firstOwner = yield* spawn(function* () {
+        const service = yield* startService({ command: command("normal", "first") });
+        firstReady.resolve(service.endpoint);
+        yield* release.operation;
+      });
+      const secondOwner = yield* spawn(function* () {
+        const service = yield* startService({ command: command("normal", "second") });
+        secondReady.resolve(service.endpoint);
+        yield* release.operation;
+      });
+      const first = yield* firstReady.operation;
+      const second = yield* secondReady.operation;
 
-      expect(first.endpoint.port).not.toBe(second.endpoint.port);
-      expect(Object.isFrozen(first.endpoint)).toBe(true);
+      expect(first.port).not.toBe(second.port);
+      expect(Object.isFrozen(first)).toBe(true);
 
       const firstResponse = yield* until(
         globalThis
-          .fetch(`http://${first.endpoint.hostname}:${first.endpoint.port}`)
+          .fetch(`http://${first.hostname}:${first.port}`)
           .then((response) => response.text()),
       );
       const secondResponse = yield* until(
         globalThis
-          .fetch(`http://${second.endpoint.hostname}:${second.endpoint.port}`)
+          .fetch(`http://${second.hostname}:${second.port}`)
           .then((response) => response.text()),
       );
       expect(firstResponse).toBe("service:first");
       expect(secondResponse).toBe("service:second");
+      release.resolve();
+      yield* firstOwner;
+      yield* secondOwner;
     });
 
     expect(stdout.join("")).toContain("service stdout before readiness");
@@ -156,6 +316,106 @@ describe("cooperative host service adapter", () => {
 
     expect(pid).toBeGreaterThan(0);
     yield* expectGone([pid]);
+  });
+
+  it("cancels after readiness and releases the child listener", function* () {
+    const stderr: string[] = [];
+    const ready = withResolvers<{ hostname: string; port: number }>();
+    let endpoint = { hostname: "127.0.0.1", port: 0 };
+
+    yield* scoped(function* () {
+      yield* installHostService(adapter([], stderr));
+      const owner = yield* spawn(function* () {
+        const service = yield* startService({ command: command("normal", "cancel-ready") });
+        ready.resolve(service.endpoint);
+        yield* suspend();
+      });
+      endpoint = yield* ready.operation;
+      const response = yield* until(
+        globalThis
+          .fetch(`http://${endpoint.hostname}:${endpoint.port}`)
+          .then((result) => result.text()),
+      );
+      expect(response).toBe("service:cancel-ready");
+      yield* owner.halt();
+      yield* expectGone(fixturePids(stderr));
+      yield* scoped(() => occupy(endpoint.port));
+    });
+  });
+
+  it("forwards unterminated ordinary stdout while the service is still active", function* () {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+
+    yield* scoped(function* () {
+      yield* installHostService(adapter(stdout, stderr));
+      yield* startService({ command: command("unterminated-live-output") });
+      const observed = yield* timebox(2_000, () =>
+        when(function* () {
+          if (!stderr.join("").includes("unterminated live output written")) {
+            throw new Error("fixture has not written its unterminated stdout yet");
+          }
+        }),
+      );
+      expect(observed.timeout).toBe(false);
+      expect(stdout.join("")).toContain("unterminated-live-output");
+    });
+  });
+
+  it("translates an observable process teardown failure", function* () {
+    const planted = new Error("injected process teardown failure");
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        yield* installHostService(adapter([], []));
+        yield* useTeardownFailure(planted);
+        yield* startService({ command: "injected-service" });
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ServiceTeardownError);
+    if (!(failure instanceof ServiceTeardownError)) {
+      throw new Error("expected ServiceTeardownError");
+    }
+    expect(failure.cause).toBe(planted);
+  });
+
+  it("preserves an execution failure beside a translated teardown failure", function* () {
+    const execution = new Error("active execution failure");
+    const teardown = new Error("injected process teardown failure");
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        yield* installHostService(adapter([], []));
+        yield* useTeardownFailure(teardown);
+        yield* withInvocation(function* () {
+          yield* startService({ command: "injected-service" });
+          throw execution;
+        });
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("expected AggregateError");
+    }
+    expect(failure.errors[0]).toBe(execution);
+    expect(failure.errors[1]).toBeInstanceOf(InvocationTeardownError);
+    const invocationTeardown = failure.errors[1];
+    if (!(invocationTeardown instanceof InvocationTeardownError)) {
+      throw new Error("expected InvocationTeardownError");
+    }
+    expect(invocationTeardown.causes).toHaveLength(1);
+    expect(invocationTeardown.causes[0]).toBeInstanceOf(ServiceTeardownError);
+    const serviceTeardown = invocationTeardown.causes[0];
+    if (!(serviceTeardown instanceof ServiceTeardownError)) {
+      throw new Error("expected ServiceTeardownError");
+    }
+    expect(serviceTeardown.cause).toBe(teardown);
   });
 
   it("fails the owning scope when a ready process exits or repeats readiness", function* () {

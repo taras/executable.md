@@ -21,6 +21,7 @@ import { transformBlock, serializeExports } from "./eval-transform.ts";
 import {
   commitLiveExports,
   liveEnvironment,
+  validateDurableExports,
   validateLiveExports,
   validateLiveOverlay,
 } from "./live-env.ts";
@@ -207,6 +208,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         }
 
         return { value: exports as unknown as Json } as Json;
+      },
+      {
+        validate: () => validateDurableExports(transformed.exports, liveEnvironment(evalEnv)),
       },
     )) as unknown as { value: Json };
 

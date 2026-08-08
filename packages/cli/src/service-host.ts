@@ -1,7 +1,7 @@
 /** Shared mechanics for the runtime-named cooperative service adapters. */
 
-import { ensure, race, resource, withResolvers, type Operation } from "effection";
-import { daemon, Stdio } from "@effectionx/process";
+import { ensure, race, resource, scoped, withResolvers, type Operation } from "effection";
+import { daemon, Stdio, type Daemon } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import {
   API,
@@ -11,6 +11,7 @@ import {
   ServiceProtocolDuplicateError,
   ServiceProtocolMalformedError,
   ServiceStartupTimeoutError,
+  ServiceTeardownError,
   ServiceUnexpectedExitError,
   parseServiceReadyRecord,
   timeout,
@@ -24,47 +25,33 @@ interface HostServiceAdapter {
   stderr(bytes: Uint8Array): void;
 }
 
-interface ProtocolObserver {
+export interface ProtocolObserver {
   stdout(bytes: Uint8Array): Operation<void>;
   flush(): Operation<void>;
 }
 
 const encoder = new TextEncoder();
 const prefixBytes = encoder.encode(SERVICE_READY_PREFIX);
+const MAX_PROTOCOL_RECORD_BYTES = 1_024;
 
-function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
-  const joined = new Uint8Array(left.byteLength + right.byteLength);
-  joined.set(left);
-  joined.set(right, left.byteLength);
-  return joined;
-}
-
-function startsWithPrefix(line: Uint8Array): boolean {
-  if (line.byteLength < prefixBytes.byteLength) {
-    return false;
-  }
-  for (let index = 0; index < prefixBytes.byteLength; index += 1) {
-    if (line[index] !== prefixBytes[index]) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function createProtocolObserver(options: {
+export function createProtocolObserver(options: {
   token: string;
   ready(endpoint: ServiceEndpoint): void;
   fail(error: Error): void;
   forward(bytes: Uint8Array): void;
 }): ProtocolObserver {
-  let pending: Uint8Array = new Uint8Array();
+  let state: "prefix" | "ordinary" | "protocol" | "suppressed" = "prefix";
+  let possiblePrefix: number[] = [];
+  let protocolRecord: number[] = [];
   let readinessSeen = false;
 
-  function consume(line: Uint8Array): void {
-    if (!startsWithPrefix(line)) {
-      options.forward(line);
-      return;
-    }
+  function beginLine(): void {
+    state = "prefix";
+    possiblePrefix = [];
+    protocolRecord = [];
+  }
+
+  function consumeProtocolRecord(): void {
     if (readinessSeen) {
       options.fail(new ServiceProtocolDuplicateError());
       return;
@@ -73,7 +60,7 @@ function createProtocolObserver(options: {
     let payload: string;
     try {
       payload = new TextDecoder("utf-8", { fatal: true }).decode(
-        line.subarray(prefixBytes.byteLength, line.byteLength - 1),
+        Uint8Array.from(protocolRecord.slice(prefixBytes.byteLength)),
       );
     } catch {
       options.fail(new ServiceProtocolMalformedError());
@@ -89,27 +76,91 @@ function createProtocolObserver(options: {
     }
   }
 
+  function appendProtocol(bytes: Uint8Array, start: number, end: number): boolean {
+    if (protocolRecord.length + end - start > MAX_PROTOCOL_RECORD_BYTES) {
+      protocolRecord = [];
+      state = "suppressed";
+      options.fail(new ServiceProtocolMalformedError());
+      return false;
+    }
+    for (let index = start; index < end; index += 1) {
+      protocolRecord.push(bytes[index]!);
+    }
+    return true;
+  }
+
   return {
     *stdout(bytes: Uint8Array): Operation<void> {
-      pending = concat(pending, bytes);
-      let newline = pending.indexOf(10);
-      while (newline !== -1) {
-        const line = pending.slice(0, newline + 1);
-        pending = pending.slice(newline + 1);
-        consume(line);
-        newline = pending.indexOf(10);
+      let index = 0;
+      while (index < bytes.byteLength) {
+        if (state === "prefix") {
+          const byte = bytes[index]!;
+          if (byte === prefixBytes[possiblePrefix.length]) {
+            possiblePrefix.push(byte);
+            index += 1;
+            if (possiblePrefix.length === prefixBytes.byteLength) {
+              protocolRecord = [...possiblePrefix];
+              possiblePrefix = [];
+              state = "protocol";
+            }
+            continue;
+          }
+
+          if (possiblePrefix.length > 0) {
+            options.forward(Uint8Array.from(possiblePrefix));
+            possiblePrefix = [];
+          }
+          state = "ordinary";
+          continue;
+        }
+
+        if (state === "ordinary") {
+          const newline = bytes.indexOf(10, index);
+          if (newline === -1) {
+            options.forward(bytes.slice(index));
+            index = bytes.byteLength;
+          } else {
+            options.forward(bytes.slice(index, newline + 1));
+            index = newline + 1;
+            beginLine();
+          }
+          continue;
+        }
+
+        if (state === "protocol") {
+          const newline = bytes.indexOf(10, index);
+          const end = newline === -1 ? bytes.byteLength : newline;
+          if (!appendProtocol(bytes, index, end)) {
+            index = end;
+            continue;
+          }
+          if (newline === -1) {
+            index = bytes.byteLength;
+          } else {
+            consumeProtocolRecord();
+            index = newline + 1;
+            beginLine();
+          }
+          continue;
+        }
+
+        const newline = bytes.indexOf(10, index);
+        if (newline === -1) {
+          index = bytes.byteLength;
+        } else {
+          index = newline + 1;
+          beginLine();
+        }
       }
     },
     *flush(): Operation<void> {
-      if (pending.byteLength > 0) {
-        if (startsWithPrefix(pending)) {
-          pending = new Uint8Array();
-          throw new ServiceProtocolMalformedError();
-        } else {
-          options.forward(pending);
-          pending = new Uint8Array();
-        }
+      if (state === "prefix" && possiblePrefix.length > 0) {
+        options.forward(Uint8Array.from(possiblePrefix));
+      } else if (state === "protocol") {
+        beginLine();
+        throw new ServiceProtocolMalformedError();
       }
+      beginLine();
     },
   };
 }
@@ -157,6 +208,32 @@ function* waitForStartup(options: {
   return result.value;
 }
 
+function serviceProcess(options: {
+  command: string;
+  cwd?: string;
+  environment: Record<string, string>;
+}): Operation<Daemon> {
+  return resource(function* (provide) {
+    let published = false;
+    try {
+      yield* scoped(function* () {
+        const process = yield* daemon(options.command, {
+          shell: true,
+          cwd: options.cwd,
+          env: options.environment,
+        });
+        published = true;
+        yield* provide(process);
+      });
+    } catch (error) {
+      if (!published || error instanceof ServiceTeardownError) {
+        throw error;
+      }
+      throw new ServiceTeardownError({ cause: error });
+    }
+  });
+}
+
 function startHostService(
   options: ServiceStartOptions,
   adapter: HostServiceAdapter,
@@ -196,10 +273,10 @@ function startHostService(
       XMD_SERVICE_HOST: SERVICE_HOSTNAME,
       XMD_SERVICE_PORT: "0",
     };
-    const process = yield* daemon(options.command, {
-      shell: true,
+    const process = yield* serviceProcess({
+      command: options.command,
       cwd: options.cwd,
-      env: environment,
+      environment,
     });
     const endpoint = yield* waitForStartup({
       ready: ready.operation,
