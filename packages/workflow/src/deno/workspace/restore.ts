@@ -3,6 +3,7 @@ import { clearBlobCache } from "../../../vendor/cloudflare-computer-dofs/generat
 import { clearResolveCache } from "../../../vendor/cloudflare-computer-dofs/generated/fs/resolveCache.js";
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { RunConnection } from "../connections.ts";
+import { reading } from "../reading.ts";
 import {
   corrupt,
   fromHex,
@@ -175,7 +176,7 @@ function materializeNode(
 }
 
 function nextRevision(database: DatabaseSync, databasePath: string): number {
-  const row = database.prepare("UPDATE vfs_meta SET v = v + 1 WHERE k = 'rev' RETURNING v").get();
+  const row = reading(database, "UPDATE vfs_meta SET v = v + 1 WHERE k = 'rev' RETURNING v").get();
   const revision = integer(row?.["v"], databasePath, "Workspace revision");
   if (revision < 1) {
     corrupt(databasePath, "restoration did not establish a valid Workspace revision");

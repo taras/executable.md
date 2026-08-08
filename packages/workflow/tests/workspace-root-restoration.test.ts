@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { inspect } from "node:util";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation } from "effection";
+import { ensure, type Operation, spawn, suspend, withResolvers } from "effection";
 import {
   WorkflowDatabaseCorruptError,
   type WorkflowRunDatabase,
@@ -16,6 +17,8 @@ import {
   transactWorkspaceRoots,
 } from "../src/deno/workspace/private.ts";
 import { createRun, runPath, tamper, useStorageRoot, withStorage } from "./support/storage.ts";
+
+const SQLITE_MAX_INTEGER = "9223372036854775807";
 
 function* transact<T>(
   database: WorkflowRunDatabase,
@@ -111,8 +114,8 @@ describe("Tier WRR — private Workspace root restoration", () => {
           size: 10,
         });
         expect(
-          (yield* workspace.filesystem.readdir("/tree")).map((entry) => entry.name).toSorted(),
-        ).toEqual(["current.txt", "file.txt", "hardlink.txt"]);
+          new Set((yield* workspace.filesystem.readdir("/tree")).map((entry) => entry.name)),
+        ).toEqual(new Set(["current.txt", "file.txt", "hardlink.txt"]));
         const resnapshot = yield* workspace.capture({ publish: true });
         expect(resnapshot).toEqual(selected);
         return selected;
@@ -375,7 +378,184 @@ describe("Tier WRR — private Workspace root restoration", () => {
       expect(readFileSync(path)).toEqual(before);
     }
   });
+
+  it("WRR7: retained-root integer corruption is redacted, typed, and read-only", function* () {
+    const storage = yield* useStorageRoot();
+    const cases: Array<{ runId: string; damage(database: DatabaseSync): void }> = [
+      {
+        runId: "huge-root-format",
+        damage(database) {
+          database.exec("PRAGMA ignore_check_constraints = ON");
+          database.exec(`UPDATE workspace_roots SET format_version = ${SQLITE_MAX_INTEGER}`);
+        },
+      },
+      {
+        runId: "huge-root-singleton",
+        damage(database) {
+          database.exec("PRAGMA ignore_check_constraints = ON");
+          database.exec(`UPDATE workspace_state SET singleton_id = ${SQLITE_MAX_INTEGER}`);
+        },
+      },
+      {
+        runId: "huge-node-mode",
+        damage(database) {
+          database.exec(`UPDATE vfs_nodes SET mode = ${SQLITE_MAX_INTEGER} WHERE inode = 1`);
+        },
+      },
+      {
+        runId: "huge-chunk-index",
+        damage(database) {
+          database.exec(`UPDATE vfs_chunks SET idx = ${SQLITE_MAX_INTEGER}`);
+        },
+      },
+      {
+        runId: "huge-manifest-size",
+        damage(database) {
+          database.exec(`UPDATE vfs_manifests SET size = ${SQLITE_MAX_INTEGER}`);
+        },
+      },
+      {
+        runId: "huge-blob-last-seen",
+        damage(database) {
+          database.exec(`UPDATE vfs_blobs SET last_seen = ${SQLITE_MAX_INTEGER}`);
+        },
+      },
+      {
+        runId: "huge-revision",
+        damage(database) {
+          database.exec(`UPDATE vfs_meta SET v = ${SQLITE_MAX_INTEGER} WHERE k = 'rev'`);
+        },
+      },
+      {
+        runId: "huge-watermark",
+        damage(database) {
+          database.exec(`UPDATE _vfs_watermark SET v = ${SQLITE_MAX_INTEGER} WHERE k = 'fetchRev'`);
+        },
+      },
+      {
+        runId: "huge-change-id",
+        damage(database) {
+          database.exec(
+            `INSERT INTO vfs_changes (id, rev, path, op)
+             VALUES (${SQLITE_MAX_INTEGER}, 1, '/gone', 'delete')`,
+          );
+        },
+      },
+    ];
+
+    for (const one of cases) {
+      yield* createCorruptionFixture(storage, one.runId);
+      const path = runPath(storage, one.runId);
+      tamper(path, one.damage);
+      const before = readFileSync(path);
+      const result = yield* withStorage(storage, function* () {
+        return yield* WorkflowRunStorage.operations.lookup(one.runId);
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        continue;
+      }
+      expect(result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+      expect(result.error).not.toBeInstanceOf(RangeError);
+      expect(errorSurface(result.error)).not.toContain(SQLITE_MAX_INTEGER);
+      expect(readFileSync(path)).toEqual(before);
+    }
+  });
+
+  it("WRR8: cleanup mutations finish before final root validation and cannot commit", function* () {
+    const storage = yield* useStorageRoot();
+    const path = runPath(storage, "cleanup-mutation");
+    let baselineRoot = "";
+    let baselineRoots = 0;
+    let baselineJournal = 0;
+
+    yield* withStorage(storage, function* () {
+      const database = yield* createRun({ runId: "cleanup-mutation" });
+      baselineRoot = (yield* capture(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/baseline.txt", "baseline");
+      })).rootId;
+      yield* database.journal.append({
+        type: "close",
+        coroutineId: "root",
+        result: { status: "ok", value: "baseline" },
+      });
+
+      const connection = workflowRunConnection(database);
+      baselineRoots = count(connection.database, "workspace_roots");
+      baselineJournal = count(connection.database, "journal_events");
+      const started = withResolvers<void>();
+      const result = yield* transactWorkspaceRoots(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/captured.txt", "captured");
+        yield* spawn(function* () {
+          yield* ensure(function* () {
+            yield* workspace.filesystem.writeFile("/cleanup.txt", "cleanup");
+          });
+          started.resolve();
+          yield* suspend();
+        });
+        yield* started.operation;
+        yield* workspace.capture({ publish: true });
+      });
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+      expect(count(connection.database, "workspace_roots")).toBe(baselineRoots);
+      expect(count(connection.database, "journal_events")).toBe(baselineJournal);
+
+      const observed = yield* transact(database, function* (workspace) {
+        const missing: string[] = [];
+        for (const file of ["/captured.txt", "/cleanup.txt"]) {
+          try {
+            yield* workspace.filesystem.readTextFile(file);
+          } catch {
+            missing.push(file);
+          }
+        }
+        return { root: yield* workspace.currentRoot(), missing };
+      });
+      expect(observed).toEqual({
+        root: baselineRoot,
+        missing: ["/captured.txt", "/cleanup.txt"],
+      });
+      expect(yield* database.journal.readAll()).toHaveLength(baselineJournal);
+    });
+
+    yield* withStorage(storage, function* () {
+      const found = yield* WorkflowRunStorage.operations.lookup("cleanup-mutation");
+      if (!found.ok) {
+        throw found.error;
+      }
+      expect(
+        yield* transact(found.value, function* (workspace) {
+          expect(yield* workspace.filesystem.readTextFile("/baseline.txt")).toBe("baseline");
+          return yield* workspace.currentRoot();
+        }),
+      ).toBe(baselineRoot);
+      expect(yield* found.value.journal.readAll()).toHaveLength(baselineJournal);
+    });
+
+    const reopened = new DatabaseSync(path);
+    try {
+      expect(count(reopened, "workspace_roots")).toBe(baselineRoots);
+      expect(count(reopened, "journal_events")).toBe(baselineJournal);
+    } finally {
+      reopened.close();
+    }
+  });
 });
+
+function errorSurface(error: unknown): string {
+  const parts: string[] = [String(error), inspect(error)];
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    parts.push(current.name, current.message, current.stack ?? "");
+    current = current.cause;
+  }
+  return parts.join("\n");
+}
 
 function currentRoot(database: DatabaseSync): string {
   return String(

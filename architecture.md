@@ -222,7 +222,10 @@ DOFS content-addressed blobs. Normalized root-to-manifest and root-to-blob rows
 equal the root's transitive content exactly and prevent retained content from
 being deleted. Opening a run validates every root and referenced manifest and
 blob, then snapshots the live frontier read-only and requires it to equal
-`current_root`.
+`current_root`. The schema structure, retained content, live/current comparison
+and run row are read through one explicit SQLite snapshot. This recognition
+transaction is not a caller-owned Workspace transaction and enables no DOFS
+savepoints.
 
 Which status transitions are legal, and what a caller may do to a run in each
 of them, is lifecycle policy applied above storage.
@@ -259,7 +262,9 @@ A transaction commits only once the work inside it has finished, including work
 that is still unwinding when the body returns. Cleanup belonging to that work
 appends through the same transaction, and a commit that happened first would
 leave those appends to publish themselves outside it. Failure and cancellation
-roll back everything the transaction did.
+roll back everything the transaction did. Adapter-private Workspace work also
+waits for its supplied scope to finish teardown before it performs the final
+live/current validation.
 
 A transaction opened inside another on the same storage is refused rather than
 nested, as is an ordinary operation called from inside a transaction body.
@@ -360,6 +365,11 @@ before their parent's effect begins. Declarative Git operations, including
 staging, switching and committing, operate on the same transactional Workspace
 rather than invoking an untracked native Git side effect.
 
+Successful effect coordination finishes the mutation scope, including child
+cleanup, before capturing the resulting root. The provider-level coordinator
+that performs this ordering and journal publication is not installed at this
+layer.
+
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the
 provider to perform or reconcile that identity, then append one local result
@@ -412,7 +422,9 @@ root-only live frontier initially. It retains arbitrary canonical roots and can
 materialize one privately through the authoritative connection. Capture runs
 inside the caller-owned transaction. Restoration runs in a nested savepoint,
 clears the authoritative resolution and blob caches, and resnapshots to the
-selected identity before release.
+selected identity before release. Private Workspace transaction bodies finish
+their child teardown before final live/current validation; a later effect
+coordinator finishes its mutation scope before it invokes capture.
 
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider

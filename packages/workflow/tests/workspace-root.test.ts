@@ -285,7 +285,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
     }
   });
 
-  it("WRR7: the production closure contains no DOFS garbage-collection path", function* () {
+  it("WRR9: the production closure contains no DOFS garbage-collection path", function* () {
     // deno-lint-ignore require-yield
     const denoAdapter = fileURLToPath(new URL("../src/deno", import.meta.url));
     const vendorManifest = fileURLToPath(

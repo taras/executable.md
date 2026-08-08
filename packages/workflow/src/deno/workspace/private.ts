@@ -1,4 +1,4 @@
-import { type Operation, type Result } from "effection";
+import { type Operation, type Result, scoped } from "effection";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { workflowRunConnection } from "../database.ts";
 import { createDenoWorkspaceFilesystem, type DenoWorkspaceFilesystem } from "./filesystem.ts";
@@ -42,7 +42,9 @@ export function* transactWorkspaceRoots<T>(
         return restoreWorkspaceRoot(connection, rootId, options);
       },
     };
-    const value = yield* body(workspace);
+    const value = yield* scoped(function* () {
+      return yield* body(workspace);
+    });
     verifyWorkspace(connection.database, connection.dofs, connection.path);
     return value;
   });

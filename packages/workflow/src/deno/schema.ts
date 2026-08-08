@@ -32,6 +32,7 @@ import {
   WorkflowIncompleteVersionOneError,
   WorkflowSchemaVersionError,
 } from "../storage/errors.ts";
+import { reading } from "./reading.ts";
 import { initializeEmptyWorkspace, verifyWorkspace } from "./workspace/root.ts";
 
 /**
@@ -598,7 +599,7 @@ function readPragmaNumber(database: DatabaseSync, pragma: string, path: string):
 
 function query(database: DatabaseSync, sql: string, path: string): Record<string, unknown>[] {
   try {
-    return database.prepare(sql).all();
+    return reading(database, sql).all();
   } catch (error) {
     throw translateSqliteError(error, path);
   }

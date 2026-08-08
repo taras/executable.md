@@ -31,7 +31,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
@@ -62,6 +62,7 @@ import {
   useTransactionSavepoints,
 } from "./transaction.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
+import { reading } from "./reading.ts";
 import { isSqliteForeignKeyConstraint, translateSqliteError } from "./schema.ts";
 
 const SELECT_RUN = "SELECT * FROM workflow_run WHERE id = 1";
@@ -525,20 +526,6 @@ export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRec
 function readRetrievalRow(database: DatabaseSync): DefinitionRetrieval | undefined {
   const row = reading(database, SELECT_RETRIEVAL).get();
   return row === undefined ? undefined : readRetrieval(row);
-}
-
-/**
- * A statement that answers with `bigint` rather than refusing to answer.
- *
- * `node:sqlite` throws a `RangeError` when a column holds a 64-bit value —
- * and quotes the value in the message. Reading integers as `bigint` puts the
- * decision back where every other stored value is decided, in a parser that
- * refuses without repeating what it refused.
- */
-function reading(database: DatabaseSync, sql: string): StatementSync {
-  const statement = database.prepare(sql);
-  statement.setReadBigInts(true);
-  return statement;
 }
 
 function readExecution(database: DatabaseSync, executionId: string): DocumentExecutionRecord {

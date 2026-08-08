@@ -328,6 +328,12 @@ connection queue and one synchronous savepoint allocator. It remains alive
 until provider-scope teardown, after the provider's child scopes finish.
 Different database paths have independent entries.
 
+Opening existing storage performs structural recognition, retained-root and
+content validation, the live/current comparison and the singleton run-row read
+inside one explicit SQLite read transaction. Those dependent reads therefore
+describe one committed version. Recognition does not mark the connection as a
+caller-owned Workspace transaction and does not permit DOFS savepoints.
+
 Operations through every lease on one entry are serialized, and each runs
 inside a transaction. A caller that needs several statements published
 together holds the transaction itself:
@@ -366,7 +372,13 @@ transaction. Capture traverses and validates the complete live DOFS frontier,
 builds or reuses a canonical DOFS file manifest when ordered chunks do not yet
 have one, retains the immutable root and exact reference sets, and optionally
 sets it current. Read-only recognition never builds a manifest or changes
-last-seen metadata.
+last-seen metadata. The supplied private Workspace body runs in an inner scope,
+and final live/current validation waits for that scope's children and resources
+to finish teardown.
+
+Successful effect coordination finishes its mutation scope before capturing
+the root. The provider-level coordinator that orders mutation teardown, root
+capture and filtered journal publication is not part of this storage layer.
 
 The private restoration materializer loads a fully validated retained root and
 rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink

@@ -4,6 +4,7 @@ import type { Database as CloudflareDatabase } from "../../../vendor/cloudflare-
 import { buildManifest } from "../../../vendor/cloudflare-computer-dofs/generated/sync/manifests.js";
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { RunConnection } from "../connections.ts";
+import { reading } from "../reading.ts";
 import {
   bytes,
   compareUtf8,
@@ -252,9 +253,10 @@ export function retainWorkspaceRoot(
     corrupt(databasePath, "a Workspace root does not match its canonical content references");
   }
 
-  const existing = database
-    .prepare("SELECT format_version, manifest FROM workspace_roots WHERE root_id = ?")
-    .get(root.rootId);
+  const existing = reading(
+    database,
+    "SELECT format_version, manifest FROM workspace_roots WHERE root_id = ?",
+  ).get(root.rootId);
   if (existing === undefined) {
     database
       .prepare("INSERT INTO workspace_roots (root_id, format_version, manifest) VALUES (?, ?, ?)")
@@ -303,9 +305,10 @@ export function loadWorkspaceRoot(
   if (!SHA256.test(rootId)) {
     corrupt(databasePath, "the selected Workspace root identity is malformed");
   }
-  const row = database
-    .prepare("SELECT root_id, format_version, manifest FROM workspace_roots WHERE root_id = ?")
-    .get(rootId);
+  const row = reading(
+    database,
+    "SELECT root_id, format_version, manifest FROM workspace_roots WHERE root_id = ?",
+  ).get(rootId);
   if (row === undefined) {
     corrupt(databasePath, "the selected Workspace root is not retained");
   }
@@ -326,7 +329,7 @@ export function setCurrentWorkspaceRoot(
 }
 
 export function currentWorkspaceRoot(database: DatabaseSync, databasePath: string): string {
-  const rows = database.prepare("SELECT singleton_id, current_root_id FROM workspace_state").all();
+  const rows = reading(database, "SELECT singleton_id, current_root_id FROM workspace_state").all();
   const row = rows[0];
   if (
     rows.length !== 1 ||
@@ -346,9 +349,10 @@ export function verifyWorkspace(
 ): void {
   validateDofsContentStore(database, databasePath);
   const retained = new Map<string, StoredWorkspaceRoot>();
-  for (const row of database
-    .prepare("SELECT root_id, format_version, manifest FROM workspace_roots ORDER BY root_id")
-    .all()) {
+  for (const row of reading(
+    database,
+    "SELECT root_id, format_version, manifest FROM workspace_roots ORDER BY root_id",
+  ).all()) {
     const root = parseStoredRoot(database, row, databasePath);
     if (retained.has(root.rootId)) {
       corrupt(databasePath, "it contains a duplicate retained Workspace root");
@@ -375,14 +379,13 @@ export function verifyWorkspace(
     corrupt(databasePath, "it contains no retained Workspace root");
   }
 
-  const unretainedJournalRoots = database
-    .prepare(
-      `SELECT COUNT(*) AS count
+  const unretainedJournalRoots = reading(
+    database,
+    `SELECT COUNT(*) AS count
          FROM journal_events AS event
          LEFT JOIN workspace_roots AS root ON root.root_id = event.workspace_root_id
         WHERE root.root_id IS NULL`,
-    )
-    .get();
+  ).get();
   if (integer(unretainedJournalRoots?.["count"], databasePath, "journal root count") !== 0) {
     corrupt(databasePath, "a journal event names a Workspace root that is not retained");
   }
@@ -403,9 +406,10 @@ export function readDofsManifest(
   databasePath: string,
 ): DofsManifest {
   const hashBytes = fromHex(hash, databasePath, "DOFS manifest identity");
-  const row = database
-    .prepare("SELECT hash, size, encoded, last_seen FROM vfs_manifests WHERE hash = ?")
-    .get(hashBytes);
+  const row = reading(
+    database,
+    "SELECT hash, size, encoded, last_seen FROM vfs_manifests WHERE hash = ?",
+  ).get(hashBytes);
   if (row === undefined) {
     corrupt(databasePath, "a retained Workspace root names a missing DOFS manifest");
   }
@@ -532,7 +536,10 @@ function validateFile(
 }
 
 function validateDofsContentStore(database: DatabaseSync, databasePath: string): void {
-  const blobs = database.prepare("SELECT hash, size, last_seen FROM vfs_blobs ORDER BY hash").all();
+  const blobs = reading(
+    database,
+    "SELECT hash, size, last_seen FROM vfs_blobs ORDER BY hash",
+  ).all();
   for (const row of blobs) {
     const hash = bytes(row["hash"], databasePath, "DOFS blob hash");
     if (hash.byteLength !== 32) {
@@ -550,7 +557,7 @@ function validateDofsContentStore(database: DatabaseSync, databasePath: string):
     corrupt(databasePath, "the DOFS blob index and retained bytes are incomplete");
   }
 
-  for (const row of database.prepare("SELECT hash FROM vfs_manifests ORDER BY hash").all()) {
+  for (const row of reading(database, "SELECT hash FROM vfs_manifests ORDER BY hash").all()) {
     const hash = bytes(row["hash"], databasePath, "DOFS manifest hash");
     if (hash.byteLength !== 32) {
       corrupt(databasePath, "a DOFS manifest has an invalid hash length");
@@ -566,14 +573,13 @@ function validateBlob(
   databasePath: string,
 ): string {
   const hashBytes = fromHex(hash, databasePath, "DOFS blob identity");
-  const row = database
-    .prepare(
-      `SELECT blob.hash, blob.size, blob.last_seen, content.bytes
+  const row = reading(
+    database,
+    `SELECT blob.hash, blob.size, blob.last_seen, content.bytes
          FROM vfs_blobs AS blob
          JOIN vfs_blob_bytes AS content ON content.hash = blob.hash
         WHERE blob.hash = ?`,
-    )
-    .get(hashBytes);
+  ).get(hashBytes);
   if (row === undefined) {
     corrupt(databasePath, "a Workspace file names missing DOFS blob bytes");
   }
@@ -599,13 +605,12 @@ function readNode(
   currentRev: number,
   databasePath: string,
 ): NodeRow {
-  const row = database
-    .prepare(
-      `SELECT inode, type, mode, mtime, rev, mount_root, stub_size,
+  const row = reading(
+    database,
+    `SELECT inode, type, mode, mtime, rev, mount_root, stub_size,
               manifest_hash, link_target, size
          FROM vfs_nodes WHERE inode = ?`,
-    )
-    .get(inode);
+  ).get(inode);
   if (row === undefined) {
     corrupt(databasePath, "its live Workspace contains a dangling directory entry");
   }
@@ -665,9 +670,10 @@ function readDirents(
   databasePath: string,
 ): Array<{ name: string; inode: number }> {
   const entries: Array<{ name: string; inode: number }> = [];
-  for (const row of database
-    .prepare("SELECT name, child_inode FROM vfs_dirents WHERE parent_inode = ?")
-    .all(inode)) {
+  for (const row of reading(
+    database,
+    "SELECT name, child_inode FROM vfs_dirents WHERE parent_inode = ?",
+  ).all(inode)) {
     const name = row["name"];
     if (typeof name !== "string") {
       corrupt(databasePath, "its live Workspace contains an invalid directory-entry name");
@@ -683,8 +689,10 @@ function readDirents(
 
 function readChunks(database: DatabaseSync, inode: number, databasePath: string): DofsChunk[] {
   const chunks: DofsChunk[] = [];
-  for (const [expected, row] of database
-    .prepare("SELECT idx, hash, size FROM vfs_chunks WHERE inode = ? ORDER BY idx")
+  for (const [expected, row] of reading(
+    database,
+    "SELECT idx, hash, size FROM vfs_chunks WHERE inode = ? ORDER BY idx",
+  )
     .all(inode)
     .entries()) {
     const index = nonnegative(row["idx"], databasePath, "Workspace chunk index");
@@ -700,7 +708,7 @@ function readChunks(database: DatabaseSync, inode: number, databasePath: string)
 }
 
 function validateDofsBookkeeping(database: DatabaseSync, databasePath: string): number {
-  const metadata = database.prepare("SELECT k, v FROM vfs_meta ORDER BY k").all();
+  const metadata = reading(database, "SELECT k, v FROM vfs_meta ORDER BY k").all();
   if (
     metadata.length !== 2 ||
     metadata[0]?.["k"] !== "rev" ||
@@ -714,7 +722,7 @@ function validateDofsBookkeeping(database: DatabaseSync, databasePath: string): 
     corrupt(databasePath, "its Workspace revision is not initialized");
   }
 
-  const watermarks = database.prepare("SELECT k, backend, v FROM _vfs_watermark ORDER BY k").all();
+  const watermarks = reading(database, "SELECT k, backend, v FROM _vfs_watermark ORDER BY k").all();
   if (
     watermarks.length !== 2 ||
     watermarks[0]?.["k"] !== "fetchRev" ||
@@ -726,7 +734,7 @@ function validateDofsBookkeeping(database: DatabaseSync, databasePath: string): 
   ) {
     corrupt(databasePath, "its Workspace synchronization watermarks are malformed");
   }
-  const cursors = database.prepare("SELECT k, backend, path FROM _vfs_fetch_cursor").all();
+  const cursors = reading(database, "SELECT k, backend, path FROM _vfs_fetch_cursor").all();
   if (
     cursors.length !== 1 ||
     cursors[0]?.["k"] !== "fetch" ||
@@ -739,9 +747,10 @@ function validateDofsBookkeeping(database: DatabaseSync, databasePath: string): 
     corrupt(databasePath, "its retained Workspace contains an unsupported mount");
   }
 
-  for (const row of database
-    .prepare("SELECT id, rev, path, op FROM vfs_changes ORDER BY id")
-    .all()) {
+  for (const row of reading(
+    database,
+    "SELECT id, rev, path, op FROM vfs_changes ORDER BY id",
+  ).all()) {
     const id = nonnegative(row["id"], databasePath, "Workspace change identity");
     const changeRev = nonnegative(row["rev"], databasePath, "Workspace change revision");
     if (
@@ -766,8 +775,7 @@ function requireReferenceSet(
   expected: readonly string[],
   databasePath: string,
 ): void {
-  const actual = database
-    .prepare(`SELECT ${column} FROM ${table} WHERE root_id = ?`)
+  const actual = reading(database, `SELECT ${column} FROM ${table} WHERE root_id = ?`)
     .all(rootId)
     .map((row) => toHex(bytes(row[column], databasePath, `${table}.${column}`)))
     .sort(compareUtf8);
@@ -777,7 +785,7 @@ function requireReferenceSet(
 }
 
 function count(database: DatabaseSync, table: string, databasePath: string): number {
-  const row = database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
+  const row = reading(database, `SELECT COUNT(*) AS count FROM ${table}`).get();
   return nonnegative(row?.["count"], databasePath, `${table} row count`);
 }
 

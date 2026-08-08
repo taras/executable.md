@@ -43,6 +43,7 @@ import {
 import type { JsonObject } from "../src/storage/members.ts";
 import { APPLICATION_ID, hashRunId, useWorkflowRunStorage } from "../deno.ts";
 import { createWorkflowRunConnections } from "../src/deno/connections.ts";
+import { WorkflowRunRecognition } from "../src/deno/provider.ts";
 import { EXPECTED_SCHEMA, initializeSchema } from "../src/deno/schema.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
@@ -260,6 +261,73 @@ describe("Tier WS — authoritative connection and complete schema", () => {
     } finally {
       database.close();
     }
+  });
+
+  it("WS0e: existing-run recognition and its run row share one SQLite snapshot", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "recognition-snapshot");
+    yield* withStorage(root, function* () {
+      yield* createRun({ runId: "recognition-snapshot" });
+    });
+
+    const writer = new DatabaseSync(path);
+    writer.exec("PRAGMA journal_mode = WAL");
+    let observedTransaction = false;
+    let probes = 0;
+    try {
+      const found = yield* scoped(function* () {
+        yield* WorkflowRunRecognition.set((reader) => {
+          probes += 1;
+          observedTransaction = reader.isTransaction;
+          writer
+            .prepare("UPDATE workflow_run SET run_id = ? WHERE id = 1")
+            .run("committed-after-validation");
+        });
+        return yield* withStorage(root, function* () {
+          return yield* lookup("recognition-snapshot");
+        });
+      });
+
+      expect(found.ok).toBe(true);
+      expect(found.ok && found.value.record.runId).toBe("recognition-snapshot");
+      expect(probes).toBe(1);
+      expect(observedTransaction).toBe(true);
+      expect(writer.prepare("SELECT run_id FROM workflow_run WHERE id = 1").get()?.["run_id"]).toBe(
+        "committed-after-validation",
+      );
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("WS0f: a recognition failure closes its SQLite read transaction", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "recognition-rollback");
+    yield* withStorage(root, function* () {
+      yield* createRun({ runId: "recognition-rollback" });
+    });
+    const before = readFileSync(path);
+    let observed: DatabaseSync | undefined;
+
+    const raised = yield* scoped(function* () {
+      yield* WorkflowRunRecognition.set((reader) => {
+        observed = reader;
+        throw new Error("recognition probe failed");
+      });
+      return yield* withStorage(root, function* () {
+        let failure: unknown;
+        try {
+          yield* lookup("recognition-rollback");
+        } catch (error) {
+          failure = error;
+        }
+        expect(observed?.isTransaction).toBe(false);
+        return failure;
+      });
+    });
+
+    expect(raised).toBeInstanceOf(Error);
+    expect(readFileSync(path)).toEqual(before);
   });
 });
 

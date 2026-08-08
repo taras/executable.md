@@ -26,8 +26,9 @@
  */
 
 import { dirname, isAbsolute } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { ensureDir, exists } from "@effectionx/fs";
-import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
+import { createContext, ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
 import {
   type CreateWorkflowRunRequest,
   type WorkflowRunDatabase,
@@ -62,6 +63,7 @@ import {
   type WorkflowRunConnections,
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
+import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
 
 const INSERT_RUN = `INSERT INTO workflow_run
@@ -79,6 +81,14 @@ export interface WorkflowRunStorageOptions {
    */
   readonly root: string;
 }
+
+export type WorkflowRunRecognitionProbe = (database: DatabaseSync) => void;
+
+/** Adapter-private observation seam for deterministic snapshot tests. */
+export const WorkflowRunRecognition = createContext<WorkflowRunRecognitionProbe>(
+  "executablemd.workflow.deno.recognition",
+  () => {},
+);
 
 /**
  * Install this host's run storage for the current scope and its descendants.
@@ -156,6 +166,7 @@ function* createWorkflowRun(
   }
 
   try {
+    const inspectRecognition = yield* WorkflowRunRecognition.expect();
     const connection = connections.at(path);
     const { lock } = connection;
     // Held across initialization, so a second caller creating the same run
@@ -163,7 +174,7 @@ function* createWorkflowRun(
     // would stop the host while the first one is still committing.
     const stored = yield* scoped(function* () {
       yield* lock.hold();
-      return establish(connection, path, wanted);
+      return establish(connection, path, wanted, inspectRecognition);
     });
     if (!stored.ok) {
       return stored;
@@ -205,13 +216,13 @@ function* lookupWorkflowRun(
   }
 
   try {
+    const inspectRecognition = yield* WorkflowRunRecognition.expect();
     const connection = connections.at(path);
     const { database, lock } = connection;
     const record = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
       yield* lock.hold();
       try {
-        verifySchema(database, path, connection.dofs);
-        return Ok(readRunRow(database, path));
+        return Ok(recognizeExisting(connection, path, inspectRecognition));
       } catch (error) {
         return refusal(error, path);
       }
@@ -242,12 +253,16 @@ function establish(
   connection: RunConnection,
   path: string,
   request: CheckedRequest,
+  inspectRecognition: WorkflowRunRecognitionProbe,
 ): Result<WorkflowRunRecord> {
   const { database } = connection;
   try {
-    if (!isUninitialized(database, path)) {
-      verifySchema(database, path, connection.dofs);
-    }
+    readTransaction(database, () => {
+      if (!isUninitialized(database, path)) {
+        verifySchema(database, path, connection.dofs);
+        inspectRecognition(database);
+      }
+    });
 
     database.exec("BEGIN IMMEDIATE");
     connection.transactionOpen = true;
@@ -283,6 +298,18 @@ function establish(
   } catch (error) {
     return refusal(error, path);
   }
+}
+
+function recognizeExisting(
+  connection: RunConnection,
+  path: string,
+  inspectRecognition: WorkflowRunRecognitionProbe,
+): WorkflowRunRecord {
+  return readTransaction(connection.database, () => {
+    verifySchema(connection.database, path, connection.dofs);
+    inspectRecognition(connection.database);
+    return readRunRow(connection.database, path);
+  });
 }
 
 /**
