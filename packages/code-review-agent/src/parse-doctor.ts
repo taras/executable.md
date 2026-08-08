@@ -1,9 +1,9 @@
+import type { DoctorResult } from "./types.ts";
+
 /**
  * Parses the JSON string produced by Doctor.md into a typed DoctorResult.
  * Applies defaults for every field so downstream code never sees undefined.
  */
-
-import type { DoctorResult } from "./types.ts";
 
 const DEFAULTS: DoctorResult = {
   oxlintInstalled: false,
@@ -16,7 +16,6 @@ const DEFAULTS: DoctorResult = {
   filesAnalyzed: 0,
   filesSkipped: 0,
   importErrors: 0,
-  availableRuleIds: [],
   bloatRulesAvailable: [],
   bloatRulesMissing: [],
   recommendation: "syntax-only",

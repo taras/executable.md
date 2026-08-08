@@ -146,11 +146,23 @@ function userLogin(record: Record<string, unknown>): string | undefined {
   return isRecord(user) ? stringValue(user, "login") : undefined;
 }
 
+function userType(record: Record<string, unknown>): string | undefined {
+  const user = record.user;
+  return isRecord(user) ? stringValue(user, "type") : undefined;
+}
+
 function isBotReview(record: Record<string, unknown>): boolean {
   return (
     userLogin(record) === "github-actions[bot]" &&
     (stringValue(record, "body")?.includes("Redundant comment") ?? false)
   );
+}
+
+function commentPayload(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value) || !value.every(isRecord)) {
+    throw new Error("GitHub comments response was not an array");
+  }
+  return value;
 }
 
 function* githubApi(): Operation<string | undefined> {
@@ -205,7 +217,7 @@ function* collectReplies(
   for (const reply of comments) {
     const parentId = numberValue(reply, "in_reply_to_id");
     const location = parentId === undefined ? undefined : botCommentMap.get(parentId);
-    if (!location || userLogin(reply) === "Bot") {
+    if (!location || userType(reply) === "Bot") {
       continue;
     }
     const replyText = stringValue(reply, "body");
@@ -232,7 +244,7 @@ export default function* CommentReviewData({ pr }: CommentReviewProps): Operatio
 
   if (api) {
     const number = yield* runtimeEnv("PR_NUMBER");
-    const comments = records(
+    const comments = commentPayload(
       yield* fetch(`${api}/pulls/${number}/comments?per_page=100`).expect().json(),
     );
     const botComments = comments.filter(isBotReview);

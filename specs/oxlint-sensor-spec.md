@@ -9,10 +9,11 @@ enforcement for Deno/tsgo interoperability.
 
 ## 1. Concept
 
-Oxlint runs inside a `Capture` block alongside `git diff`. Its
-JSON output becomes a structured input to the review pipeline. The
-LLM receives both the diff and the diagnostic map, interpreting
-the density and pattern of violations rather than individual hits.
+Oxlint runs through the typed `OxlintDiagnostics` component after
+`ReviewContext` has constructed the diff. Its bounded diagnostic value becomes
+a structured input to the review pipeline. The LLM receives both the diff and
+the diagnostic map, interpreting the density and pattern of violations rather
+than individual hits.
 
 Oxlint runs permissively — all bloat-relevant rules enabled at
 `"warn"`, zero rules at `"error"`. It collects signals, not
@@ -31,10 +32,9 @@ in the same files suggest unreviewed generated code.
 
 ```
 ReviewPR.md
-  ├─ Capture: git diff → rawDiff
-  ├─ Capture: git diff --name-status → rawFiles
-  ├─ eval: parseDiff(rawDiff, rawFiles) → pr
-  ├─ silent exec: generate tsconfig
+  ├─ <Output> → execution failures fail the document
+  ├─ <GitHubAuth> → scoped exact-host GitHub authentication
+  ├─ ReviewContext → git diff and PR metadata → pr
   ├─ Doctor (as="doctor")
   │    ├─ Check: oxlint binary
   │    ├─ Check: tsgolint binary
@@ -42,9 +42,8 @@ ReviewPR.md
   │    ├─ Check: tsconfig
   │    ├─ Scan: scheme specifiers (jsr:, npm:)
   │    └─ Probe: type-aware test run
-  ├─ OxlintDiagnostics (as="diagnostics")
-  ├─ Capture: oxlint (mode per doctor) → rawDiagnostics
-  ├─ eval: buildDiagnostics → diagnostics
+  ├─ OxlintDiagnostics (as="rawDiagnostics")
+  ├─ eval: buildDiagnostics(rawDiagnostics) → diagnostics
   │
   └─ DeepInfraProvider (or OllamaProvider)
        └─ Instructions
@@ -402,6 +401,12 @@ Rules may appear in multiple categories.
 `buildDiagnostics` drops diagnostics matching import resolution
 noise (`"Cannot find module"`, `"cannot find"`) before grouping.
 
+`parseDiagnostics` retains the published tolerant parser contract: malformed
+JSON and unsupported JSON shapes produce an empty `Diagnostics` value. The
+review execution path uses `normalizeOxlintOutput` first; that boundary is
+strict and fails malformed output or an unexpected process exit before a
+document binding is created.
+
 **Coverage annotation:** When `doctor.bloatRulesMissing.length > 0`,
 summary appends:
 
@@ -431,7 +436,18 @@ Density: 0.12 violations/added-line
   no-redundant-type-constituents (1): src/types.ts
 ```
 
-### 5.3 `DoctorResult` type
+### 5.3 `parseDoctorResult`
+
+```typescript
+function parseDoctorResult(json: string): DoctorResult;
+```
+
+`parseDoctorResult` remains a published tolerant parser. It applies defaults
+to missing fields and returns the default Doctor value for malformed or
+non-object JSON. The typed `Doctor` component returns its structured result
+directly and does not serialize it for this parser.
+
+### 5.4 `DoctorResult` type
 
 ```typescript
 interface DoctorResult {
@@ -457,7 +473,7 @@ interface DoctorResult {
 }
 ```
 
-### 5.4 Doctor helpers
+### 5.5 Doctor helpers
 
 ```typescript
 function summarizeDoctorProbe(input: DoctorProbeInput): DoctorProbeSummary;
@@ -471,13 +487,14 @@ These helpers accept only the bounded diagnostic representation. The typed
 `Doctor` function component keeps process output local and returns the
 validated Doctor object directly.
 
-### 5.5 Package structure
+### 5.6 Package structure
 
 ```
 packages/code-review-agent/
   src/
     parse-diff.ts
     parse-diagnostics.ts
+    parse-doctor.ts
     parse-oxlint.ts
     doctor.ts
     categories.ts
@@ -521,333 +538,12 @@ document binding.
 | `"type-aware-filtered"` | Type-aware works but noise ≥ 30%. Run type-aware, filter import noise in `parseDiagnostics`. |
 | `"syntax-only"` | Prerequisites missing or probe crashed. 10 syntax-only rules, 4 type-aware missing. |
 
-The exploratory implementation below is retained as design history. It is not
-the production document. The production implementation uses the typed
-`Doctor.ts` component shown above and the package helpers in §5.4; it does not
-capture shell output, serialize a Doctor JSON string, or recover malformed
-probe output.
-
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-    tsconfigPath:
-      type: string
-      default: ".reviews/tsconfig.oxlint.json"
-  required: [pr]
-  additionalProperties: false
----
-
-### Oxlint Compatibility Check
-
-Checking whether Oxlint and its type-aware backend are available
-in this environment.
-
-**Oxlint binary:**
-
-<Capture as="oxlintVersion">
-
-```bash silent exec
-npx oxlint --version 2>/dev/null || echo "NOT_INSTALLED"
-```
-
-</Capture>
-
-`{oxlintVersion}`
-
-**tsgolint binary** (type-aware backend — uses typescript-go for
-full TypeScript type system access):
-
-<Capture as="tsgolintVersion">
-
-```bash silent exec
-npx oxlint-tsgolint --version 2>/dev/null || echo "NOT_INSTALLED"
-```
-
-</Capture>
-
-`{tsgolintVersion}`
-
-**node_modules/** (required by tsgolint for import resolution —
-created by `deno install` when `nodeModulesDir: "auto"` is set
-in `deno.json`):
-
-<Capture as="nodeModulesCheck">
-
-```bash silent exec
-test -d node_modules && echo "EXISTS" || echo "MISSING"
-```
-
-</Capture>
-
-`{nodeModulesCheck}`
-
-**Generated tsconfig** at `{tsconfigPath}` (required by tsgolint
-to build TypeScript programs — generated by the review workflow,
-not committed to the repo):
-
-<Capture as="tsconfigCheck">
-
-```bash silent exec
-test -f {tsconfigPath} && echo "EXISTS" || echo "MISSING"
-```
-
-</Capture>
-
-`{tsconfigCheck}`
-
-```ts eval
-const oxlintInstalled = !oxlintVersion.includes("NOT_INSTALLED");
-const tsgolintInstalled = !tsgolintVersion.includes("NOT_INSTALLED");
-const nodeModulesExists = nodeModulesCheck.trim() === "EXISTS";
-const tsconfigExists = tsconfigCheck.trim() === "EXISTS";
-
-const canProbeTypeAware = oxlintInstalled && tsgolintInstalled
-  && nodeModulesExists && tsconfigExists;
-```
-
-**Import specifier compatibility.** Oxlint's type-aware backend
-uses typescript-go, which resolves imports through standard Node
-module resolution. Deno-native scheme specifiers — `jsr:`, `npm:`
-— in source files are invisible to this resolver and produce
-"Cannot find module" noise.
-
-The fix is to use bare specifiers in source and map them in
-`deno.json` `imports`. Both Deno and typescript-go resolve bare
-specifiers — Deno through the import map, tsgo through
-`node_modules/`.
-
-<Capture as="specifierScan">
-
-```bash silent exec
-grep -rn --include='*.ts' --include='*.tsx' -E '^\s*(import|export)\s.*from\s+['"'"'"](jsr:|npm:)' packages/ src/ 2>/dev/null | head -50 || echo "NONE"
-```
-
-</Capture>
-
-```ts eval
-const hasNativeSpecifiers = specifierScan.trim() !== "NONE"
-  && specifierScan.trim().length > 0;
-
-const specifierLines = hasNativeSpecifiers
-  ? specifierScan.trim().split("\n") : [];
-
-const specifierFiles = [...new Set(
-  specifierLines.map(l => l.split(":")[0]).filter(Boolean)
-)];
-
-const jsrCount = specifierLines.filter(l => l.includes("jsr:")).length;
-const npmCount = specifierLines.filter(l => l.includes("npm:")).length;
-```
-
-<If condition={hasNativeSpecifiers}>
-
-Found **{specifierLines.length}** scheme specifiers across
-**{specifierFiles.length}** files ({jsrCount} `jsr:`,
-{npmCount} `npm:`). These will produce import noise in
-type-aware mode.
-
-To fix, add entries to `deno.json` `imports` and use bare
-specifiers in source:
-
-```
-// Before (source file):
-import { assertEquals } from "jsr:@std/assert";
-import express from "npm:express@4";
-
-// After (deno.json imports):
-{ "@std/assert": "jsr:@std/assert", "express": "npm:express@4" }
-
-// After (source file):
-import { assertEquals } from "@std/assert";
-import express from "express";
-```
-
-To enforce this going forward, add the `no-scheme-specifiers`
-lint plugin to `deno.json`:
-
-```json
-{
-  "lint": {
-    "plugins": ["./lint-plugins/no-scheme-specifiers.ts"]
-  }
-}
-```
-
-Then run `deno lint --fix` to auto-replace specifiers. Add the
-`deno.json` `imports` entries manually.
-
-Files with scheme specifiers:
-
-{specifierFiles.slice(0, 20).map(f => "- `" + f + "`").join("\n")}
-
-<If condition={specifierFiles.length > 20}>
-
-...and {specifierFiles.length - 20} more.
-
-</If>
-
-</If>
-
-<If condition={!hasNativeSpecifiers}>
-
-No scheme specifiers found in source files. All imports use bare
-specifiers — compatible with both Deno and typescript-go.
-
-</If>
-
-**Type-aware probe.** All four prerequisites must pass before
-attempting a type-aware run. Even then, the probe may fail — tsgo
-can't resolve scheme specifiers that Deno handles natively,
-tsgolint may OOM on very large monorepos, or the generated
-tsconfig's include globs may not match the actual source tree.
-
-<If condition={!canProbeTypeAware}>
-
-Skipping type-aware probe — prerequisites not met.
-
-</If>
-
-<Capture as="probeResult">
-
-<If condition={canProbeTypeAware}>
-
-```bash silent exec
-RESULT=$(npx oxlint --type-aware --tsconfig {tsconfigPath} --format json 2>/dev/null || true)
-printf '%s' "$RESULT" | jq -c '
-  def entries:
-    if type == "array" then .
-    elif (.diagnostics? | type) == "array" then .diagnostics
-    else []
-    end;
-  def rule: if (.ruleId? | type) == "string" then .ruleId elif (.code? | type) == "string" then .code else "unknown" end;
-  entries | map({message: (.message // ""), ruleId: rule, file: (.file // .filename // "")}) as $diagnostics
-  | {diagnosticCount: ($diagnostics | length), importNoiseCount: ([$diagnostics[] | select((.message | ascii_downcase | contains("cannot find module")) or (.ruleId | ascii_downcase | contains("import")))] | length), filesAnalyzed: ([$diagnostics[].file | select(length > 0)] | unique | length), filesSkipped: 0, importErrors: ([$diagnostics[] | select((.message | ascii_downcase | contains("cannot find module")) or (.ruleId | ascii_downcase | contains("import")))] | length), availableRuleIds: ([$diagnostics[].ruleId] | unique), tsgolintCrashed: false}
-' || echo '{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}'
-```
-
-<Else>
-
-{"diagnosticCount":0,"importNoiseCount":0,"filesAnalyzed":0,"filesSkipped":0,"importErrors":0,"availableRuleIds":[],"tsgolintCrashed":false}
-
-</Else>
-</If>
-
-</Capture>
-
-Analyzing probe results. When source files use Deno-native
-scheme specifiers, tsgo can't resolve them and emits "Cannot find
-module" diagnostics. These aren't code quality signals — they're
-environment incompatibilities. If more than 30% of diagnostics are
-import noise, the signal-to-noise ratio is too low for reliable
-density calculations.
-
-```ts eval
-const BLOAT_RULES = [
-  "no-unused-vars", "no-inferrable-types", "no-empty-function",
-  "no-empty-object-type", "no-useless-empty-export",
-  "no-unnecessary-type-constraint",
-  "no-unnecessary-parameter-property-assignment",
-  "no-static-only-class", "no-console", "no-debugger",
-  "no-unnecessary-type-assertion", "no-redundant-type-constituents",
-  "no-unnecessary-type-arguments",
-  "no-unnecessary-boolean-literal-compare",
-];
-const TYPE_AWARE_RULES = [
-  "no-unnecessary-type-assertion", "no-redundant-type-constituents",
-  "no-unnecessary-type-arguments",
-  "no-unnecessary-boolean-literal-compare",
-];
-
-let probe = {
-  diagnosticCount: 0,
-  importNoiseCount: 0,
-  filesAnalyzed: 0,
-  filesSkipped: 0,
-  importErrors: 0,
-  availableRuleIds: [],
-  tsgolintCrashed: false,
-};
-try { probe = { ...probe, ...JSON.parse(probeResult) }; } catch { }
-
-const diagnosticCount = typeof probe.diagnosticCount === "number"
-  ? probe.diagnosticCount : 0;
-const importNoiseCount = typeof probe.importNoiseCount === "number"
-  ? probe.importNoiseCount : 0;
-const noiseRatio = diagnosticCount > 0
-  ? importNoiseCount / diagnosticCount : 0;
-const tsgolintCrashed = probe.tsgolintCrashed === true;
-
-const typeAwareAvailable = canProbeTypeAware && !tsgolintCrashed;
-
-let recommendation = "syntax-only";
-if (typeAwareAvailable && noiseRatio < 0.3) {
-  recommendation = "type-aware";
-} else if (typeAwareAvailable && noiseRatio >= 0.3) {
-  recommendation = "type-aware-filtered";
-}
-
-const bloatRulesAvailable = typeAwareAvailable
-  ? BLOAT_RULES
-  : BLOAT_RULES.filter(r => !TYPE_AWARE_RULES.includes(r));
-const bloatRulesMissing = typeAwareAvailable
-  ? []
-  : TYPE_AWARE_RULES;
-
-const doctor = {
-  oxlintInstalled,
-  oxlintVersion: oxlintVersion.trim(),
-  tsgolintInstalled,
-  tsgolintVersion: tsgolintVersion.trim(),
-  tsconfigExists,
-  nodeModulesExists,
-  typeAwareAvailable,
-  filesAnalyzed: typeof probe.filesAnalyzed === "number" ? probe.filesAnalyzed : 0,
-  filesSkipped: typeof probe.filesSkipped === "number" ? probe.filesSkipped : 0,
-  importErrors: typeof probe.importErrors === "number" ? probe.importErrors : 0,
-  availableRuleIds: Array.isArray(probe.availableRuleIds) ? probe.availableRuleIds : [],
-  bloatRulesAvailable,
-  bloatRulesMissing,
-  recommendation,
-  nativeSpecifiers: {
-    count: hasNativeSpecifiers ? specifierLines.length : 0,
-    files: specifierFiles,
-    jsr: jsrCount,
-    npm: npmCount,
-  },
-};
-
-return JSON.stringify(doctor);
-```
-
-**Result:** {recommendation}
-
-<If condition={typeAwareAvailable}>
-
-Type-aware linting available. {bloatRulesAvailable.length} bloat
-rules active across {probe.filesAnalyzed} files.
-Import noise: {probe.importNoiseCount} diagnostics
-({(noiseRatio * 100).toFixed(1)}%).
-
-</If>
-
-<If condition={!typeAwareAvailable && oxlintInstalled}>
-
-Falling back to syntax-only mode. {bloatRulesAvailable.length}
-bloat rules active, {bloatRulesMissing.length} type-aware rules
-unavailable.
-
-</If>
-
-<If condition={!oxlintInstalled}>
-
-Oxlint not installed. Static analysis signals unavailable.
-
-</If>
-````
+Doctor is the production typed function component. It obtains observations
+through contextual `stat`, `exec`, `glob`, and `readTextFile` operations,
+passes bounded diagnostics to the package helpers, and returns a structured
+Doctor result. A missing prerequisite or recognized type-aware crash selects
+`syntax-only`; malformed output and unexpected process exits fail the
+enclosing `<Output>`.
 
 ### 6.2 `OxlintSignals.md`
 
@@ -1110,285 +806,30 @@ select files and adapt bounded package values:
 </Output>
 ```
 
-The older shell-and-capture sketch below is historical; it does not describe
-the production entrypoint.
-
-````markdown
----
-title: PR Review
----
-
-<Output>
-
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
-```
-
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
-```bash silent exec
-mkdir -p .reviews
-cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
-{
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "lib": ["ESNext", "DOM"],
-    "types": []
-  },
-  "include": ["packages/*/src/**/*.ts", "packages/*/*.ts"],
-  "exclude": ["node_modules", "dist", ".vendor", "**/*.test.ts"]
-}
-TSCONFIG
-```
-
-<Doctor pr={pr} as="doctor" />
-
-<Capture as="rawDiagnostics">
-
-<If condition={doctor.recommendation === "type-aware"
-            || doctor.recommendation === "type-aware-filtered"}>
-
-```bash exec
-npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
-```
-
-</If>
-
-<If condition={doctor.recommendation === "syntax-only"}>
-
-```bash exec
-npx oxlint --format json 2>&1 || true
-```
-
-</If>
-
-</Capture>
-
-```ts eval
-import { buildDiagnostics } from "@executablemd/code-review-agent";
-
-const diagnostics = buildDiagnostics(rawDiagnostics, pr, doctor);
-```
-
-<DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
-  <Instructions system="You are a precise TypeScript code review assistant for the effectionx monorepo. Be concise. Report only findings, not praise.">
-    <GitHubComment>
-      <ReviewBody pr={pr} diagnostics={diagnostics} doctor={doctor} />
-    </GitHubComment>
-  </Instructions>
-</DeepInfraProvider>
-
-</Output>
-````
+The root keeps only short eval adapters: it selects changed TypeScript
+paths and calls `buildDiagnostics` on the bounded return from
+`OxlintDiagnostics`. Git, configuration, Oxlint execution, and normalization
+remain in the typed components. `DeepInfraProvider` and `GitHubComment` stay
+inside the same `<GitHubAuth>` scope.
 
 ### 8.2 `ReviewPR.local.md` (local with Ollama)
 
-Same structure, different provider, no `<GitHubComment>` wrapper. The local
-entrypoint uses the same `ReviewSetup`, `ReviewContext`, `Doctor`, and
-`OxlintDiagnostics` components and keeps its Ollama provider inside the same
-Markdown composition. The older shell-and-capture sketch below is historical.
-
-````markdown
----
-title: PR Review (local)
----
-
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
-```
-
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
-```bash silent exec
-mkdir -p .reviews
-cat > .reviews/tsconfig.oxlint.json << 'TSCONFIG'
-{
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "lib": ["ESNext", "DOM"],
-    "types": []
-  },
-  "include": ["packages/*/src/**/*.ts", "packages/*/*.ts"],
-  "exclude": ["node_modules", "dist", ".vendor", "**/*.test.ts"]
-}
-TSCONFIG
-```
-
-<Doctor pr={pr} as="doctor" />
-
-<Capture as="rawDiagnostics">
-
-<If condition={doctor.recommendation === "type-aware"
-            || doctor.recommendation === "type-aware-filtered"}>
-
-```bash exec
-npx oxlint --type-aware --tsconfig .reviews/tsconfig.oxlint.json --format json 2>&1 || true
-```
-
-</If>
-
-<If condition={doctor.recommendation === "syntax-only"}>
-
-```bash exec
-npx oxlint --format json 2>&1 || true
-```
-
-</If>
-
-</Capture>
-
-```ts eval
-import { buildDiagnostics } from "@executablemd/code-review-agent";
-
-const diagnostics = buildDiagnostics(rawDiagnostics, pr, doctor);
-```
-
-<OllamaProvider model="qwen3:30b-a3b">
-  <Instructions system="You are a precise TypeScript code review assistant. Be concise. Report only findings, not praise.">
-    <ReviewBody pr={pr} diagnostics={diagnostics} doctor={doctor} />
-  </Instructions>
-</OllamaProvider>
-````
+The local entrypoint has the same component composition and replaces
+`DeepInfraProvider`/`GitHubComment` with `OllamaProvider`. Its root eval
+adapters select files and build the bounded diagnostics value; no shell
+capture or raw Oxlint JSON crosses the document boundary.
 
 ---
 
 ## 9. CI Workflow
 
-### `.github/workflows/review.yml`
-
-```yaml
-name: PR Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      - uses: denoland/setup-deno@v2
-
-      - name: Install dependencies
-        run: deno task deps
-
-      - name: Build the checked-out xmd binary
-        run: deno task build
-
-      - name: Run review
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: |
-          ./dist/xmd run .reviews/ReviewPR.md \
-            --component-dir .reviews/components \
-            --component-dir .reviews/policies \
-            --component-dir packages/core/components \
-            -j .reviews/journal.jsonl \
-            --verbose
-
-      - name: Upload journal
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: review-journal-${{ github.event.pull_request.head.sha }}
-          path: .reviews/journal.jsonl
-          retention-days: 30
-```
-
-The workflow builds and runs the checked-out `./dist/xmd` after
-`deno task deps`, so the review documents and executable use one revision.
-The root document encloses its executable body in `<Output>`; execution
-failures therefore exit nonzero through the normal `DocumentResult` path.
-Review finding text remains ordinary report output and does not fail the job.
-
-The workflow uploads the journal with `if: always()` and does not interpret
-journal records or rendered Markdown after XMD exits.
-
-### Durable diagnostic boundary
-
-The Doctor compatibility probe emits only aggregate facts: availability or
-crash state, diagnostic and import-noise counts, file counts, and available
-rule identifiers. Actual Oxlint output is normalized before capture to
-`message`, `ruleId` or `code`, `severity`, `file`, and minimal line/column
-information. PR review restricts diagnostics to changed files; repository
-analysis retains all files. Source excerpts, causes, rendered source, URLs,
-and arbitrary payload do not cross the exec/durable boundary.
-
-Credential-bearing headers are created inside non-serializable functions at
-request time. Default secret detection remains enabled.
+The review workflow checks out the requested revision, installs the pinned
+Deno toolchain, runs `deno task setup`, and executes that checkout's
+`./dist/xmd` binary. It passes credentials through the workflow environment
+to the lexically scoped `GitHubAuth` component. The root is inside
+`<Output>`, so execution failures produce a nonzero CLI exit while ordinary
+review findings remain report text. The journal is uploaded with `if: always()`
+and Actions performs no journal or rendered-output postflight parsing.
 
 ### Separate enforcement jobs (unchanged from base spec)
 

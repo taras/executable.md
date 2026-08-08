@@ -7,16 +7,18 @@
 
 ## 1. Architecture
 
-A PR review is an executable markdown document. The document gathers
-the diff, parses it into a structured object, passes it through
-composable check components, optionally sends it to an LLM for
-semantic analysis, and posts the rendered output as a GitHub comment.
+A PR review is an executable Markdown document. Typed function components
+gather the diff, environment observations, and bounded diagnostics. Markdown
+then composes the policy components, model provider, and optional GitHub
+delivery.
 
 ```
 ReviewPR.md
-  ├─ Capture: git diff → rawDiff
-  ├─ Capture: git diff --name-status → rawFiles
-  ├─ eval: parseDiff(rawDiff, rawFiles) → pr
+  ├─ <Output> → execution failures fail the document
+  ├─ <GitHubAuth> → scoped exact-host GitHub authentication
+  ├─ ReviewContext → git diff and PR metadata → pr
+  ├─ Doctor → bounded environment recommendation
+  ├─ OxlintDiagnostics → normalized diagnostics
   │
   └─ DeepInfraProvider (or OllamaProvider)
        └─ Instructions (system prompt)
@@ -39,7 +41,7 @@ ReviewPR.md
                       └─ SemanticReview → Sample
 ```
 
-Three layers of concern, three layers of middleware:
+The review composition has three layers of concern:
 
 | Layer | Component | Responsibility |
 |---|---|---|
@@ -77,8 +79,12 @@ All executable.md core changes and the full agent implementation are complete:
 
 ## 3. Package: `@executablemd/code-review-agent`
 
-One export: `parseDiff`. Takes raw `git diff` and `git diff --name-status`
-output, returns a typed `PR` object.
+The package exports the published diff, diagnostics, Oxlint normalization, and
+Doctor parsing helpers. `parseDiff` takes raw `git diff` and
+`git diff --name-status` output and returns a typed `PR` object. Existing
+`parseDoctorResult` and tolerant `parseDiagnostics` behavior remains stable;
+strict Oxlint validation belongs to `normalizeOxlintOutput` at the review
+component boundary.
 
 ### 3.1 `PR` type
 
@@ -92,7 +98,7 @@ interface PR {
   deleted: DiffFile[];
   directories: Set<string>;
   addedSource: string;
-  diffPreview: string;       // addedSource truncated to 40K chars
+  diffPreview: string;       // addedSource truncated to 80K chars
   stats: {
     totalFiles: number;
     additions: number;
@@ -149,8 +155,7 @@ function parseDiff(
 - Test file detection: `*.test.ts`, `*.spec.ts`, `__tests__/`, `test/`
 - Config file detection: `*.config.*`, `.*rc`, `tsconfig*`, `package.json`
 - Type declaration detection: `*.d.ts`
-- `diffPreview`: `addedSource` truncated to 40,000 characters so the
-  correctness prompt stays within the provider context limit on large PRs
+- `diffPreview`: `addedSource` truncated to 80,000 characters
 - `directories`: unique top-level dirs at depth 2
 
 ### 3.4 Package structure
@@ -264,139 +269,26 @@ delegate unchanged. `GitHubComment` therefore keeps only request-specific
 headers such as `Content-Type`; it requires repository and PR metadata instead
 of silently returning an empty report.
 
-````markdown
----
-props:
-  type: object
-  properties:
-    marker:
-      type: string
-      default: "<!-- xmd-review -->"
-  additionalProperties: false
----
-
-```ts eval
-const content = yield* renderChildren();
-const body = marker + "\n" + content;
-
-const repo = process.env.GITHUB_REPOSITORY;
-const prNumber = process.env.PR_NUMBER;
-const [owner, name] = repo.split("/");
-const api = `https://api.github.com/repos/${owner}/${name}`;
-
-const comments = yield* fetch(
-  `${api}/issues/${prNumber}/comments`
-).expect().json();
-
-const existing = comments.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
-);
-
-if (existing) {
-  yield* fetch(`${api}/issues/comments/${existing.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).expect();
-} else {
-  yield* fetch(`${api}/issues/${prNumber}/comments`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).expect();
-}
-
-return content;
-```
-````
+`GitHubComment.md` renders the report, reads the configured repository and PR
+metadata through contextual environment access, and uses the fluent
+`fetch().expect()` operations to create or update the marked comment. It
+requires its metadata and validates the comments payload. Authentication is
+inherited from the surrounding `GitHubAuth` provider; the component supplies
+only request-specific headers such as `Content-Type`.
 
 ### 4.5 `DeepInfraProvider.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    model:
-      type: string
-  required: [model]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch("https://api.deepinfra.com/v1/openai/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${process.env.DEEPINFRA_TOKEN}`,
-    },
-    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 4096 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<Content />
-````
+`DeepInfraProvider` is a Markdown provider for the `Sample` API. It keeps
+request construction and response validation in its scoped middleware. The
+token is read through contextual environment access and stays in the private
+request operation; a successful 2xx response without model content fails the
+provider.
 
 ### 4.6 `OllamaProvider.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    model:
-      type: string
-    baseUrl:
-      type: string
-      default: "http://localhost:11434"
-  required: [model]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, temperature: 0 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<Content />
-````
+`OllamaProvider` uses the same `Sample` provider contract with its configured
+local base URL. It validates that a successful response contains model
+content and otherwise fails the enclosing document.
 
 ---
 
@@ -1021,180 +913,49 @@ Zero eval blocks.
 
 ## 7. Entry Points
 
-### 7.1 `.reviews/ReviewPR.md` (CI with DeepInfra)
+The CI and local roots keep workflow composition in Markdown. Both use
+`ReviewSetup`, `ReviewContext`, `Doctor`, and `OxlintDiagnostics`; the CI root
+places the complete review inside `<Output>` and wraps it in `GitHubAuth`.
+The local root uses the same composition without `GitHubComment`.
 
-````markdown
----
-title: PR Review
----
-
+```markdown
 <Output>
-
+<GitHubAuth>
+<ReviewSetup />
+<ReviewContext as="context" />
+<Doctor pr={context.pr} as="doctor" />
+<OxlintDiagnostics
+  files={changedTsFiles}
+  typeAware={doctor.recommendation !== "syntax-only"}
+  as="rawDiagnostics"
+/>
 ```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
+import { buildDiagnostics } from "@executablemd/code-review-agent";
+const diagnostics = buildDiagnostics(rawDiagnostics, context.pr, doctor);
 ```
-
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
 <DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
-  <Instructions system="You are a precise TypeScript code review assistant for the effectionx monorepo. Be concise. Report only findings, not praise.">
-    <GitHubComment>
-      <ReviewBody pr={pr} />
-    </GitHubComment>
-  </Instructions>
+  <GitHubComment>
+    <PrPolicyReport pr={context.pr} diagnostics={diagnostics} doctor={doctor} />
+  </GitHubComment>
 </DeepInfraProvider>
-
+</GitHubAuth>
 </Output>
-````
-
-### 7.2 `.reviews/ReviewPR.local.md` (local with Ollama)
-
-````markdown
----
-title: PR Review (local)
----
-
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
 ```
 
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
-<OllamaProvider model="qwen3:30b-a3b">
-  <Instructions system="You are a precise TypeScript code review assistant. Be concise. Report only findings, not praise.">
-    <ReviewBody pr={pr} />
-  </Instructions>
-</OllamaProvider>
-````
-
-Output goes to stdout. No `<GitHubComment>` wrapper.
-
----
+The two eval blocks in the checked-in roots only select bounded values and
+adapt package results. Git, GitHub, Oxlint execution, configuration, and
+normalization live in typed function components or package modules.
 
 ## 8. CI Workflow
 
-### `.github/workflows/review.yml`
-
-```yaml
-name: PR Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      - uses: denoland/setup-deno@v2
-
-      - name: Install dependencies
-        run: deno task deps
-
-      - name: Build the checked-out xmd binary
-        run: deno task build
-
-      - name: Run review
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: |
-          ./dist/xmd run .reviews/ReviewPR.md \
-            --component-dir .reviews/components \
-            --component-dir .reviews/policies \
-            --component-dir packages/core/components \
-            -j .reviews/journal.jsonl \
-            --verbose
-```
-
-The executable body of the CI root is enclosed in one top-level `<Output>`
-region. An execution failure therefore remains a failed `DocumentResult`,
-fails `execute()`, and makes `xmd run` exit nonzero. Review findings are report
-text and do not fail the run. The workflow does not inspect journal records or
-rendered error markers after the command; it only uploads the journal with
-`if: always()`.
-
-### Journal artifact
-
-The journal is uploaded by head SHA after every run, including failed runs, so
-an execution failure remains inspectable without making the artifact a second
-workflow result channel.
-
-### Durable-boundary safety
-
-Doctor compatibility probes emit aggregate facts only: diagnostic count,
-import-noise count or ratio, file counts, crash state, and available rule IDs.
-Actual Oxlint output is normalized before it enters a capture or durable event
-to `message`, `ruleId` or `code`, `severity`, `file`, and the minimal line and
-column span. PR review keeps diagnostics for changed files; repository analysis
-may keep all files. Source excerpts, causes, rendered source, URLs, and other
-arbitrary payload are discarded.
-
-GitHub credentials are created inside non-serializable header factories at the
-request site. Tokens are not placed in eval bindings or durable output, and
-secret detection remains enabled.
-
----
+The review workflow checks out the requested revision, installs the pinned
+Deno toolchain, runs `deno task setup`, and executes that checkout's
+`./dist/xmd` binary with the review component directories. Credentials stay
+in the workflow environment and are consumed by the scoped `GitHubAuth`
+provider. The CI root uses `<Output>` so execution errors fail the CLI while
+ordinary review findings remain successful report text. The journal is
+uploaded under `if: always()`; Actions does not parse journal records or
+rendered error markers.
 
 ## 9. Deterministic Analysis (separate CI jobs, unchanged)
 

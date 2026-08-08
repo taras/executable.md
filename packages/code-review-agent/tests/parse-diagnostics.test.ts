@@ -253,10 +253,18 @@ describe("parseDiagnostics", () => {
     expect(result.byCategory.structural.map((g) => g.ruleId)).toContain("no-unused-vars");
   });
 
-  it("PD8: malformed JSON fails the diagnostic boundary", function* () {
-    expect(() => parseDiagnostics("not valid json {{{", makePR(), makeDoctor())).toThrow(
-      "malformed JSON",
-    );
+  it("preserves tolerant parsing for malformed JSON", function* () {
+    const result = parseDiagnostics("not valid json {{{", makePR(), makeDoctor());
+
+    expect(result.total).toBe(0);
+    expect(result.groups).toHaveLength(0);
+  });
+
+  it("preserves tolerant parsing for unsupported JSON shapes", function* () {
+    const result = parseDiagnostics(JSON.stringify({ output: [] }), makePR(), makeDoctor());
+
+    expect(result.total).toBe(0);
+    expect(result.groups).toHaveLength(0);
   });
 
   it("sorts groups by count descending", function* () {

@@ -10,6 +10,23 @@ import { categorizeRule } from "./categories.ts";
 import { normalizeOxlintOutput } from "./parse-oxlint.ts";
 import type { Diagnostics, DiagnosticGroup, DoctorResult, OxlintDiagnostic, PR } from "./types.ts";
 
+function emptyDiagnostics(): Diagnostics {
+  return {
+    groups: [],
+    total: 0,
+    fileCount: 0,
+    ruleCount: 0,
+    byCategory: {
+      structural: [],
+      verbosity: [],
+      typeAware: [],
+      other: [],
+    },
+    summary: "",
+    density: 0,
+  };
+}
+
 /**
  * Group bounded Oxlint diagnostics for review policies.
  */
@@ -112,5 +129,9 @@ export function buildDiagnostics(
  * Parse raw Oxlint JSON output into structured diagnostics.
  */
 export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
-  return buildDiagnostics(normalizeOxlintOutput(rawJson), pr, doctor);
+  try {
+    return buildDiagnostics(normalizeOxlintOutput(rawJson), pr, doctor);
+  } catch {
+    return emptyDiagnostics();
+  }
 }
