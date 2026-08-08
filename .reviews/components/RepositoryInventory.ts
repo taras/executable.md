@@ -36,10 +36,17 @@ function lineCount(source: string): number {
 }
 
 function filePaths(entries: { isFile: boolean; path: string }[]): string[] {
-  return entries
-    .filter((entry) => entry.isFile)
-    .map((entry) => entry.path)
-    .toSorted();
+  const paths = entries.filter((entry) => entry.isFile).map((entry) => entry.path);
+  const ordered: string[] = [];
+  for (const path of paths) {
+    const index = ordered.findIndex((candidate) => candidate > path);
+    if (index === -1) {
+      ordered.push(path);
+    } else {
+      ordered.splice(index, 0, path);
+    }
+  }
+  return ordered;
 }
 
 function* totalLineCount(paths: string[]): Operation<number> {

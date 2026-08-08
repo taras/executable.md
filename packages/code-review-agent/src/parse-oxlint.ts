@@ -27,7 +27,7 @@ function firstSpan(record: Record<string, unknown>): Record<string, unknown> | u
   if (!Array.isArray(labels)) {
     return undefined;
   }
-  const [label] = labels;
+  const [label] = Array.from(labels, (entry: unknown) => entry);
   if (!isRecord(label) || !isRecord(label.span)) {
     return undefined;
   }
@@ -94,7 +94,7 @@ export function normalizeDiagnostic(value: unknown): OxlintDiagnostic | undefine
 
 function diagnosticEntries(value: unknown): unknown[] | undefined {
   if (Array.isArray(value)) {
-    return value;
+    return Array.from(value, (entry: unknown) => entry);
   }
   if (!isRecord(value)) {
     return undefined;
@@ -102,10 +102,10 @@ function diagnosticEntries(value: unknown): unknown[] | undefined {
 
   const { diagnostics } = value;
   if (Array.isArray(diagnostics)) {
-    return diagnostics;
+    return Array.from(diagnostics, (entry: unknown) => entry);
   }
   if (isRecord(diagnostics) && Array.isArray(diagnostics.diagnostics)) {
-    return diagnostics.diagnostics;
+    return Array.from(diagnostics.diagnostics, (entry: unknown) => entry);
   }
   return undefined;
 }

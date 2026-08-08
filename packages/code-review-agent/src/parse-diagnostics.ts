@@ -67,7 +67,16 @@ function diagnosticGroups(raw: readonly OxlintDiagnostic[]): DiagnosticGroup[] {
     files: filesForGroup(instances),
     instances,
   }));
-  return groups.sort((left, right) => right.count - left.count);
+  const ordered: DiagnosticGroup[] = [];
+  for (const group of groups) {
+    const index = ordered.findIndex((candidate) => candidate.count < group.count);
+    if (index === -1) {
+      ordered.push(group);
+    } else {
+      ordered.splice(index, 0, group);
+    }
+  }
+  return ordered;
 }
 
 function categorizedGroups(groups: readonly DiagnosticGroup[]): Diagnostics["byCategory"] {

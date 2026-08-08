@@ -246,6 +246,6 @@ export default function* CommentReviewState({
     checklistMd: checklistMarkdown(checklistItems),
     hasFindings: pendingFindings.length > 0,
     pendingFindings,
-    newDismissReplies: dismissedReplies.filter((reply) => !reply.alreadyProcessed),
+    newDismissReplies: dismissedReplies.filter((reply) => reply.alreadyProcessed !== true),
   };
 }
