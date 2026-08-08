@@ -321,7 +321,7 @@ main(function* () {
      *
      * Site-enabled, and once. The clone gets a real `site/` change first, so
      * applicability selects the pair from a change rather than from a fixture
-     * and all ten commands run together. `siteEnabledBattery` fixes the order:
+     * and every command in the battery runs together. `siteEnabledBattery` fixes the order:
      * the edit lands before the baseline snapshot, which is what makes it the
      * state the battery must preserve rather than a dirty tree it would report.
      * Running a second `--no-site` battery to cover the other branch would

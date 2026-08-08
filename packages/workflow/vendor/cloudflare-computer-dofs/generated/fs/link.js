@@ -1,0 +1,53 @@
+import { createWorkspaceError } from "../errors.js";
+import { canonicalizePath } from "../path.js";
+import { incrementRev } from "../rev.js";
+import { ROOT_INODE } from "../schema/index.js";
+import { assertNotReadOnly } from "./mount-guard.js";
+import { resolveInode } from "./resolve.js";
+import { invalidateResolveExact } from "./resolveCache.js";
+function resolveParent(db, parts, canonical) {
+    let parentInode = ROOT_INODE;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const child = db.one("SELECT child_inode FROM vfs_dirents WHERE parent_inode = ? AND name = ?", parentInode, parts[i]);
+        if (child === undefined) {
+            throw createWorkspaceError("ENOENT", `parent directory missing: ${canonical}`, canonical);
+        }
+        const next = db.one("SELECT inode, type FROM vfs_nodes WHERE inode = ?", child.child_inode);
+        if (next === undefined) {
+            throw createWorkspaceError("ENOENT", `dangling dirent: ${canonical}`, canonical);
+        }
+        if (next.type !== "dir") {
+            throw createWorkspaceError("ENOTDIR", `parent path segment is not a directory: ${canonical}`, canonical);
+        }
+        parentInode = next.inode;
+    }
+    return parentInode;
+}
+export function link(db, existingPath, newPath) {
+    const { parts, path: canonicalNew } = canonicalizePath(newPath);
+    if (parts.length === 0) {
+        throw createWorkspaceError("EEXIST", "cannot link onto root", canonicalNew);
+    }
+    assertNotReadOnly(db, canonicalNew);
+    db.transactionSync(() => {
+        const source = resolveInode(db, existingPath);
+        if (source === null) {
+            throw createWorkspaceError("ENOENT", `no such file: ${existingPath}`, existingPath);
+        }
+        if (source.type !== "file") {
+            throw createWorkspaceError("EPERM", `cannot hardlink non-file: ${existingPath}`, existingPath);
+        }
+        const parentInode = resolveParent(db, parts, canonicalNew);
+        const leafName = parts[parts.length - 1];
+        const existing = db.one("SELECT child_inode FROM vfs_dirents WHERE parent_inode = ? AND name = ?", parentInode, leafName);
+        if (existing !== undefined) {
+            throw createWorkspaceError("EEXIST", `path exists: ${canonicalNew}`, canonicalNew);
+        }
+        db.run("INSERT INTO vfs_dirents (parent_inode, name, child_inode) VALUES (?, ?, ?)", parentInode, leafName, source.inode);
+        const rev = incrementRev(db);
+        db.run("UPDATE vfs_nodes SET rev = ? WHERE inode = ?", rev, source.inode);
+        // A new hardlink name for an existing file: a leaf with no
+        // descendants, so drop just the (possibly negative) entry for it.
+        invalidateResolveExact(db, canonicalNew);
+    });
+}
