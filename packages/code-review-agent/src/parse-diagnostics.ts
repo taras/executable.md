@@ -165,8 +165,8 @@ function appendDoctorNotes(lines: string[], doctor: DoctorResult): void {
     );
   }
   if (doctor.nativeSpecifiers.count > 0) {
-    lines.push("");
     lines.push(
+      "",
       `Note: ${doctor.nativeSpecifiers.count} source files use scheme specifiers (jsr:, npm:).`,
       "Run `deno lint --fix` with no-scheme-specifiers plugin to migrate.",
     );
