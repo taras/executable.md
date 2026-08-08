@@ -9,47 +9,39 @@ props:
 ---
 
 ```ts eval
-// GITHUB_TOKEN is read inline at each call site, never assigned to a binding:
-// eval bindings are journaled, and the journal is uploaded as a CI artifact.
+import { env as runtimeEnv } from "@executablemd/runtime";
+
+function* reviewConfiguration() {
+  const repository = yield* runtimeEnv("GITHUB_REPOSITORY");
+  const number = yield* runtimeEnv("PR_NUMBER");
+  if (!repository || !number || !repository.includes("/")) {
+    throw new Error("GitHubComment requires GITHUB_REPOSITORY and PR_NUMBER");
+  }
+  const [owner, name] = repository.split("/");
+  return { api: `https://api.github.com/repos/${owner}/${name}`, number };
+}
+
 const content = yield* renderChildren();
 const body = marker + "\n" + content.trim();
+const { api, number } = yield* reviewConfiguration();
+const comments = yield* fetch(`${api}/issues/${number}/comments`).expect().json();
+if (!Array.isArray(comments)) {
+  throw new Error("GitHub comments response was not an array");
+}
 
-const repo = process.env.GITHUB_REPOSITORY;
-const prNumber = process.env.PR_NUMBER;
-const [owner, name] = repo.split("/");
-const api = `https://api.github.com/repos/${owner}/${name}`;
-
-const commentsResult = yield* fetch(`${api}/issues/${prNumber}/comments`, {
-  headers: {
-    "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-    "Accept": "application/vnd.github+json",
-  },
-})
-  .expect()
-  .json();
-
-const existing = commentsResult.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
+const existing = comments.find((comment) =>
+  comment.user?.type === "Bot" && typeof comment.body === "string" && comment.body.includes(marker)
 );
-
 if (existing) {
   yield* fetch(`${api}/issues/comments/${existing.id}`, {
     method: "PATCH",
-    headers: {
-      "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-      "Accept": "application/vnd.github+json",
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 } else {
-  yield* fetch(`${api}/issues/${prNumber}/comments`, {
+  yield* fetch(`${api}/issues/${number}/comments`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
-      "Accept": "application/vnd.github+json",
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   }).expect();
 }
