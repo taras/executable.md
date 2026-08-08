@@ -8,14 +8,40 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { spawn, withResolvers, type Operation } from "effection";
 import {
   type DurableEvent,
+  type DurableStream,
   InMemoryStream,
   type Json,
   type Workflow,
   durableCall,
   durableRun,
 } from "../mod.ts";
+
+class PausedYieldStream implements DurableStream {
+  readonly appendStarted = withResolvers<void>();
+  readonly allowAppend = withResolvers<void>();
+  readonly inner = new InMemoryStream();
+
+  constructor(readonly order: string[]) {}
+
+  *readAll(): Operation<DurableEvent[]> {
+    return yield* this.inner.readAll();
+  }
+
+  *append(event: DurableEvent): Operation<void> {
+    if (event.type === "yield") {
+      this.order.push("append:started");
+      this.appendStarted.resolve();
+      yield* this.allowAppend.operation;
+    }
+    yield* this.inner.append(event);
+    if (event.type === "yield") {
+      this.order.push("append:completed");
+    }
+  }
+}
 
 /** Track which functions were actually called during live execution. */
 function createCallTracker() {
@@ -212,43 +238,62 @@ describe("durableRun", () => {
   });
 
   it("persist-before-resume: generator does not advance until write completes", function* () {
-    const stream = new InMemoryStream();
     const order: string[] = [];
-
-    // Hook into append to track ordering
-    stream.onAppend = (event) => {
-      if (event.type === "yield") {
-        order.push(`persist:${event.type}`);
-      }
-    };
+    const stream = new PausedYieldStream(order);
+    let resumed = false;
 
     function* workflow(): Workflow<string> {
       yield* durableCall("step1", () => {
         order.push("execute:step1");
         return Promise.resolve("one" as const);
       });
+      resumed = true;
       order.push("resumed:after-step1");
-
-      yield* durableCall("step2", () => {
-        order.push("execute:step2");
-        return Promise.resolve("two" as const);
-      });
-      order.push("resumed:after-step2");
-
       return "done";
     }
 
-    yield* durableRun(workflow, { stream });
+    const task = yield* spawn(() => durableRun(workflow, { stream }));
+    yield* stream.appendStarted.operation;
+    expect(resumed).toBe(false);
+    expect(stream.inner.snapshot()).toHaveLength(0);
 
-    // Verify ordering: execute → persist → resume for each step
+    stream.allowAppend.resolve();
+    expect(yield* task).toBe("done");
+
     expect(order).toEqual([
       "execute:step1",
-      "persist:yield",
+      "append:started",
+      "append:completed",
       "resumed:after-step1",
-      "execute:step2",
-      "persist:yield",
-      "resumed:after-step2",
     ]);
+  });
+
+  it("append failure cannot resolve a live effect successfully without a Yield", function* () {
+    const stream = new InMemoryStream();
+    const appendFailure = new Error("yield append failed");
+    stream.injectFailure = appendFailure;
+    let resumed = false;
+    let failure: unknown;
+
+    function* workflow(): Workflow<string> {
+      yield* durableCall("step", () => Promise.resolve("completed" as const));
+      resumed = true;
+      return "unjournaled-success";
+    }
+
+    try {
+      yield* durableRun(workflow, { stream });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(resumed).toBe(false);
+    expect(stream.snapshot()).toHaveLength(0);
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("expected append failure aggregation");
+    }
+    expect(failure.errors[0]).toBe(appendFailure);
   });
 
   it("actor handoff: Process B resumes from Process A's events", function* () {

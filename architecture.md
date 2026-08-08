@@ -133,9 +133,9 @@ The `@executablemd/workflow` package owns `WorkflowRun`, `useWorkflow()`,
 `getWorkflowRun()` and the Git capability. It depends on `@executablemd/core`,
 `@executablemd/durable-streams` and `@executablemd/runtime`, whose contextual
 `exec()` and `cwd()` the Git provider invokes; core never imports workflow or
-Git. The CLI lifecycle is `xmd workflow start` and `xmd workflow resume`; the
-durable lookup resumption requires is the run storage below. Ordinary `xmd run`
-remains unchanged.
+Git. The future CLI lifecycle is `xmd workflow start` and `xmd workflow resume`;
+there is no workflow CLI execution branch yet. The durable lookup that resume
+will require is the run storage below. Ordinary `xmd run` remains unchanged.
 
 ## Workflow run storage
 
@@ -267,9 +267,10 @@ member value can.
 
 The command selects the environment; the document describes the procedure.
 `xmd run` uses the caller's current environment and makes no restoration
-promise. `xmd workflow` creates a workflow run with one implicit root Workspace.
-The same declarative components use contextual capabilities in both modes; the
-workflow host supplies the stronger durability and authority boundary.
+promise. The specified future `xmd workflow` command creates a workflow run with
+one implicit root Workspace. The same declarative components use contextual
+capabilities in both modes; the workflow host supplies the stronger durability
+and authority boundary.
 
 Workspace identity belongs to the workflow run. A document path locates an
 immutable definition but does not identify a previous run. A host-generated or
@@ -343,11 +344,11 @@ external branches, pushes, pull requests or provider state.
 
 ## Agent authority and generated XMD
 
-An Agent under `xmd workflow` is read-only. The host enforces that ceiling in
-the permission bridge, the provider-native sandbox and the filesystem view; a
-document cannot raise it. A provider that cannot enforce the boundary fails
-before Prompt execution. `xmd run` keeps its caller-selected Agent permission
-behavior.
+An Agent under the specified future `xmd workflow` command is read-only. The
+host enforces that ceiling in the permission bridge, the provider-native sandbox
+and the filesystem view; a document cannot raise it. A provider that cannot
+enforce the boundary fails before Prompt execution. `xmd run` keeps its
+caller-selected Agent permission behavior.
 
 Native Agent processes inspect disposable read-only materializations of the
 current logical Workspace root. Those views have no write-back path. An Agent
@@ -603,10 +604,18 @@ replaced by a live one.
 Service attachment and `ephemeral eval` execute again during partial replay so
 the current process and middleware chain are reconstructed. A completed
 document replay returns its recorded result without expanding the document and
-therefore starts no service. Workflow execution installs a non-delegating
-`API.Service` denial provider: a workflow cannot reach an inherited host
-adapter, because a run-owned durable service requires stable identity and
-reconciliation rather than an execution-owned live process.
+therefore starts no service. Ordinary durable eval transforms a block and
+validates its declared exports against the live overlay before constructing its
+durable effect. A collision therefore has no eval `Yield`; compatible partial
+replay remains aligned, while retained history containing a now-incompatible
+successful eval is rejected by the existing replay guard or divergence path.
+
+#390 provides and tests the non-delegating `useWorkflowServiceDenial()` provider.
+#366 will install it in the future `xmd workflow start` and `xmd workflow resume`
+scopes. No workflow CLI execution branch exists yet. The provider prevents a
+workflow from reaching an inherited host adapter, because a run-owned durable
+service requires stable identity and reconciliation rather than an
+execution-owned live process.
 
 ## State ownership
 
@@ -665,7 +674,7 @@ Status is measured against main.
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
-| workflow service denial | prevents workflow documents from inheriting an ordinary host service adapter | built on main |
+| `useWorkflowServiceDenial()` | provides and tests a non-delegating workflow service denial provider; #366 will install it in future start and resume scopes | built on main; no workflow CLI execution branch exists yet |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI | defined in `specs/workflow-workspace-spec.md`, unbuilt; the lookup it resumes through is built |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | defined in `specs/workflow-workspace-spec.md`, unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |

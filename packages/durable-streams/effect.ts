@@ -81,7 +81,6 @@ function checkReplay<T>(
   resolve: Resolve<EffectionResult<T>>,
   routine: CoroutineView,
   ctx: DurableContext,
-  validate?: () => void,
 ): ReplayResult<T> {
   const entry = ctx.replayIndex.peekYield(ctx.coroutineId);
 
@@ -144,16 +143,6 @@ function checkReplay<T>(
 
       // All guards approved — consume the entry and advance cursor
       ctx.replayIndex.consumeYield(ctx.coroutineId);
-
-      try {
-        validate?.();
-      } catch (error) {
-        resolve({
-          ok: false,
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-        return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
-      }
 
       // Feed stored result synchronously
       resolve(protocolToEffection<T>(entry.result));
@@ -304,13 +293,10 @@ export function createDurableEffect<T>(
  *
  * @param desc Structured description for the journal and divergence detection
  * @param execute Returns an Operation to run during live execution
- * @param options.validate Runs before live execution or replay restoration; a
- * thrown error is not persisted as this operation's result
  */
 export function createDurableOperation<T extends Json>(
   desc: EffectDescription,
   execute: () => Operation<T>,
-  options: { validate?: () => void } = {},
 ): DurableEffect<T> {
   return {
     description: `${desc.type}(${desc.name})`,
@@ -321,22 +307,12 @@ export function createDurableOperation<T extends Json>(
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
-      const replay = checkReplay<T>(desc, resolve, routine, ctx, options.validate);
+      const replay = checkReplay<T>(desc, resolve, routine, ctx);
       if (replay.path === "replayed") {
         return replay.teardown;
       }
 
       // ── LIVE PATH ──
-      try {
-        options.validate?.();
-      } catch (error) {
-        resolve({
-          ok: false,
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-        return (exit) => exit(VOID_OK);
-      }
-
       // Run the entire execute → capture → persist → resolve sequence
       // as a structured operation in the routine's scope.
       routine.scope.run(function* () {
