@@ -17,6 +17,7 @@ import process from "node:process";
 import { API } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { useNodeService } from "./node-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
@@ -36,5 +37,5 @@ await main(function* (args) {
     },
     { at: "min" },
   );
-  yield* runXmd(args);
+  yield* runXmd(args, useNodeService);
 });

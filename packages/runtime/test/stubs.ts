@@ -23,6 +23,25 @@
 import type { Operation } from "effection";
 import { API } from "../apis.ts";
 import type { StatResult } from "../apis.ts";
+import { SERVICE_HOSTNAME } from "../service.ts";
+import type { ServiceEndpoint } from "../service.ts";
+
+/** Install a provider-neutral scoped service attachment stub. */
+export function* useStubService(endpoint: ServiceEndpoint): Operation<void> {
+  if (endpoint.hostname !== SERVICE_HOSTNAME) {
+    throw new Error("stub service endpoint must use 127.0.0.1");
+  }
+  if (!Number.isInteger(endpoint.port) || endpoint.port < 1 || endpoint.port > 65_535) {
+    throw new Error("stub service endpoint port must be an integer from 1 through 65535");
+  }
+  const exact = Object.freeze({ hostname: SERVICE_HOSTNAME, port: endpoint.port });
+  yield* API.Service.around({
+    // deno-lint-ignore require-yield
+    *start() {
+      return { endpoint: exact };
+    },
+  });
+}
 
 /**
  * Install an in-memory filesystem stub.

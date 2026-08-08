@@ -1,7 +1,8 @@
 /**
  * Runtime Context APIs — platform I/O operations with pluggable middleware.
  *
- * Five domain-specific context APIs built on `@effectionx/context-api`.
+ * Five host-backed domain APIs plus the provider-neutral Service Api, built on
+ * `@effectionx/context-api`.
  * Each API provides default Node.js implementations. Use `.around()` to
  * install middleware (mocking, instrumentation, sandboxing) scoped to the
  * current Effection scope.
@@ -25,7 +26,7 @@
  * });
  * ```
  *
- * ## Why four separate APIs?
+ * ## Why separate APIs?
  *
  * - **Process** — subprocess lifecycle has its own cancellation semantics
  *   (killing processes on scope teardown). Middleware targets exec only.
@@ -41,6 +42,8 @@
  *   use `.around()` to mock platform/env for deterministic replay; an
  *   entrypoint installs its `command` and `compile` with `{ at: "min" }` so
  *   ordinary middleware can wrap them.
+ * - **Service** — scoped service attachment. Its terminal handler requires an
+ *   explicit host provider and never detects or imports a runtime.
  *
  * ## Middleware
  *
@@ -59,7 +62,8 @@
  * ## Test stubs
  *
  * Common stubs are provided by `@executablemd/runtime/test`:
- * `useStubFs(files)`, `useEchoExec()`, `useFailingExec(code, stderr)`.
+ * `useStubFs(files)`, `useEchoExec()`, `useFailingExec(code, stderr)`,
+ * `useStubService(endpoint)`.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
@@ -80,6 +84,7 @@ import { exec as processExec } from "@effectionx/process";
 import { race, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeout as contextualTimeout } from "./config.ts";
+import { Service } from "./service.ts";
 
 /**
  * Result of a `stat` call.
@@ -339,6 +344,7 @@ export const API: {
   Fs: Api<FsHandler>;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
+  Service: typeof Service;
 } = {
   /**
    * Subprocess execution.
@@ -539,6 +545,7 @@ export const API: {
       );
     },
   }),
+  Service,
 };
 
 export const exec: typeof API.Process.operations.exec = API.Process.operations.exec;

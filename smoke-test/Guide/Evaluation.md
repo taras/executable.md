@@ -6,9 +6,10 @@ blocks execute in the same process, sharing a binding environment across
 blocks within a component. Eval blocks produce **no rendered output** —
 they exist for bindings and side effects. The `persist` modifier extends
 a block's resource lifetime from the block scope to the component scope,
-the `timeout` modifier cancels a block that overruns its duration, the
-`findFreePort` VM global allocates a free TCP port, and bare `{name}`
-references interpolate eval bindings into other code blocks.
+the `timeout` modifier cancels a block that overruns its duration, and bare
+`{name}` references interpolate durable eval bindings into other code blocks.
+`ephemeral eval` reconstructs invocation-local live bindings without output or
+journal events.
 
 </Section>
 
@@ -58,21 +59,23 @@ const startedAt = Date.now();
 <AssertExists actual={startedAt} />
 </Test>
 
-<Test name="findFreePort allocates a free port">
-```js eval
-const port = yield * findFreePort();
-```
-<AssertGreater actual={port} expected={0} />
-</Test>
-
 <Test name="Eval bindings interpolate into exec blocks">
 ```js eval
-const port = yield * findFreePort();
+const label = "configured";
 ```
 <Capture as="portEcho">
 ```bash exec
-echo "Server would start on port {port}"
+echo "Service is {label}"
 ```
 </Capture>
-<AssertEquals actual={portEcho} expected={"\nServer would start on port " + port} />
+<AssertEquals actual={portEcho} expected={"\nService is configured"} />
+</Test>
+
+<Test name="Ephemeral eval reconstructs live bindings without rendering">
+<Capture as="ephemeralRendered">
+```js ephemeral eval
+const reconstructed = "live";
+```
+</Capture>
+<AssertEquals actual={ephemeralRendered} expected={""} />
 </Test>

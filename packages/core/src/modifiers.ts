@@ -104,6 +104,28 @@ export function composeModifierChain(
     throw new Error("No terminal modifier (exec/eval) in chain");
   };
 
+  const terminalNames = new Set(["exec", "eval", "daemon", "service"]);
+  const firstTerminal = modifiers.find((modifier) => terminalNames.has(modifier.name));
+  if (
+    modifiers.some((modifier) => modifier.name === "ephemeral") &&
+    firstTerminal?.name !== "eval"
+  ) {
+    return function* () {
+      throw new Error("ephemeral is valid only with the eval terminal modifier");
+    };
+  }
+  const serviceIndex = modifiers.findIndex((modifier) => modifier.name === "service");
+  if (serviceIndex > 0) {
+    return function* () {
+      throw new Error("service must be the outermost modifier");
+    };
+  }
+  if (serviceIndex === 0 && !modifiers.some((modifier) => modifier.name === "exec")) {
+    return function* () {
+      throw new Error("service requires the exec detection modifier");
+    };
+  }
+
   // Build the middleware array — each factory is called with its params
   const middlewares: ModifierMiddleware[] = [];
   for (const mod of modifiers) {

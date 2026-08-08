@@ -13,6 +13,7 @@
  * - `API.Env` — the host: variables, platform info, the command that invokes
  *   this xmd, and eval-block compilation
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
+ * - `API.Service` — scoped attached service startup (`startService`)
  * - `Config` — shared execution config (`timeout`)
  *
  * See `apis.ts` for architecture rationale.
@@ -38,6 +39,28 @@ export {
   compile,
 } from "./apis.ts";
 export type { EvalBlock, ResponseHeaders, RuntimeFetchResponse, StatResult } from "./apis.ts";
-export { findFreePort } from "./find-free-port.ts";
+export {
+  Service,
+  SERVICE_HOSTNAME,
+  SERVICE_READY_PREFIX,
+  ServiceProcessExitBeforeReadyError,
+  ServiceProtocolDuplicateError,
+  ServiceProtocolHostnameMismatchError,
+  ServiceProtocolIncompatibleError,
+  ServiceProtocolMalformedError,
+  ServiceProtocolTokenMismatchError,
+  ServiceProviderError,
+  ServiceStartupTimeoutError,
+  ServiceTeardownError,
+  ServiceUnexpectedExitError,
+  parseServiceReadyRecord,
+  startService,
+} from "./service.ts";
+export type {
+  ServiceEndpoint,
+  ServiceHandler,
+  ServiceAttachment,
+  ServiceStartOptions,
+} from "./service.ts";
 export { Config, timeout } from "./config.ts";
 export type { ConfigApi } from "./config.ts";

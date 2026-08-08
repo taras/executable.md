@@ -105,6 +105,13 @@ jobs:
             --component-dir packages/core/components \
             --raw
 
+      - name: Smoke test attached-service ping-pong with the compiled binary
+        run: |
+          ./dist/xmd test smoke-test/attached-service-ping-pong.test.md \
+            --component-dir smoke-test \
+            --component-dir packages/core/components \
+            --raw
+
       # The script installs a second copy of core beside a repository component.
       # The declaration must cross into the bundled engine so the failure prints
       # and execution continues.

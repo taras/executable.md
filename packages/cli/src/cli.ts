@@ -407,6 +407,8 @@ interface DocumentMode {
   props?: Record<string, Json>;
 }
 
+export type HostServiceInstaller = () => Operation<void>;
+
 /**
  * Run one document and report how it finished.
  *
@@ -415,7 +417,11 @@ interface DocumentMode {
  * what the process status is. Rendered output, the --verbose journal echo, and
  * a value root's JSON line are the document's own output and stay.
  */
-function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
+function* runDocument(
+  config: DocumentConfig,
+  mode: DocumentMode,
+  installService: HostServiceInstaller,
+): Operation<Result<void>> {
   const { root, componentDir, verbose, journal, raw, secretDetection } = config;
 
   // Every CLI invocation starts from an empty stream. --journal writes
@@ -497,6 +503,10 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
   // alone. Reading the mode costs no document effects.
   const valueRoot = !mode.testing && (yield* readsValue(root));
 
+  // Native service authority belongs only to document execution. Help,
+  // document inspection, and the agent worker never enter this scope.
+  yield* installService();
+
   const execution = yield* execute({
     ...root,
     stream,
@@ -557,9 +567,13 @@ function* runDocument(config: DocumentConfig, mode: DocumentMode): Operation<Res
  * only be caught out here. That is what lets a directory run continue past a
  * document whose resources failed to release.
  */
-function* runScopedDocument(config: DocumentConfig, mode: DocumentMode): Operation<Result<void>> {
+function* runScopedDocument(
+  config: DocumentConfig,
+  mode: DocumentMode,
+  installService: HostServiceInstaller,
+): Operation<Result<void>> {
   try {
-    return yield* scoped(() => runDocument(config, mode));
+    return yield* scoped(() => runDocument(config, mode, installService));
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
@@ -592,7 +606,11 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
  * end. A single document behaves exactly as it always has: one reported
  * failure, no heading, no summary.
  */
-function* test(config: TestConfig, args: string[]): Operation<void> {
+function* test(
+  config: TestConfig,
+  args: string[],
+  installService: HostServiceInstaller,
+): Operation<void> {
   const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
     console.error(
@@ -621,7 +639,11 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
       return;
     }
     announceSecretDetection(config.secretDetection);
-    const result = yield* runScopedDocument({ ...config, root: { path } }, { testing: true });
+    const result = yield* runScopedDocument(
+      { ...config, root: { path } },
+      { testing: true },
+      installService,
+    );
     if (!result.ok) {
       reportFailure(result.error);
       yield* exit(1);
@@ -660,6 +682,7 @@ function* test(config: TestConfig, args: string[]): Operation<void> {
         componentDir: componentSearchPath(document, target.root, config.componentDir),
       },
       { testing: true },
+      installService,
     );
     if (!result.ok) {
       reportFailure(result.error, document.relativePath);
@@ -935,7 +958,7 @@ function* resolveRunProps(
  * `process.stdout` and `node:fs/promises`. Routing those through contextual
  * APIs is #156.
  */
-export function* runXmd(args: string[]): Operation<void> {
+export function* runXmd(args: string[], installService: HostServiceInstaller): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
   const evalFlags = readEvalFlags(args);
@@ -1025,6 +1048,7 @@ export function* runXmd(args: string[]): Operation<void> {
             denyAll: config.denyAll,
           },
         },
+        installService,
       );
       if (!result.ok) {
         reportFailure(result.error);
@@ -1049,7 +1073,7 @@ export function* runXmd(args: string[]): Operation<void> {
         yield* exit(1);
         break;
       }
-      yield* test(command.config, evalFlags.rest);
+      yield* test(command.config, evalFlags.rest, installService);
       break;
     }
     case "test-agent":
