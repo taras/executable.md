@@ -31,24 +31,29 @@ interface StartRequest {
 
 interface InspectRequest {
   readonly type: "inspect";
+  readonly provider: object | undefined;
 }
 
 interface ExecuteRequest {
   readonly type: "execute";
+  readonly provider: object | undefined;
 }
 
 interface PublishRequest {
   readonly type: "publish";
+  readonly provider: object | undefined;
   readonly result: Result;
 }
 
 interface ActivateFailureRequest {
   readonly type: "activate-failure";
+  readonly provider: object | undefined;
   readonly failure: unknown;
 }
 
 interface CompleteRequest {
   readonly type: "complete";
+  readonly provider: object | undefined;
   readonly result: Result;
 }
 
@@ -139,13 +144,6 @@ function activated(response: InvocationResponse): Error {
   return response.failure;
 }
 
-function completed(response: InvocationResponse): Result {
-  if (response.type !== "result") {
-    throw unavailable("the selected Workspace provider did not complete its live invocation");
-  }
-  return response.result;
-}
-
 export function withWorkspaceCoordinationProvider<T>(
   provider: WorkspaceCoordinationProvider,
   operation: Operation<T>,
@@ -166,7 +164,7 @@ export function withWorkspaceCoordinationProvider<T>(
             );
           }
 
-          const details = inspect(yield* next({ type: "inspect" }));
+          const details = inspect(yield* next({ type: "inspect", provider: selection }));
           let authorityOpen = true;
           const authority: WorkspaceCoordinationAuthority = Object.freeze({
             executionIdentity: details.executionIdentity,
@@ -177,7 +175,7 @@ export function withWorkspaceCoordinationProvider<T>(
                   "the live Workspace coordination authority is completed or stale",
                 );
               }
-              return value(yield* next({ type: "execute" }));
+              return value(yield* next({ type: "execute", provider: selection }));
             },
             *publish(result: Result): Operation<void> {
               if (!authorityOpen) {
@@ -185,7 +183,7 @@ export function withWorkspaceCoordinationProvider<T>(
                   "the live Workspace coordination authority is completed or stale",
                 );
               }
-              published(yield* next({ type: "publish", result }));
+              published(yield* next({ type: "publish", provider: selection, result }));
             },
             *activateFailure(failure: unknown): Operation<Error> {
               if (!authorityOpen) {
@@ -193,13 +191,15 @@ export function withWorkspaceCoordinationProvider<T>(
                   "the live Workspace coordination authority is completed or stale",
                 );
               }
-              return activated(yield* next({ type: "activate-failure", failure }));
+              return activated(
+                yield* next({ type: "activate-failure", provider: selection, failure }),
+              );
             },
           });
 
           try {
             const result = yield* provider.run(authority);
-            return yield* next({ type: "complete", result });
+            return yield* next({ type: "complete", provider: selection, result });
           } finally {
             authorityOpen = false;
           }
@@ -212,15 +212,21 @@ export function withWorkspaceCoordinationProvider<T>(
 }
 
 function invocationApi(
+  provider: object | undefined,
   executionIdentity: object,
   execute: () => Operation<Json>,
   publish: (result: Result) => Operation<void>,
   activateFailure: ActivateDurabilityFailure,
   publicationIdentity: DurablePublicationIdentity | undefined,
-): { api: Api<WorkspaceInvocationApi>; close: () => void } {
+): {
+  api: Api<WorkspaceInvocationApi>;
+  authoritativeResult: () => Result | undefined;
+  close: () => void;
+} {
   let state: "available" | "active" | "complete" = "available";
   let executionAttempted = false;
-  let publicationCompleted = false;
+  let publishedResult: Result | undefined;
+  let completedResult: Result | undefined;
 
   function requireActive(): void {
     if (state !== "active") {
@@ -233,6 +239,9 @@ function invocationApi(
       *coordinate(request: InvocationRequest): Operation<InvocationResponse> {
         if (request.type === "start") {
           throw unavailable("no Workspace coordinator accepted this live invocation");
+        }
+        if (provider === undefined || request.provider !== provider) {
+          throw unavailable("the live Workspace coordination invocation has foreign authority");
         }
         if (request.type === "inspect") {
           if (state !== "available") {
@@ -256,23 +265,27 @@ function invocationApi(
           return { type: "value", value: yield* execute() };
         }
         if (request.type === "publish") {
-          if (!executionAttempted || publicationCompleted) {
+          if (!executionAttempted || publishedResult !== undefined) {
             throw unavailable("the live Workspace publication is missing or already consumed");
           }
           yield* publish(request.result);
-          publicationCompleted = true;
+          publishedResult = request.result;
           return { type: "published" };
         }
         if (request.type === "activate-failure") {
           return { type: "failure", failure: activateFailure(request.failure) };
         }
-        if (!publicationCompleted) {
+        if (publishedResult === undefined || request.result !== publishedResult) {
           throw unavailable("the selected Workspace provider omitted its live publication");
         }
+        completedResult = publishedResult;
         state = "complete";
-        return { type: "result", result: request.result };
+        return { type: "result", result: completedResult };
       },
     }),
+    authoritativeResult(): Result | undefined {
+      return completedResult;
+    },
     close(): void {
       state = "complete";
     },
@@ -287,23 +300,32 @@ function workspaceCoordinator(executionIdentity: object): LiveDurableOperationCo
       activateFailure: ActivateDurabilityFailure,
       publicationIdentity: DurablePublicationIdentity | undefined,
     ): Operation<Result> {
-      const invocation = invocationApi(
-        executionIdentity,
-        execute,
-        publish,
-        activateFailure,
-        publicationIdentity,
-      );
+      let invocation: ReturnType<typeof invocationApi> | undefined;
 
       try {
         const selection = yield* WorkspaceCoordination.operations.provider;
-        return completed(
-          yield* invocation.api.operations.coordinate({ type: "start", provider: selection }),
+        invocation = invocationApi(
+          selection,
+          executionIdentity,
+          execute,
+          publish,
+          activateFailure,
+          publicationIdentity,
         );
+        yield* invocation.api.operations.coordinate({ type: "start", provider: selection });
+        const result = invocation.authoritativeResult();
+        if (result === undefined) {
+          throw unavailable("the selected Workspace provider did not complete its live invocation");
+        }
+        return result;
       } catch (error) {
+        const result = invocation?.authoritativeResult();
+        if (result !== undefined) {
+          return result;
+        }
         throw activateFailure(error);
       } finally {
-        invocation.close();
+        invocation?.close();
       }
     },
   };

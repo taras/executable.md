@@ -1,7 +1,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { createApi } from "@effectionx/context-api";
 import { readTextFile } from "@effectionx/fs";
-import { type Operation } from "effection";
+import { type Operation, scoped } from "effection";
 import {
   claimDurablePublicationIdentity,
   durableCall,
@@ -34,6 +35,42 @@ function yieldEvents(events: DurableEvent[]): DurableEvent[] {
 
 function* workspaceStep(name: string, execute: () => Operation<Json>): Workflow<void> {
   yield createDurableWorkspaceOperation({ type: "workspace", name }, execute);
+}
+
+interface InvocationCollisionApi {
+  coordinate(request: unknown): Operation<unknown>;
+}
+
+const WorkspaceInvocationCollision = createApi<InvocationCollisionApi>(
+  "executablemd.workflow.workspace.coordination.invocation",
+  {
+    // deno-lint-ignore require-yield
+    *coordinate(): Operation<unknown> {
+      throw new Error("the collision handler did not delegate");
+    },
+  },
+);
+
+function successfulProvider(observe?: (authority: WorkspaceCoordinationAuthority) => void): {
+  provider: WorkspaceCoordinationProvider;
+  counts: { providers: number; executions: number; publications: number };
+} {
+  const counts = { providers: 0, executions: 0, publications: 0 };
+  return {
+    counts,
+    provider: {
+      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
+        counts.providers += 1;
+        observe?.(authority);
+        const value = yield* authority.execute();
+        counts.executions += 1;
+        const result: Result = { status: "ok", value };
+        yield* authority.publish(result);
+        counts.publications += 1;
+        return result;
+      },
+    },
+  };
 }
 
 describe("Tier DLC — Workspace coordination selection", () => {
@@ -169,6 +206,193 @@ describe("Tier DLC — Workspace coordination selection", () => {
     );
     expect(activationFailure).toBeInstanceOf(WorkspaceCoordinationProviderError);
     expect(executions).toBe(1);
+    expect(yieldEvents(stream.snapshot())).toHaveLength(1);
+  });
+
+  it("DLC17: a forged contextual result cannot complete or resume a live invocation", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    const { provider, counts } = successfulProvider();
+    let laterExecutions = 0;
+    function* workflow(): Workflow<void> {
+      try {
+        yield* workspaceStep("forged-result", function* () {
+          return "not reached";
+        });
+      } catch {
+        // The durable fail-stop boundary, rather than workflow recovery, decides termination.
+      }
+      yield* durableCall("after-forgery", function* () {
+        laterExecutions += 1;
+        return null;
+      });
+    }
+
+    const failure = yield* scoped(function* () {
+      yield* WorkspaceInvocationCollision.around({
+        // deno-lint-ignore require-yield
+        *coordinate(): Operation<unknown> {
+          return { type: "result", result: { status: "ok", value: "forged" } };
+        },
+      });
+      return yield* raised(
+        withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream })),
+      );
+    });
+
+    expect(failure).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    expect(counts).toEqual({ providers: 0, executions: 0, publications: 0 });
+    expect(laterExecutions).toBe(0);
+    expect(stream.snapshot()).toEqual([]);
+  });
+
+  it("DLC18: invocation phases are unreachable without a selected provider", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    const attempts: unknown[] = [];
+    let executions = 0;
+    function* workflow(): Workflow<void> {
+      yield* workspaceStep("direct-phases", function* () {
+        executions += 1;
+        return "not reached";
+      });
+    }
+
+    const failure = yield* scoped(function* () {
+      yield* WorkspaceInvocationCollision.around({
+        *coordinate(_args, next): Operation<unknown> {
+          const requests = [
+            { type: "inspect", provider: undefined },
+            { type: "execute", provider: undefined },
+            {
+              type: "publish",
+              provider: undefined,
+              result: { status: "ok", value: "forged" },
+            },
+            { type: "complete", provider: undefined, result: { status: "ok", value: "forged" } },
+          ];
+          for (const request of requests) {
+            attempts.push(yield* raised(next(request)));
+          }
+          return { type: "result", result: { status: "ok", value: "forged" } };
+        },
+      });
+      return yield* raised(durableRun(workflow, { stream }));
+    });
+
+    expect(failure).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    expect(attempts).toHaveLength(4);
+    for (const attempt of attempts) {
+      expect(attempt).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    }
+    expect(executions).toBe(0);
+    expect(stream.snapshot()).toEqual([]);
+  });
+
+  it("DLC19: contextual middleware cannot replace the authoritative published Result", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    const { provider, counts } = successfulProvider();
+    function* workflow(): Workflow<string> {
+      const result = yield createDurableWorkspaceOperation(
+        { type: "workspace", name: "replace-result" },
+        function* () {
+          return "authoritative";
+        },
+      );
+      if (typeof result !== "string") {
+        throw new Error("the Workspace operation did not return its string result");
+      }
+      return result;
+    }
+
+    const value = yield* scoped(function* () {
+      yield* WorkspaceInvocationCollision.around({
+        *coordinate(args, next): Operation<unknown> {
+          yield* next(...args);
+          return { type: "result", result: { status: "ok", value: "forged" } };
+        },
+      });
+      return yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
+    });
+
+    expect(value).toBe("authoritative");
+    expect(counts).toEqual({ providers: 1, executions: 1, publications: 1 });
+    expect(yieldEvents(stream.snapshot())).toEqual([
+      expect.objectContaining({ result: { status: "ok", value: "authoritative" } }),
+    ]);
+  });
+
+  it("DLC20: post-completion middleware cannot suppress, throw, or duplicate work", function* () {
+    for (const behavior of ["suppress", "throw", "duplicate"]) {
+      const stream = new InMemoryStream();
+      claimDurablePublicationIdentity(stream);
+      const { provider, counts } = successfulProvider();
+      function* workflow(): Workflow<string> {
+        const result = yield createDurableWorkspaceOperation(
+          { type: "workspace", name: behavior },
+          function* () {
+            return behavior;
+          },
+        );
+        if (typeof result !== "string") {
+          throw new Error("the Workspace operation did not return its string result");
+        }
+        return result;
+      }
+
+      const value = yield* scoped(function* () {
+        yield* WorkspaceInvocationCollision.around({
+          *coordinate(args, next): Operation<unknown> {
+            const response = yield* next(...args);
+            if (behavior === "throw") {
+              throw new Error("post-completion middleware failure");
+            }
+            if (behavior === "duplicate") {
+              yield* next(...args);
+            }
+            return behavior === "suppress" ? { type: "published" } : response;
+          },
+        });
+        return yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
+      });
+
+      expect(value).toBe(behavior);
+      expect(counts).toEqual({ providers: 1, executions: 1, publications: 1 });
+      expect(yieldEvents(stream.snapshot())).toHaveLength(1);
+    }
+  });
+
+  it("DLC21: retained contextual continuation cannot reuse a completed invocation", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    const { provider, counts } = successfulProvider();
+    let retained: ((request: unknown) => Operation<unknown>) | undefined;
+    let retainedRequest: unknown;
+    function* workflow(): Workflow<void> {
+      yield* workspaceStep("retained-continuation", function* () {
+        return null;
+      });
+    }
+
+    yield* scoped(function* () {
+      yield* WorkspaceInvocationCollision.around({
+        *coordinate(args, next): Operation<unknown> {
+          retained = (request) => next(request);
+          retainedRequest = args[0];
+          return yield* next(...args);
+        },
+      });
+      yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
+    });
+    if (retained === undefined) {
+      throw new Error("the collision middleware did not retain its continuation");
+    }
+
+    expect(yield* raised(retained(retainedRequest))).toBeInstanceOf(
+      WorkspaceCoordinationProviderError,
+    );
+    expect(counts).toEqual({ providers: 1, executions: 1, publications: 1 });
     expect(yieldEvents(stream.snapshot())).toHaveLength(1);
   });
 });

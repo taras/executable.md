@@ -404,15 +404,23 @@ selection identity: execution, publication, failure activation and durable
 publication identity never pass through that middleware. Each live call creates
 a same-named contextual invocation operation whose execution-owned base handler
 closes over those exact values. A provider installed by any loaded package copy
-wraps that base handler through the contextual operation's `next` continuation;
-the selector remains its only replaceable argument. No module registry or
-replaceable structural value resolves provider or invocation authority. The
-execution-owned handler accepts each phase once while the invocation remains
-active; foreign or substituted selectors and reused, completed or stale calls
-fail before transaction work. Its default fails before execution or publication, so
-installing no provider cannot leak a mutation outside its transaction. Selecting
-Workspace coordination for one operation does not enlist unrelated durable
-operations in the same scope.
+terminally accepts the provider-routing request and drives the base handler
+inward with the selected identity. Enclosing middleware sees only the routing
+request; calling its continuation with an execution or publication phase is
+refused by the terminal provider handler, and the execution-owned base refuses
+every phase when no provider was selected. No module registry or replaceable
+structural value resolves provider or invocation authority.
+
+The execution-owned handler accepts execution and publication once and records
+the exact `Result` only after the provider returns it from the completed
+publication. The live operation ignores the contextual call's response as
+completion evidence and resumes from that recorded result alone. A short
+circuit or altered response therefore activates fail-stop before resume, while
+an exception or substituted response after authoritative completion cannot
+replace the published result. Foreign or substituted selectors and reused,
+completed or stale calls fail before transaction work. Installing no provider
+cannot leak execution or publication, and selecting Workspace coordination for
+one operation does not enlist unrelated durable operations in the same scope.
 
 The Deno adapter retains the canonical module's non-operational identity for
 each WorkflowRun journal. The existing secret guard privately associates only

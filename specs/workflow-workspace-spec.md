@@ -823,8 +823,12 @@ live executor, publisher, failure activator or publication witness. The
 live call retains those values in the execution-owned base handler of a
 same-named contextual invocation operation. This operation composes with a
 provider installed by another loaded package copy without a module registry;
-replaceable middleware sees only the selector, while the provider wraps the
-exact base handler through `next`. Before opening the transaction, the provider
+replaceable middleware sees only the provider-routing request, while the
+terminal provider handler drives execution and publication inward. The
+execution-owned handler refuses phases without that selected provider and
+records completion only after the exact published result returns from the
+provider. The durable operation resumes from that record, never from a
+middleware-supplied response. Before opening the transaction, the provider
 requires that handler's proof executor and guarded durable stream identity to
 carry the selected WorkflowRun's exact provider-owned authority. Its supported
 filesystem calls use synchronous pinned DOFS primitives, leaving no asynchronous

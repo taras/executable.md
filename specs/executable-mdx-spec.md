@@ -7022,6 +7022,11 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC14 | Provider infrastructure failure | A selected coordinator activates one first failure by identity and fences later execution and publication |
 | DLC15 | One-shot Workspace invocation | A provider can use the execution-owned invocation authority only during its original call; retained execution, publication and failure operations are refused after completion |
 | DLC16 | Loaded-copy Workspace selection | A provider installed by one physical package copy coordinates one operation created by another copy exactly once without sharing authority through context or a module registry; substituted selection and retained authority remain fail-closed |
+| DLC17 | Forged contextual completion | A same-named invocation middleware that returns a forged successful response reaches no provider, executor or publication; fail-stop prevents Yield and Close persistence and fences later durable work |
+| DLC18 | Missing-provider phase refusal | Direct inspection, execution, publication and completion requests through a same-named invocation continuation are refused when no provider is selected |
+| DLC19 | Authoritative published result | Middleware that delegates and replaces the returned response cannot replace the exact Result recorded by the execution-owned publication |
+| DLC20 | Post-completion isolation | Throwing, suppressing or delegating twice after authoritative completion cannot alter the result or repeat provider, execution or publication work |
+| DLC21 | Retained continuation refusal | A contextual continuation retained beyond its original live invocation is stale and cannot repeat execution or publication |
 
 ### Tier WAC — Atomic provider-level Workspace coordination
 

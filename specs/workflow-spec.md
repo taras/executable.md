@@ -456,14 +456,23 @@ selection. The replaceable selection API carries no live-operation authority:
 it receives no executor, publisher, failure activator or durable publication
 identity. The live call retains those exact values in the base handler of a
 same-named contextual invocation operation. A provider installed by another
-loaded package copy wraps that handler through `next`; only the non-operational
-selector crosses replaceable middleware. Provider selection and invocation
-authority require no module registry and trust no replaceable structural value.
+loaded package copy terminally accepts the routing request and uses its inward
+continuation to drive the execution-owned handler; enclosing middleware receives
+no execution or publication phase. The base refuses every phase when no provider
+was selected. Provider selection and invocation authority require no module
+registry and trust no replaceable structural value.
+
 The execution-owned handler permits one inspection, execution and publication
-during its original live call. A foreign or substituted selector and a reused,
-completed or stale invocation fail before the provider opens a transaction. The
-default missing-provider path also fails before execution or publication, and
-installing a provider does not enlist unrelated durable operations.
+during its original live call. It records the exact result only after the
+selected provider completes publication, and the durable operation resumes from
+that record rather than from the contextual call's structural response. A
+short-circuit, premature response or missing publication activates fail-stop;
+middleware cannot transform an authoritative published result or turn a later
+middleware exception into a different outcome. A foreign or substituted
+selector and a reused, completed or stale invocation fail before the provider
+opens a transaction. The default missing-provider path also fails before
+execution or publication, and installing a provider does not enlist unrelated
+durable operations.
 
 Successful Workspace effect coordination finishes its mutation scope before
 capturing the root. The Deno provider binds an adapter-private proof operation
