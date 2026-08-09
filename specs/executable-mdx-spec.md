@@ -4971,10 +4971,10 @@ operation-failed
 
 A failure carries that reason and the phase it came from, as a plain frozen
 object under a stable tag, and it is **parsed** before any field is read. Data
-that does not validate is treated as absent rather than trusted: for a read or a
-search that means the generic phrase, and for a write it is a provider-contract
-failure (below), because every sentence a write could print makes a claim about
-whether the file was replaced.
+that does not validate is treated as absent rather than trusted: for a non-write
+operation that means the generic phrase, and for a write it is a
+provider-contract failure (below), because every sentence a write could print
+makes a claim about whether the file was replaced.
 
 The outcome a provider returns is checked the same way, and the distinction
 matters more than it looks. An outcome that **will not say** what it is — one
@@ -4982,7 +4982,7 @@ that does not report whether it succeeded, or whose success value or failure
 cannot be read at all — has described nothing, and is a provider-contract
 failure. An outcome that reads perfectly well but carries a failure the
 vocabulary does not recognize *has* described something, just not in terms this
-version knows: for a read or a search that is the generic sentence and the
+version knows: for a non-write operation that is the generic sentence and the
 document carries on.
 
 One operation qualifies that. Admitting a path succeeds with no value at all, so
@@ -6788,10 +6788,10 @@ platform's.
 | FF8 | Identity is preserved | A nested durability failure and a nested Files failure are each rethrown as the same object |
 | FF9 | Precedence at the wrapper | A durability failure beneath a Files invariant is the one preserved |
 | FF10 | Ordinary failures | A missing file is still a printed error and the sibling still runs |
-| FF11 | Hostile shapes are recognized, never fatal in themselves | A throwing `data` accessor, fields and key enumeration that refuse, an unreadable prototype, a throwing `cause`, unreadable or non-list aggregate members, and unreadable teardown causes are each unrecognized rather than thrown, and a real failure beneath one is still found |
+| FF11 | Hostile-shape inspection is total | A throwing `data` accessor, fields and key enumeration that refuse, an unreadable prototype, a throwing `cause`, unreadable or non-list aggregate members, and unreadable teardown causes are each declined rather than allowed to throw — none of them is a valid structural failure — and a real failure beneath one is still found |
 | FF12 | An unsafe tagged candidate is replaced, not preserved | The right tag plus a raw message, a cause chain, mutable data, an extra data field, a path-bearing `name`, an extra Error-level property, an enumerable symbol payload, or hostile enumeration each fail the identity contract; the planted value survives neither stringification nor enumeration, and the real constructors stay recognizable |
 | FF13 | Cancellation cleanup is discovered as fatal | A host cleanup that fails while cancellation unwinds is selected by the engine's own fatal discovery, by identity, with nothing of the platform's failure in it |
-| FF14 | A hostile Result never reaches a component | An `ok`, `value` or `error` that throws, is absent, or is the wrong type is a fatal protocol violation for read, write, path admission, search and temporary-directory alike; no child expands, no later sibling runs, and nothing planted escapes |
+| FF14 | A hostile outcome never reaches a component | A settlement that is absent, unreadable, or not a boolean is a provider-contract failure; so is a selected failure that is absent or unreadable, and a success value that is absent or unreadable for the operations that carry one — path admission's succeeds without a value (FF14c). A readable but invalid success payload is a contract failure too, while a readable but unrecognized non-write failure takes FF15's printable path. Where the outcome is a contract failure no child expands, no later sibling runs, and nothing planted escapes |
 | FF14b | Search results are recognized and copied totally | A refusing array brand, `length` or element is a fatal protocol violation; the walk never consults the iterator; and the array a document binds is its own copy |
 | FF14c | A payload-free success is accepted however it is spelled | Effection's `Unit` carries no `value` member, so an absent one is the ordinary path-admission success — while a present but unreadable one, and a present one that is not `undefined`, are fatal |
 | FF15 | Readable malformed failure data stays printable | A non-write failure whose data does not validate renders the generic sentence and the document carries on, with nothing the provider put there reaching it |
