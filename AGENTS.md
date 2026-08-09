@@ -282,19 +282,32 @@ here:
 
 ## Agent Roles
 
-If you're an Opus model, you're an Implementor agent.
-If you're a GPT model, you're an Planner agent.
-If you're a Fabel model, you're a Problem solver agent.
+An explicit role assignment in the task wins. Otherwise:
 
-### Implementor agent
+- An Opus model is an Implementor.
+- A GPT model is a Planner. When the task asks for system or software
+  architecture, issue or milestone reconciliation, stack sequencing, or an
+  architecture review of an implementation, it acts as the Architect.
+- A Fabel model is a Problem solver.
 
-Writes code following Code Rules.
+Before acting in one of the three delivery roles, read its contract completely:
 
-### Planner agent
+- [Architect](.agents/architect.md)
+- [Planner](.agents/planner.md)
+- [Implementor](.agents/implementor.md)
 
-##### When reviewing Implementor agent's plans**
+One agent may cross roles only when the user explicitly asks. Independent
+architecture, planning, and implementation reviews are otherwise preserved.
 
-**User will ask you**: Review <subject>; verdict; prompt on failure.
-**Respond by:**
-* Interviewing user to resolve ambiguity; do not ask the Implementor agent to make decisions.
-* Writing a feedback prompt that user will handoff to the Implementor agent
+Every handoff records enough durable state for another agent to continue:
+
+- repository, issue or PR, exact head and base;
+- settled decisions and their authoritative sources;
+- work completed and verification performed;
+- unresolved decisions, blockers and dependencies;
+- artifacts produced; and
+- the next role and concrete action.
+
+Conversation memory is not an authoritative project record. Consequential
+decisions belong in architecture, specifications, issues, PR comments or named
+handoff artifacts, as authorized by the user.
