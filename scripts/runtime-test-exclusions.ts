@@ -126,6 +126,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "proves Deno-private atomic Workspace coordination against the authoritative node:sqlite and DOFS adapter; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/365",
   },
+  {
+    path: "packages/workflow/tests/workspace-effect-loaded-copy.test.ts",
+    reason:
+      "creates and imports a physical temporary copy of the Workspace modules through Deno.makeTempDir and the Deno module loader",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
 ];
 
 /**

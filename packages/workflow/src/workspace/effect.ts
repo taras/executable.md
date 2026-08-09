@@ -1,3 +1,4 @@
+import { type Api, createApi } from "@effectionx/context-api";
 import {
   createDurableOperation,
   type ActivateDurabilityFailure,
@@ -11,123 +12,138 @@ import {
 import { ensure, type Operation, scoped } from "effection";
 import { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./api.ts";
 
-export type WorkspaceCoordinationInvocation = object;
-
 export interface WorkspaceCoordinationAuthority {
   readonly executionIdentity: object;
   readonly publicationIdentity: DurablePublicationIdentity | undefined;
   execute(): Operation<Json>;
   publish(result: Result): Operation<void>;
-  activateFailure(failure: unknown): Error;
+  activateFailure(failure: unknown): Operation<Error>;
 }
 
 export interface WorkspaceCoordinationProvider {
-  run(invocation: WorkspaceCoordinationInvocation): Operation<Result>;
+  run(authority: WorkspaceCoordinationAuthority): Operation<Result>;
 }
 
-interface ProviderRegistration {
-  open: boolean;
-  readonly provider: WorkspaceCoordinationProvider;
+interface StartRequest {
+  readonly type: "start";
+  readonly provider: object | undefined;
 }
 
-interface InvocationRecord {
-  state: "available" | "active" | "complete";
+interface InspectRequest {
+  readonly type: "inspect";
+}
+
+interface ExecuteRequest {
+  readonly type: "execute";
+}
+
+interface PublishRequest {
+  readonly type: "publish";
+  readonly result: Result;
+}
+
+interface ActivateFailureRequest {
+  readonly type: "activate-failure";
+  readonly failure: unknown;
+}
+
+interface CompleteRequest {
+  readonly type: "complete";
+  readonly result: Result;
+}
+
+type InvocationRequest =
+  | StartRequest
+  | InspectRequest
+  | ExecuteRequest
+  | PublishRequest
+  | ActivateFailureRequest
+  | CompleteRequest;
+
+interface InspectionResponse {
+  readonly type: "inspection";
   readonly executionIdentity: object;
-  readonly execute: () => Operation<Json>;
-  readonly publish: (result: Result) => Operation<void>;
-  readonly activateFailure: ActivateDurabilityFailure;
   readonly publicationIdentity: DurablePublicationIdentity | undefined;
 }
 
-const workspaceCoordinationState = (() => {
-  const providers = new WeakMap<object, ProviderRegistration>();
-  const invocations = new WeakMap<object, InvocationRecord>();
+interface ValueResponse {
+  readonly type: "value";
+  readonly value: Json;
+}
 
-  return {
-    registerProvider(provider: WorkspaceCoordinationProvider): {
-      selection: object;
-      close: () => void;
-    } {
-      const selection = Object.freeze({});
-      const registration: ProviderRegistration = { open: true, provider };
-      providers.set(selection, registration);
-      return {
-        selection,
-        close(): void {
-          registration.open = false;
-          providers.delete(selection);
-        },
-      };
-    },
+interface PublishedResponse {
+  readonly type: "published";
+}
 
-    provider(selection: object): WorkspaceCoordinationProvider | undefined {
-      const registration = providers.get(selection);
-      return registration?.open ? registration.provider : undefined;
-    },
+interface FailureResponse {
+  readonly type: "failure";
+  readonly failure: Error;
+}
 
-    createInvocation(record: InvocationRecord): WorkspaceCoordinationInvocation {
-      const invocation = Object.freeze({});
-      invocations.set(invocation, record);
-      return invocation;
-    },
+interface ResultResponse {
+  readonly type: "result";
+  readonly result: Result;
+}
 
-    invocation(invocation: WorkspaceCoordinationInvocation): InvocationRecord | undefined {
-      return invocations.get(invocation);
-    },
+type InvocationResponse =
+  | InspectionResponse
+  | ValueResponse
+  | PublishedResponse
+  | FailureResponse
+  | ResultResponse;
 
-    finishInvocation(invocation: WorkspaceCoordinationInvocation, record: InvocationRecord): void {
-      record.state = "complete";
-      invocations.delete(invocation);
-    },
-  };
-})();
+interface WorkspaceInvocationApi {
+  coordinate(request: InvocationRequest): Operation<InvocationResponse>;
+}
+
+const WORKSPACE_INVOCATION_API = "executablemd.workflow.workspace.coordination.invocation";
 
 function unavailable(message: string): WorkspaceCoordinationProviderError {
   return new WorkspaceCoordinationProviderError(message);
 }
 
-function requireActive(
-  invocation: WorkspaceCoordinationInvocation,
-  record: InvocationRecord,
-): void {
-  if (record.state !== "active" || workspaceCoordinationState.invocation(invocation) !== record) {
-    throw unavailable("the live Workspace coordination invocation is completed or stale");
+const WorkspaceInvocation: Api<WorkspaceInvocationApi> = createApi<WorkspaceInvocationApi>(
+  WORKSPACE_INVOCATION_API,
+  {
+    // deno-lint-ignore require-yield
+    *coordinate(): Operation<InvocationResponse> {
+      throw unavailable("no Workspace coordinator accepted this live invocation");
+    },
+  },
+);
+
+function inspect(response: InvocationResponse): InspectionResponse {
+  if (response.type !== "inspection") {
+    throw unavailable("the Workspace provider received an invalid invocation inspection");
+  }
+  return response;
+}
+
+function value(response: InvocationResponse): Json {
+  if (response.type !== "value") {
+    throw unavailable("the Workspace provider received an invalid execution response");
+  }
+  return response.value;
+}
+
+function published(response: InvocationResponse): void {
+  if (response.type !== "published") {
+    throw unavailable("the Workspace provider received an invalid publication response");
   }
 }
 
-export function* withWorkspaceCoordinationInvocation(
-  invocation: WorkspaceCoordinationInvocation,
-  coordinate: (authority: WorkspaceCoordinationAuthority) => Operation<Result>,
-): Operation<Result> {
-  const record = workspaceCoordinationState.invocation(invocation);
-  if (record === undefined || record.state !== "available") {
-    throw unavailable(
-      "the live Workspace coordination invocation is missing, foreign, reused, completed, or stale",
-    );
+function activated(response: InvocationResponse): Error {
+  if (response.type !== "failure") {
+    throw unavailable("the Workspace provider received an invalid durability failure response");
   }
-  record.state = "active";
-  const authority: WorkspaceCoordinationAuthority = Object.freeze({
-    executionIdentity: record.executionIdentity,
-    publicationIdentity: record.publicationIdentity,
-    *execute(): Operation<Json> {
-      requireActive(invocation, record);
-      return yield* record.execute();
-    },
-    *publish(result: Result): Operation<void> {
-      requireActive(invocation, record);
-      yield* record.publish(result);
-    },
-    activateFailure(failure: unknown): Error {
-      requireActive(invocation, record);
-      return record.activateFailure(failure);
-    },
-  });
+  return response.failure;
+}
 
-  try {
-    return yield* coordinate(authority);
-  } finally {
-    workspaceCoordinationState.finishInvocation(invocation, record);
+function completed(response: InvocationResponse): Result {
+  if (response.type !== "result") {
+    throw unavailable("the selected Workspace provider did not complete its live invocation");
   }
+  return response.result;
 }
 
 export function withWorkspaceCoordinationProvider<T>(
@@ -135,11 +151,132 @@ export function withWorkspaceCoordinationProvider<T>(
   operation: Operation<T>,
 ): Operation<T> {
   return scoped(function* () {
-    const registration = workspaceCoordinationState.registerProvider(provider);
-    yield* ensure(registration.close);
-    yield* WorkspaceCoordination.around({ provider: () => registration.selection }, { at: "min" });
+    const selection = Object.freeze({});
+    let registrationOpen = true;
+    yield* ensure(() => {
+      registrationOpen = false;
+    });
+    yield* WorkspaceCoordination.around({ provider: () => selection }, { at: "min" });
+    yield* WorkspaceInvocation.around(
+      {
+        *coordinate([request], next): Operation<InvocationResponse> {
+          if (!registrationOpen || request.type !== "start" || request.provider !== selection) {
+            throw unavailable(
+              "the selected Workspace coordinator is missing, foreign, completed, or stale",
+            );
+          }
+
+          const details = inspect(yield* next({ type: "inspect" }));
+          let authorityOpen = true;
+          const authority: WorkspaceCoordinationAuthority = Object.freeze({
+            executionIdentity: details.executionIdentity,
+            publicationIdentity: details.publicationIdentity,
+            *execute(): Operation<Json> {
+              if (!authorityOpen) {
+                throw unavailable(
+                  "the live Workspace coordination authority is completed or stale",
+                );
+              }
+              return value(yield* next({ type: "execute" }));
+            },
+            *publish(result: Result): Operation<void> {
+              if (!authorityOpen) {
+                throw unavailable(
+                  "the live Workspace coordination authority is completed or stale",
+                );
+              }
+              published(yield* next({ type: "publish", result }));
+            },
+            *activateFailure(failure: unknown): Operation<Error> {
+              if (!authorityOpen) {
+                throw unavailable(
+                  "the live Workspace coordination authority is completed or stale",
+                );
+              }
+              return activated(yield* next({ type: "activate-failure", failure }));
+            },
+          });
+
+          try {
+            const result = yield* provider.run(authority);
+            return yield* next({ type: "complete", result });
+          } finally {
+            authorityOpen = false;
+          }
+        },
+      },
+      { at: "min" },
+    );
     return yield* operation;
   });
+}
+
+function invocationApi(
+  executionIdentity: object,
+  execute: () => Operation<Json>,
+  publish: (result: Result) => Operation<void>,
+  activateFailure: ActivateDurabilityFailure,
+  publicationIdentity: DurablePublicationIdentity | undefined,
+): { api: Api<WorkspaceInvocationApi>; close: () => void } {
+  let state: "available" | "active" | "complete" = "available";
+  let executionAttempted = false;
+  let publicationCompleted = false;
+
+  function requireActive(): void {
+    if (state !== "active") {
+      throw unavailable("the live Workspace coordination invocation is completed or stale");
+    }
+  }
+
+  return {
+    api: createApi<WorkspaceInvocationApi>(WORKSPACE_INVOCATION_API, {
+      *coordinate(request: InvocationRequest): Operation<InvocationResponse> {
+        if (request.type === "start") {
+          throw unavailable("no Workspace coordinator accepted this live invocation");
+        }
+        if (request.type === "inspect") {
+          if (state !== "available") {
+            throw unavailable(
+              "the live Workspace coordination invocation is missing, reused, completed, or stale",
+            );
+          }
+          state = "active";
+          return {
+            type: "inspection",
+            executionIdentity,
+            publicationIdentity,
+          };
+        }
+        requireActive();
+        if (request.type === "execute") {
+          if (executionAttempted) {
+            throw unavailable("the live Workspace execution is already consumed");
+          }
+          executionAttempted = true;
+          return { type: "value", value: yield* execute() };
+        }
+        if (request.type === "publish") {
+          if (!executionAttempted || publicationCompleted) {
+            throw unavailable("the live Workspace publication is missing or already consumed");
+          }
+          yield* publish(request.result);
+          publicationCompleted = true;
+          return { type: "published" };
+        }
+        if (request.type === "activate-failure") {
+          return { type: "failure", failure: activateFailure(request.failure) };
+        }
+        if (!publicationCompleted) {
+          throw unavailable("the selected Workspace provider omitted its live publication");
+        }
+        state = "complete";
+        return { type: "result", result: request.result };
+      },
+    }),
+    close(): void {
+      state = "complete";
+    },
+  };
 }
 
 function workspaceCoordinator(executionIdentity: object): LiveDurableOperationCoordinator {
@@ -150,36 +287,23 @@ function workspaceCoordinator(executionIdentity: object): LiveDurableOperationCo
       activateFailure: ActivateDurabilityFailure,
       publicationIdentity: DurablePublicationIdentity | undefined,
     ): Operation<Result> {
-      const record: InvocationRecord = {
-        state: "available",
+      const invocation = invocationApi(
         executionIdentity,
         execute,
         publish,
         activateFailure,
         publicationIdentity,
-      };
-      const invocation = workspaceCoordinationState.createInvocation(record);
+      );
 
       try {
         const selection = yield* WorkspaceCoordination.operations.provider;
-        const provider =
-          selection === undefined ? undefined : workspaceCoordinationState.provider(selection);
-        if (provider === undefined) {
-          throw unavailable(
-            "the selected Workspace coordinator is missing, foreign, completed, or stale",
-          );
-        }
-        const result = yield* provider.run(invocation);
-        if (record.state !== "complete") {
-          throw unavailable(
-            "the selected Workspace coordinator did not consume its live invocation",
-          );
-        }
-        return result;
+        return completed(
+          yield* invocation.api.operations.coordinate({ type: "start", provider: selection }),
+        );
       } catch (error) {
         throw activateFailure(error);
       } finally {
-        workspaceCoordinationState.finishInvocation(invocation, record);
+        invocation.close();
       }
     },
   };

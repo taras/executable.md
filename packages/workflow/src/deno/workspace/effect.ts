@@ -12,9 +12,7 @@ import { WorkflowTransactionError } from "../../storage/errors.ts";
 import {
   createOwnedDurableWorkspaceOperation,
   type WorkspaceCoordinationAuthority,
-  type WorkspaceCoordinationInvocation,
   type WorkspaceCoordinationProvider,
-  withWorkspaceCoordinationInvocation,
   withWorkspaceCoordinationProvider,
 } from "../../workspace/effect.ts";
 import type { WorkflowRunConnections } from "../connections.ts";
@@ -167,38 +165,33 @@ function coordinator(
   database: WorkflowRunDatabase,
 ): WorkspaceCoordinationProvider {
   return {
-    *run(invocation: WorkspaceCoordinationInvocation): Operation<DurableResult> {
-      return yield* withWorkspaceCoordinationInvocation(
-        invocation,
-        function* (authority: WorkspaceCoordinationAuthority): Operation<DurableResult> {
-          let transacted;
-          try {
-            if (workspaceEffectOwners.get(authority.executionIdentity) !== database) {
-              throw new WorkflowTransactionError(
-                "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
-              );
-            }
-            connections.validateJournal(database, authority.publicationIdentity);
-            transacted = yield* database.transact(function* (transaction) {
-              return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
-                coordinateTransaction(
-                  database,
-                  transaction,
-                  workspace,
-                  authority.execute,
-                  authority.publish,
-                ),
-              );
-            });
-          } catch (error) {
-            throw authority.activateFailure(error);
-          }
-          if (!transacted.ok) {
-            throw authority.activateFailure(transacted.error);
-          }
-          return transacted.value;
-        },
-      );
+    *run(authority: WorkspaceCoordinationAuthority): Operation<DurableResult> {
+      let transacted;
+      try {
+        if (workspaceEffectOwners.get(authority.executionIdentity) !== database) {
+          throw new WorkflowTransactionError(
+            "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
+          );
+        }
+        connections.validateJournal(database, authority.publicationIdentity);
+        transacted = yield* database.transact(function* (transaction) {
+          return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
+            coordinateTransaction(
+              database,
+              transaction,
+              workspace,
+              authority.execute,
+              authority.publish,
+            ),
+          );
+        });
+      } catch (error) {
+        throw yield* authority.activateFailure(error);
+      }
+      if (!transacted.ok) {
+        throw yield* authority.activateFailure(transacted.error);
+      }
+      return transacted.value;
     },
   };
 }

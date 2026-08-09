@@ -7016,11 +7016,12 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC8 | Explicit selection | A selected coordinator affects only the operation that names it and receives a non-operational publication identity rather than stream capabilities |
 | DLC9 | Callback compatibility | Callback-based durable effects retain their existing behavior |
 | DLC10 | Fail-closed Workspace | A missing Workspace provider activates fail-stop before execution or publication and persists no Yield or Close |
-| DLC11 | Workspace isolation | Replaceable context carries only provider selection; the registered provider receives the exact canonical invocation, while unrelated durable operations stay on the default coordinator |
+| DLC11 | Workspace isolation | Replaceable context carries only provider selection; the provider wraps the execution-owned invocation handler, while unrelated durable operations stay on the default coordinator |
 | DLC12 | Workspace replay | Replayed Workspace operations require no live provider |
 | DLC13 | Runtime-neutral boundary | Shared Workspace coordination source exposes no runtime or storage implementation type |
 | DLC14 | Provider infrastructure failure | A selected coordinator activates one first failure by identity and fences later execution and publication |
-| DLC15 | One-shot Workspace invocation | A provider consumes the canonical live invocation once; retaining and replaying its opaque identity after completion is refused before execution or publication |
+| DLC15 | One-shot Workspace invocation | A provider can use the execution-owned invocation authority only during its original call; retained execution, publication and failure operations are refused after completion |
+| DLC16 | Loaded-copy Workspace selection | A provider installed by one physical package copy coordinates one operation created by another copy exactly once without sharing authority through context or a module registry; substituted selection and retained authority remain fail-closed |
 
 ### Tier WAC — Atomic provider-level Workspace coordination
 

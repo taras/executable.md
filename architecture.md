@@ -401,12 +401,15 @@ publication. Callback-based durable effects keep their existing path.
 The shared Workspace durable-operation wrapper reads a contextual provider
 selection explicitly. That replaceable API carries only a non-operational
 selection identity: execution, publication, failure activation and durable
-publication identity never pass through middleware. For each live call the
-canonical wrapper retains those continuations in a module-private one-shot
-invocation and hands only its opaque identity directly to the registered
-provider. The provider must consume the exact invocation once while it remains
-active; foreign, substituted, reused, completed and stale identities fail before
-transaction work. Its default fails before execution or publication, so
+publication identity never pass through that middleware. Each live call creates
+a same-named contextual invocation operation whose execution-owned base handler
+closes over those exact values. A provider installed by any loaded package copy
+wraps that base handler through the contextual operation's `next` continuation;
+the selector remains its only replaceable argument. No module registry or
+replaceable structural value resolves provider or invocation authority. The
+execution-owned handler accepts each phase once while the invocation remains
+active; foreign or substituted selectors and reused, completed or stale calls
+fail before transaction work. Its default fails before execution or publication, so
 installing no provider cannot leak a mutation outside its transaction. Selecting
 Workspace coordination for one operation does not enlist unrelated durable
 operations in the same scope.
@@ -927,7 +930,7 @@ Status is measured against main.
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
-| Workspace coordination API | fails closed by default; replaceable context selects only a registered provider while the canonical one-shot invocation retains execution, publication and failure authority | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
+| Workspace coordination API | fails closed by default; replaceable context selects only a provider while a loaded-copy-compatible contextual invocation keeps execution, publication and failure authority in its execution-owned base handler | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |

@@ -454,22 +454,26 @@ callback-based durable-effect factory remains unchanged.
 The shared Workspace operation wrapper explicitly reads a contextual provider
 selection. The replaceable selection API carries no live-operation authority:
 it receives no executor, publisher, failure activator or durable publication
-identity. The canonical wrapper retains those exact values in a module-private
-one-shot invocation and passes only its opaque identity directly to the
-registered provider. The invocation can be consumed once during its original
-live call. A foreign, substituted, reused, completed or stale invocation fails
-before the provider opens a transaction. The default missing-provider path also
-fails before execution or publication, and installing a provider does not enlist
-unrelated durable operations.
+identity. The live call retains those exact values in the base handler of a
+same-named contextual invocation operation. A provider installed by another
+loaded package copy wraps that handler through `next`; only the non-operational
+selector crosses replaceable middleware. Provider selection and invocation
+authority require no module registry and trust no replaceable structural value.
+The execution-owned handler permits one inspection, execution and publication
+during its original live call. A foreign or substituted selector and a reused,
+completed or stale invocation fail before the provider opens a transaction. The
+default missing-provider path also fails before execution or publication, and
+installing a provider does not enlist unrelated durable operations.
 
 Successful Workspace effect coordination finishes its mutation scope before
 capturing the root. The Deno provider binds an adapter-private proof operation
 to one exact WorkflowRun handle through module-private executor identity. It
 retains the canonical durable-stream module's non-operational publication
 identity for that run's journal; the existing secret-filter wrapper privately
-preserves the identity only for wrappers it constructs. The provider consumes
-the invocation and validates its exact executor and publication identities
-before it opens the caller-owned transaction. It refuses a foreign executor,
+preserves the identity only for wrappers it constructs. The provider receives
+the invocation's exact executor and publication identities from its
+execution-owned base handler and validates them before it opens the caller-owned
+transaction. It refuses a foreign executor,
 publication identity, custom wrapper or copied property before transaction
 work. It runs the mutation in one operation savepoint, waits for mutation child
 teardown, captures and publishes the immutable root, and routes the

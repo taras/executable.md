@@ -818,11 +818,14 @@ lifecycle contracts; documents do not choose that topology.
 The Deno provider's adapter-private proof operation already coordinates one
 real DOFS mutation savepoint, immutable root publication and filtered durable
 Yield in the caller-owned transaction. Replaceable Workspace context selects a
-registered provider through a non-operational identity and never receives the
+provider through a non-operational identity and never receives the
 live executor, publisher, failure activator or publication witness. The
-canonical wrapper retains those values in a one-shot invocation that the Deno
-provider consumes directly. Before opening the transaction, the provider
-requires that invocation's proof executor and guarded durable stream identity to
+live call retains those values in the execution-owned base handler of a
+same-named contextual invocation operation. This operation composes with a
+provider installed by another loaded package copy without a module registry;
+replaceable middleware sees only the selector, while the provider wraps the
+exact base handler through `next`. Before opening the transaction, the provider
+requires that handler's proof executor and guarded durable stream identity to
 carry the selected WorkflowRun's exact provider-owned authority. Its supported
 filesystem calls use synchronous pinned DOFS primitives, leaving no asynchronous
 continuation after mutation teardown. It distinguishes a documented filesystem
