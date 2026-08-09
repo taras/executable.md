@@ -29,7 +29,11 @@ import { execute } from "../src/execute.ts";
 import { inspectDocument } from "../src/inspect.ts";
 import { getExpansion } from "../src/expansion.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { DocumentTargetError } from "../src/document-targets.ts";
+import {
+  asDocumentTargetError,
+  DocumentTargetError,
+  isDocumentTargetError,
+} from "../src/document-targets.ts";
 import { fileSource, formatDocumentReference, inlineSource } from "../src/root-source.ts";
 import type { RootDocumentSource } from "../src/root-source.ts";
 import { asText } from "./helpers.ts";
@@ -361,11 +365,16 @@ describe("Tier TX — targeted execution", () => {
     const stream = new InMemoryStream();
     const seen: Probes = { names: [], ids: [] };
     const error = yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream, seen);
-    expect((error as Error).name).toBe("DocumentTargetError");
-    expect((error as Error).message).toContain("matches no document target");
+    expect(isDocumentTargetError(error)).toBe(true);
+    expect(asDocumentTargetError(error)?.data).toMatchObject({
+      kind: "no-match",
+      selector: "Missing",
+      matches: [],
+    });
     expect(seen.names).toEqual([]);
-    // The root import is the only effect the journal saw, and it failed.
-    expect(rootImports(stream).map((event) => event.result.status)).toEqual(["err"]);
+    // The selection was recorded as an observation, and the effect succeeded:
+    // what failed is the document, deterministically, from that record.
+    expect(rootImports(stream).map((event) => event.result.status)).toEqual(["ok"]);
     expect(stream.snapshot().filter((event) => event.type === "yield").length).toBe(1);
   });
 
@@ -373,7 +382,7 @@ describe("Tier TX — targeted execution", () => {
     const stream = new InMemoryStream();
     const seen: Probes = { names: [], ids: [] };
     const error = yield* failure(inlineSource(SECTIONS, { target: "**" }), stream, seen);
-    expect((error as Error).message).toContain("matches more than one document target");
+    expect(asDocumentTargetError(error)?.data.kind).toBe("multiple-matches");
     expect(seen.names).toEqual([]);
     expect(stream.snapshot().filter((event) => event.type === "yield").length).toBe(1);
   });
@@ -464,7 +473,78 @@ describe("Tier TX — targeted replay", () => {
     // that it means the recorded section.
     const error = yield* failure(inlineSource(SECTIONS, { target: "**" }), stream);
     expect(error).toBeInstanceOf(StaleInputError);
-    expect((error as Error).cause).toBeInstanceOf(DocumentTargetError);
+    // Stale input is what this is, and it carries nothing else: the guard
+    // retains no failure object from the selection it could not match.
+    expect((error as Error).cause).toBe(undefined);
+    expect(isDocumentTargetError(error)).toBe(false);
+  });
+
+  /**
+   * The defect this stack shipped first, and the reason a failed selection is
+   * recorded structurally rather than left to the effect's own failure.
+   *
+   * `Missing` matched nothing, so the run failed and `durableRun` closed the
+   * root. A later request for `Good` — which the document really offers — was
+   * then answered with the recorded `Missing` error, because the guard
+   * delegated past every `err` result and the completed Close short-circuited
+   * everything after it.
+   */
+  it("TX24: a journal from a failed selector never answers a valid one", function* () {
+    const stream = new InMemoryStream();
+    const first = yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream);
+    expect(asDocumentTargetError(first)?.data.selector).toBe("Missing");
+
+    const second = yield* failure(inlineSource(SECTIONS, { target: "Beta" }), stream);
+    expect(second).toBeInstanceOf(StaleInputError);
+    expect((second as Error).message).not.toContain("Missing");
+  });
+
+  it("TX25: the same failing selector replays its own recorded failure", function* () {
+    const stream = new InMemoryStream();
+    const seen: Probes = { names: [], ids: [] };
+    const first = yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream);
+    const replayed = yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream, seen);
+
+    expect(isDocumentTargetError(replayed)).toBe(true);
+    expect(asDocumentTargetError(replayed)?.data).toEqual(asDocumentTargetError(first)?.data);
+    expect(seen.names).toEqual([]);
+    // One recorded import, and it is the first run's.
+    expect(rootImports(stream).length).toBe(1);
+  });
+
+  it("TX26: one failed selection never answers for another kind of failure", function* () {
+    const stream = new InMemoryStream();
+    yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream);
+
+    // Ambiguous rather than unmatched: a different outcome, not a different
+    // spelling of the same one.
+    const ambiguous = yield* failure(inlineSource(SECTIONS, { target: "**" }), stream);
+    expect(ambiguous).toBeInstanceOf(StaleInputError);
+
+    // Invalid syntax rather than unmatched.
+    const invalid = yield* failure(inlineSource(SECTIONS, { target: "/bad" }), stream);
+    expect(invalid).toBeInstanceOf(StaleInputError);
+
+    // A different selector that also matches nothing is still a different
+    // request, and the recorded failure describes the one that was made.
+    const other = yield* failure(inlineSource(SECTIONS, { target: "AlsoMissing" }), stream);
+    expect(other).toBeInstanceOf(StaleInputError);
+  });
+
+  it("TX27: live and replayed selection failures are the same structural error", function* () {
+    const stream = new InMemoryStream();
+    const live = yield* failure(inlineSource(SECTIONS, { target: "**/N*/Deep" }), stream);
+    const replayed = yield* failure(inlineSource(SECTIONS, { target: "**/N*/Deep" }), stream);
+
+    for (const error of [live, replayed]) {
+      expect(isDocumentTargetError(error)).toBe(true);
+      expect(asDocumentTargetError(error)?.data.selector).toBe("**/N*/Deep");
+      expect(asDocumentTargetError(error)?.data.available).toEqual([
+        "Alpha",
+        "Alpha/Inner",
+        "Beta",
+      ]);
+    }
   });
 
   it("TX22: an untargeted journal still replays for an untargeted run", function* () {

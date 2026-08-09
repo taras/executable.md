@@ -87,13 +87,22 @@ export function formatDocumentReference(path: string, target?: string): string {
   if (path.length === 0) {
     throw new TypeError(INVALID_REFERENCE);
   }
+  // The round trip is the rule, not a sample of it: a path only formats when
+  // decoding what this would write reproduces it exactly. NUL, which the
+  // decoder refuses, and an unpaired surrogate, which encodes lossily to the
+  // replacement character, both fail here rather than producing a reference
+  // that names a different file than the one asked about.
+  const encoded = encodeDocumentPath(path);
+  if (decodePercentEncoded(encoded) !== path) {
+    throw new TypeError(INVALID_REFERENCE);
+  }
   if (target === undefined) {
-    return encodeDocumentPath(path);
+    return encoded;
   }
   if (!isCanonicalTarget(target)) {
     throw new TypeError(INVALID_REFERENCE);
   }
-  return `${encodeDocumentPath(path)}#${target}`;
+  return `${encoded}#${target}`;
 }
 
 /** The identity printed errors and source positions report for this root. */

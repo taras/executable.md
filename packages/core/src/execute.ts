@@ -52,6 +52,14 @@ import {
   parseRootMarkdownDefinition,
   resolveDocumentTarget,
 } from "./definition.ts";
+import {
+  asDocumentTargetError,
+  documentTargetError,
+  documentTargetFailure,
+  recordedDocumentTargetFailure,
+  sameDocumentTargetFailure,
+} from "./document-targets.ts";
+import type { DocumentTargetFailure } from "./document-targets.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
   expandSegments,
@@ -138,7 +146,38 @@ export type ExecuteOptions = RootDocumentSource & ExecuteSettings;
  */
 type DurableSelection =
   | { kind: "repository"; path: string; content: string; target?: string }
+  | { kind: "target-failure"; path: string; content: string; failure: TargetFailureRecord }
   | { kind: "registered"; origin: string; reserved: boolean };
+
+/**
+ * A selection that named no single section, as the journal holds it.
+ *
+ * A failed selection is an observation of the document, not an accident: the
+ * text was read, and it does not offer what was asked for. Recording it as data
+ * — rather than letting the effect fail and keeping only a serialized message —
+ * is what lets a resumed run tell "the same request, failing the same way" from
+ * "a different request the recorded run never made", and what lets the failure
+ * be rebuilt with its fields intact instead of reduced to prose.
+ *
+ * `selector` is sanitized invocation metadata. It is never identity: it does
+ * not occupy the exact-target field, and it never reaches a workflow
+ * definition.
+ */
+type TargetFailureRecord = {
+  kind: string;
+  selector: string;
+  matches: string[];
+  available: string[];
+};
+
+function targetFailureRecord(failure: DocumentTargetFailure): TargetFailureRecord {
+  return {
+    kind: failure.kind,
+    selector: failure.selector,
+    matches: [...failure.matches],
+    available: [...failure.available],
+  };
+}
 
 function* durableImportComponent(
   name: string,
@@ -161,13 +200,22 @@ function* durableImportComponent(
         // for, not what ran.
         const path = rootSourcePath(root);
         const content = yield* readRootSource(root);
-        const target =
-          root.target === undefined ? undefined : resolveDocumentTarget(path, content, root.target);
+        if (root.target === undefined) {
+          return { kind: "repository", path, content };
+        }
+        const resolved = resolveDocumentTarget(path, content, root.target);
+        if (resolved.ok) {
+          return { kind: "repository", path, content, target: resolved.value };
+        }
+        const failure = asDocumentTargetError(resolved.error);
+        if (failure === undefined) {
+          throw resolved.error;
+        }
         return {
-          kind: "repository",
+          kind: "target-failure",
           path,
           content,
-          ...(target === undefined ? {} : { target }),
+          failure: targetFailureRecord(failure.data),
         };
       }
 
@@ -195,6 +243,20 @@ function* durableImportComponent(
       }
     },
   )) as DurableSelection;
+
+  // Rebuilt here rather than carried out of the durable operation, so a replayed
+  // failed selection and a live one raise the same error with the same fields.
+  // Parsed rather than trusted: the record is journal data.
+  if (selection.kind === "target-failure") {
+    const failure = recordedDocumentTargetFailure(selection.failure);
+    if (failure === undefined) {
+      throw new Error(
+        "The recorded root document import describes a failed target selection this version " +
+          "cannot read.",
+      );
+    }
+    throw documentTargetError(failure);
+  }
 
   if (selection.kind === "registered") {
     // The function was never journaled. Find the implementation the recorded
@@ -271,8 +333,24 @@ function isFunctionComponent(value: unknown): value is FunctionComponent {
   return typeof value === "function";
 }
 
+/**
+ * What one run's selector decided: the whole document, one exact section, or a
+ * failure that named none.
+ *
+ * Selection is compared as an outcome rather than as a target string, because a
+ * failed selection is an outcome too. Without the third case a journal written
+ * by one selector that matched nothing would answer a later request for a
+ * section that does exist.
+ */
+type SelectionOutcome =
+  | { kind: "whole" }
+  | { kind: "exact"; target: string }
+  | { kind: "failed"; failure: DocumentTargetFailure };
+
 /** The recorded root import this event is, when it is one that can be read. */
-function recordedRootImport(event: Yield): { content: string; target?: string } | undefined {
+function recordedRootImport(
+  event: Yield,
+): { content: string; selection: SelectionOutcome } | undefined {
   if (
     event.description.type !== "import_component" ||
     event.description.name !== "__root__" ||
@@ -285,97 +363,109 @@ function recordedRootImport(event: Yield): { content: string; target?: string } 
     return undefined;
   }
   const content = record["content"];
-  const target = record["target"];
-  if (typeof content !== "string" || (target !== undefined && typeof target !== "string")) {
+  if (typeof content !== "string") {
     return undefined;
   }
-  return target === undefined ? { content } : { content, target };
+  if (record["kind"] === "target-failure") {
+    const failure = recordedDocumentTargetFailure(record["failure"]);
+    return failure === undefined ? undefined : { content, selection: { kind: "failed", failure } };
+  }
+  const target = record["target"];
+  if (target === undefined) {
+    return { content, selection: { kind: "whole" } };
+  }
+  return typeof target === "string" ? { content, selection: { kind: "exact", target } } : undefined;
+}
+
+/** What this run's selector decides against the content the journal recorded. */
+function requestedSelection(root: RootDocumentSource, content: string): SelectionOutcome {
+  if (root.target === undefined) {
+    return { kind: "whole" };
+  }
+  const resolved = resolveDocumentTarget(rootSourcePath(root), content, root.target);
+  if (resolved.ok) {
+    return { kind: "exact", target: resolved.value };
+  }
+  const failure = asDocumentTargetError(resolved.error);
+  // A failure this module did not build is not a selection outcome that can be
+  // compared, so it cannot be shown compatible with anything.
+  return failure === undefined
+    ? { kind: "failed", failure: documentTargetFailure("invalid-selector", root.target, [], []) }
+    : { kind: "failed", failure: failure.data };
+}
+
+function sameSelection(recorded: SelectionOutcome, requested: SelectionOutcome): boolean {
+  if (recorded.kind === "whole" || requested.kind === "whole") {
+    return recorded.kind === requested.kind;
+  }
+  if (recorded.kind === "exact" || requested.kind === "exact") {
+    return (
+      recorded.kind === "exact" &&
+      requested.kind === "exact" &&
+      recorded.target === requested.target
+    );
+  }
+  return sameDocumentTargetFailure(recorded.failure, requested.failure);
+}
+
+function describeSelection(selection: SelectionOutcome): string {
+  switch (selection.kind) {
+    case "whole":
+      return "the whole document";
+    case "exact":
+      return `the target ${JSON.stringify(selection.target)}`;
+    case "failed":
+      return `a selector that names no single target (${selection.failure.kind})`;
+  }
 }
 
 /**
- * Refuse to replay a run that was recorded against a different section.
+ * Hold a resumed run to the selection its journal recorded.
  *
  * Only `type` and `name` decide whether a journal entry matches, and the root
- * import's name is the same for every target — so without this, resuming with a
- * different selector would restore the recorded content and then project a
- * section the recorded run never executed.
+ * import's name is the same for every selector — so without this, resuming with
+ * a different one would restore the recorded content and then project a section
+ * the recorded run never executed, or restore a recorded selection failure as
+ * the answer to a request that would have succeeded.
  *
- * The current selector is resolved against the *recorded* content, so a glob
- * that still names the same section replays and a glob that now names another
- * one does not. A selector that has become invalid or ambiguous against that
- * content is refused for the same reason: nothing here may guess which section
- * a resumed run meant.
+ * The current selector is resolved against the *recorded* content, so what is
+ * compared is what each run decided, not what each caller typed: a different
+ * glob naming the same section replays, and so does the same failing selector,
+ * while any difference in outcome is stale input.
  *
- * This validates in the check phase rather than the decide phase because
- * `durableRun` reuses a recorded root Close before any effect is replayed. A
- * decision made later would never run for a completed journal, which is exactly
- * the run whose recorded target must still be the one being asked for.
+ * A recorded failed selection is reproduced here, not delegated. Nothing later
+ * would reproduce it with its fields intact — `durableRun` reuses a recorded
+ * root Close before any effect is replayed, and that path restores a
+ * deserialized error — so a recorded failure is rebuilt from its structural
+ * record and raised before that reuse. Either way no authored effect runs.
  *
- * A `StaleInputError`, so it propagates as a durability failure rather than
- * being printed into the document.
+ * This is also why validation is in the check phase rather than the decide
+ * phase: a decision made during replay never runs for a completed journal,
+ * which is exactly the run whose recorded selection must still be the one being
+ * asked for.
  */
-function refuseChangedRootTarget(root: RootDocumentSource): Operation<void> {
+function holdRootSelection(root: RootDocumentSource): Operation<void> {
   return ReplayGuard.around({
     *check([event], next) {
       const recorded = recordedRootImport(event);
       if (recorded === undefined) {
         return yield* next(event);
       }
-      const requested = resolveRecordedTarget(root, recorded.content);
-      const compatible =
-        requested.kind === "whole"
-          ? recorded.target === undefined
-          : requested.kind === "exact" && requested.target === recorded.target;
-      if (!compatible) {
-        const stale = new StaleInputError(
-          `the recorded root document import ran ${describeRecorded(recorded.target)}, and this ` +
-            `run asks for ${describeRequested(requested)}. Re-run the document from the ` +
-            "start rather than resuming from a journal that recorded another section.",
+      const requested = requestedSelection(root, recorded.content);
+      if (!sameSelection(recorded.selection, requested)) {
+        throw new StaleInputError(
+          `the recorded root document import ran ${describeSelection(recorded.selection)}, and ` +
+            `this run asks for ${describeSelection(requested)}. Re-run the document from the ` +
+            "start rather than resuming from a journal that recorded another selection.",
           { coroutineId: event.coroutineId, description: event.description },
         );
-        if (requested.kind === "unresolved") {
-          stale.cause = requested.failure;
-        }
-        throw stale;
+      }
+      if (recorded.selection.kind === "failed") {
+        throw documentTargetError(recorded.selection.failure);
       }
       return yield* next(event);
     },
   });
-}
-
-/** What this run's selector names in the recorded content. */
-type RequestedTarget =
-  | { kind: "whole" }
-  | { kind: "exact"; target: string }
-  | { kind: "unresolved"; failure: unknown };
-
-function resolveRecordedTarget(root: RootDocumentSource, content: string): RequestedTarget {
-  if (root.target === undefined) {
-    return { kind: "whole" };
-  }
-  try {
-    return {
-      kind: "exact",
-      target: resolveDocumentTarget(rootSourcePath(root), content, root.target),
-    };
-  } catch (failure) {
-    return { kind: "unresolved", failure };
-  }
-}
-
-function describeRecorded(target: string | undefined): string {
-  return target === undefined ? "the whole document" : `the target ${JSON.stringify(target)}`;
-}
-
-function describeRequested(requested: RequestedTarget): string {
-  switch (requested.kind) {
-    case "whole":
-      return "the whole document";
-    case "exact":
-      return `the target ${JSON.stringify(requested.target)}`;
-    case "unresolved":
-      return "a target that recorded content no longer names exactly once";
-  }
 }
 
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>
@@ -998,7 +1088,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
 
       // Installed before the durable run, so the check phase sees the recorded
       // root import before `durableRun` can reuse a recorded Close.
-      yield* refuseChangedRootTarget(root);
+      yield* holdRootSelection(root);
 
       // The policy is selected here — before the durable run and before any
       // document, frontmatter, prop, component, or eval code exists — so the

@@ -2676,6 +2676,13 @@ alone and escapes everything else as uppercase UTF-8 hexadecimal, so a `/`,
 `*`, `#`, or `%` inside a heading becomes `%2F`, `%2A`, `%23`, or `%25` and
 cannot be read as syntax.
 
+A fragment is an **exact** canonical target only when every level survives the
+whole round trip: decoding it, normalizing the label, and re-encoding that label
+reproduce the level byte for byte. That one rule rejects a wildcard operator, an
+empty level, a lowercase escape, a raw `#`, an NFD spelling, a tab, and leading,
+trailing, or uncollapsed whitespace, because none of them is what the encoder
+writes. Two spellings of one section are therefore never two identities.
+
 The catalog is in source order and retains duplicates: two sections whose
 canonical paths are equal stay two entries, so the ambiguity is observable.
 
@@ -2692,8 +2699,9 @@ The first raw `#` separates the two. Raw `/` separates target levels and raw
 chunks are percent-decoded, which is what keeps `%2F` a slash inside one label
 and `%2A` a literal asterisk. Decoding is URI path decoding: `+` is a plus, not
 a space. Malformed escapes, byte sequences that are not UTF-8, NUL, a leading
-or trailing slash, and an empty level are all refused. Matching is
-case-sensitive.
+or trailing slash, an empty level, and a raw `#` — the reference's own
+delimiter, written `%23` when a heading really contains one — are all refused.
+Matching is case-sensitive.
 
 - A literal level matches one canonical label exactly, after decoding and label
   normalization.
@@ -2751,15 +2759,17 @@ The live root import records the **exact canonical target**, never the caller's
 selector. An untargeted import records no target member at all, so journals
 written before targets existed stay readable by untargeted runs.
 
-A replay guard validates the target before the recorded run is reused. It parses
-the recorded root content, resolves the current selector against *that* content,
-and requires the result to equal the recorded exact target; the recorded content
-is then what the projection is taken from. A different selector naming the same
-section replays. A different exact target, a targeted request against an
-untargeted record, an untargeted request against a targeted record, and a
-selector the recorded content no longer resolves are all stale input (§6.11).
-The check runs before a completed run's recorded terminal result can be reused,
-so a finished journal cannot answer for a section it never ran.
+A replay guard validates the selection before the recorded run is reused. It
+resolves the current selector against the *recorded* content and requires the
+same selection outcome; the recorded content is then what the projection is
+taken from. A different selector naming the same section replays, and so does
+the same failing selector. A different exact target, a targeted request against
+an untargeted record, an untargeted request against a targeted record, and any
+difference in a failed selection are all stale input (§6.11). Stale input is
+reported as itself: the guard retains no failure object from the selection it
+could not match. The check runs before a completed run's recorded terminal
+result can be reused, so a finished journal cannot answer for a selection it
+never made.
 
 ##### Naming a root document
 
@@ -2801,21 +2811,73 @@ than encoding it again, and joins them with `#`. It is the one formatter
 diagnostics, command output, and workflow handoff use. Making an authored glob
 canonical is the selector parser's work, not this function's.
 
+It only formats what `fileSource()` reads back: the encoded path is decoded
+again and must reproduce the path exactly. NUL, which the decoder refuses, and
+an unpaired surrogate, which encodes lossily to the replacement character, are
+therefore rejected rather than turned into a reference naming a different file.
+
 Existing programmatic `{ path }` values and `inlineSource(source)` remain valid
 and untargeted.
 
-An unresolvable target raises `DocumentTargetError`, whose `kind` is
-`invalid-selector`, `no-match`, or `multiple-matches`. It carries the requested
-`selector` as it arrived, the canonical encoded `matches` (empty except for
-`multiple-matches`), and every canonical encoded `available` target. Its data is
-rebuilt and frozen at the boundary, and its message quotes the selector as JSON
-and lists canonical encoded references, so a heading holding a control character
-cannot reach a diagnostic literally. It is an ordinary invocation failure, not a
-durability or `API.Files` failure. Because target resolution sits inside the
-durable root import, a failure reaching a caller through `execute()` arrives by
-name and message like every other failure crossing that boundary; the typed
-error is what `inspectDocument()` reports, and inspection is where a host
-resolves a selector before running anything.
+An unresolvable target raises `DocumentTargetError`. It is an ordinary
+invocation failure, not a durability or `API.Files` failure, and it is the same
+error on every public path: `inspectDocument()`, a live `execute()`, and a
+replayed `execute()` all raise one carrying the same fields.
+
+```ts
+interface DocumentTargetFailure {
+  readonly type: "executablemd.document-target-failure";
+  readonly kind: "invalid-selector" | "no-match" | "multiple-matches";
+  readonly selector: string;
+  readonly matches: readonly string[];
+  readonly available: readonly string[];
+}
+
+class DocumentTargetError extends Error {
+  readonly data: DocumentTargetFailure;
+}
+
+function isDocumentTargetError(error: unknown): error is DocumentTargetError;
+function asDocumentTargetError(error: unknown): DocumentTargetError | undefined;
+function parseDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined;
+```
+
+`selector` is the fragment as it arrived. `matches` is the ambiguity list and is
+empty for every other kind; `available` is the whole catalog. The message is
+derived from the data, quotes the selector as JSON, and lists canonical encoded
+references, so a heading holding a control character cannot reach a diagnostic
+literally.
+
+Recognition is structural and total. The data carries a stable namespaced tag,
+so a failure built by a separately loaded copy of the package is recognized on
+the same terms as one built locally — `instanceof` cannot answer that question
+across two copies. Recognition also requires the name, the message its own data
+derives, frozen data with exactly the described members, no cause, and no other
+enumerable member: a recognized failure is handed onward by identity, so a
+candidate carrying a path or a foreign object is refused rather than adopted.
+The data is rebuilt from validated parts wherever it crosses a boundary, so
+nothing a candidate owns is retained.
+
+##### A failed selection is recorded, not merely failed
+
+A selection that names no single section is an observation of the document: the
+text was read, and it does not offer what was asked for. The root import records
+that outcome structurally — its kind, the requested selector, the matches, and
+the catalog — and the failure is then rebuilt from that record and raised.
+
+Recording it is what makes a resumed run correct. A journal is matched by effect
+type and name alone, so without the record a run whose selector matched nothing
+would leave a completed journal that answers a later request for a section that
+does exist. The replay guard therefore compares whole selection outcomes — the
+whole document, one exact target, or one failure — rather than target strings,
+and reproduces a recorded failure with its fields intact before the recorded
+terminal result can be reused. The same failing selector replays its own
+failure; any difference in outcome, including a different selector that fails
+the same way, is stale input. No authored effect runs in either case.
+
+The recorded selector is sanitized invocation metadata, retained only so an
+ordinary failed execution can be reproduced. It never occupies the exact-target
+field and never reaches a workflow definition.
 
 ### 5.5 The Component Api
 
@@ -7321,6 +7383,51 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | WRR9 | No unsafe garbage collection | The production closure neither exposes nor invokes Cloudflare DOFS garbage collection |
 | WRR10/WRR10b | Outer rollback cache coherence | Failure and cancellation after an uncommitted removal and negative lookup roll back and invalidate both authoritative DOFS caches |
 | WRR11 | Historical file size | Every historical file entry's declared size agrees with its retained DOFS manifest during read-only recognition |
+
+### Tier DT — Document target catalog, selectors, and projection
+
+| # | Test | Verify |
+|---|------|--------|
+| DT1–DT5 | Outline | ATX and Setext headings catalog in source order; a skipped depth still nests; the outermost depth is the smallest present; a sole outermost heading is the title and several are path levels |
+| DT6 | Case | Matching is case-sensitive |
+| DT7–DT9 | Labels | Formatting, link destinations, inline code, image alt text and passive HTML tags reduce to statically rendered text; a heading rendering no text is unaddressable |
+| DT8 | Normalization | NFC-equivalent spellings are one label and Unicode whitespace collapses |
+| DT10 | Encoding | `/`, `%`, `#` and `*` in a heading encode to `%2F`, `%25`, `%23` and `%2A` and never read as syntax |
+| DT11 | Duplicates | Two sections with one canonical path stay two entries and report as ambiguous |
+| DT12 | Nested flow | Headings in block quotes, lists, fences, exec fences and raw HTML are not targets |
+| DT13 | Component children | A component child holding blank lines and `#` lines contributes no target — the regression that kills raw Remark discovery |
+| DT14–DT17 | Addressability | A heading overlapping component syntax or carrying an interpolation is unaddressable and blocks its subtree; escaped interpolation stays static; a computed sole title still leaves its sections addressable |
+| DT18/DT19 | Empty catalog | A document with no heading addresses nothing, and a sole title is no target |
+| DT20–DT22 | Matching | Literal levels, embedded `*`, and `**` across zero or more levels |
+| DT23 | Exactly one | Zero matches and several matches both fail, reporting matches and the catalog |
+| DT24–DT26 | Selector syntax | Empty, leading/trailing slash, empty level, malformed escape, NUL and non-UTF-8 are refused; `+` is a plus |
+| DT27 | Termination | A wildcard-dense selector against a long label completes without exponential search |
+| DT28 | Wildcard whitespace | Whitespace beside a wildcard is matched; only the level's outer edges trim |
+| DT29–DT32 | References | A reference splits at the first raw `#`; a path keeps separators and decodes escapes; an unreadable reference says only `Invalid document reference`, cause-free; formatting encodes the path and validates an exact target |
+| DT33/DT48 | Canonical exactness | A level is canonical only through decode, normalize and re-encode — NFD, tabs, uncollapsed or edge whitespace, lowercase escapes, empty levels and raw operators are refused |
+| DT49 | Raw `#` | A raw `#` is never a literal selector character; `%23` addresses a heading containing one |
+| DT50/DT51 | Formatter totality | A path that cannot encode losslessly — NUL, an unpaired surrogate — is refused, and every formatted reference parses back to what it named |
+| DT34–DT39 | Projection | Preamble, ancestor direct content and the selected subtree are retained; siblings are absent; a non-leaf keeps its descendants; a sole title stays |
+| DT40–DT43 | Positions | A retained element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
+| DT44–DT47 | Inspection | The catalog is reported without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
+| DT52–DT55 | Recognition | A failure from a separately loaded copy is recognized; hostile, unreadable, mutable, over-populated, cause-bearing and payload-bearing candidates are all refused |
+
+### Tier TX — Targeted execution and replay
+
+| # | Test | Verify |
+|---|------|--------|
+| TX1–TX3 | Selection | Only the preamble, ancestors and subtree expand; a skipped sibling's components and code blocks never run; a non-leaf expands its descendants |
+| TX4/TX5 | Identity | A retained element keeps the expansion ID it has in a full run, and two targets retaining it agree |
+| TX6 | Sources | A file root and an inline root behave identically |
+| TX7–TX9 | Root values | Root props, frontmatter interpolation, a declared `returns`, and `<Output>` apply to the projected body |
+| TX10/TX11 | Structure | An invalid skipped sibling is irrelevant; an invalid retained range fails before any authored effect |
+| TX12–TX14 | Failure timing | An unmatched or ambiguous target runs no authored effect and is structurally recognizable; inspection resolves without expanding a component |
+| TX15/TX16 | Recording | The journal records the exact target, never the glob, and an untargeted run records no target member |
+| TX17 | Compatibility | A different selector naming the same section replays |
+| TX18–TX21 | Staleness | A different exact target, a targeted request against an untargeted journal, the reverse, and a selector the recorded content no longer resolves all fail stale before completed-Close reuse, carrying no foreign cause |
+| TX22/TX23 | Recorded content | An untargeted journal replays untargeted; replay projects the recorded content, not the file on disk |
+| TX24 | Failed selection | A journal from a selector that matched nothing never answers a later valid one |
+| TX25–TX27 | Failed replay | The same failing selector replays its own recorded failure with no authored effect; a different failure kind or a different selector is stale; live and replayed failures are the same structural error |
 
 ### Tier SL — Own-scope context updates
 

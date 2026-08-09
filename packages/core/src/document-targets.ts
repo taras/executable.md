@@ -22,6 +22,8 @@
  * identifiers equal between a full run and a targeted one.
  */
 
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
 import { remark } from "remark";
 import { toString as mdastToString } from "mdast-util-to-string";
 
@@ -66,11 +68,216 @@ export interface DocumentOutline {
 /** Why a requested target did not resolve to exactly one catalog entry. */
 export type DocumentTargetErrorKind = "invalid-selector" | "no-match" | "multiple-matches";
 
+const KINDS: readonly DocumentTargetErrorKind[] = [
+  "invalid-selector",
+  "no-match",
+  "multiple-matches",
+];
+
 const KIND_WORDING: ReadonlyMap<DocumentTargetErrorKind, string> = new Map([
   ["invalid-selector", "is not a valid document target selector"],
   ["no-match", "matches no document target"],
   ["multiple-matches", "matches more than one document target"],
 ]);
+
+/**
+ * The structural tag a document-target failure carries.
+ *
+ * Namespaced and stable, because it is the whole recognition mechanism. Two
+ * loaded copies of this package are two classes, so `instanceof` answers false
+ * between them; a failure built by one copy has to be recognized by the other
+ * on exactly the same terms as one built here (AGENTS.md rule 15).
+ */
+const DOCUMENT_TARGET_FAILURE = "executablemd.document-target-failure";
+
+/**
+ * Why one requested selector did not name exactly one section, as data.
+ *
+ * Frozen and rebuilt from validated parts wherever it crosses a boundary. The
+ * selector is retained because reproducing an ordinary failed execution needs
+ * to say what was asked for — it is sanitized invocation metadata, never
+ * identity, and it never stands in for an exact target.
+ */
+export interface DocumentTargetFailure {
+  readonly type: typeof DOCUMENT_TARGET_FAILURE;
+  readonly kind: DocumentTargetErrorKind;
+  /** The selector fragment as it was requested, still encoded. */
+  readonly selector: string;
+  /** Canonical encoded targets the selector matched; empty unless ambiguous. */
+  readonly matches: readonly string[];
+  /** Every canonical encoded target the document offers. */
+  readonly available: readonly string[];
+}
+
+/** The fields a failure carries, without the tag that authenticates them. */
+interface TargetFailureFields {
+  kind: DocumentTargetErrorKind;
+  selector: string;
+  matches: string[];
+  available: string[];
+}
+
+function attempt<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether this is an Error, without trusting its prototype chain. */
+function isError(value: unknown): value is Error {
+  return attempt(() => value instanceof Error) === true;
+}
+
+/** One property, read through a trap that may refuse or fail. */
+function property(target: object, name: string): unknown {
+  return attempt(() => Reflect.get(target, name));
+}
+
+function stringList(value: unknown): string[] | undefined {
+  return attempt(() => {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+    const items: string[] = [];
+    for (let index = 0; index < value.length; index++) {
+      const item = index in value ? value[index] : undefined;
+      if (typeof item !== "string") {
+        return undefined;
+      }
+      items.push(item);
+    }
+    return items;
+  });
+}
+
+/**
+ * Read a candidate's failure fields, rebuilding every one of them.
+ *
+ * Total: an unreadable property, a missing one, a kind outside the closed set,
+ * a sparse or non-string list, and matches on a kind that has none are all "not
+ * this shape" rather than a throw. Nothing the candidate owns is retained — the
+ * arrays that come back are new.
+ */
+function targetFailureFields(value: unknown): TargetFailureFields | undefined {
+  return attempt(() => {
+    if (!isRecord(value)) {
+      return undefined;
+    }
+    const kind = KINDS.find((candidate) => candidate === property(value, "kind"));
+    const selector = property(value, "selector");
+    const matches = stringList(property(value, "matches"));
+    const available = stringList(property(value, "available"));
+    if (kind === undefined || typeof selector !== "string") {
+      return undefined;
+    }
+    if (matches === undefined || available === undefined) {
+      return undefined;
+    }
+    // `matches` is the ambiguity list and nothing else; a populated one under
+    // any other kind is not the closed shape this contract describes.
+    if (kind !== "multiple-matches" && matches.length > 0) {
+      return undefined;
+    }
+    return { kind, selector, matches, available };
+  });
+}
+
+/** Freeze validated fields into the failure data an error carries. */
+function sealFailure(fields: TargetFailureFields): DocumentTargetFailure {
+  return Object.freeze({
+    type: DOCUMENT_TARGET_FAILURE,
+    kind: fields.kind,
+    selector: fields.selector,
+    matches: Object.freeze([...fields.matches]),
+    available: Object.freeze([...fields.available]),
+  });
+}
+
+/**
+ * The failure data this value carries, if it carries valid, tagged, frozen
+ * data.
+ *
+ * Every field is checked, the member count with them, and that the object is
+ * frozen: extra keys are not the shape this contract describes, and a mutable
+ * one is not the shape a constructor here produces.
+ */
+export function parseDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined {
+  return attempt(() => {
+    if (!isRecord(value) || property(value, "type") !== DOCUMENT_TARGET_FAILURE) {
+      return undefined;
+    }
+    if (attempt(() => Object.isFrozen(value)) !== true) {
+      return undefined;
+    }
+    if (attempt(() => Object.keys(value).length) !== 5) {
+      return undefined;
+    }
+    const fields = targetFailureFields(value);
+    return fields === undefined ? undefined : sealFailure(fields);
+  });
+}
+
+/**
+ * The failure a journal record describes, rebuilt and sealed.
+ *
+ * The record is untagged — its place inside a recorded root-import selection is
+ * what identifies it — so this validates the fields and supplies the tag,
+ * rather than requiring a tag the journal never held.
+ */
+export function recordedDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined {
+  const fields = targetFailureFields(value);
+  return fields === undefined ? undefined : sealFailure(fields);
+}
+
+/**
+ * The one diagnostic a failure carries, derived from its data alone.
+ *
+ * Recognition compares against this, so the message cannot disagree with the
+ * fields. Every reference is canonically encoded and the selector is JSON
+ * quoted, so a heading holding a control character cannot reach a diagnostic
+ * literally.
+ */
+function documentTargetMessage(failure: DocumentTargetFailure): string {
+  const ambiguous = failure.kind === "multiple-matches";
+  const listed = ambiguous ? failure.matches : failure.available;
+  const heading = ambiguous ? "Matched targets:" : "Available targets:";
+  return (
+    `${JSON.stringify(failure.selector)} ${KIND_WORDING.get(failure.kind)}.\n` +
+    (listed.length === 0
+      ? "The document has no targets."
+      : `${heading}\n${listed.map((target) => `  ${target}`).join("\n")}`)
+  );
+}
+
+/**
+ * Everything a constructor here puts on the Error itself, and nothing else.
+ *
+ * `message` and `stack` are non-enumerable own properties of every Error, so
+ * what remains enumerable is exactly what this constructor assigned.
+ */
+const FAILURE_MEMBERS: readonly string[] = ["data", "name"];
+
+function hasOnlyContractMembers(error: Error): boolean {
+  const keys = attempt(() => [...Object.keys(error)].sort());
+  if (keys === undefined || keys.length !== FAILURE_MEMBERS.length) {
+    return false;
+  }
+  if (!keys.every((key, index) => key === FAILURE_MEMBERS[index])) {
+    return false;
+  }
+  const payload = attempt(() =>
+    Object.getOwnPropertySymbols(error).filter(
+      (symbol) => Object.getOwnPropertyDescriptor(error, symbol)?.enumerable === true,
+    ),
+  );
+  return payload !== undefined && payload.length === 0;
+}
 
 /**
  * A requested document target that does not name exactly one section.
@@ -80,41 +287,105 @@ const KIND_WORDING: ReadonlyMap<DocumentTargetErrorKind, string> = new Map([
  * before the document expands, so a run that cannot decide what to execute
  * executes nothing.
  *
- * Everything it carries is rebuilt and frozen here. The selector arrives from a
- * command line and the catalog from a parser, and neither object belongs to a
- * failure that outlives them. Every reference in the message is canonically
- * encoded, so a heading holding a control character cannot reach a diagnostic
- * literally.
+ * Its data is the contract; the message is derived from it. Construct one from
+ * validated data — `documentTargetError()` — rather than from parts, so a
+ * failure rebuilt at a journal boundary is indistinguishable from the one the
+ * live run raised.
  */
 export class DocumentTargetError extends Error {
-  readonly kind: DocumentTargetErrorKind;
-  /** The selector fragment as it was requested, still encoded. */
-  readonly selector: string;
-  /** Canonical encoded targets the selector matched; empty unless ambiguous. */
-  readonly matches: readonly string[];
-  /** Every canonical encoded target the document offers. */
-  readonly available: readonly string[];
+  readonly data: DocumentTargetFailure;
 
-  constructor(
-    kind: DocumentTargetErrorKind,
-    selector: string,
-    matches: readonly string[],
-    available: readonly string[],
-  ) {
-    const listed = kind === "multiple-matches" ? matches : available;
-    const heading = kind === "multiple-matches" ? "Matched targets:" : "Available targets:";
-    super(
-      `${JSON.stringify(selector)} ${KIND_WORDING.get(kind)}.\n` +
-        (listed.length === 0
-          ? "The document has no targets."
-          : `${heading}\n${listed.map((target) => `  ${target}`).join("\n")}`),
-    );
+  constructor(data: DocumentTargetFailure) {
+    super(documentTargetMessage(data));
     this.name = "DocumentTargetError";
-    this.kind = kind;
-    this.selector = selector;
-    this.matches = Object.freeze([...matches]);
-    this.available = Object.freeze([...available]);
+    this.data = data;
   }
+}
+
+/** Build the failure this selector produced, from parts this module owns. */
+export function documentTargetFailure(
+  kind: DocumentTargetErrorKind,
+  selector: string,
+  matches: readonly string[],
+  available: readonly string[],
+): DocumentTargetFailure {
+  return sealFailure({
+    kind,
+    selector,
+    matches: [...matches],
+    available: [...available],
+  });
+}
+
+/**
+ * Rebuild the error a failure describes.
+ *
+ * The one constructor call outside this module's own selection path, so a
+ * replayed failure and a live one are the same object shape carrying the same
+ * fields — a caller cannot tell which run raised it, and does not have to.
+ */
+export function documentTargetError(data: DocumentTargetFailure): DocumentTargetError {
+  return new DocumentTargetError(data);
+}
+
+/**
+ * Whether this failure satisfies the whole contract, not merely the tag.
+ *
+ * Structural throughout, so a failure constructed by a separately loaded copy
+ * of this package is recognized on exactly the same terms as one constructed
+ * here. The name is checked rather than the class for the same reason: a second
+ * copy's constructor is a different function producing the same name.
+ *
+ * Stricter than `parseDocumentTargetFailure` because recognition hands the
+ * object onward: the message has to be the one its own data derives, there can
+ * be no cause, and no member beyond the contract — otherwise a candidate could
+ * carry a path, a foreign object, or a second message past this boundary under
+ * a recognized tag.
+ */
+export function isDocumentTargetError(error: unknown): error is DocumentTargetError {
+  return (
+    attempt(() => {
+      if (!isError(error)) {
+        return false;
+      }
+      const data = parseDocumentTargetFailure(property(error, "data"));
+      if (data === undefined) {
+        return false;
+      }
+      if (property(error, "name") !== "DocumentTargetError") {
+        return false;
+      }
+      if (property(error, "message") !== documentTargetMessage(data)) {
+        return false;
+      }
+      if (property(error, "cause") !== undefined) {
+        return false;
+      }
+      return hasOnlyContractMembers(error);
+    }) === true
+  );
+}
+
+/** The document-target failure this error is, by identity. */
+export function asDocumentTargetError(error: unknown): DocumentTargetError | undefined {
+  return isDocumentTargetError(error) ? error : undefined;
+}
+
+/** Whether two failures describe the same selection outcome, field by field. */
+export function sameDocumentTargetFailure(
+  left: DocumentTargetFailure,
+  right: DocumentTargetFailure,
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.selector === right.selector &&
+    sameList(left.matches, right.matches) &&
+    sameList(left.available, right.available)
+  );
+}
+
+function sameList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
@@ -201,23 +472,26 @@ export function normalizeLabel(text: string): string {
 }
 
 /**
- * Whether a fragment is already an exact canonical target: raw `/` between
- * nonempty levels, every level percent-encoded exactly as this module encodes
- * it, and no wildcard operator anywhere.
+ * Whether a fragment is already an exact canonical target.
+ *
+ * A level is canonical only when decoding it, normalizing the label, and
+ * re-encoding that label reproduce the level byte for byte. Requiring the whole
+ * round trip is what makes this total: it rejects a wildcard operator, an empty
+ * level, a lowercase escape, a raw `#`, an NFD spelling, a tab, and leading,
+ * trailing, or uncollapsed whitespace without naming any of them, because none
+ * of them is what this module would have written.
  */
 export function isCanonicalTarget(target: string): boolean {
   if (target.length === 0) {
     return false;
   }
   return target.split("/").every((level) => {
-    if (level.length === 0 || level.includes("*")) {
-      return false;
-    }
     const decoded = decodePercentEncoded(level);
     if (decoded === undefined || decoded.length === 0) {
       return false;
     }
-    return encodeTargetLabel(decoded) === level;
+    const label = normalizeLabel(decoded);
+    return label === decoded && encodeTargetLabel(label) === level;
   });
 }
 
@@ -239,6 +513,12 @@ type SelectorLevel =
  */
 function parseSelector(selector: string): readonly SelectorLevel[] | undefined {
   if (selector.length === 0 || selector.startsWith("/") || selector.endsWith("/")) {
+    return undefined;
+  }
+  // A raw `#` is the reference's own delimiter, so it never reaches a selector
+  // by the supported route and cannot be written back into one. `%23` addresses
+  // a heading that really contains it.
+  if (selector.includes("#")) {
     return undefined;
   }
   const levels: SelectorLevel[] = [];
@@ -347,24 +627,37 @@ function matchPath(levels: readonly SelectorLevel[], path: readonly string[]): b
  * duplicate entries, which is what makes that ambiguity observable at all.
  */
 export function selectTarget(outline: DocumentOutline, selector: string): DocumentTarget {
+  const found = findTarget(outline, selector);
+  if (found.ok) {
+    return found.value;
+  }
+  throw found.error;
+}
+
+/** The entry a selector names, or the failure describing why it names none. */
+export function findTarget(outline: DocumentOutline, selector: string): Result<DocumentTarget> {
+  const fail = (
+    kind: DocumentTargetErrorKind,
+    matches: readonly string[],
+  ): Result<DocumentTarget> =>
+    Err(documentTargetError(documentTargetFailure(kind, selector, matches, outline.targets)));
+
   const levels = parseSelector(selector);
   if (levels === undefined) {
-    throw new DocumentTargetError("invalid-selector", selector, [], outline.targets);
+    return fail("invalid-selector", []);
   }
   const matched = outline.entries.filter((entry) => matchPath(levels, entry.labels));
   const first = matched[0];
   if (first === undefined) {
-    throw new DocumentTargetError("no-match", selector, [], outline.targets);
+    return fail("no-match", []);
   }
   if (matched.length > 1) {
-    throw new DocumentTargetError(
+    return fail(
       "multiple-matches",
-      selector,
       matched.map((entry) => entry.target),
-      outline.targets,
     );
   }
-  return first;
+  return Ok(first);
 }
 
 /**

@@ -24,10 +24,13 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
 import {
+  asDocumentTargetError,
   DocumentTargetError,
   encodeTargetLabel,
   isCanonicalTarget,
+  isDocumentTargetError,
   normalizeLabel,
+  parseDocumentTargetFailure,
   outlineDocument,
   retainedRanges,
   selectTarget,
@@ -118,7 +121,7 @@ describe("Tier DT — document target catalog", () => {
 
   it("DT6: matching is case sensitive", function* () {
     const body = ["# Title", "", "## Test", ""].join("\n");
-    expect(refusal(body, "test").kind).toBe("no-match");
+    expect(refusal(body, "test").data.kind).toBe("no-match");
     expect(selectTarget(outline(body), "Test").target).toBe("Test");
   });
 
@@ -177,7 +180,7 @@ describe("Tier DT — document target catalog", () => {
     expect(catalog(body)).toEqual(["a%2Fb", "100%25%20done", "C%23%20sharp", "star%20%2A%20here"]);
     // `%2F` addresses one label containing a slash; a raw `/` would be hierarchy.
     expect(selectTarget(outline(body), "a%2Fb").labels).toEqual(["a/b"]);
-    expect(refusal(body, "a/b").kind).toBe("no-match");
+    expect(refusal(body, "a/b").data.kind).toBe("no-match");
     // `%2A` is a literal asterisk; a raw `*` is the operator.
     expect(selectTarget(outline(body), "star%20%2A%20here").labels).toEqual(["star * here"]);
   });
@@ -186,8 +189,8 @@ describe("Tier DT — document target catalog", () => {
     const body = ["# Title", "", "## Same", "", "one", "", "## Same", "", "two", ""].join("\n");
     expect(catalog(body)).toEqual(["Same", "Same"]);
     const ambiguous = refusal(body, "Same");
-    expect(ambiguous.kind).toBe("multiple-matches");
-    expect(ambiguous.matches).toEqual(["Same", "Same"]);
+    expect(ambiguous.data.kind).toBe("multiple-matches");
+    expect(ambiguous.data.matches).toEqual(["Same", "Same"]);
   });
 
   it("DT12: only root-flow headings count", function* () {
@@ -286,7 +289,7 @@ describe("Tier DT — document target catalog", () => {
 
   it("DT18: a document with no heading has an empty catalog", function* () {
     expect(catalog("just prose\n")).toEqual([]);
-    expect(refusal("just prose\n", "Anything").available).toEqual([]);
+    expect(refusal("just prose\n", "Anything").data.available).toEqual([]);
   });
 
   it("DT19: a sole title is itself no target", function* () {
@@ -297,7 +300,7 @@ describe("Tier DT — document target catalog", () => {
 describe("Tier DT — target selectors", () => {
   it("DT20: a literal selector matches one whole label", function* () {
     expect(selectTarget(outline(SECTIONS), "Test/Node").labels).toEqual(["Test", "Node"]);
-    expect(refusal(SECTIONS, "Nod").kind).toBe("no-match");
+    expect(refusal(SECTIONS, "Nod").data.kind).toBe("no-match");
   });
 
   it("DT21: `*` matches within one level, in any position, more than once", function* () {
@@ -306,7 +309,7 @@ describe("Tier DT — target selectors", () => {
     expect(selectTarget(outline(SECTIONS), "Test/N*d*").target).toBe("Test/Node");
     expect(selectTarget(outline(SECTIONS), "*ther").target).toBe("Other");
     // One `*` never crosses a level boundary.
-    expect(refusal(SECTIONS, "*Node").kind).toBe("no-match");
+    expect(refusal(SECTIONS, "*Node").data.kind).toBe("no-match");
   });
 
   it("DT22: `**` matches zero or more complete levels", function* () {
@@ -317,11 +320,16 @@ describe("Tier DT — target selectors", () => {
   });
 
   it("DT23: a selector must name exactly one entry", function* () {
-    expect(refusal(SECTIONS, "**").kind).toBe("multiple-matches");
-    expect(refusal(SECTIONS, "**").matches).toEqual(["Test", "Test/Node", "Test/Bun", "Other"]);
-    expect(refusal(SECTIONS, "Missing").kind).toBe("no-match");
-    expect(refusal(SECTIONS, "Missing").matches).toEqual([]);
-    expect(refusal(SECTIONS, "Missing").available).toEqual([
+    expect(refusal(SECTIONS, "**").data.kind).toBe("multiple-matches");
+    expect(refusal(SECTIONS, "**").data.matches).toEqual([
+      "Test",
+      "Test/Node",
+      "Test/Bun",
+      "Other",
+    ]);
+    expect(refusal(SECTIONS, "Missing").data.kind).toBe("no-match");
+    expect(refusal(SECTIONS, "Missing").data.matches).toEqual([]);
+    expect(refusal(SECTIONS, "Missing").data.available).toEqual([
       "Test",
       "Test/Node",
       "Test/Bun",
@@ -331,7 +339,7 @@ describe("Tier DT — target selectors", () => {
 
   it("DT24: malformed selector syntax is refused as syntax", function* () {
     for (const selector of ["", "/Test", "Test/", "Test//Node", "%zz", "Test/%2"]) {
-      expect(refusal(SECTIONS, selector).kind).toBe("invalid-selector");
+      expect(refusal(SECTIONS, selector).data.kind).toBe("invalid-selector");
     }
   });
 
@@ -344,9 +352,9 @@ describe("Tier DT — target selectors", () => {
   });
 
   it("DT26: a malformed or NUL-bearing escape never decodes", function* () {
-    expect(refusal(SECTIONS, "%00").kind).toBe("invalid-selector");
+    expect(refusal(SECTIONS, "%00").data.kind).toBe("invalid-selector");
     // A lone continuation byte is not UTF-8.
-    expect(refusal(SECTIONS, "%80").kind).toBe("invalid-selector");
+    expect(refusal(SECTIONS, "%80").data.kind).toBe("invalid-selector");
   });
 
   /**
@@ -358,7 +366,7 @@ describe("Tier DT — target selectors", () => {
     const label = "a".repeat(120);
     const body = ["# Title", "", `## ${label}`, ""].join("\n");
     const selector = `${"*a".repeat(30)}*b`;
-    expect(refusal(body, selector).kind).toBe("no-match");
+    expect(refusal(body, selector).data.kind).toBe("no-match");
     expect(selectTarget(outline(body), `${"*a".repeat(30)}*`).labels).toEqual([label]);
   });
 
@@ -367,7 +375,7 @@ describe("Tier DT — target selectors", () => {
     const joined = ["# Title", "", "## alphabetagamma", ""].join("\n");
     expect(selectTarget(outline(spaced), "alpha%20*%20gamma").labels).toEqual(["alpha beta gamma"]);
     // The spaces around the wildcard are part of what was asked for.
-    expect(refusal(joined, "alpha%20*%20gamma").kind).toBe("no-match");
+    expect(refusal(joined, "alpha%20*%20gamma").data.kind).toBe("no-match");
     // The level's own outer whitespace is not, so a padded selector still lands.
     expect(selectTarget(outline(spaced), "%20alpha*gamma%20").labels).toEqual(["alpha beta gamma"]);
   });
@@ -428,6 +436,79 @@ describe("Tier DT — canonical references", () => {
     expect(isCanonicalTarget("Test/Node")).toBe(true);
     expect(isCanonicalTarget("Test/%2A")).toBe(true);
     expect(isCanonicalTarget("Test/*")).toBe(false);
+  });
+
+  /**
+   * Canonical means "exactly what the encoder would have written". Anything
+   * that decodes to a label needing normalization is a spelling of a target,
+   * not the target — accepting one would let two spellings of one section
+   * become two workflow-definition identities.
+   */
+  it("DT48: a level is canonical only through the whole round trip", function* () {
+    for (const canonical of ["Caf%C3%A9", "a%20b", "A%2FB", "%2A", "%23", "a%2Bb", "Test/Node"]) {
+      expect(isCanonicalTarget(canonical)).toBe(true);
+      expect(formatDocumentReference("a.md", canonical)).toBe(`a.md#${canonical}`);
+    }
+    const rejected = [
+      "Cafe%CC%81", // NFD — normalization would change it
+      "a%09b", // a tab is not an ASCII space
+      "a%20%20b", // uncollapsed whitespace
+      "%20a", // leading whitespace
+      "a%20", // trailing whitespace
+      "a%2fb", // lowercase escape
+      "A#B", // a raw `#` is the reference delimiter
+      "a//b", // an empty level
+      "a*b", // a raw wildcard operator
+      "%00", // NUL
+    ];
+    for (const target of rejected) {
+      expect(isCanonicalTarget(target)).toBe(false);
+    }
+  });
+
+  it("DT49: a raw `#` is never a literal selector character, but `%23` is", function* () {
+    const body = ["# Title", "", "## A#B", "", "## Real", ""].join("\n");
+    expect(catalog(body)).toEqual(["A%23B", "Real"]);
+    expect(selectTarget(outline(body), "A%23B").labels).toEqual(["A#B"]);
+    expect(refusal(body, "A#B").data.kind).toBe("invalid-selector");
+  });
+
+  /**
+   * The formatter may only produce references the parser reads back. Sampling
+   * the rule would miss the two ways encoding loses information, so the
+   * implementation checks the round trip itself and these pin both losses.
+   */
+  it("DT50: formatting refuses a path it could not encode losslessly", function* () {
+    // NUL, which the decoder refuses outright, and both halves of a broken
+    // surrogate pair, which encode lossily to the replacement character.
+    for (const path of ["a\u0000b.md", "lone\uD800.md", "trail\uDC00.md"]) {
+      let caught: unknown;
+      try {
+        formatDocumentReference(path);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error | undefined)?.message).toBe("Invalid document reference");
+    }
+  });
+
+  it("DT51: every formatted reference parses back to what it named", function* () {
+    const paths = [
+      "README.md",
+      "docs/sub dir/a.md",
+      "odd#name.md",
+      "lit%20.md",
+      "café/ü.md",
+      "star*.md",
+      "a+b.md",
+    ];
+    for (const path of paths) {
+      expect(fileSource(formatDocumentReference(path))).toEqual({ path });
+      expect(fileSource(formatDocumentReference(path, "A%2FB"))).toEqual({
+        path,
+        target: "A%2FB",
+      });
+    }
   });
 });
 
@@ -627,20 +708,132 @@ describe("Tier DT — inspection", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(DocumentTargetError);
-    expect((caught as DocumentTargetError).kind).toBe("no-match");
-    expect((caught as DocumentTargetError).selector).toBe("Nope");
+    expect((caught as DocumentTargetError).data.kind).toBe("no-match");
+    expect((caught as DocumentTargetError).data.selector).toBe("Nope");
   });
 
   it("DT47: the error's data is frozen and rebuilt, not the parser's arrays", function* () {
     const error = refusal(SECTIONS, "**");
-    expect(Object.isFrozen(error.matches)).toBe(true);
-    expect(Object.isFrozen(error.available)).toBe(true);
-    expect(error.matches).not.toBe(outline(SECTIONS).targets);
+    expect(Object.isFrozen(error.data.matches)).toBe(true);
+    expect(Object.isFrozen(error.data.available)).toBe(true);
+    expect(error.data.matches).not.toBe(outline(SECTIONS).targets);
     // Encoded throughout, so a control character in a heading cannot reach a
     // diagnostic literally.
     expect(error.message).toContain('"**"');
     for (const line of error.message.split("\n").slice(1)) {
       expect(line).not.toMatch(/[\u0000-\u001F]/);
     }
+  });
+});
+
+/**
+ * Recognition is the whole contract, so it is tested as one.
+ *
+ * A second loaded copy of this package is a different class producing the same
+ * name and the same tagged data, and it must be recognized on exactly the same
+ * terms. Everything else — a candidate carrying payload, a mutable data object,
+ * a message that disagrees with its own fields, a property that refuses to be
+ * read — must be refused, because recognition hands the object onward by
+ * identity and whatever it carries travels with it.
+ */
+describe("Tier DT — structural recognition", () => {
+  const FAILURE = Object.freeze({
+    type: "executablemd.document-target-failure",
+    kind: "no-match",
+    selector: "Missing",
+    matches: Object.freeze([]),
+    available: Object.freeze(["Alpha"]),
+  });
+
+  const MESSAGE = '"Missing" matches no document target.\nAvailable targets:\n  Alpha';
+
+  /** What a separately loaded copy of this module produces: same shape, own class. */
+  function foreignError(): Error {
+    class DocumentTargetError extends Error {
+      readonly data = FAILURE;
+      constructor() {
+        super(MESSAGE);
+        this.name = "DocumentTargetError";
+      }
+    }
+    return new DocumentTargetError();
+  }
+
+  it("DT52: a failure from another loaded copy is recognized", function* () {
+    const foreign = foreignError();
+    expect(foreign instanceof DocumentTargetError).toBe(false);
+    expect(isDocumentTargetError(foreign)).toBe(true);
+    expect(asDocumentTargetError(foreign)?.data.kind).toBe("no-match");
+    // Rebuilt, not adopted: the arrays a caller reads are this module's.
+    expect(parseDocumentTargetFailure(FAILURE)?.available).not.toBe(FAILURE.available);
+  });
+
+  it("DT53: this module's own failure is recognized", function* () {
+    expect(isDocumentTargetError(refusal(SECTIONS, "Missing"))).toBe(true);
+  });
+
+  it("DT54: every hostile or unreadable candidate is refused", function* () {
+    const withData = (data: unknown): Error => {
+      const error = new Error(MESSAGE);
+      error.name = "DocumentTargetError";
+      Object.assign(error, { data });
+      return error;
+    };
+    const mutate = (change: Record<string, unknown>) => Object.freeze({ ...FAILURE, ...change });
+
+    const hostile: unknown[] = [
+      undefined,
+      null,
+      "a string",
+      new Error(MESSAGE),
+      // Untagged, wrongly tagged, unfrozen, and over- or under-populated data.
+      withData({ ...FAILURE }),
+      withData(mutate({ type: "other.tag" })),
+      withData(mutate({ kind: "made-up" })),
+      withData(Object.freeze({ ...FAILURE, extra: 1 })),
+      withData(Object.freeze({ type: FAILURE.type, kind: "no-match", selector: "Missing" })),
+      // A list holding something that is not a canonical reference.
+      withData(mutate({ available: Object.freeze([1]) })),
+      // `matches` populated under a kind that has none.
+      withData(mutate({ matches: Object.freeze(["Alpha"]) })),
+      // A property that refuses to answer.
+      withData(
+        Object.freeze(
+          Object.defineProperties(
+            { type: FAILURE.type, kind: "no-match", matches: [], available: [] },
+            {
+              selector: {
+                get() {
+                  throw new Error("hostile");
+                },
+                enumerable: true,
+              },
+            },
+          ),
+        ),
+      ),
+    ];
+    for (const candidate of hostile) {
+      expect(isDocumentTargetError(candidate)).toBe(false);
+      expect(asDocumentTargetError(candidate)).toBe(undefined);
+    }
+  });
+
+  it("DT55: a recognized failure carries no cause and no extra payload", function* () {
+    const withCause = new Error(MESSAGE);
+    withCause.name = "DocumentTargetError";
+    Object.assign(withCause, { data: FAILURE, cause: new Error("foreign") });
+    expect(isDocumentTargetError(withCause)).toBe(false);
+
+    const withPayload = new Error(MESSAGE);
+    withPayload.name = "DocumentTargetError";
+    Object.assign(withPayload, { data: FAILURE, path: "/etc/passwd" });
+    expect(isDocumentTargetError(withPayload)).toBe(false);
+
+    // A message that does not derive from the data it claims.
+    const wrongMessage = new Error("something else");
+    wrongMessage.name = "DocumentTargetError";
+    Object.assign(wrongMessage, { data: FAILURE });
+    expect(isDocumentTargetError(wrongMessage)).toBe(false);
   });
 });

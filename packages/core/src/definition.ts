@@ -1,9 +1,10 @@
-import type { Operation } from "effection";
+import { Ok } from "effection";
+import type { Operation, Result } from "effection";
 import type { ComponentDefinition, Segment } from "./types.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { compilePropsSchema, compileReturnsSchema } from "./validate.ts";
 import { scanComponentSpans, scanSegments } from "./scanner.ts";
-import { outlineDocument, retainedRanges, selectTarget } from "./document-targets.ts";
+import { findTarget, outlineDocument, retainedRanges, selectTarget } from "./document-targets.ts";
 import type { DocumentOutline } from "./document-targets.ts";
 
 import matter from "gray-matter";
@@ -56,14 +57,22 @@ function documentOutline(path: string, content: string): DocumentOutline {
 }
 
 /**
- * The exact canonical target a selector names in this document's content.
+ * The exact canonical target a selector names in this document's content, or
+ * the failure describing why it names none.
  *
  * Synchronous and free of effects, so the resolution that decides *what* runs
  * happens before anything runs — including inside the durable operation that
- * records the root, and inside a replay guard reading recorded content.
+ * records the root, and inside a replay guard reading recorded content. The
+ * outcome comes back rather than being thrown because both of those callers
+ * record it as data before anyone reports it.
  */
-export function resolveDocumentTarget(path: string, content: string, selector: string): string {
-  return selectTarget(documentOutline(path, content), selector).target;
+export function resolveDocumentTarget(
+  path: string,
+  content: string,
+  selector: string,
+): Result<string> {
+  const found = findTarget(documentOutline(path, content), selector);
+  return found.ok ? Ok(found.value.target) : found;
 }
 
 interface CompiledFrontmatter {

@@ -142,8 +142,13 @@ export type {
   InlineRootDocument,
   RootDocumentSource,
 } from "./src/root-source.ts";
-export { DocumentTargetError } from "./src/document-targets.ts";
-export type { DocumentTargetErrorKind } from "./src/document-targets.ts";
+export {
+  asDocumentTargetError,
+  DocumentTargetError,
+  isDocumentTargetError,
+  parseDocumentTargetFailure,
+} from "./src/document-targets.ts";
+export type { DocumentTargetErrorKind, DocumentTargetFailure } from "./src/document-targets.ts";
 export { inspectComponent, inspectDocument } from "./src/inspect.ts";
 export type {
   ComponentInfo,
