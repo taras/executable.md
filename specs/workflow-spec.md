@@ -181,7 +181,9 @@ behavior appear. Shared modules import none of them and detect no runtime.
 A handle is a lease belonging to the scope that asked for it. Lease teardown
 makes that handle unusable, and every later call answers with a closed-handle
 failure rather than reopening the file. It does not close the run's physical
-connection or invalidate another lease.
+connection or invalidate another lease. The provider keeps the association in
+exact-object adapter-private state; the public handle contains no discoverable
+SQLite or DOFS connection.
 
 ### 9.1 What identifies a run
 
@@ -329,9 +331,17 @@ is cancelled leaves no row at all.
 The Deno provider maps each canonical workflow-run database path to one
 authoritative entry. The entry owns one physical SQLite connection, one
 Cloudflare DOFS database wrapper, one Workspace filesystem, one cooperative
-connection queue and one synchronous savepoint allocator. It remains alive
+connection queue and one unified savepoint allocator. It remains alive
 until provider-scope teardown, after the provider's child scopes finish.
 Different database paths have independent entries.
+
+The entry receives an opaque generation identity when it is created. Reopening
+the same canonical path after provider teardown produces a different identity.
+Every top-level transaction receives a separate opaque identity and an exact
+active record containing its path, connection generation, open state,
+authorized lease and transaction handle. The provider invalidates that record
+before commit or rollback, so a retained handle or token never becomes valid
+again in a later transaction.
 
 Opening existing storage performs structural recognition, retained-root and
 content validation, the live/current comparison and the singleton run-row read
@@ -372,12 +382,35 @@ Cloudflare's synchronous transactions use uniquely named SQLite savepoints on
 that same connection and only while XMD's caller-owned transaction is open.
 DOFS does not begin, commit or roll back a top-level transaction.
 
-If a caller-owned transaction does not commit, its finalizer attempts SQLite
-rollback and then invalidates both the resolution and blob caches on the
+If a caller-owned transaction does not commit, its finalizer attempts top-level
+SQLite rollback and then invalidates both the resolution and blob caches on the
 authoritative DOFS wrapper before releasing the serialized connection turn.
 The same cleanup covers body failure, cancellation during the body or child
 teardown, final Workspace validation failure, and commit failure. Rolled-back
 topology therefore cannot survive as a positive or negative cache entry.
+
+The same monotonically unique allocator also owns operation-spanning
+savepoints. An operation savepoint validates the exact active transaction
+identity before SQL, runs its operation in a child scope, and waits for all
+children and resources to tear down before release. An ordinary failure rolls
+back to and releases only that savepoint, leaving the outer transaction free to
+continue. Cancellation or halt invokes synchronous cleanup so no savepoint is
+stranded. A savepoint creation, rollback, or release failure makes the outer
+transaction uncommittable.
+
+After `ROLLBACK TO` and `RELEASE` both succeed, the shared savepoint rollback
+path invalidates the authoritative resolution and blob caches before the caller
+may resume outer transaction work. This applies equally to operation savepoints
+and synchronous DOFS savepoints. If rollback, release or cache invalidation
+fails, the active transaction is poisoned and cannot commit; its top-level
+rollback finalizer performs the separate outer-transaction invalidation above.
+
+The active-path context chain remains structural refusal data: it detects that
+an enclosing scope already holds a path, but never authorizes work. Adapter-
+private contextual operations validate provider-owned exact identities instead.
+Missing, foreign, fabricated, completed, closed and stale handles or tokens are
+refused before SQLite is touched. A transaction on a different run neither
+hides nor replaces the outer run's active record.
 
 Adapter-private root operations also run only inside this caller-owned
 transaction. Capture traverses and validates the complete live DOFS frontier,
@@ -470,7 +503,8 @@ also left unchanged.
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
 leases and stale-owner recovery; public Workspace mutation and filesystem
-effects; provider-level atomic Workspace effect/journal publication; public
+effects; provider-neutral live effect coordination and filtered journal
+routing; provider-level atomic Workspace effect/journal publication; public
 root selection, history checkpoints and forks; `<File>` integration;
 workflow-owned worktrees; and deterministic Git and GitHub effects. Retained
 roots and private restoration do not expose any of those behaviors.

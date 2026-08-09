@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { WorkflowTransactionError } from "../../storage/errors.ts";
-import type { RunConnection } from "../connections.ts";
+import type { RunConnection, RunTransaction } from "../connections.ts";
 import { reading } from "../reading.ts";
 import {
   corrupt,
@@ -26,21 +25,18 @@ export interface RestoreWorkspaceRootOptions {
 
 export function restoreWorkspaceRoot(
   connection: RunConnection,
+  transaction: RunTransaction,
   rootId: string,
   options: RestoreWorkspaceRootOptions = {},
 ): StoredWorkspaceRoot {
-  if (!connection.transactionOpen) {
-    throw new WorkflowTransactionError(
-      "restoring a Workspace root requires the caller-owned workflow transaction to be open.",
-    );
-  }
+  connection.validateTransaction(transaction);
 
   const { database, dofs, path, savepoints } = connection;
   verifyWorkspace(database, dofs, path);
   const selected = loadWorkspaceRoot(database, rootId, path);
   connection.invalidateDofsCaches();
   try {
-    return savepoints.synchronous(() => {
+    return savepoints.synchronous(transaction, () => {
       rebuild(database, selected, path);
       connection.invalidateDofsCaches();
       const restored = snapshotWorkspace(database, dofs, path, false);

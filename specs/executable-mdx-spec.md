@@ -6615,6 +6615,23 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | WJ24 | Two processes | Two real processes racing to create one run leave one winner and one conflict |
 | WJ25 | A second process | Restores the run, preserves journal order and identity, and performs no recorded operation again |
 
+### Tier WTX — WorkflowRun savepoints and transaction authority
+
+Defined in [Workflow runs](./workflow-spec.md) §9.6.
+
+| # | Test | Verify |
+|---|------|--------|
+| WTX1 | Successful operation savepoint | Release follows child teardown and retains the savepoint's work inside the outer transaction |
+| WTX2 | Nested and ordinary failure | Each failed savepoint rolls back only its own work, and the outer transaction may continue |
+| WTX3 | Cleanup failure | A failure during child teardown rolls back the operation savepoint |
+| WTX4 | Cancellation | Cancellation before entry, during mutation and during teardown strands no savepoint |
+| WTX5 | Shared allocator | Synchronous DOFS and operation savepoints draw collision-free names from one connection-owned allocator |
+| WTX6 | Savepoint SQL failure | Creation, rollback or release failure poisons the outer transaction so it cannot commit |
+| WTX7 | Exact active authority | Handles and tokens authorize work only during their exact active transaction |
+| WTX8 | Foreign authority | Foreign, fabricated and cross-run identities are refused before SQL |
+| WTX9 | Lease and generation fences | Closed leases and stale connection generations cannot recover private authority |
+| WTX10 | Savepoint rollback cache coherence | A failed mutation restores the file and both authoritative caches before the caller continues and commits the outer transaction |
+
 ### Tier WRR — Immutable retained Workspace roots
 
 Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.

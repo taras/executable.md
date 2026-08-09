@@ -2,8 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { Database as CloudflareDatabase } from "../../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { buildManifest } from "../../../vendor/cloudflare-computer-dofs/generated/sync/manifests.js";
-import { WorkflowTransactionError } from "../../storage/errors.ts";
-import type { RunConnection } from "../connections.ts";
+import type { RunConnection, RunTransaction } from "../connections.ts";
 import { reading } from "../reading.ts";
 import {
   bytes,
@@ -85,13 +84,10 @@ export function initializeEmptyWorkspace(database: DatabaseSync): void {
 
 export function captureWorkspaceRoot(
   connection: RunConnection,
+  transaction: RunTransaction,
   options: CaptureWorkspaceRootOptions = {},
 ): StoredWorkspaceRoot {
-  if (!connection.transactionOpen) {
-    throw new WorkflowTransactionError(
-      "capturing a Workspace root requires the caller-owned workflow transaction to be open.",
-    );
-  }
+  connection.validateTransaction(transaction);
   const root = snapshotWorkspace(connection.database, connection.dofs, connection.path, true);
   retainWorkspaceRoot(connection.database, root, connection.path);
   if (options.publish === true) {

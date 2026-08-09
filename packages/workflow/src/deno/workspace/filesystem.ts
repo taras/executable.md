@@ -32,7 +32,10 @@ export interface DenoWorkspaceFilesystem {
   link(existingPath: string, newPath: string): Operation<void>;
 }
 
-export function createDenoWorkspaceFilesystem(connection: RunConnection): DenoWorkspaceFilesystem {
+export function createDenoWorkspaceFilesystem(
+  connection: RunConnection,
+  authorize: () => void,
+): DenoWorkspaceFilesystem {
   const { dofs, filesystem } = connection;
 
   function stat(value: {
@@ -49,11 +52,13 @@ export function createDenoWorkspaceFilesystem(connection: RunConnection): DenoWo
 
   return {
     *readFile(path): Operation<Uint8Array> {
+      authorize();
       const stream = yield* until(filesystem.readFile(path));
       return new Uint8Array(yield* until(new Response(stream).arrayBuffer()));
     },
 
     *readTextFile(path): Operation<string> {
+      authorize();
       const value = yield* until(filesystem.readFile(path, "utf8"));
       if (typeof value !== "string") {
         throw new Error("the Workspace text read returned a byte stream");
@@ -62,18 +67,22 @@ export function createDenoWorkspaceFilesystem(connection: RunConnection): DenoWo
     },
 
     *stat(path): Operation<DenoWorkspaceStat> {
+      authorize();
       return stat(yield* until(filesystem.stat(path)));
     },
 
     *lstat(path): Operation<DenoWorkspaceStat> {
+      authorize();
       return stat(yield* until(filesystem.lstat(path)));
     },
 
     *readlink(path): Operation<string> {
+      authorize();
       return yield* until(filesystem.readlink(path));
     },
 
     *readdir(path): Operation<DenoWorkspaceEntry[]> {
+      authorize();
       const entries = yield* until(filesystem.readdir(path));
       return entries.map((entry: WorkspaceDirentResult) => ({
         name: entry.name,
@@ -82,32 +91,39 @@ export function createDenoWorkspaceFilesystem(connection: RunConnection): DenoWo
     },
 
     *writeFile(path, content, mode): Operation<void> {
+      authorize();
       yield* until(filesystem.writeFile(path, content, mode === undefined ? {} : { mode }));
     },
 
     *mkdir(path, options = {}): Operation<void> {
+      authorize();
       yield* until(filesystem.mkdir(path, options));
     },
 
     *remove(path, options = {}): Operation<void> {
+      authorize();
       yield* until(filesystem.rm(path, options));
     },
 
     // deno-lint-ignore require-yield
     *rename(from, to): Operation<void> {
+      authorize();
       renamePath(dofs, from, to);
     },
 
     *chmod(path, mode): Operation<void> {
+      authorize();
       yield* until(filesystem.chmod(path, mode));
     },
 
     *symlink(target, path): Operation<void> {
+      authorize();
       yield* until(filesystem.symlink(target, path));
     },
 
     // deno-lint-ignore require-yield
     *link(existingPath, newPath): Operation<void> {
+      authorize();
       linkFile(dofs, existingPath, newPath);
     },
   };

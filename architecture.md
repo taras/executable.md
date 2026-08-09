@@ -156,7 +156,10 @@ A storage handle is a lease owned by the scope that opened it. Lease teardown
 makes that handle unusable without closing the run's physical connection or
 invalidating another handle. The Deno provider owns the authoritative
 SQLite/DOFS connection for each canonical workflow-run database path and closes
-it at provider-scope teardown after its child scopes finish.
+it at provider-scope teardown after its child scopes finish. The public handle
+contains no raw connection association; the provider owns an exact-object lease
+registration and refuses foreign, fabricated, closed, or stale handles before
+they can reach SQLite.
 
 ### Identity is separate from retrieval
 
@@ -257,6 +260,15 @@ contending — a host whose storage is reached synchronously would otherwise sto
 while a second handle waited for a transaction the first one cannot resume to
 finish. Different workflow-run paths have independent entries.
 
+Each entry has an opaque generation identity created with the physical
+connection. Reopening the same path after provider teardown creates a different
+generation. Each top-level transaction has its own opaque identity and exact
+active record, including its path, generation, authorized lease and public
+transaction handle. Finishing invalidates that record before commit or rollback
+can expose the connection to later work. Retained transaction handles and
+tokens stay invalid across a later transaction on the same connection and
+across a later provider generation.
+
 A caller that must publish several changes together holds the transaction
 itself and receives a handle for taking part in it. Enlistment travels with
 that handle rather than with the storage, so work that never received one
@@ -273,6 +285,19 @@ live/current validation.
 
 A transaction opened inside another on the same storage is refused rather than
 nested, as is an ordinary operation called from inside a transaction body.
+The active-path context chain only detects and refuses that accidental nesting;
+it never authorizes transaction or savepoint use. Authorization comes from the
+provider-owned identities behind an adapter-private contextual operation, which
+validates exact handle possession each time.
+
+One monotonically unique allocator serves both synchronous Cloudflare DOFS
+savepoints and Effection operation savepoints. The operation form receives an
+`Operation`, runs it in a child scope, waits for every child and resource to
+finish teardown, and only then releases. Ordinary failure rolls back to and
+releases that savepoint while leaving the outer transaction usable. Synchronous
+cleanup rolls an open savepoint back on cancellation or halt. A failure to
+create, roll back, or release poisons the active transaction, so its top-level
+owner cannot commit it.
 
 Serialization is not a single-executor policy. Which executor may advance a run
 is decided above storage.
@@ -418,8 +443,12 @@ DOFS filesystem layer behind the provider-neutral Workspace boundary. One
 authoritative provider-owned connection entry serves each canonical workflow
 database path until provider teardown. The journal and DOFS adapter use that
 same SQLite connection; Cloudflare's synchronous initialization transactions
-become uniquely named savepoints inside XMD's caller-owned transaction. A
-second long-lived DOFS connection is not a coherent reader because provider
+become uniquely named savepoints inside XMD's caller-owned transaction. Those
+savepoints and operation-spanning savepoints share one allocator and cannot
+collide or release one another. After a savepoint successfully rolls back and
+releases, the shared rollback path invalidates both caches on the authoritative
+DOFS wrapper before outer transaction work resumes. A second long-lived DOFS
+connection is not a coherent reader because provider
 caches may retain negative entries across another connection's commit.
 
 Complete schema version 1 retains the canonical empty Workspace root and its
@@ -431,7 +460,8 @@ selected identity before release. Private Workspace transaction bodies finish
 their child teardown before final live/current validation; a later effect
 coordinator finishes its mutation scope before it invokes capture.
 
-Every unsuccessful caller-owned transaction attempts SQLite rollback and then
+Separately, every unsuccessful caller-owned transaction attempts top-level
+SQLite rollback and then
 invalidates both caches on the provider-owned DOFS wrapper while it still holds
 the serialized connection turn. This includes body failure, cancellation,
 teardown or final-validation failure, and commit failure. The surviving wrapper
@@ -441,7 +471,8 @@ after SQLite has restored the prior frontier.
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider
 exposes no public Workspace mutation effect, history selection or fork
-operation at this layer.
+operation at this layer. Provider-neutral durable coordination, filtered
+journal routing, and atomic Workspace effect publication are also absent.
 
 The initial topology requires neither writable FUSE nor native subprocess
 access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed

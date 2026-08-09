@@ -18,6 +18,7 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import { type Context, createContext, type Operation } from "effection";
 import { WorkflowTransactionError } from "../storage/errors.ts";
+import type { RunTransaction } from "./connections.ts";
 import type { SavepointManager } from "./savepoints.ts";
 
 /**
@@ -70,7 +71,7 @@ export interface TransactionApi {
    * and propagates, leaving the surrounding transaction open and free to
    * continue or to fail on its own terms.
    */
-  savepoint<T>(body: () => T): Operation<T>;
+  savepoint<T>(body: Operation<T>): Operation<T>;
 }
 
 /** No transaction is open in this scope, so there is nothing to nest inside. */
@@ -89,7 +90,7 @@ export const Transaction: Api<TransactionApi> = createApi<TransactionApi>(
   "executablemd.workflow.deno.savepoint",
   {
     // deno-lint-ignore require-yield
-    *savepoint<T>(_body: () => T): Operation<T> {
+    *savepoint<T>(_body: Operation<T>): Operation<T> {
       throw new NoOpenTransactionError();
     },
   },
@@ -101,19 +102,12 @@ export const savepoint: TransactionApi["savepoint"] = Transaction.operations.sav
 /** What the open transaction installs so `savepoint()` can answer. */
 export function useTransactionSavepoints(
   savepoints: SavepointManager,
-  isOpen: () => boolean,
+  transaction: RunTransaction,
 ): Operation<void> {
   return Transaction.around(
     {
-      // deno-lint-ignore require-yield
-      *savepoint<T>([body]: [() => T]): Operation<T> {
-        if (!isOpen()) {
-          throw new WorkflowTransactionError(
-            "this transaction has already finished, so nothing more can happen inside it.",
-          );
-        }
-
-        return savepoints.synchronous(body);
+      *savepoint<T>([body]: [Operation<T>]): Operation<T> {
+        return yield* savepoints.operation(transaction, body);
       },
     },
     { at: "min" },

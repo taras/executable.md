@@ -54,7 +54,12 @@ import {
   type WorkflowRunRecord,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
-import type { RunConnection } from "./connections.ts";
+import type {
+  RunConnection,
+  RunConnectionLease,
+  RunTransaction,
+  WorkflowRunConnections,
+} from "./connections.ts";
 import {
   ActiveTransaction,
   enclosing,
@@ -88,6 +93,7 @@ const SELECT_EXECUTIONS = "SELECT * FROM document_executions ORDER BY sequence A
 /** What opening needs from whoever found the file and checked its schema. */
 export interface OpenConnection {
   readonly connection: RunConnection;
+  readonly connections: WorkflowRunConnections;
   readonly record: WorkflowRunRecord;
 }
 
@@ -111,33 +117,21 @@ interface Handle {
   close(): void;
 }
 
-const DENO_CONNECTION = Symbol("executablemd.workflow.deno.connection");
-
-interface DenoWorkflowRunDatabase extends WorkflowRunDatabase {
-  readonly [DENO_CONNECTION]: RunConnection;
-}
-
-export function workflowRunConnection(database: WorkflowRunDatabase): RunConnection {
-  if (!isDenoWorkflowRunDatabase(database)) {
-    throw new WorkflowTransactionError(
-      "the WorkflowRun database is not owned by this Deno storage provider.",
-    );
-  }
-  return database[DENO_CONNECTION];
-}
-
-function isDenoWorkflowRunDatabase(
-  database: WorkflowRunDatabase,
-): database is DenoWorkflowRunDatabase {
-  return DENO_CONNECTION in database;
-}
-
 function createHandle(connection: OpenConnection): Handle {
-  const { database, path, lock } = connection.connection;
+  const runConnection = connection.connection;
+  const { database, path, lock } = runConnection;
 
   let closed = false;
+  let lease: RunConnectionLease | undefined;
   let record = connection.record;
   let retrieval = readRetrievalRow(database);
+
+  function activeLease(): RunConnectionLease {
+    if (lease === undefined) {
+      throw new WorkflowTransactionError("the WorkflowRun database lease is not installed.");
+    }
+    return lease;
+  }
 
   /** Whether this scope may reach the database at all, and why not. */
   function* admit(): Operation<Result<void>> {
@@ -164,7 +158,7 @@ function createHandle(connection: OpenConnection): Handle {
     }
     return yield* scoped(function* (): Operation<Result<T>> {
       yield* lock.hold();
-      return inTransaction(database, path, body);
+      return inTransaction(runConnection, activeLease(), body);
     });
   }
 
@@ -209,25 +203,40 @@ function createHandle(connection: OpenConnection): Handle {
         return Err(translateSqliteError(error, path));
       }
 
-      const transaction = { open: true };
-      connection.connection.transactionOpen = true;
+      let active: RunTransaction;
+      try {
+        active = runConnection.beginTransaction(activeLease());
+      } catch (error) {
+        rollback(database);
+        return Err(translateSqliteError(error, path));
+      }
       let committed = false;
 
       // Registered after the lock, so teardown rolls back while the connection
       // is still ours and releases it only once that is done.
       yield* ensure(() => {
-        transaction.open = false;
-        connection.connection.transactionOpen = false;
+        if (active.open) {
+          runConnection.finishTransaction(active);
+        }
         if (!committed) {
           rollback(database);
           connection.connection.invalidateDofsCaches();
         }
       });
 
+      const transaction: WorkflowRunTransaction = {
+        journal: enlistedJournal(runConnection, active, path),
+      };
+      try {
+        runConnection.bindTransaction(active, transaction);
+      } catch (error) {
+        return Err(translateSqliteError(error, path));
+      }
+
       // The chain, not just this path: a transaction on another run nested
       // inside this one must not hide that this one is held.
       yield* ActiveTransaction.set(yield* enclosing(path));
-      yield* useTransactionSavepoints(connection.connection.savepoints, () => transaction.open);
+      yield* useTransactionSavepoints(runConnection.savepoints, active);
 
       try {
         // The body runs in a scope of its own, so everything it started —
@@ -237,21 +246,20 @@ function createHandle(connection: OpenConnection): Handle {
         // would let that append autocommit on its own, published whatever the
         // transaction went on to decide.
         const value = yield* scoped(function* () {
-          return yield* body({
-            journal: enlistedJournal(database, transaction, path),
-          });
+          return yield* body(transaction);
         });
 
         // Closed before the commit, not after: nothing may append to a
         // transaction whose contents are already decided.
-        transaction.open = false;
-        connection.connection.transactionOpen = false;
+        runConnection.validateTransaction(active);
+        runConnection.finishTransaction(active);
         database.exec("COMMIT");
         committed = true;
         return Ok(value);
       } catch (error) {
-        transaction.open = false;
-        connection.connection.transactionOpen = false;
+        if (active.open) {
+          runConnection.finishTransaction(active);
+        }
         return Err(translateSqliteError(error, path));
       }
     });
@@ -268,9 +276,7 @@ function createHandle(connection: OpenConnection): Handle {
     },
   };
 
-  const handle: DenoWorkflowRunDatabase = {
-    [DENO_CONNECTION]: connection.connection,
-
+  const handle: WorkflowRunDatabase = {
     get record() {
       return record;
     },
@@ -398,10 +404,13 @@ function createHandle(connection: OpenConnection): Handle {
     },
   };
 
+  lease = connection.connections.registerLease(handle, runConnection);
+
   return {
     database: handle,
     close() {
       closed = true;
+      connection.connections.closeLease(activeLease());
     },
   };
 }
@@ -413,14 +422,15 @@ function createHandle(connection: OpenConnection): Handle {
  * decides whether these rows survive, and nothing here commits.
  */
 function enlistedJournal(
-  database: DatabaseSync,
-  transaction: { open: boolean },
+  connection: RunConnection,
+  transaction: RunTransaction,
   path: string,
 ): DurableStream {
+  const { database } = connection;
   return {
     // deno-lint-ignore require-yield
     *readAll(): Operation<DurableEvent[]> {
-      assertOpen(transaction);
+      connection.validateTransaction(transaction);
       try {
         return readJournalEntries(database).map((entry) => entry.event);
       } catch (error) {
@@ -430,7 +440,7 @@ function enlistedJournal(
 
     // deno-lint-ignore require-yield
     *append(event: DurableEvent): Operation<void> {
-      assertOpen(transaction);
+      connection.validateTransaction(transaction);
       try {
         insertJournalEvent(database, event);
       } catch (error) {
@@ -438,15 +448,6 @@ function enlistedJournal(
       }
     },
   };
-}
-
-function assertOpen(transaction: { open: boolean }): void {
-  if (!transaction.open) {
-    throw new WorkflowTransactionError(
-      "this transaction has already finished, so nothing more can be appended through it. " +
-        "A handle kept past the end of the body it was given commits nothing.",
-    );
-  }
 }
 
 /** A `DurableStream` reports a failure by raising it, so unwrap and throw. */
@@ -458,17 +459,34 @@ function* mustSucceed<T>(operation: Operation<Result<T>>): Operation<T> {
   return result.value;
 }
 
-function inTransaction<T>(database: DatabaseSync, path: string, body: () => T): Result<T> {
+function inTransaction<T>(
+  connection: RunConnection,
+  lease: RunConnectionLease,
+  body: () => T,
+): Result<T> {
+  const { database, path } = connection;
   try {
     database.exec("BEGIN IMMEDIATE");
   } catch (error) {
     return Err(translateSqliteError(error, path));
   }
+  let transaction: RunTransaction;
+  try {
+    transaction = connection.beginTransaction(lease);
+  } catch (error) {
+    rollback(database);
+    return Err(translateSqliteError(error, path));
+  }
   try {
     const value = body();
+    connection.validateTransaction(transaction);
+    connection.finishTransaction(transaction);
     database.exec("COMMIT");
     return Ok(value);
   } catch (error) {
+    if (transaction.open) {
+      connection.finishTransaction(transaction);
+    }
     rollback(database);
     return Err(translateSqliteError(error, path));
   }

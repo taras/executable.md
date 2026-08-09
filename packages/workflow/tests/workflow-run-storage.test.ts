@@ -186,7 +186,7 @@ describe("Tier WS — authoritative connection and complete schema", () => {
     const connection = connections.at(join(root, "savepoint.sqlite"));
 
     connection.database.exec("BEGIN IMMEDIATE");
-    connection.transactionOpen = true;
+    const transaction = connection.beginTransaction();
     expect(() =>
       connection.dofs.transactionSync(() => {
         connection.dofs.run("CREATE TABLE rolled_back (value TEXT)");
@@ -194,7 +194,7 @@ describe("Tier WS — authoritative connection and complete schema", () => {
       }),
     ).toThrow(Error);
     connection.database.exec("CREATE TABLE outer_survives (value TEXT)");
-    connection.transactionOpen = false;
+    connection.finishTransaction(transaction);
     connection.database.exec("COMMIT");
 
     const names = connection.database
@@ -212,13 +212,13 @@ describe("Tier WS — authoritative connection and complete schema", () => {
     const connection = connections.at(join(root, "atomic.sqlite"));
 
     connection.database.exec("BEGIN IMMEDIATE");
-    connection.transactionOpen = true;
+    const transaction = connection.beginTransaction();
     expect(() =>
       initializeSchema(connection.database, connection.dofs, () => {
         throw new Error("fail after the filesystem and root are initialized");
       }),
     ).toThrow(Error);
-    connection.transactionOpen = false;
+    connection.finishTransaction(transaction);
     connection.database.exec("ROLLBACK");
 
     expect(normalizedSchema(connection.database)).toEqual([]);
