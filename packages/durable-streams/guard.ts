@@ -18,17 +18,21 @@ import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
-type DurableEventRejectionObserver = (error: unknown) => void;
+export interface DurableEventRejectionOccurrence {
+  rejected: boolean;
+  error?: unknown;
+}
 
-const EventRejectionObserver = createContext<DurableEventRejectionObserver>(
-  "@effectionx/durable-streams/event-rejection-observer",
+const EventRejectionOccurrence = createContext<DurableEventRejectionOccurrence | undefined>(
+  "effectionx.durable-streams.event-rejection-occurrence",
+  undefined,
 );
 
-export function withDurableEventRejectionObserver(
-  observer: DurableEventRejectionObserver,
+export function withDurableEventRejectionOccurrence(
+  occurrence: DurableEventRejectionOccurrence,
   operation: () => Operation<void>,
 ): Operation<void> {
-  return EventRejectionObserver.with(observer, operation);
+  return EventRejectionOccurrence.with(occurrence, operation);
 }
 
 /**
@@ -66,8 +70,11 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       try {
         yield* gate(structuredClone(event));
       } catch (error) {
-        const observer = yield* EventRejectionObserver.get();
-        observer?.(error);
+        const occurrence = yield* EventRejectionOccurrence.get();
+        if (occurrence !== undefined) {
+          occurrence.rejected = true;
+          occurrence.error = error;
+        }
         throw error;
       }
       yield* stream.append(event);
