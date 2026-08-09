@@ -30,6 +30,10 @@ export { getWorkflowRun, useWorkflow } from "./src/run.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
+export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
+export type { WorkspaceCoordinationApi } from "./src/workspace/api.ts";
+export { createDurableWorkspaceOperation } from "./src/workspace/effect.ts";
+
 export { WorkflowRunStorage, WorkflowStorageProviderError } from "./src/storage/api.ts";
 export type {
   CreateWorkflowRunRequest,

@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createApi } from "@effectionx/context-api";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exec } from "@executablemd/runtime";
@@ -33,13 +34,17 @@ import { all, ensure, type Operation, race, sleep, spawn, suspend, withResolvers
 import {
   WorkflowRecordMalformedError,
   WorkflowRequestError,
+  type WorkflowRunDatabase,
   WorkflowRunConflictError,
   WorkflowRunStorage,
   type WorkflowRunTransaction,
   WorkflowTransactionError,
 } from "../mod.ts";
+import { WorkflowRunTransactionToken } from "../src/deno/connections.ts";
+import { withEnlistedJournalRoute } from "../src/deno/journal-route.ts";
 import { NoOpenTransactionError, savepoint } from "../src/deno/transaction.ts";
 import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/manifest.ts";
+import { workflowRunTransactionToken } from "../src/deno/workspace/private.ts";
 import {
   allowJournalInserts,
   committedEventCount,
@@ -53,6 +58,20 @@ import {
 } from "./support/storage.ts";
 
 const { create } = WorkflowRunStorage.operations;
+
+interface CollidingJournalDestinationApi {
+  append(database: WorkflowRunDatabase, event: DurableEvent): Operation<boolean>;
+}
+
+const CollidingJournalDestination = createApi<CollidingJournalDestinationApi>(
+  "executablemd.workflow.deno.journal.destination",
+  {
+    // deno-lint-ignore require-yield
+    *append(_database: WorkflowRunDatabase, _event: DurableEvent): Operation<boolean> {
+      return false;
+    },
+  },
+);
 
 const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 const CHILD = fileURLToPath(new URL("./support/restart-child.ts", import.meta.url));
@@ -110,6 +129,15 @@ function* attempt(body: () => Operation<unknown>): Operation<unknown> {
     return error;
   }
   return undefined;
+}
+
+function tokenValue(
+  value: unknown,
+  seed: WorkflowRunTransactionToken,
+): WorkflowRunTransactionToken {
+  const container = { token: seed };
+  Object.defineProperty(container, "token", { value, enumerable: true });
+  return container.token;
 }
 
 /** One whole run in a process of its own, through the production adapter. */
@@ -1063,6 +1091,437 @@ describe("Tier WJ — two callers creating at once", () => {
     expect(succeeded).toHaveLength(1);
     expect(refused).toHaveLength(1);
     expect(refused[0].ok === false && refused[0].error).toBeInstanceOf(WorkflowRunConflictError);
+  });
+});
+
+describe("Tier WJ — explicit transaction journal routing", () => {
+  it("WJ26: an exact active token routes an already-filtered event after the gate", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "routed" });
+      const result = yield* database.transact(function* (transaction) {
+        const token = yield* workflowRunTransactionToken(database, transaction);
+        const guarded = guardDurableStream(database.journal, function* () {
+          expect(names(yield* transaction.journal.readAll())).toEqual([]);
+        });
+        yield* withEnlistedJournalRoute(
+          database,
+          transaction,
+          token,
+          guarded.append(yielded("routed", "filtered")),
+        );
+        expect(names(yield* transaction.journal.readAll())).toEqual(["routed"]);
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["routed"]);
+  });
+
+  it("WJ27: rejected and cancelled gates reach no routed insertion", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-gates" });
+      const result = yield* database.transact(function* (transaction) {
+        const token = yield* workflowRunTransactionToken(database, transaction);
+        const rejected = guardDurableStream(database.journal, function* () {
+          throw new Error("secret gate refused the event");
+        });
+        expect(
+          yield* attempt(() =>
+            withEnlistedJournalRoute(
+              database,
+              transaction,
+              token,
+              rejected.append(yielded("rejected", "rejected")),
+            ),
+          ),
+        ).toBeInstanceOf(Error);
+
+        const gateStarted = withResolvers<void>();
+        const cancelled = guardDurableStream(database.journal, function* () {
+          gateStarted.resolve();
+          yield* suspend();
+        });
+        const task = yield* spawn(() =>
+          withEnlistedJournalRoute(
+            database,
+            transaction,
+            token,
+            cancelled.append(yielded("cancelled", "cancelled")),
+          ),
+        );
+        yield* gateStarted.operation;
+        yield* task.halt();
+        expect(names(yield* transaction.journal.readAll())).toEqual([]);
+        yield* transaction.journal.append(yielded("companion", "companion"));
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["companion"]);
+  });
+
+  it("WJ28: missing, fabricated, foreign and cross-run routes fail before insertion", function* () {
+    const root = yield* useStorageRoot();
+
+    const result = yield* withStorage(root, function* () {
+      const first = yield* createRun({ runId: "route-first" });
+      const second = yield* createRun({ runId: "route-second" });
+      const transacted = yield* first.transact(function* (firstTransaction) {
+        const valid = yield* workflowRunTransactionToken(first, firstTransaction);
+        const missing = tokenValue(undefined, valid);
+        const fabricated = new WorkflowRunTransactionToken();
+        const candidates = [missing, fabricated];
+        for (const token of candidates) {
+          expect(
+            yield* attempt(() =>
+              withEnlistedJournalRoute(
+                first,
+                firstTransaction,
+                token,
+                first.journal.append(yielded("unauthorized", "unauthorized")),
+              ),
+            ),
+          ).toBeInstanceOf(WorkflowTransactionError);
+        }
+
+        const nested = yield* second.transact(function* (secondTransaction) {
+          expect(
+            yield* attempt(() =>
+              withEnlistedJournalRoute(
+                second,
+                secondTransaction,
+                valid,
+                second.journal.append(yielded("cross-run", "cross-run")),
+              ),
+            ),
+          ).toBeInstanceOf(WorkflowTransactionError);
+        });
+        if (!nested.ok) {
+          throw nested.error;
+        }
+      });
+      if (!transacted.ok) {
+        throw transacted.error;
+      }
+      return {
+        first: yield* first.journal.readAll(),
+        second: yield* second.journal.readAll(),
+      };
+    });
+
+    expect(result).toEqual({ first: [], second: [] });
+  });
+
+  it("WJ29: completed, closed and stale-generation authority cannot bind", function* () {
+    const root = yield* useStorageRoot();
+    let closedDatabase: WorkflowRunDatabase | undefined;
+    let completedTransaction: WorkflowRunTransaction | undefined;
+    let staleToken: WorkflowRunTransactionToken | undefined;
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-stale" });
+      closedDatabase = database;
+      const result = yield* database.transact(function* (transaction) {
+        completedTransaction = transaction;
+        staleToken = yield* workflowRunTransactionToken(database, transaction);
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      const transaction = completedTransaction;
+      const token = staleToken;
+      if (transaction === undefined || token === undefined) {
+        throw new Error("the transaction did not leave route authority for the refusal proof");
+      }
+      expect(
+        yield* attempt(() =>
+          withEnlistedJournalRoute(
+            database,
+            transaction,
+            token,
+            database.journal.append(yielded("completed", "completed")),
+          ),
+        ),
+      ).toBeInstanceOf(WorkflowTransactionError);
+    });
+
+    const closed = closedDatabase;
+    const transaction = completedTransaction;
+    const token = staleToken;
+    if (closed === undefined || transaction === undefined || token === undefined) {
+      throw new Error("the prior provider did not leave route authority");
+    }
+    const events = yield* withStorage(root, function* () {
+      const found = yield* WorkflowRunStorage.operations.lookup("route-stale");
+      if (!found.ok) {
+        throw found.error;
+      }
+      const database = found.value;
+      expect(
+        yield* attempt(() =>
+          withEnlistedJournalRoute(
+            closed,
+            transaction,
+            token,
+            closed.journal.append(yielded("closed", "closed")),
+          ),
+        ),
+      ).toBeInstanceOf(WorkflowTransactionError);
+
+      const current = yield* database.transact(function* (currentTransaction) {
+        expect(
+          yield* attempt(() =>
+            withEnlistedJournalRoute(
+              database,
+              currentTransaction,
+              token,
+              database.journal.append(yielded("stale", "stale")),
+            ),
+          ),
+        ).toBeInstanceOf(WorkflowTransactionError);
+      });
+      if (!current.ok) {
+        throw current.error;
+      }
+      return yield* database.journal.readAll();
+    });
+    expect(events).toEqual([]);
+  });
+
+  it("WJ30: escaped route authority appends nothing after transaction completion", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-escaped" });
+      let escapedTransaction: WorkflowRunTransaction | undefined;
+      let escapedToken: WorkflowRunTransactionToken | undefined;
+      const result = yield* database.transact(function* (transaction) {
+        escapedTransaction = transaction;
+        escapedToken = yield* workflowRunTransactionToken(database, transaction);
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      const transaction = escapedTransaction;
+      const token = escapedToken;
+      if (transaction === undefined || token === undefined) {
+        throw new Error("route authority did not escape for the refusal proof");
+      }
+      expect(
+        yield* attempt(() =>
+          withEnlistedJournalRoute(
+            database,
+            transaction,
+            token,
+            database.journal.append(yielded("late", "late")),
+          ),
+        ),
+      ).toBeInstanceOf(WorkflowTransactionError);
+      return yield* database.journal.readAll();
+    });
+
+    expect(events).toEqual([]);
+  });
+
+  it("WJ31: an unrelated concurrent append never inherits an enlisted route", function* () {
+    const root = yield* useStorageRoot();
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-unrelated" });
+      const beginUnrelated = withResolvers<void>();
+      const unrelated = yield* spawn(function* () {
+        yield* beginUnrelated.operation;
+        yield* database.journal.append(yielded("unrelated", "unrelated"));
+      });
+
+      const result = yield* database.transact(function* (transaction) {
+        const token = yield* workflowRunTransactionToken(database, transaction);
+        yield* withEnlistedJournalRoute(
+          database,
+          transaction,
+          token,
+          database.journal.append(yielded("rolled-back", "rolled-back")),
+        );
+        beginUnrelated.resolve();
+        throw new Error("roll back the routed transaction");
+      });
+      expect(result.ok).toBe(false);
+      yield* unrelated;
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["unrelated"]);
+  });
+
+  it("WJ32: a nested route for another run delegates to the enclosing destination", function* () {
+    const root = yield* useStorageRoot();
+    let collisions = 0;
+    yield* CollidingJournalDestination.around(
+      {
+        // deno-lint-ignore require-yield
+        *append(): Operation<boolean> {
+          collisions += 1;
+          return true;
+        },
+      },
+      { at: "min" },
+    );
+
+    const events = yield* withStorage(root, function* () {
+      const first = yield* createRun({ runId: "route-outer" });
+      const second = yield* createRun({ runId: "route-inner" });
+      const outer = yield* first.transact(function* (firstTransaction) {
+        const firstToken = yield* workflowRunTransactionToken(first, firstTransaction);
+        const nested = yield* withEnlistedJournalRoute(
+          first,
+          firstTransaction,
+          firstToken,
+          (function* () {
+            return yield* second.transact(function* (secondTransaction) {
+              const secondToken = yield* workflowRunTransactionToken(second, secondTransaction);
+              yield* withEnlistedJournalRoute(
+                second,
+                secondTransaction,
+                secondToken,
+                (function* () {
+                  yield* first.journal.append(yielded("outer", "outer"));
+                  yield* second.journal.append(yielded("inner", "inner"));
+                })(),
+              );
+            });
+          })(),
+        );
+        if (!nested.ok) {
+          throw nested.error;
+        }
+      });
+      if (!outer.ok) {
+        throw outer.error;
+      }
+      return {
+        first: yield* first.journal.readAll(),
+        second: yield* second.journal.readAll(),
+      };
+    });
+
+    expect(names(events.first)).toEqual(["outer"]);
+    expect(names(events.second)).toEqual(["inner"]);
+    expect(collisions).toBe(0);
+  });
+
+  it("WJ33: readAll remains ordinary replay and never invokes a gate or route", function* () {
+    const root = yield* useStorageRoot();
+
+    const result = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-read" });
+      yield* database.journal.append(yielded("existing", "existing"));
+      let gates = 0;
+      const guarded = guardDurableStream(database.journal, function* () {
+        gates += 1;
+      });
+      expect(names(yield* guarded.readAll())).toEqual(["existing"]);
+
+      const transacted = yield* database.transact(function* (transaction) {
+        const token = yield* workflowRunTransactionToken(database, transaction);
+        yield* withEnlistedJournalRoute(
+          database,
+          transaction,
+          token,
+          (function* () {
+            expect(yield* attempt(() => guarded.readAll())).toBeInstanceOf(
+              WorkflowTransactionError,
+            );
+            expect(names(yield* transaction.journal.readAll())).toEqual(["existing"]);
+          })(),
+        );
+      });
+      if (!transacted.ok) {
+        throw transacted.error;
+      }
+      return { gates, events: yield* guarded.readAll() };
+    });
+
+    expect(result.gates).toBe(0);
+    expect(names(result.events)).toEqual(["existing"]);
+  });
+
+  it("WJ34: a colliding destination cannot suppress an ordinary append", function* () {
+    const root = yield* useStorageRoot();
+    let collisions = 0;
+    yield* CollidingJournalDestination.around(
+      {
+        // deno-lint-ignore require-yield
+        *append(): Operation<boolean> {
+          collisions += 1;
+          return true;
+        },
+      },
+      { at: "min" },
+    );
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-collision-ordinary" });
+      yield* database.journal.append(yielded("ordinary", "ordinary"));
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["ordinary"]);
+    expect(collisions).toBe(0);
+  });
+
+  it("WJ35: a colliding destination cannot suppress or authorize a routed append", function* () {
+    const root = yield* useStorageRoot();
+    let collisions = 0;
+    yield* CollidingJournalDestination.around(
+      {
+        // deno-lint-ignore require-yield
+        *append(): Operation<boolean> {
+          collisions += 1;
+          return true;
+        },
+      },
+      { at: "min" },
+    );
+
+    const events = yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "route-collision-routed" });
+      const result = yield* database.transact(function* (transaction) {
+        const token = yield* workflowRunTransactionToken(database, transaction);
+        yield* withEnlistedJournalRoute(
+          database,
+          transaction,
+          token,
+          database.journal.append(yielded("routed", "routed")),
+        );
+        expect(
+          yield* attempt(() =>
+            withEnlistedJournalRoute(
+              database,
+              transaction,
+              tokenValue({}, token),
+              database.journal.append(yielded("fabricated", "fabricated")),
+            ),
+          ),
+        ).toBeInstanceOf(WorkflowTransactionError);
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      return yield* database.journal.readAll();
+    });
+
+    expect(names(events)).toEqual(["routed"]);
+    expect(collisions).toBe(0);
   });
 });
 

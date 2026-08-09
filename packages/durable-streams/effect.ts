@@ -29,6 +29,10 @@ import {
   rememberDurabilityFailure,
 } from "./durability.ts";
 import { StaleInputError } from "./errors.ts";
+import {
+  defaultLiveDurableOperationCoordinator,
+  type LiveDurableOperationCoordinator,
+} from "./live-coordinator.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
 import type {
@@ -306,10 +310,15 @@ export function createDurableEffect<T>(
  *
  * @param desc Structured description for the journal and divergence detection
  * @param execute Returns an Operation to run during live execution
+ * @param options.coordinator Selects the live execution/publication boundary;
+ * replay never invokes it
  */
 export function createDurableOperation<T extends Json>(
   desc: EffectDescription,
   execute: () => Operation<T>,
+  options: {
+    coordinator?: LiveDurableOperationCoordinator;
+  } = {},
 ): DurableEffect<T> {
   return {
     description: `${desc.type}(${desc.name})`,
@@ -340,24 +349,17 @@ export function createDurableOperation<T extends Json>(
           return;
         }
 
-        let result: Result;
         try {
-          const value = yield* execute();
-          result = { status: "ok", value: value as Json };
-        } catch (e) {
-          const error = e instanceof Error ? e : new Error(String(e));
-          result = { status: "err", error: serializeError(error) };
-        }
-
-        const event: Yield = {
-          type: "yield",
-          coroutineId: ctx.coroutineId,
-          description: desc,
-          result,
-        };
-
-        try {
-          yield* appendDurableEvent(ctx, event);
+          const coordinator = options.coordinator ?? defaultLiveDurableOperationCoordinator;
+          const result = yield* coordinator.run(execute, function* (published) {
+            const event: Yield = {
+              type: "yield",
+              coroutineId: ctx.coroutineId,
+              description: desc,
+              result: published,
+            };
+            yield* appendDurableEvent(ctx, event);
+          });
           resolve(protocolToEffection<T>(result));
         } catch (err) {
           resolve({

@@ -78,6 +78,10 @@ export { parseDurableEvent } from "./parse.ts";
 export { createDurableEffect, createDurableOperation } from "./effect.ts";
 export type { Executor } from "./effect.ts";
 
+// Structured live-operation coordination
+export { defaultLiveDurableOperationCoordinator } from "./live-coordinator.ts";
+export type { LiveDurableOperationCoordinator } from "./live-coordinator.ts";
+
 // Workflow-enabled effects
 export { durableAction, durableCall, durableSleep, versionCheck } from "./operations.ts";
 

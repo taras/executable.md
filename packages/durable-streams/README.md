@@ -286,6 +286,24 @@ gate's ordinary failure and may produce a separately admitted `Close(err)`.
 
 Violating this invariant (advancing the generator before the write) creates an unrecoverable gap: the journal would be missing an entry, and replay would feed the wrong result to a subsequent effect.
 
+### Live operation coordinators
+
+`createDurableOperation` accepts an optional
+`LiveDurableOperationCoordinator`. The default coordinator executes the live
+operation once, converts its success or failure to the existing protocol
+`Result`, invokes the Yield publication continuation once, and returns that
+same result after publication completes. Replay bypasses the coordinator,
+executor, continuation, and live append; a partially replayed run coordinates
+only its live suffix.
+
+The publication continuation uses the ordered append fence described above. A
+backing append failure therefore activates the same fail-stop state and raises
+`DurablePersistenceError` with the adapter error as its cause. A marked
+pre-persistence policy rejection remains an ordinary policy failure. There is no
+generic validation option on durable operations: a caller or provider validates
+before constructing the durable effect. Callback-based durable effects retain
+their existing execution path.
+
 ---
 
 ## Divergence detection

@@ -6638,6 +6638,35 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | WJ22/WJ23 | Concurrent creation | Compatible callers converge on one run; conflicting ones produce one winner and one conflict |
 | WJ24 | Two processes | Two real processes racing to create one run leave one winner and one conflict |
 | WJ25 | A second process | Restores the run, preserves journal order and identity, and performs no recorded operation again |
+| WJ26 | Exact routed publication | The existing secret gate completes before one exact active token delegates the already-filtered event to `transaction.journal` |
+| WJ27 | Routed gate refusal | Gate rejection and cancellation reach no routed insertion |
+| WJ28 | Invalid route authority | Missing, fabricated, foreign and cross-run authority is refused before insertion |
+| WJ29/WJ30 | Expired route authority | Completed, closed, stale-generation and escaped authority cannot bind or append |
+| WJ31 | No ambient enlistment | An unrelated concurrent append does not inherit a publication-local route and survives the routed transaction's rollback |
+| WJ32 | Nested run routes | A route for another WorkflowRun delegates to the enclosing run's destination instead of hiding it, even under a colliding loaded-copy handler |
+| WJ33 | Replay stays ordinary | `readAll()` never enlists and never invokes a secret gate |
+| WJ34 | Terminal ordinary destination | A same-named enclosing handler cannot suppress an unbound ordinary append ahead of the provider-owned terminal destination |
+| WJ35 | Terminal routed destination | A same-named enclosing handler cannot suppress a routed append or bypass provider-owned exact-token validation |
+
+### Tier DLC — Live durable-operation coordination
+
+Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
+
+| # | Test | Verify |
+|---|------|--------|
+| DLC1 | Default live success | Execution and publication each occur once, and publication completes before the caller resumes |
+| DLC2 | Live execution failure | The existing serialized failed protocol `Result` is published exactly once |
+| DLC3 | Publication failure | One failed backing append raises `DurablePersistenceError` with the adapter error as cause, persists no Yield or Close, and never resumes the workflow past publication |
+| DLC4 | Active fail-stop | Catching a failed coordinated publication cannot invoke a later coordinator or executor, cannot attempt another append, and the first durability failure escapes at termination |
+| DLC5 | Complete replay | Coordinator, execution, publication continuation and live append are all bypassed |
+| DLC6 | Partial replay | Only the live suffix enters coordination |
+| DLC7 | Cancellation | Cancellation during execution or publication produces no late or duplicate Yield |
+| DLC8 | Explicit selection | A selected coordinator affects only the operation that names it |
+| DLC9 | Callback compatibility | Callback-based durable effects retain their existing behavior |
+| DLC10 | Fail-closed Workspace | A missing Workspace provider fails before execution or publication |
+| DLC11 | Workspace isolation | Explicit Workspace selection leaves unrelated durable operations on the default coordinator |
+| DLC12 | Workspace replay | Replayed Workspace operations require no live provider |
+| DLC13 | Runtime-neutral boundary | Shared Workspace coordination source exposes no runtime or storage implementation type |
 
 ### Tier WTX — WorkflowRun savepoints and transaction authority
 
