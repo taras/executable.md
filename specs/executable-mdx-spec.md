@@ -7015,11 +7015,12 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC7 | Cancellation | Cancellation during execution or publication produces no late or duplicate Yield |
 | DLC8 | Explicit selection | A selected coordinator affects only the operation that names it and receives a non-operational publication identity rather than stream capabilities |
 | DLC9 | Callback compatibility | Callback-based durable effects retain their existing behavior |
-| DLC10 | Fail-closed Workspace | A missing Workspace provider fails before execution or publication |
-| DLC11 | Workspace isolation | Explicit Workspace selection leaves unrelated durable operations on the default coordinator |
+| DLC10 | Fail-closed Workspace | A missing Workspace provider activates fail-stop before execution or publication and persists no Yield or Close |
+| DLC11 | Workspace isolation | Replaceable context carries only provider selection; the registered provider receives the exact canonical invocation, while unrelated durable operations stay on the default coordinator |
 | DLC12 | Workspace replay | Replayed Workspace operations require no live provider |
 | DLC13 | Runtime-neutral boundary | Shared Workspace coordination source exposes no runtime or storage implementation type |
 | DLC14 | Provider infrastructure failure | A selected coordinator activates one first failure by identity and fences later execution and publication |
+| DLC15 | One-shot Workspace invocation | A provider consumes the canonical live invocation once; retaining and replaying its opaque identity after completion is refused before execution or publication |
 
 ### Tier WAC — Atomic provider-level Workspace coordination
 
@@ -7046,6 +7047,9 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC16 | Current-root failure | A real current-root update refusal rolls the captured root, live mutation, pointer and event back |
 | WAC17 | Existing fail-stop precedence | An already-active `DurablePersistenceError` retains exact identity and prevents Workspace coordination and mutation |
 | WAC18 | Savepoint SQL failure | Actual savepoint create, rollback and release refusals poison the coordinated outer transaction and publish nothing |
+| WAC19 | Middleware publication isolation | Enclosing default-order Workspace middleware receives only provider selection and cannot replace publication with a no-op; mutation, root, pointer and one filtered Yield still commit together |
+| WAC20 | Middleware failure isolation | Enclosing Workspace middleware cannot replace failure activation; provider infrastructure failure rolls back all state, retains exact identity and fences later effects |
+| WAC21 | Selection refusal | A substituted or foreign provider selection is rejected before transaction or savepoint work and leaves no mutation, retained root, pointer change, Yield or Close |
 
 ### Tier WTX — WorkflowRun savepoints and transaction authority
 

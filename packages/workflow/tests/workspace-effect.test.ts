@@ -3,22 +3,23 @@ import { expect } from "@executablemd/test-support/expect";
 import { readTextFile } from "@effectionx/fs";
 import { type Operation } from "effection";
 import {
-  type ActivateDurabilityFailure,
   claimDurablePublicationIdentity,
   durableCall,
   durableRun,
-  type DurablePublicationIdentity,
   InMemoryStream,
   type DurableEvent,
   type Json,
   type Result,
   type Workflow,
 } from "@executablemd/durable-streams";
+import { createDurableWorkspaceOperation, WorkspaceCoordinationProviderError } from "../mod.ts";
 import {
-  createDurableWorkspaceOperation,
-  WorkspaceCoordination,
-  WorkspaceCoordinationProviderError,
-} from "../mod.ts";
+  type WorkspaceCoordinationAuthority,
+  type WorkspaceCoordinationInvocation,
+  type WorkspaceCoordinationProvider,
+  withWorkspaceCoordinationInvocation,
+  withWorkspaceCoordinationProvider,
+} from "../src/workspace/effect.ts";
 
 function* raised(operation: Operation<unknown>): Operation<unknown> {
   try {
@@ -51,7 +52,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
     const failure = yield* raised(durableRun(workflow, { stream }));
     expect(failure).toBeInstanceOf(WorkspaceCoordinationProviderError);
     expect(executions).toBe(0);
-    expect(yieldEvents(stream.snapshot())).toEqual([]);
+    expect(stream.snapshot()).toEqual([]);
   });
 
   it("DLC11: explicit Workspace selection leaves unrelated durable operations ordinary", function* () {
@@ -59,22 +60,19 @@ describe("Tier DLC — Workspace coordination selection", () => {
     const publicationIdentity = claimDurablePublicationIdentity(stream);
     const coordinated: string[] = [];
     const ordinary: string[] = [];
-    yield* WorkspaceCoordination.around({
-      *run<T extends Json>([execute, publish, _activateFailure, identity]: [
-        () => Operation<T>,
-        (result: Result) => Operation<void>,
-        ActivateDurabilityFailure,
-        DurablePublicationIdentity | undefined,
-      ]): Operation<Result> {
-        expect(identity).toBe(publicationIdentity);
-        expect(Reflect.get(identity ?? {}, "append")).toBe(undefined);
-        expect(Reflect.get(identity ?? {}, "readAll")).toBe(undefined);
-        coordinated.push("workspace");
-        const result: Result = { status: "ok", value: yield* execute() };
-        yield* publish(result);
-        return result;
+    const provider: WorkspaceCoordinationProvider = {
+      *run(invocation: WorkspaceCoordinationInvocation): Operation<Result> {
+        return yield* withWorkspaceCoordinationInvocation(invocation, function* (authority) {
+          expect(authority.publicationIdentity).toBe(publicationIdentity);
+          expect(Reflect.get(authority.publicationIdentity ?? {}, "append")).toBe(undefined);
+          expect(Reflect.get(authority.publicationIdentity ?? {}, "readAll")).toBe(undefined);
+          coordinated.push("workspace");
+          const result: Result = { status: "ok", value: yield* authority.execute() };
+          yield* authority.publish(result);
+          return result;
+        });
       },
-    });
+    };
 
     function* workflow(): Workflow<string> {
       yield* workspaceStep("selected", function* () {
@@ -87,7 +85,9 @@ describe("Tier DLC — Workspace coordination selection", () => {
       return "done";
     }
 
-    expect(yield* durableRun(workflow, { stream })).toBe("done");
+    expect(
+      yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream })),
+    ).toBe("done");
     expect(coordinated).toEqual(["workspace"]);
     expect(ordinary).toEqual(["ordinary"]);
     expect(yieldEvents(stream.snapshot())).toHaveLength(2);
@@ -136,5 +136,62 @@ describe("Tier DLC — Workspace coordination selection", () => {
         expect(source.includes(name)).toBe(false);
       }
     }
+  });
+
+  it("DLC15: live Workspace invocation authority is one-shot", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    let captured: WorkspaceCoordinationInvocation | undefined;
+    let capturedAuthority: WorkspaceCoordinationAuthority | undefined;
+    let executions = 0;
+    const provider: WorkspaceCoordinationProvider = {
+      *run(invocation: WorkspaceCoordinationInvocation): Operation<Result> {
+        captured = invocation;
+        return yield* withWorkspaceCoordinationInvocation(invocation, function* (authority) {
+          capturedAuthority = authority;
+          const result: Result = { status: "ok", value: yield* authority.execute() };
+          yield* authority.publish(result);
+          return result;
+        });
+      },
+    };
+    function* workflow(): Workflow<void> {
+      yield* workspaceStep("one-shot", function* () {
+        executions += 1;
+        return null;
+      });
+    }
+
+    yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
+    if (captured === undefined) {
+      throw new Error("the provider did not receive its live invocation");
+    }
+    let reused = 0;
+    const failure = yield* raised(
+      withWorkspaceCoordinationInvocation(captured, function* () {
+        reused += 1;
+        return { status: "ok", value: null };
+      }),
+    );
+    expect(failure).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    expect(reused).toBe(0);
+    if (capturedAuthority === undefined) {
+      throw new Error("the provider did not receive its live invocation authority");
+    }
+    expect(yield* raised(capturedAuthority.execute())).toBeInstanceOf(
+      WorkspaceCoordinationProviderError,
+    );
+    expect(
+      yield* raised(capturedAuthority.publish({ status: "ok", value: "late" })),
+    ).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    let activationFailure: unknown;
+    try {
+      capturedAuthority.activateFailure(new Error("late activation"));
+    } catch (error) {
+      activationFailure = error;
+    }
+    expect(activationFailure).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    expect(executions).toBe(1);
+    expect(yieldEvents(stream.snapshot())).toHaveLength(1);
   });
 });

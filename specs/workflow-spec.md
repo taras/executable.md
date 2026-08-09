@@ -451,20 +451,29 @@ coordinator, execution, publication and live append; partial replay coordinates
 only its live suffix. Cancellation cannot append or resolve late. The
 callback-based durable-effect factory remains unchanged.
 
-The shared Workspace operation wrapper explicitly selects a contextual
-Workspace coordinator. Its default fails before execution or publication, and
-installing a provider does not enlist unrelated durable operations. Successful
-Workspace effect coordination finishes its mutation scope before capturing the
-root. The Deno provider binds an adapter-private proof operation to one exact
-WorkflowRun handle through module-private executor identity. It retains the
-canonical durable-stream module's non-operational publication identity for that
-run's journal; the existing secret-filter wrapper privately preserves the
-identity only for wrappers it constructs. The coordinator refuses a foreign
-executor, publication identity, custom wrapper or copied property before it
-opens the caller-owned transaction. It runs
-the mutation in one operation savepoint, waits for mutation child teardown,
-captures and publishes the immutable root, and routes the already-filtered
-Yield through that transaction's journal before commit.
+The shared Workspace operation wrapper explicitly reads a contextual provider
+selection. The replaceable selection API carries no live-operation authority:
+it receives no executor, publisher, failure activator or durable publication
+identity. The canonical wrapper retains those exact values in a module-private
+one-shot invocation and passes only its opaque identity directly to the
+registered provider. The invocation can be consumed once during its original
+live call. A foreign, substituted, reused, completed or stale invocation fails
+before the provider opens a transaction. The default missing-provider path also
+fails before execution or publication, and installing a provider does not enlist
+unrelated durable operations.
+
+Successful Workspace effect coordination finishes its mutation scope before
+capturing the root. The Deno provider binds an adapter-private proof operation
+to one exact WorkflowRun handle through module-private executor identity. It
+retains the canonical durable-stream module's non-operational publication
+identity for that run's journal; the existing secret-filter wrapper privately
+preserves the identity only for wrappers it constructs. The provider consumes
+the invocation and validates its exact executor and publication identities
+before it opens the caller-owned transaction. It refuses a foreign executor,
+publication identity, custom wrapper or copied property before transaction
+work. It runs the mutation in one operation savepoint, waits for mutation child
+teardown, captures and publishes the immutable root, and routes the
+already-filtered Yield through that transaction's journal before commit.
 
 The adapter-private proof filesystem invokes the pinned synchronous DOFS
 functions for its supported string and byte-array contract. It does not leave a

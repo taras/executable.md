@@ -4,19 +4,26 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile } from "@effectionx/fs";
 import {
+  type ActivateDurabilityFailure,
   durableCall,
   durableRun,
   guardDurableStream,
   InMemoryStream,
   type DurableEvent,
+  type DurablePublicationIdentity,
   type DurableStream,
   DurablePersistenceError,
   type Json,
+  type Result,
   type Workflow,
   type Yield,
 } from "@executablemd/durable-streams";
 import { ensure, type Operation, scoped, spawn, suspend, withResolvers } from "effection";
-import { createDurableWorkspaceOperation, type WorkflowRunDatabase } from "../mod.ts";
+import {
+  createDurableWorkspaceOperation,
+  WorkspaceCoordination,
+  type WorkflowRunDatabase,
+} from "../mod.ts";
 import {
   createWorkflowRunConnections,
   type RunConnection,
@@ -1177,5 +1184,180 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         },
       );
     }
+  });
+
+  it("WAC19: enclosing coordination middleware cannot suppress publication", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "atomic-middleware-publication" });
+      let selections = 0;
+      let replacementRuns = 0;
+      const replacingMiddleware = {
+        provider(_args: [], next: () => object | undefined): object | undefined {
+          selections += 1;
+          return next();
+        },
+        *run<T extends Json>(
+          [execute, _publish, activateFailure, identity]: [
+            () => Operation<T>,
+            (result: Result) => Operation<void>,
+            ActivateDurabilityFailure,
+            DurablePublicationIdentity | undefined,
+          ],
+          next: (
+            execute: () => Operation<T>,
+            publish: (result: Result) => Operation<void>,
+            activateFailure: ActivateDurabilityFailure,
+            identity: DurablePublicationIdentity | undefined,
+          ) => Operation<Result>,
+        ): Operation<Result> {
+          replacementRuns += 1;
+          return yield* next(
+            execute,
+            // deno-lint-ignore require-yield
+            function* () {},
+            activateFailure,
+            identity,
+          );
+        },
+      };
+      function* workflow(): Workflow<void> {
+        yield* workspaceStep(database, "middleware-publication", function* (filesystem) {
+          yield* filesystem.writeFile("/middleware.txt", "committed together");
+          return null;
+        });
+      }
+
+      yield* scoped(function* () {
+        yield* WorkspaceCoordination.around(replacingMiddleware);
+        yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+      });
+
+      expect(selections).toBe(1);
+      expect(replacementRuns).toBe(0);
+      expect((yield* inspectWorkspace(database, "/middleware.txt")).content).toBe(
+        "committed together",
+      );
+      expect(workspaceYields(yield* database.journal.readAll())).toHaveLength(1);
+    });
+  });
+
+  it("WAC20: enclosing middleware cannot replace infrastructure failure activation", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-middleware-failure";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/middleware-failure.txt");
+      const roots = retainedRootCount(path);
+      let replacementRuns = 0;
+      let caught: unknown;
+      let laterExecutions = 0;
+      const replacingMiddleware = {
+        provider(_args: [], next: () => object | undefined): object | undefined {
+          return next();
+        },
+        *run<T extends Json>(
+          [execute, publish, _activateFailure, identity]: [
+            () => Operation<T>,
+            (result: Result) => Operation<void>,
+            ActivateDurabilityFailure,
+            DurablePublicationIdentity | undefined,
+          ],
+          next: (
+            execute: () => Operation<T>,
+            publish: (result: Result) => Operation<void>,
+            activateFailure: ActivateDurabilityFailure,
+            identity: DurablePublicationIdentity | undefined,
+          ) => Operation<Result>,
+        ): Operation<Result> {
+          replacementRuns += 1;
+          return yield* next(execute, publish, () => new Error("replacement failure"), identity);
+        },
+      };
+      tamper(path, (sqlite) => {
+        sqlite.exec(`
+          CREATE TRIGGER refuse_middleware_root BEFORE INSERT ON workspace_roots
+          BEGIN
+            SELECT raise(ABORT, 'middleware root capture refused');
+          END
+        `);
+      });
+      function* workflow(): Workflow<void> {
+        try {
+          yield* workspaceStep(database, "middleware-failure", function* (filesystem) {
+            yield* filesystem.writeFile("/middleware-failure.txt", "must roll back");
+            return null;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        yield* durableCall("fenced-after-middleware-failure", function* () {
+          laterExecutions += 1;
+          return null;
+        });
+      }
+
+      let failure: unknown;
+      yield* scoped(function* () {
+        yield* WorkspaceCoordination.around(replacingMiddleware);
+        failure = yield* raised(
+          withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+        );
+      });
+      tamper(path, (sqlite) => sqlite.exec("DROP TRIGGER refuse_middleware_root"));
+
+      expect(replacementRuns).toBe(0);
+      expect(failure).toBe(caught);
+      expect(failure).toBeInstanceOf(Error);
+      expect(laterExecutions).toBe(0);
+      expect(yield* inspectWorkspace(database, "/middleware-failure.txt")).toEqual(baseline);
+      expect(retainedRootCount(path)).toBe(roots);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC21: substituted provider selection is refused before transaction work", function* () {
+    const root = yield* useStorageRoot();
+    const savepoints: string[] = [];
+    yield* SavepointObservation.set((event) => {
+      if (event.kind === "create") {
+        savepoints.push(event.name);
+      }
+    });
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-substituted-provider";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/substituted.txt");
+      const roots = retainedRootCount(path);
+      let mutations = 0;
+      function* workflow(): Workflow<void> {
+        yield* workspaceStep(database, "substituted-provider", function* (filesystem) {
+          mutations += 1;
+          yield* filesystem.writeFile("/substituted.txt", "must not run");
+          return null;
+        });
+      }
+
+      savepoints.length = 0;
+      let failure: unknown;
+      yield* scoped(function* () {
+        yield* WorkspaceCoordination.around({ provider: () => Object.freeze({}) });
+        failure = yield* raised(
+          withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+        );
+      });
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(mutations).toBe(0);
+      expect(savepoints).toEqual([]);
+      expect(yield* inspectWorkspace(database, "/substituted.txt")).toEqual(baseline);
+      expect(retainedRootCount(path)).toBe(roots);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
   });
 });

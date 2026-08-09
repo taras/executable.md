@@ -1,19 +1,22 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import {
-  type ActivateDurabilityFailure,
   type DurableEffect,
-  type DurablePublicationIdentity,
   type EffectDescription,
   type Json,
-  type LiveDurableOperationCoordinator,
   type Result as DurableResult,
   serializeError,
 } from "@executablemd/durable-streams";
-import { type Operation, scoped } from "effection";
+import { ensure, type Operation, scoped } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../../storage/api.ts";
 import { WorkflowTransactionError } from "../../storage/errors.ts";
-import { WorkspaceCoordination } from "../../workspace/api.ts";
-import { createDurableWorkspaceOperation } from "../../workspace/effect.ts";
+import {
+  createOwnedDurableWorkspaceOperation,
+  type WorkspaceCoordinationAuthority,
+  type WorkspaceCoordinationInvocation,
+  type WorkspaceCoordinationProvider,
+  withWorkspaceCoordinationInvocation,
+  withWorkspaceCoordinationProvider,
+} from "../../workspace/effect.ts";
 import type { WorkflowRunConnections } from "../connections.ts";
 import { withEnlistedJournalRoute } from "../journal-route.ts";
 import { savepoint } from "../transaction.ts";
@@ -68,20 +71,46 @@ const workspaceEffectOwners = (() => {
   };
 })();
 
-interface DenoWorkspaceCoordinationApi {
-  bind<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T>;
+interface WorkspaceEffectProviderApi {
+  readonly provider: object | undefined;
 }
 
-const DenoWorkspaceCoordination: Api<DenoWorkspaceCoordinationApi> =
-  createApi<DenoWorkspaceCoordinationApi>(
-    "executablemd.workflow.deno.workspace.effect.coordination",
-    {
-      // deno-lint-ignore require-yield
-      *bind<T>(_database: WorkflowRunDatabase, _operation: Operation<T>): Operation<T> {
-        return unavailable();
-      },
+interface WorkspaceEffectProviderRegistration {
+  open: boolean;
+  readonly connections: WorkflowRunConnections;
+}
+
+const WorkspaceEffectProvider: Api<WorkspaceEffectProviderApi> =
+  createApi<WorkspaceEffectProviderApi>("executablemd.workflow.deno.workspace.effect.provider", {
+    provider: undefined,
+  });
+
+const workspaceEffectProviders = (() => {
+  const providers = new WeakMap<object, WorkspaceEffectProviderRegistration>();
+
+  return {
+    register(connections: WorkflowRunConnections): {
+      selection: object;
+      close: () => void;
+    } {
+      const selection = Object.freeze({});
+      const registration: WorkspaceEffectProviderRegistration = { open: true, connections };
+      providers.set(selection, registration);
+      return {
+        selection,
+        close(): void {
+          registration.open = false;
+          providers.delete(selection);
+        },
+      };
     },
-  );
+
+    get(selection: object): WorkflowRunConnections | undefined {
+      const registration = providers.get(selection);
+      return registration?.open ? registration.connections : undefined;
+    },
+  };
+})();
 
 function* runMutation<T extends Json>(
   database: WorkflowRunDatabase,
@@ -136,71 +165,64 @@ function* coordinateTransaction<T extends Json>(
 function coordinator(
   connections: WorkflowRunConnections,
   database: WorkflowRunDatabase,
-): LiveDurableOperationCoordinator {
+): WorkspaceCoordinationProvider {
   return {
-    *run<T extends Json>(
-      execute: () => Operation<T>,
-      publish: (result: DurableResult) => Operation<void>,
-      activateFailure: ActivateDurabilityFailure,
-      publicationIdentity: DurablePublicationIdentity | undefined,
-    ): Operation<DurableResult> {
-      let transacted;
-      try {
-        if (workspaceEffectOwners.get(execute) !== database) {
-          throw new WorkflowTransactionError(
-            "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
-          );
-        }
-        connections.validateJournal(database, publicationIdentity);
-        transacted = yield* database.transact(function* (transaction) {
-          return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
-            coordinateTransaction(database, transaction, workspace, execute, publish),
-          );
-        });
-      } catch (error) {
-        throw activateFailure(error);
-      }
-      if (!transacted.ok) {
-        throw activateFailure(transacted.error);
-      }
-      return transacted.value;
+    *run(invocation: WorkspaceCoordinationInvocation): Operation<DurableResult> {
+      return yield* withWorkspaceCoordinationInvocation(
+        invocation,
+        function* (authority: WorkspaceCoordinationAuthority): Operation<DurableResult> {
+          let transacted;
+          try {
+            if (workspaceEffectOwners.get(authority.executionIdentity) !== database) {
+              throw new WorkflowTransactionError(
+                "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
+              );
+            }
+            connections.validateJournal(database, authority.publicationIdentity);
+            transacted = yield* database.transact(function* (transaction) {
+              return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
+                coordinateTransaction(
+                  database,
+                  transaction,
+                  workspace,
+                  authority.execute,
+                  authority.publish,
+                ),
+              );
+            });
+          } catch (error) {
+            throw authority.activateFailure(error);
+          }
+          if (!transacted.ok) {
+            throw authority.activateFailure(transacted.error);
+          }
+          return transacted.value;
+        },
+      );
     },
   };
 }
 
-export function useWorkspaceEffects(connections: WorkflowRunConnections): Operation<void> {
-  return DenoWorkspaceCoordination.around(
-    {
-      *bind<T>([database, operation]: [WorkflowRunDatabase, Operation<T>]): Operation<T> {
-        connections.validateLease(database);
-        return yield* scoped(function* () {
-          const selected = coordinator(connections, database);
-          yield* WorkspaceCoordination.around(
-            {
-              *run<Candidate extends Json>([execute, publish, activateFailure, identity]: [
-                () => Operation<Candidate>,
-                (result: DurableResult) => Operation<void>,
-                ActivateDurabilityFailure,
-                DurablePublicationIdentity | undefined,
-              ]): Operation<DurableResult> {
-                return yield* selected.run(execute, publish, activateFailure, identity);
-              },
-            },
-            { at: "min" },
-          );
-          return yield* operation;
-        });
-      },
-    },
-    { at: "min" },
-  );
+export function* useWorkspaceEffects(connections: WorkflowRunConnections): Operation<void> {
+  const registration = workspaceEffectProviders.register(connections);
+  yield* ensure(registration.close);
+  yield* WorkspaceEffectProvider.around({ provider: () => registration.selection }, { at: "min" });
 }
 
 export function withWorkspaceEffects<T>(
   database: WorkflowRunDatabase,
   operation: Operation<T>,
 ): Operation<T> {
-  return DenoWorkspaceCoordination.operations.bind(database, operation);
+  return scoped(function* () {
+    const selection = yield* WorkspaceEffectProvider.operations.provider;
+    const connections =
+      selection === undefined ? undefined : workspaceEffectProviders.get(selection);
+    if (connections === undefined) {
+      return unavailable();
+    }
+    connections.validateLease(database);
+    return yield* withWorkspaceCoordinationProvider(coordinator(connections, database), operation);
+  });
 }
 
 export function createWorkspaceProofEffect<T extends Json>(
@@ -209,6 +231,7 @@ export function createWorkspaceProofEffect<T extends Json>(
   mutate: DenoWorkspaceMutation<T>,
 ): DurableEffect<T> {
   const execute = () => WorkspaceMutation.operations.run(database, mutate);
-  workspaceEffectOwners.claim(execute, database);
-  return createDurableWorkspaceOperation(description, execute);
+  const executionIdentity = Object.freeze({});
+  workspaceEffectOwners.claim(executionIdentity, database);
+  return createOwnedDurableWorkspaceOperation(description, execute, executionIdentity);
 }

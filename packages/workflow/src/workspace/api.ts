@@ -1,35 +1,22 @@
 import { type Api, createApi } from "@effectionx/context-api";
-import type {
-  ActivateDurabilityFailure,
-  DurablePublicationIdentity,
-  Json,
-  LiveDurableOperationCoordinator,
-  Result,
-} from "@executablemd/durable-streams";
-import type { Operation } from "effection";
 
-export type WorkspaceCoordinationApi = LiveDurableOperationCoordinator;
+export interface WorkspaceCoordinationApi {
+  readonly provider: object | undefined;
+}
 
 /** A Workspace operation has no safe live fallback without its owning provider. */
 export class WorkspaceCoordinationProviderError extends Error {
   override name = "WorkspaceCoordinationProviderError";
 
-  constructor() {
-    super(
-      "no Workspace coordinator is installed, so a live Workspace operation cannot execute or publish",
-    );
+  constructor(
+    message = "no Workspace coordinator is installed, so a live Workspace operation cannot execute or publish",
+  ) {
+    super(message);
   }
 }
 
+/** Selects a Workspace provider without carrying live-operation authority. */
 export const WorkspaceCoordination: Api<WorkspaceCoordinationApi> =
   createApi<WorkspaceCoordinationApi>("executablemd.workflow.workspace.coordination", {
-    // deno-lint-ignore require-yield
-    *run<T extends Json>(
-      _execute: () => Operation<T>,
-      _publish: (result: Result) => Operation<void>,
-      _activateFailure: ActivateDurabilityFailure,
-      _publicationIdentity: DurablePublicationIdentity | undefined,
-    ): Operation<Result> {
-      throw new WorkspaceCoordinationProviderError();
-    },
+    provider: undefined,
   });

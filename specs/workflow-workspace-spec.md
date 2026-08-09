@@ -817,15 +817,19 @@ lifecycle contracts; documents do not choose that topology.
 
 The Deno provider's adapter-private proof operation already coordinates one
 real DOFS mutation savepoint, immutable root publication and filtered durable
-Yield in the caller-owned transaction. Before opening that transaction it
-requires the proof effect and guarded durable stream to carry the selected
-WorkflowRun's exact provider-owned authority. Its supported filesystem calls
-use synchronous pinned DOFS primitives, leaving no asynchronous continuation
-after mutation teardown. It distinguishes a documented
-filesystem refusal from infrastructure failure and cancellation, and activates
-the durable fail-stop fence for infrastructure failures. This foundation is not
-a public filesystem effect: `<File>`, `API.Files`, workflow start/resume and
-history commands do not route to it in this slice.
+Yield in the caller-owned transaction. Replaceable Workspace context selects a
+registered provider through a non-operational identity and never receives the
+live executor, publisher, failure activator or publication witness. The
+canonical wrapper retains those values in a one-shot invocation that the Deno
+provider consumes directly. Before opening the transaction, the provider
+requires that invocation's proof executor and guarded durable stream identity to
+carry the selected WorkflowRun's exact provider-owned authority. Its supported
+filesystem calls use synchronous pinned DOFS primitives, leaving no asynchronous
+continuation after mutation teardown. It distinguishes a documented filesystem
+refusal from infrastructure failure and cancellation, and activates the durable
+fail-stop fence for infrastructure failures. This foundation is not a public
+filesystem effect: `<File>`, `API.Files`, workflow start/resume and history
+commands do not route to it in this slice.
 
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be
