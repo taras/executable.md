@@ -82,18 +82,20 @@ class BlockingFailureStream implements DurableStream {
   }
 }
 
+function durabilityClassErrors(): Error[] {
+  const description = { type: "call", name: "classified-error" };
+  return [
+    new StaleInputError("classified stale input"),
+    new DivergenceError("root", 0, description, description),
+    new TerminalDivergenceError("root", 0, 1),
+    new ContinuePastCloseDivergenceError("root", 0),
+    new DurablePersistenceError("yield", new Error("classified persistence failure")),
+  ];
+}
+
 describe("durable fail-stop boundary", () => {
   it("classifies unmarked adapter failures by source", function* () {
-    const description = { type: "call", name: "adapter-error" };
-    const adapterFailures = [
-      new StaleInputError("adapter reported stale input"),
-      new DivergenceError("root", 0, description, description),
-      new TerminalDivergenceError("root", 0, 1),
-      new ContinuePastCloseDivergenceError("root", 0),
-      new DurablePersistenceError("yield", new Error("nested persistence failure")),
-    ];
-
-    for (const adapterFailure of adapterFailures) {
+    for (const adapterFailure of durabilityClassErrors()) {
       const stream = new FailOnceStream(adapterFailure);
       let firstExecutions = 0;
       let laterExecutions = 0;
@@ -140,6 +142,57 @@ describe("durable fail-stop boundary", () => {
       }
       expect(failure).not.toBe(adapterFailure);
       expect(failure.cause).toBe(adapterFailure);
+    }
+  });
+
+  it("keeps marked policy failures non-poisoning regardless of class", function* () {
+    for (const policyFailure of durabilityClassErrors()) {
+      const backend = new InMemoryStream();
+      let blockedExecutions = 0;
+      let laterExecutions = 0;
+      let caught: unknown;
+      const stream = guardDurableStream(
+        backend,
+        // deno-lint-ignore require-yield
+        function* (event) {
+          if (event.type === "yield" && event.description.name === "blocked") {
+            throw policyFailure;
+          }
+        },
+      );
+
+      const result = yield* durableRun(
+        function* (): Workflow<string> {
+          try {
+            yield* durableCall("blocked", () => {
+              blockedExecutions++;
+              return Promise.resolve("blocked");
+            });
+          } catch (error) {
+            caught = error;
+          }
+          return yield* durableCall("later", () => {
+            laterExecutions++;
+            return Promise.resolve("completed");
+          });
+        },
+        { stream },
+      );
+
+      expect(result).toBe("completed");
+      expect(caught).toBe(policyFailure);
+      expect(blockedExecutions).toBe(1);
+      expect(laterExecutions).toBe(1);
+      expect(backend.appendCount).toBe(2);
+      expect(
+        backend
+          .snapshot()
+          .map((event) =>
+            event.type === "yield"
+              ? `yield:${event.description.name}`
+              : `close:${event.coroutineId}`,
+          ),
+      ).toEqual(["yield:later", "close:root"]);
     }
   });
 

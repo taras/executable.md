@@ -136,7 +136,7 @@ export function* appendDurableEvent(ctx: DurableContext, event: DurableEvent): O
   } catch (error) {
     if (isDurableEventRejection(error)) {
       const rejection = unwrapDurableEventRejection(error);
-      const failure = activeDurabilityFailure(ctx, rejection);
+      const failure = activeDurabilityFailure(ctx);
       if (failure) {
         throw failure;
       }
