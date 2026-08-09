@@ -464,9 +464,11 @@ terminal handling therefore cannot reinterpret it as a workflow failure or
 append a compensating `Close(err)`. Durable entry checks that shared state
 before replay matching or executor startup. Appends pass through a shared FIFO
 boundary and check it again immediately before calling the stream adapter, so
-an append queued behind the failure never reaches storage. An executor that
-started concurrently may complete, but it cannot persist its result after the
-failure becomes active.
+an append queued behind the failure never reaches storage. Concurrent work that
+began earlier cannot be undone, but its not-yet-started append is fenced.
+Every unmarked stream-adapter rejection is wrapped as persistence failure
+regardless of its error class. Only a rejection marked by the pre-persistence
+gate is unwrapped as a policy outcome.
 
 **Transparency (§4.3).** During replay, `resolve()` is called synchronously
 with the stored result (converted via `protocolToEffection()`). The reducer

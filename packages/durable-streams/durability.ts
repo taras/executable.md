@@ -142,7 +142,7 @@ export function* appendDurableEvent(ctx: DurableContext, event: DurableEvent): O
       }
       throw rejection;
     }
-    const active = activeDurabilityFailure(ctx, error);
+    const active = activeDurabilityFailure(ctx);
     if (active) {
       throw active;
     }

@@ -464,14 +464,17 @@ consumer with an unjournaled success or append a compensating `Close(err)`. A
 failed terminal `Close` append follows the same rule. A pre-persistence gate
 rejection is distinct: the rejected event does not reach the backend, and the
 gate's ordinary failure may be recorded by a separately admitted `Close(err)`.
+This distinction is source-based: every unmarked backing-stream rejection is a
+persistence failure regardless of its error class, while the marked gate
+rejection is unwrapped as the policy outcome.
 
 The first durability failure makes the root and all of its child coroutines
 fail-stop. Every later durable-effect entry MUST raise that exact error before
 replay matching or live execution. Every ordered append MUST recheck the shared
 failure immediately before invoking storage; an append waiting behind the
-operation that failed MUST NOT reach the stream adapter. Concurrent executors
-that started before the failure may finish, but their pending appends are
-fenced. The first error and, for `DurablePersistenceError`, its adapter cause
+operation that failed MUST NOT reach the stream adapter. Concurrent work that
+began earlier cannot be undone, but its not-yet-started append is fenced. The
+first error and, for `DurablePersistenceError`, its adapter cause
 retain their identity even when workflow code catches the error. An ordinary
 pre-persistence policy rejection does not activate fail-stop state.
 

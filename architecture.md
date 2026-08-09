@@ -633,8 +633,10 @@ unpersisted success, and never triggers a compensating `Close`. The first
 durability failure is shared by the root and every durable child. From that
 point, durable entry fails with that exact error before replay or execution,
 and the ordered append boundary rechecks it immediately before storage. Work
-already executing may finish, but its pending append and every later append are
-fenced. A pre-persistence policy rejection remains the policy's ordinary
+already executing may finish. Concurrent work that began earlier cannot be
+undone, but its not-yet-started append is fenced. An unmarked backing-stream
+rejection is a persistence failure regardless of the error class the adapter
+throws. A pre-persistence policy rejection remains the policy's ordinary
 document failure; the guarded stream marks that boundary before the backing
 append and does not activate the fail-stop state.
 

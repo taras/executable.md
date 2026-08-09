@@ -2,12 +2,15 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { sleep, withResolvers, type Operation } from "effection";
 import {
+  ContinuePastCloseDivergenceError,
   DivergenceError,
   type DurableEvent,
   DurablePersistenceError,
   type DurableStream,
   InMemoryStream,
   ReplayGuard,
+  StaleInputError,
+  TerminalDivergenceError,
   type Workflow,
   durableAction,
   durableAll,
@@ -80,6 +83,66 @@ class BlockingFailureStream implements DurableStream {
 }
 
 describe("durable fail-stop boundary", () => {
+  it("classifies unmarked adapter failures by source", function* () {
+    const description = { type: "call", name: "adapter-error" };
+    const adapterFailures = [
+      new StaleInputError("adapter reported stale input"),
+      new DivergenceError("root", 0, description, description),
+      new TerminalDivergenceError("root", 0, 1),
+      new ContinuePastCloseDivergenceError("root", 0),
+      new DurablePersistenceError("yield", new Error("nested persistence failure")),
+    ];
+
+    for (const adapterFailure of adapterFailures) {
+      const stream = new FailOnceStream(adapterFailure);
+      let firstExecutions = 0;
+      let laterExecutions = 0;
+      let firstCaught: unknown;
+      let laterCaught: unknown;
+      let failure: unknown;
+
+      try {
+        yield* durableRun(
+          function* (): Workflow<string> {
+            try {
+              yield* durableCall("adapter-error", () => {
+                firstExecutions++;
+                return Promise.resolve("completed");
+              });
+            } catch (error) {
+              firstCaught = error;
+            }
+            try {
+              yield* durableCall("later", () => {
+                laterExecutions++;
+                return Promise.resolve("must-not-run");
+              });
+            } catch (error) {
+              laterCaught = error;
+            }
+            return "must-not-close";
+          },
+          { stream },
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(firstExecutions).toBe(1);
+      expect(laterExecutions).toBe(0);
+      expect(stream.appendAttempts).toBe(1);
+      expect(stream.snapshot()).toEqual([]);
+      expect(firstCaught).toBe(failure);
+      expect(laterCaught).toBe(failure);
+      expect(failure).toBeInstanceOf(DurablePersistenceError);
+      if (!(failure instanceof DurablePersistenceError)) {
+        throw new Error("expected durable persistence failure");
+      }
+      expect(failure).not.toBe(adapterFailure);
+      expect(failure.cause).toBe(adapterFailure);
+    }
+  });
+
   it("fences a later callback executor after a caught persistence failure", function* () {
     const adapterFailure = new Error("first append failed");
     const stream = new FailOnceStream(adapterFailure);
