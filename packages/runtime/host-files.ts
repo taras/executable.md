@@ -423,7 +423,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     try {
       const matched = yield* traverse(input, observe);
       const files = matched.filter((entry) => entry.isFile).map((entry) => entry.path);
-      return Ok([...new Set(files)].sort(byCodePoint));
+      return Ok([...new Set(files)].toSorted(byCodePoint));
     } catch (error) {
       // The Api compiles patterns as it starts, so an unusable one — an
       // unterminated character class — arrives as a `SyntaxError` from `RegExp`

@@ -3,6 +3,7 @@
   "version": "0.8.0",
   "exports": {
     ".": "./mod.ts",
+    "./files": "./files.ts",
     "./test": "./test/mod.ts"
   }
 }

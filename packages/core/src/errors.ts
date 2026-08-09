@@ -7,8 +7,13 @@ import {
   StaleInputError,
   TerminalDivergenceError,
 } from "@executablemd/durable-streams";
-import { asFilesFatal } from "@executablemd/runtime";
-import type { FilesFatalFailure } from "@executablemd/runtime";
+// The leaf module rather than the package root. This module is in the graph a
+// separately loaded copy of `printErrors` bundles, and the runtime's root
+// re-exports the host Apis — process, fetch, filesystem — one of which carries a
+// native addon no bundler can inline. Recognizing a Files failure needs none of
+// that: it is a structural tag and a parser.
+import { asFilesFatal } from "@executablemd/runtime/files";
+import type { FilesFatalFailure } from "@executablemd/runtime/files";
 import { InvocationTeardownError } from "./invocation.ts";
 import type { ErrorSegment } from "./types.ts";
 

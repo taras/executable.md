@@ -160,14 +160,16 @@ await main(function* () {
   });
   check("a temporary directory is removed with its scope", !exists(temporary));
 
+  // Diagnostics rather than a result, so they go to stderr: this probe's whole
+  // output is the account of what it checked.
   for (const claim of checked) {
-    console.log(`${failures.includes(claim) ? "FAIL" : "ok  "} ${claim}`);
+    console.error(`${failures.includes(claim) ? "FAIL" : "ok  "} ${claim}`);
   }
   if (failures.length > 0) {
     console.error(`files contract: ${failures.length} of ${checked.length} claims failed`);
     yield* exit(1);
   }
-  console.log(
+  console.error(
     `files contract: ${checked.length} claims hold on ${process.platform}/${process.arch}`,
   );
 });
