@@ -454,16 +454,19 @@ callback-based durable-effect factory remains unchanged.
 The shared Workspace operation wrapper explicitly reads a contextual provider
 selection. The replaceable selection API carries no live-operation authority:
 it receives no executor, publisher, failure activator or durable publication
-identity. The live call retains those exact values in the base handler of a
-same-named contextual invocation operation. A provider installed by another
-loaded package copy terminally accepts the routing request and uses its inward
-continuation to drive the execution-owned handler; enclosing middleware receives
-no execution or publication phase. The base refuses every phase when no provider
-was selected. Provider selection and invocation authority require no module
-registry and trust no replaceable structural value.
+identity. The live call retains those exact values behind an execution-owned
+capability associated with a same-named contextual invocation operation.
+Provider selection creates a one-use route and a separate opaque credential.
+The contextual invocation carries the route and an execution-owned capability
+but not its credential. A provider installed by another loaded package copy
+terminally consumes the route and calls that capability directly. It never sends inspection, execution,
+publication, failure activation or completion through `next`, so enclosing
+middleware at either priority receives no operational phase. Provider selection
+and invocation authority require no module registry and trust no replaceable
+structural value.
 
-The execution-owned handler permits one inspection, execution and publication
-during its original live call. It records the exact result only after the
+The execution-owned capability permits one inspection, execution and
+publication during its original live call. It records the exact result only after the
 selected provider completes publication, and the durable operation resumes from
 that record rather than from the contextual call's structural response. A
 short-circuit, premature response or missing publication activates fail-stop;
@@ -481,12 +484,15 @@ retains the canonical durable-stream module's non-operational publication
 identity for that run's journal; the existing secret-filter wrapper privately
 preserves the identity only for wrappers it constructs. The provider receives
 the invocation's exact executor and publication identities from its
-execution-owned base handler and validates them before it opens the caller-owned
+execution-owned capability and validates them before it opens the caller-owned
 transaction. It refuses a foreign executor,
 publication identity, custom wrapper or copied property before transaction
 work. It runs the mutation in one operation savepoint, waits for mutation child
 teardown, captures and publishes the immutable root, and routes the
-already-filtered Yield through that transaction's journal before commit.
+already-filtered Yield through that transaction's journal before commit. Its
+publication operation calls the execution-owned publisher directly, so the
+transaction body cannot return until the exact Result has been appended and
+recorded as authoritative.
 
 The adapter-private proof filesystem invokes the pinned synchronous DOFS
 functions for its supported string and byte-array contract. It does not leave a

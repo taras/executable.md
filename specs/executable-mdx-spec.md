@@ -7016,17 +7016,19 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC8 | Explicit selection | A selected coordinator affects only the operation that names it and receives a non-operational publication identity rather than stream capabilities |
 | DLC9 | Callback compatibility | Callback-based durable effects retain their existing behavior |
 | DLC10 | Fail-closed Workspace | A missing Workspace provider activates fail-stop before execution or publication and persists no Yield or Close |
-| DLC11 | Workspace isolation | Replaceable context carries only provider selection; the provider wraps the execution-owned invocation handler, while unrelated durable operations stay on the default coordinator |
+| DLC11 | Workspace isolation | Replaceable context carries only provider routing; the selected provider directly invokes the credentialed execution-owned capability, while unrelated durable operations stay on the default coordinator |
 | DLC12 | Workspace replay | Replayed Workspace operations require no live provider |
 | DLC13 | Runtime-neutral boundary | Shared Workspace coordination source exposes no runtime or storage implementation type |
 | DLC14 | Provider infrastructure failure | A selected coordinator activates one first failure by identity and fences later execution and publication |
 | DLC15 | One-shot Workspace invocation | A provider can use the execution-owned invocation authority only during its original call; retained execution, publication and failure operations are refused after completion |
 | DLC16 | Loaded-copy Workspace selection | A provider installed by one physical package copy coordinates one operation created by another copy exactly once without sharing authority through context or a module registry; substituted selection and retained authority remain fail-closed |
 | DLC17 | Forged contextual completion | A same-named invocation middleware that returns a forged successful response reaches no provider, executor or publication; fail-stop prevents Yield and Close persistence and fences later durable work |
-| DLC18 | Missing-provider phase refusal | Direct inspection, execution, publication and completion requests through a same-named invocation continuation are refused when no provider is selected |
+| DLC18 | Missing-provider phase refusal | No same-named invocation middleware or execution capability is reached when provider selection is missing |
 | DLC19 | Authoritative published result | Middleware that delegates and replaces the returned response cannot replace the exact Result recorded by the execution-owned publication |
 | DLC20 | Post-completion isolation | Throwing, suppressing or delegating twice after authoritative completion cannot alter the result or repeat provider, execution or publication work |
 | DLC21 | Retained continuation refusal | A contextual continuation retained beyond its original live invocation is stale and cannot repeat execution or publication |
+| DLC22 | Minimum-priority invocation isolation | An enclosing same-named minimum-priority handler receives no invocation capability or operational phase and cannot acknowledge publication without delegation |
+| DLC23 | Minimum-priority failure isolation | A minimum-priority collision cannot replace first-failure activation; the exact execution-owned failure remains authoritative and no event persists |
 
 ### Tier WAC — Atomic provider-level Workspace coordination
 
@@ -7056,6 +7058,8 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC19 | Middleware publication isolation | Enclosing default-order Workspace middleware receives only provider selection and cannot replace publication with a no-op; mutation, root, pointer and one filtered Yield still commit together |
 | WAC20 | Middleware failure isolation | Enclosing Workspace middleware cannot replace failure activation; provider infrastructure failure rolls back all state, retains exact identity and fences later effects |
 | WAC21 | Selection refusal | A substituted or foreign provider selection is rejected before transaction or savepoint work and leaves no mutation, retained root, pointer change, Yield or Close |
+| WAC22 | Minimum-priority publication isolation | A minimum-priority same-named handler cannot observe or acknowledge publication; the real mutation, retained root, current pointer and filtered Yield commit together |
+| WAC23 | Minimum-priority failure isolation | A minimum-priority same-named handler cannot replace infrastructure-failure activation; the exact first failure rolls back mutation, roots and journal and fences later work |
 
 ### Tier WTX — WorkflowRun savepoints and transaction authority
 

@@ -401,18 +401,20 @@ publication. Callback-based durable effects keep their existing path.
 The shared Workspace durable-operation wrapper reads a contextual provider
 selection explicitly. That replaceable API carries only a non-operational
 selection identity: execution, publication, failure activation and durable
-publication identity never pass through that middleware. Each live call creates
-a same-named contextual invocation operation whose execution-owned base handler
-closes over those exact values. A provider installed by any loaded package copy
-terminally accepts the provider-routing request and drives the base handler
-inward with the selected identity. Enclosing middleware sees only the routing
-request; calling its continuation with an execution or publication phase is
-refused by the terminal provider handler, and the execution-owned base refuses
-every phase when no provider was selected. No module registry or replaceable
-structural value resolves provider or invocation authority.
+publication identity never pass through that middleware. Provider selection
+creates a one-use route and a separate opaque credential. The live call keeps
+that credential out of its contextual invocation request and places the exact
+executor, publisher and failure activator behind an execution-owned capability
+that accepts only the credential. A provider installed by any loaded package
+copy terminally consumes the route and invokes that capability directly. It
+does not send inspection, execution, publication, failure or completion through
+the contextual continuation. Enclosing middleware at either priority can
+therefore route or refuse the initial request but cannot observe or acknowledge
+an operational phase. No module registry or replaceable structural value
+resolves provider or invocation authority.
 
-The execution-owned handler accepts execution and publication once and records
-the exact `Result` only after the provider returns it from the completed
+The execution-owned capability accepts execution and publication once and
+records the exact `Result` only after the provider returns it from the completed
 publication. The live operation ignores the contextual call's response as
 completion evidence and resumes from that recorded result alone. A short
 circuit or altered response therefore activates fail-stop before resume, while
@@ -429,6 +431,10 @@ Before it opens a transaction, the adapter requires both the exact proof
 executor and the publication identity from the consumed invocation to belong to
 the selected WorkflowRun. An in-memory stream, another run's journal, a copied
 property, or an unproven wrapper is refused before mutation or publication.
+Inside the transaction, the provider's publication operation calls the
+execution-owned publisher directly and returns only after that publisher records
+the exact Result. The transaction body cannot return or commit on a contextual
+publication acknowledgement.
 
 Every Workspace-local expansion publishes one effect through one effect
 transaction:
@@ -938,7 +944,7 @@ Status is measured against main.
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
-| Workspace coordination API | fails closed by default; replaceable context selects only a provider while a loaded-copy-compatible contextual invocation keeps execution, publication and failure authority in its execution-owned base handler | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
+| Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |

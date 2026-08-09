@@ -819,20 +819,23 @@ The Deno provider's adapter-private proof operation already coordinates one
 real DOFS mutation savepoint, immutable root publication and filtered durable
 Yield in the caller-owned transaction. Replaceable Workspace context selects a
 provider through a non-operational identity and never receives the
-live executor, publisher, failure activator or publication witness. The
-live call retains those values in the execution-owned base handler of a
+live executor, publisher, failure activator or publication witness. The live
+call retains those values in an execution-owned capability associated with a
 same-named contextual invocation operation. This operation composes with a
 provider installed by another loaded package copy without a module registry;
-replaceable middleware sees only the provider-routing request, while the
-terminal provider handler drives execution and publication inward. The
-execution-owned handler refuses phases without that selected provider and
-records completion only after the exact published result returns from the
-provider. The durable operation resumes from that record, never from a
-middleware-supplied response. Before opening the transaction, the provider
-requires that handler's proof executor and guarded durable stream identity to
-carry the selected WorkflowRun's exact provider-owned authority. Its supported
-filesystem calls use synchronous pinned DOFS primitives, leaving no asynchronous
-continuation after mutation teardown. It distinguishes a documented filesystem
+provider selection creates a one-use route and a separate credential, and the
+terminal provider handler consumes that route before calling the credentialed
+capability directly. Inspection, execution, publication, failure activation and
+completion never traverse the contextual continuation, including at minimum
+priority. The capability records completion only after the exact published
+result returns from the provider. The durable operation resumes from that
+record, never from a middleware-supplied response. Before opening the
+transaction, the provider requires that capability's proof executor and guarded
+durable stream identity to carry the selected WorkflowRun's exact provider-owned
+authority. The transaction body calls the execution-owned publisher directly
+and cannot return until the exact Result has been appended and recorded. Its
+supported filesystem calls use synchronous pinned DOFS primitives, leaving no
+asynchronous continuation after mutation teardown. It distinguishes a documented filesystem
 refusal from infrastructure failure and cancellation, and activates the durable
 fail-stop fence for infrastructure failures. This foundation is not a public
 filesystem effect: `<File>`, `API.Files`, workflow start/resume and history

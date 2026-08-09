@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { createApi } from "@effectionx/context-api";
 import { readTextFile } from "@effectionx/fs";
 import {
   type ActivateDurabilityFailure,
@@ -69,6 +70,20 @@ function sqliteConstant(name: string): number {
 const SQLITE_SAVEPOINT = sqliteConstant("SQLITE_SAVEPOINT");
 const SQLITE_OK = sqliteConstant("SQLITE_OK");
 const SQLITE_DENY = sqliteConstant("SQLITE_DENY");
+
+interface InvocationCollisionApi {
+  coordinate(request: unknown): Operation<unknown>;
+}
+
+const WorkspaceInvocationCollision = createApi<InvocationCollisionApi>(
+  "executablemd.workflow.workspace.coordination.invocation",
+  {
+    // deno-lint-ignore require-yield
+    *coordinate(): Operation<unknown> {
+      throw new Error("the collision handler did not delegate");
+    },
+  },
+);
 
 function* raised(operation: Operation<unknown>): Operation<unknown> {
   try {
@@ -1356,6 +1371,111 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(mutations).toBe(0);
       expect(savepoints).toEqual([]);
       expect(yield* inspectWorkspace(database, "/substituted.txt")).toEqual(baseline);
+      expect(retainedRootCount(path)).toBe(roots);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC22: minimum-priority middleware cannot split publication from commit", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-minimum-publication";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/minimum.txt");
+      const roots = retainedRootCount(path);
+      const observed: unknown[] = [];
+      function* workflow(): Workflow<void> {
+        yield* workspaceStep(database, "minimum-publication", function* (filesystem) {
+          yield* filesystem.writeFile("/minimum.txt", "committed with Yield");
+          return null;
+        });
+      }
+
+      yield* scoped(function* () {
+        yield* WorkspaceInvocationCollision.around(
+          {
+            // deno-lint-ignore require-yield
+            *coordinate(args): Operation<unknown> {
+              observed.push(args[0]);
+              return { type: "published" };
+            },
+          },
+          { at: "min" },
+        );
+        yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+      });
+
+      const committed = yield* inspectWorkspace(database, "/minimum.txt");
+      const events = yield* database.journal.readAll();
+      expect(observed).toEqual([]);
+      expect(committed.content).toBe("committed with Yield");
+      expect(committed.root).not.toBe(baseline.root);
+      expect(retainedRootCount(path)).toBe(roots + 1);
+      expect(workspaceYields(events)).toHaveLength(1);
+      expect(journalRoot(path, "minimum-publication")).toBe(committed.root);
+    });
+  });
+
+  it("WAC23: minimum-priority middleware cannot replace failure activation", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-minimum-failure";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/minimum-failure.txt");
+      const roots = retainedRootCount(path);
+      let collisions = 0;
+      let caught: unknown;
+      let laterExecutions = 0;
+      tamper(path, (sqlite) => {
+        sqlite.exec(`
+          CREATE TRIGGER refuse_minimum_root BEFORE INSERT ON workspace_roots
+          BEGIN
+            SELECT raise(ABORT, 'minimum root capture refused');
+          END
+        `);
+      });
+      function* workflow(): Workflow<void> {
+        try {
+          yield* workspaceStep(database, "minimum-failure", function* (filesystem) {
+            yield* filesystem.writeFile("/minimum-failure.txt", "must roll back");
+            return null;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        yield* durableCall("fenced-after-minimum-failure", function* () {
+          laterExecutions += 1;
+          return null;
+        });
+      }
+
+      let failure: unknown;
+      yield* scoped(function* () {
+        yield* WorkspaceInvocationCollision.around(
+          {
+            // deno-lint-ignore require-yield
+            *coordinate(): Operation<unknown> {
+              collisions += 1;
+              return { type: "failure", failure: new Error("replacement failure") };
+            },
+          },
+          { at: "min" },
+        );
+        failure = yield* raised(
+          withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+        );
+      });
+      tamper(path, (sqlite) => sqlite.exec("DROP TRIGGER refuse_minimum_root"));
+
+      expect(collisions).toBe(0);
+      expect(failure).toBe(caught);
+      expect(failure).toBeInstanceOf(Error);
+      expect(laterExecutions).toBe(0);
+      expect(yield* inspectWorkspace(database, "/minimum-failure.txt")).toEqual(baseline);
       expect(retainedRootCount(path)).toBe(roots);
       expect(yield* database.journal.readAll()).toEqual([]);
     });

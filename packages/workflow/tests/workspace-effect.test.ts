@@ -249,7 +249,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
   it("DLC18: invocation phases are unreachable without a selected provider", function* () {
     const stream = new InMemoryStream();
     claimDurablePublicationIdentity(stream);
-    const attempts: unknown[] = [];
+    let collisionCalls = 0;
     let executions = 0;
     function* workflow(): Workflow<void> {
       yield* workspaceStep("direct-phases", function* () {
@@ -260,31 +260,16 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
     const failure = yield* scoped(function* () {
       yield* WorkspaceInvocationCollision.around({
-        *coordinate(_args, next): Operation<unknown> {
-          const requests = [
-            { type: "inspect", provider: undefined },
-            { type: "execute", provider: undefined },
-            {
-              type: "publish",
-              provider: undefined,
-              result: { status: "ok", value: "forged" },
-            },
-            { type: "complete", provider: undefined, result: { status: "ok", value: "forged" } },
-          ];
-          for (const request of requests) {
-            attempts.push(yield* raised(next(request)));
-          }
-          return { type: "result", result: { status: "ok", value: "forged" } };
+        *coordinate(args, next): Operation<unknown> {
+          collisionCalls += 1;
+          return yield* next(...args);
         },
       });
       return yield* raised(durableRun(workflow, { stream }));
     });
 
     expect(failure).toBeInstanceOf(WorkspaceCoordinationProviderError);
-    expect(attempts).toHaveLength(4);
-    for (const attempt of attempts) {
-      expect(attempt).toBeInstanceOf(WorkspaceCoordinationProviderError);
-    }
+    expect(collisionCalls).toBe(0);
     expect(executions).toBe(0);
     expect(stream.snapshot()).toEqual([]);
   });
@@ -394,5 +379,75 @@ describe("Tier DLC — Workspace coordination selection", () => {
     );
     expect(counts).toEqual({ providers: 1, executions: 1, publications: 1 });
     expect(yieldEvents(stream.snapshot())).toHaveLength(1);
+  });
+
+  it("DLC22: minimum-priority collision middleware receives no invocation capability", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    const { provider, counts } = successfulProvider();
+    const observed: unknown[] = [];
+    function* workflow(): Workflow<void> {
+      yield* workspaceStep("minimum-priority", function* () {
+        return "published";
+      });
+    }
+
+    yield* scoped(function* () {
+      yield* WorkspaceInvocationCollision.around(
+        {
+          // deno-lint-ignore require-yield
+          *coordinate(args): Operation<unknown> {
+            observed.push(args[0]);
+            return { type: "published" };
+          },
+        },
+        { at: "min" },
+      );
+      yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
+    });
+
+    expect(observed).toEqual([]);
+    expect(counts).toEqual({ providers: 1, executions: 1, publications: 1 });
+    expect(yieldEvents(stream.snapshot())).toHaveLength(1);
+  });
+
+  it("DLC23: minimum-priority middleware cannot replace first-failure activation", function* () {
+    const stream = new InMemoryStream();
+    claimDurablePublicationIdentity(stream);
+    const first = new Error("authoritative infrastructure failure");
+    let activated: Error | undefined;
+    let collisions = 0;
+    const provider: WorkspaceCoordinationProvider = {
+      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
+        activated = yield* authority.activateFailure(first);
+        throw activated;
+      },
+    };
+    function* workflow(): Workflow<void> {
+      yield* workspaceStep("minimum-failure", function* () {
+        return "not reached";
+      });
+    }
+
+    const failure = yield* scoped(function* () {
+      yield* WorkspaceInvocationCollision.around(
+        {
+          // deno-lint-ignore require-yield
+          *coordinate(): Operation<unknown> {
+            collisions += 1;
+            return { type: "failure", failure: new Error("replacement") };
+          },
+        },
+        { at: "min" },
+      );
+      return yield* raised(
+        withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream })),
+      );
+    });
+
+    expect(collisions).toBe(0);
+    expect(activated).toBe(first);
+    expect(failure).toBe(first);
+    expect(stream.snapshot()).toEqual([]);
   });
 });

@@ -136,7 +136,7 @@ describe("Tier DLC — physical Workspace package composition", () => {
       );
     });
 
-    expect(failure).toBeInstanceOf(WorkspaceCoordinationProviderError);
+    expect(Reflect.get(failure ?? {}, "name")).toBe("WorkspaceCoordinationProviderError");
     expect({ providers, transactions, refusedExecutions, publications }).toEqual({
       providers: 1,
       transactions: 1,
