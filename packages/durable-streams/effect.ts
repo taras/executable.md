@@ -23,7 +23,11 @@
 import type { Operation } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
 import { Divergence } from "./divergence.ts";
-import { appendDurableEvent, rememberDurabilityFailure } from "./durability.ts";
+import {
+  activeDurabilityFailure,
+  appendDurableEvent,
+  rememberDurabilityFailure,
+} from "./durability.ts";
 import { StaleInputError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
@@ -202,6 +206,11 @@ export function createDurableEffect<T>(
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
+      const durabilityFailure = activeDurabilityFailure(ctx);
+      if (durabilityFailure) {
+        resolve({ ok: false, error: durabilityFailure });
+        return (exit) => exit(VOID_OK);
+      }
       const replay = checkReplay<T>(desc, resolve, routine, ctx);
       if (replay.path === "replayed") {
         return replay.teardown;
@@ -311,6 +320,11 @@ export function createDurableOperation<T extends Json>(
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
+      const durabilityFailure = activeDurabilityFailure(ctx);
+      if (durabilityFailure) {
+        resolve({ ok: false, error: durabilityFailure });
+        return (exit) => exit(VOID_OK);
+      }
       const replay = checkReplay<T>(desc, resolve, routine, ctx);
       if (replay.path === "replayed") {
         return replay.teardown;
@@ -320,6 +334,12 @@ export function createDurableOperation<T extends Json>(
       // Run the entire execute → capture → persist → resolve sequence
       // as a structured operation in the routine's scope.
       routine.scope.run(function* () {
+        const active = activeDurabilityFailure(ctx);
+        if (active) {
+          resolve({ ok: false, error: active });
+          return;
+        }
+
         let result: Result;
         try {
           const value = yield* execute();

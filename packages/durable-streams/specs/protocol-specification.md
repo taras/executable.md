@@ -465,6 +465,16 @@ failed terminal `Close` append follows the same rule. A pre-persistence gate
 rejection is distinct: the rejected event does not reach the backend, and the
 gate's ordinary failure may be recorded by a separately admitted `Close(err)`.
 
+The first durability failure makes the root and all of its child coroutines
+fail-stop. Every later durable-effect entry MUST raise that exact error before
+replay matching or live execution. Every ordered append MUST recheck the shared
+failure immediately before invoking storage; an append waiting behind the
+operation that failed MUST NOT reach the stream adapter. Concurrent executors
+that started before the failure may finish, but their pending appends are
+fenced. The first error and, for `DurablePersistenceError`, its adapter cause
+retain their identity even when workflow code catches the error. An ordinary
+pre-persistence policy rejection does not activate fail-stop state.
+
 ### 5.1 Why this is a hard invariant
 
 If the generator advances past a yield point whose resolution is not in
@@ -585,7 +595,9 @@ Terminal alignment covers the whole terminating coroutine subtree. All
 terminal divergence cases raise a durability error and leave the retained
 journal unchanged. A durability failure discovered after the last replay entry
 was consumed remains a durability failure and is never serialized as
-`Close(err)`.
+`Close(err)`. Once any durability failure is active, no later replay entry is
+consumed, durable executor begins, or ordered `Yield` or `Close` append reaches
+storage.
 
 ### 6.4 What is NOT checked
 
@@ -1037,6 +1049,7 @@ For reference, the complete set of invariants defined in this specification:
 | 11  | Append-Only                       | §11.3   | No mutation or deletion                     |
 | 12  | Prefix-Closed                     | §11.3   | No gaps in the stream                       |
 | 13  | Monotonic Indexing                | §11.3   | Sequential offsets                          |
+| 14  | Durability Fail-Stop              | §5      | First durability failure fences later work  |
 
 ---
 
@@ -1055,6 +1068,7 @@ These tests MUST pass for the protocol to be considered implemented.
 | 5   | **Crash after last effect**            | Provide all `Yield` events but no `Close` events.                             | All effects replayed; close events written; same result.                                |
 | 6   | **Persist-before-resume verification** | Inject crash between effect resolution and `iterator.next()`.                 | On resume, the resolved effect is in the stream; no replay gap; no duplicate execution. |
 | 6b  | **Fail-once persistence** | Fail the first `Yield` append and, separately, the successful root `Close` append. | The adapter failure remains the cause; no compensating `Close` is appended and an unpersisted effect never resumes successfully. |
+| 6c  | **Caught durability failure** | Catch persistence and replay-divergence failures, then attempt later effects and concurrent child appends. | The exact first failure escapes; no later replay is consumed or executor starts, and no append queued behind the failure reaches storage. An ordinary gate rejection remains catchable and permits later effects. |
 | 7   | **Actor handoff**                      | Process A writes first N events, terminates. Process B reads stream, resumes. | B replays N events (none re-executed), continues live; correct result.                  |
 
 ### Tier 2 — Divergence detection

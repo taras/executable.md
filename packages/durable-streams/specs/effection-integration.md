@@ -461,7 +461,12 @@ the spec's "Strategy B: buffered write with deferred resume." If the
 append rejects, `DurablePersistenceError` is delivered through Effection's
 error channel and recorded in the shared durable context. Root and child
 terminal handling therefore cannot reinterpret it as a workflow failure or
-append a compensating `Close(err)`.
+append a compensating `Close(err)`. Durable entry checks that shared state
+before replay matching or executor startup. Appends pass through a shared FIFO
+boundary and check it again immediately before calling the stream adapter, so
+an append queued behind the failure never reaches storage. An executor that
+started concurrently may complete, but it cannot persist its result after the
+failure becomes active.
 
 **Transparency (§4.3).** During replay, `resolve()` is called synchronously
 with the stored result (converted via `protocolToEffection()`). The reducer
@@ -710,7 +715,10 @@ circuits would emit a second Close event.
 **Shared persistence state.** Root and child contexts share the first active
 durability failure. If a child append fails while sibling teardown runs, no
 sibling can serialize the persistence failure as its own cancellation or
-ordinary error outcome.
+ordinary error outcome. The state is fail-stop across catches: subsequent root,
+child, or sibling durable entry raises the exact first error without consuming
+replay or starting an executor. The append boundary preserves the same identity
+and fences work already queued for persistence.
 
 ### 8.2 durableSpawn
 
@@ -966,9 +974,11 @@ Key details:
 - **Backing persistence is outside workflow outcomes.** Every backing append
   failure records a shared `DurablePersistenceError` before it reaches root or
   child terminal handling. A failed yield never resumes successfully, and a
-  failed successful close is not retried as `Close(err)`. A
-  `guardDurableStream` gate rejection is marked separately and remains the
-  gate's ordinary workflow failure.
+  failed successful close is not retried as `Close(err)`. Once active, that
+  exact failure rejects all later durable entry and ordered append across the
+  root and children; no later replay entry is consumed and no later executor
+  begins. A `guardDurableStream` gate rejection is marked separately, remains
+  the gate's ordinary workflow failure, and does not activate fail-stop state.
 
 ---
 
@@ -1284,7 +1294,11 @@ All cases from §6.3 are implemented and tested (DEC-008):
 The same checks run at child termination. The terminal errors carry consumed
 and total counts; exceptional termination also carries the execution failure
 as its cause. An already-active durability failure bypasses ordinary terminal
-serialization even when no unconsumed yield remains.
+serialization even when no unconsumed yield remains. This terminal check is the
+last defense, not the first: durable entry and the ordered append boundary also
+reject with the exact active failure, so workflow code cannot catch a
+durability error and advance replay, execute another effect, or persist another
+event.
 
 ### 12.6 Durable `each()` — design and implementation plan
 
@@ -1659,8 +1673,9 @@ crashes.
 5. ~~Implement `durableRun`~~ — Entry point with in-memory stream
    (`run.ts`).
 6. ~~Run Tier 1 tests~~ — Golden run, full replay, crash-at-N,
-   persist-before-resume, actor handoff — all passing
-   (`durable-run.test.ts`).
+   persist-before-resume, actor handoff, and caught fail-stop behavior across
+   root and child coroutines — all passing (`durable-run.test.ts`,
+   `fail-stop.test.ts`).
 7. ~~Run Tier 2 tests~~ — All divergence detection cases passing
    (`divergence.test.ts`).
 8. ~~Implement `durableSpawn`, `durableAll`, `durableRace`~~ — Workflow

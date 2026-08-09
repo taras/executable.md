@@ -1,5 +1,6 @@
-import type { Operation } from "effection";
-import type { DurableContext } from "./context.ts";
+import { ensure, resource, withResolvers } from "effection";
+import type { Operation, WithResolvers } from "effection";
+import type { DurableAppendFence, DurableContext, DurabilityState } from "./context.ts";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,
@@ -9,6 +10,65 @@ import {
 } from "./errors.ts";
 import { isDurableEventRejection, unwrapDurableEventRejection } from "./guard.ts";
 import type { DurableEvent } from "./types.ts";
+
+interface AppendTurn {
+  readonly gate: WithResolvers<void>;
+  granted: boolean;
+}
+
+function createAppendFence(): DurableAppendFence {
+  let held = false;
+  const waiting: AppendTurn[] = [];
+
+  function release(): void {
+    const next = waiting.shift();
+    if (next === undefined) {
+      held = false;
+      return;
+    }
+    next.granted = true;
+    next.gate.resolve();
+  }
+
+  return {
+    hold: () =>
+      resource<void>(function* (provide) {
+        const turn: AppendTurn = { gate: withResolvers<void>(), granted: false };
+
+        yield* ensure(() => {
+          if (turn.granted) {
+            release();
+            return;
+          }
+          const index = waiting.indexOf(turn);
+          if (index >= 0) {
+            waiting.splice(index, 1);
+          }
+        });
+
+        if (held) {
+          waiting.push(turn);
+          yield* turn.gate.operation;
+        } else {
+          held = true;
+          turn.granted = true;
+        }
+
+        yield* provide();
+      }),
+  };
+}
+
+function durabilityState(ctx: DurableContext): DurabilityState {
+  ctx.durability ??= {};
+  return ctx.durability;
+}
+
+function appendFence(ctx: DurableContext): DurableAppendFence {
+  const state = durabilityState(ctx);
+  state.appendFence ??= createAppendFence();
+  return state.appendFence;
+}
 
 export function findDurabilityFailure(error: unknown): Error | undefined {
   const visited = new Set<unknown>();
@@ -42,9 +102,9 @@ export function findDurabilityFailure(error: unknown): Error | undefined {
 }
 
 export function rememberDurabilityFailure(ctx: DurableContext, error: Error): Error {
-  ctx.durability ??= {};
-  ctx.durability.failure ??= error;
-  return ctx.durability.failure;
+  const state = durabilityState(ctx);
+  state.failure ??= error;
+  return state.failure;
 }
 
 export function activeDurabilityFailure(ctx: DurableContext, error?: unknown): Error | undefined {
@@ -59,19 +119,33 @@ export function activeDurabilityFailure(ctx: DurableContext, error?: unknown): E
 }
 
 export function* appendDurableEvent(ctx: DurableContext, event: DurableEvent): Operation<void> {
+  const existing = activeDurabilityFailure(ctx);
+  if (existing) {
+    throw existing;
+  }
+
+  yield* appendFence(ctx).hold();
+
+  const admitted = activeDurabilityFailure(ctx);
+  if (admitted) {
+    throw admitted;
+  }
+
   try {
     yield* ctx.stream.append(event);
   } catch (error) {
     if (isDurableEventRejection(error)) {
       const rejection = unwrapDurableEventRejection(error);
-      const failure = findDurabilityFailure(rejection);
+      const failure = activeDurabilityFailure(ctx, rejection);
       if (failure) {
-        rememberDurabilityFailure(ctx, failure);
+        throw failure;
       }
       throw rejection;
     }
-    const failure = new DurablePersistenceError(event.type, error);
-    rememberDurabilityFailure(ctx, failure);
-    throw failure;
+    const active = activeDurabilityFailure(ctx, error);
+    if (active) {
+      throw active;
+    }
+    throw rememberDurabilityFailure(ctx, new DurablePersistenceError(event.type, error));
   }
 }

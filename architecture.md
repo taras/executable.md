@@ -629,9 +629,14 @@ A durability failure (§6.11) says the journal no longer describes the document
 execution. No middleware sees it; it is never the document's own outcome. A
 backing-journal append failure is the same kind of boundary failure: it
 preserves the adapter error as its cause, resumes no consumer with an
-unpersisted success, and never triggers a compensating `Close`. A
-pre-persistence policy rejection remains the policy's ordinary document
-failure; the guarded stream marks that boundary before the backing append.
+unpersisted success, and never triggers a compensating `Close`. The first
+durability failure is shared by the root and every durable child. From that
+point, durable entry fails with that exact error before replay or execution,
+and the ordered append boundary rechecks it immediately before storage. Work
+already executing may finish, but its pending append and every later append are
+fenced. A pre-persistence policy rejection remains the policy's ordinary
+document failure; the guarded stream marks that boundary before the backing
+append and does not activate the fail-stop state.
 
 ## Attempts
 
