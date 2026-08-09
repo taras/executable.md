@@ -445,8 +445,10 @@ database path until provider teardown. The journal and DOFS adapter use that
 same SQLite connection; Cloudflare's synchronous initialization transactions
 become uniquely named savepoints inside XMD's caller-owned transaction. Those
 savepoints and operation-spanning savepoints share one allocator and cannot
-collide or release one another. A
-second long-lived DOFS connection is not a coherent reader because provider
+collide or release one another. After a savepoint successfully rolls back and
+releases, the shared rollback path invalidates both caches on the authoritative
+DOFS wrapper before outer transaction work resumes. A second long-lived DOFS
+connection is not a coherent reader because provider
 caches may retain negative entries across another connection's commit.
 
 Complete schema version 1 retains the canonical empty Workspace root and its
@@ -458,7 +460,8 @@ selected identity before release. Private Workspace transaction bodies finish
 their child teardown before final live/current validation; a later effect
 coordinator finishes its mutation scope before it invokes capture.
 
-Every unsuccessful caller-owned transaction attempts SQLite rollback and then
+Separately, every unsuccessful caller-owned transaction attempts top-level
+SQLite rollback and then
 invalidates both caches on the provider-owned DOFS wrapper while it still holds
 the serialized connection turn. This includes body failure, cancellation,
 teardown or final-validation failure, and commit failure. The surviving wrapper

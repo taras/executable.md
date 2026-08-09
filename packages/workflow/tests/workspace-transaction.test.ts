@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { DurableEvent, Yield } from "@executablemd/durable-streams";
@@ -22,7 +23,7 @@ import {
   withPrivateWorkspaceTransaction,
   workflowRunTransactionToken,
 } from "../src/deno/workspace/private.ts";
-import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
+import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
 
 function yielded(name: string): Yield {
   return {
@@ -336,6 +337,81 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
     expect(creationFailure).toBeInstanceOf(Error);
     expect(() => connection.validateTransaction(transaction)).toThrow(WorkflowTransactionError);
     connection.finishTransaction(transaction);
+  });
+
+  it("WTX10: savepoint rollback restores cache coherence before outer commit", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "savepoint-cache";
+    let retainedRoot = "";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const initialized = yield* database.transact(function* (transaction) {
+        return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/kept.txt", "known retained bytes");
+          const root = yield* workspace.capture({ publish: true });
+          expect(yield* workspace.filesystem.readTextFile("/kept.txt")).toBe(
+            "known retained bytes",
+          );
+          return root.rootId;
+        });
+      });
+      if (!initialized.ok) {
+        throw initialized.error;
+      }
+      retainedRoot = initialized.value;
+
+      const committed = yield* database.transact(function* (transaction) {
+        yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
+          expect(yield* workspace.currentRoot()).toBe(retainedRoot);
+          const failure = yield* raised(
+            savepoint(
+              (function* () {
+                yield* workspace.filesystem.remove("/kept.txt");
+                expect(
+                  yield* raised(workspace.filesystem.readTextFile("/kept.txt")),
+                ).toBeInstanceOf(Error);
+                throw new Error("known operation failure");
+              })(),
+            ),
+          );
+          expect(failure).toBeInstanceOf(Error);
+          expect(yield* workspace.filesystem.readTextFile("/kept.txt")).toBe(
+            "known retained bytes",
+          );
+          expect(yield* workspace.currentRoot()).toBe(retainedRoot);
+        });
+        yield* transaction.journal.append(yielded("savepoint-cache-rollback"));
+      });
+      if (!committed.ok) {
+        throw committed.error;
+      }
+
+      const next = yield* database.transact(function* (transaction) {
+        return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
+          return {
+            content: yield* workspace.filesystem.readTextFile("/kept.txt"),
+            root: yield* workspace.currentRoot(),
+          };
+        });
+      });
+      if (!next.ok) {
+        throw next.error;
+      }
+      expect(next.value).toEqual({ content: "known retained bytes", root: retainedRoot });
+      expect(names(yield* database.journal.readAll())).toEqual(["savepoint-cache-rollback"]);
+    });
+
+    const database = new DatabaseSync(runPath(root, runId));
+    try {
+      const rows = database
+        .prepare("SELECT workspace_root_id FROM journal_events ORDER BY sequence")
+        .all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.["workspace_root_id"]).toBe(retainedRoot);
+    } finally {
+      database.close();
+    }
   });
 });
 

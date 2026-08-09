@@ -382,8 +382,8 @@ Cloudflare's synchronous transactions use uniquely named SQLite savepoints on
 that same connection and only while XMD's caller-owned transaction is open.
 DOFS does not begin, commit or roll back a top-level transaction.
 
-If a caller-owned transaction does not commit, its finalizer attempts SQLite
-rollback and then invalidates both the resolution and blob caches on the
+If a caller-owned transaction does not commit, its finalizer attempts top-level
+SQLite rollback and then invalidates both the resolution and blob caches on the
 authoritative DOFS wrapper before releasing the serialized connection turn.
 The same cleanup covers body failure, cancellation during the body or child
 teardown, final Workspace validation failure, and commit failure. Rolled-back
@@ -397,6 +397,13 @@ back to and releases only that savepoint, leaving the outer transaction free to
 continue. Cancellation or halt invokes synchronous cleanup so no savepoint is
 stranded. A savepoint creation, rollback, or release failure makes the outer
 transaction uncommittable.
+
+After `ROLLBACK TO` and `RELEASE` both succeed, the shared savepoint rollback
+path invalidates the authoritative resolution and blob caches before the caller
+may resume outer transaction work. This applies equally to operation savepoints
+and synchronous DOFS savepoints. If rollback, release or cache invalidation
+fails, the active transaction is poisoned and cannot commit; its top-level
+rollback finalizer performs the separate outer-transaction invalidation above.
 
 The active-path context chain remains structural refusal data: it detects that
 an enclosing scope already holds a path, but never authorizes work. Adapter-

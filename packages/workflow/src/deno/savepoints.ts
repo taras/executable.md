@@ -9,6 +9,7 @@ export interface SavepointTransaction {
 export interface SavepointTransactionController {
   validate(transaction: SavepointTransaction): void;
   poison(transaction: SavepointTransaction, failure: unknown): void;
+  afterRollback(transaction: SavepointTransaction): void;
 }
 
 export interface SavepointManager {
@@ -100,6 +101,12 @@ export function createSavepointManager(
     if (failure !== undefined) {
       transactions.poison(transaction, failure);
       throw failure;
+    }
+    try {
+      transactions.afterRollback(transaction);
+    } catch (error) {
+      transactions.poison(transaction, error);
+      throw error;
     }
     report("rollback", savepoint.name);
   }

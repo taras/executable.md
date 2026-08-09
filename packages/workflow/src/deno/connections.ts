@@ -149,6 +149,13 @@ function createConnection(path: string, observeSavepoint: SavepointObserver): Ru
           active.failure = failure;
         }
       },
+      afterRollback(transaction): void {
+        validate(transaction);
+        if (installed === undefined) {
+          throw new WorkflowConnectionStateError("the workflow connection is not installed");
+        }
+        installed.invalidateDofsCaches();
+      },
     },
     observeSavepoint,
   );
