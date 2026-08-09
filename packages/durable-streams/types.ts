@@ -138,4 +138,5 @@ export interface DurableEffect<T> {
  * at compile time — yielding a plain Effect inside a Workflow generator
  * is a type error.
  */
+// oxlint-disable-next-line local/prefer-effection-operation
 export type Workflow<T> = Generator<DurableEffect<unknown>, T, unknown>;

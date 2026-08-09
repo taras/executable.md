@@ -56,6 +56,7 @@ const GATE_RULES = [
   "local/no-module-scoped-registry",
   "local/no-section-divider-comments",
   "local/no-yield-in-finally",
+  "local/prefer-effection-operation",
   "local/prefer-effection-result",
 ];
 
