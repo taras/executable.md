@@ -729,28 +729,45 @@ describe("Tier DT — inspection", () => {
 /**
  * Recognition is the whole contract, so it is tested as one.
  *
- * A second loaded copy of this package is a different class producing the same
- * name and the same tagged data, and it must be recognized on exactly the same
- * terms. Everything else — a candidate carrying payload, a mutable data object,
- * a message that disagrees with its own fields, a property that refuses to be
- * read — must be refused, because recognition hands the object onward by
- * identity and whatever it carries travels with it.
+ * The boundary is closed and it reconstructs: a candidate is validated field by
+ * field and a *fresh local* error is built from the result. Nothing the
+ * candidate owns is handed on, which is why these mutate and revoke the
+ * originals afterwards and assert the answer is unchanged.
+ *
+ * A separately loaded copy of this package is a different class producing the
+ * same name and the same tagged data, and must be read on exactly the same
+ * terms. Everything else — payload, a list that is not a catalog, fields that no
+ * selection could have produced — must be refused.
  */
 describe("Tier DT — structural recognition", () => {
-  const FAILURE = Object.freeze({
-    type: "executablemd.document-target-failure",
-    kind: "no-match",
-    selector: "Missing",
-    matches: Object.freeze([]),
-    available: Object.freeze(["Alpha"]),
-  });
+  const CATALOG = ["# T", "", "## Alpha", "", "## Beta", ""].join("\n");
 
-  const MESSAGE = '"Missing" matches no document target.\nAvailable targets:\n  Alpha';
+  /** Genuine failure data, so the fixtures cannot drift from the real thing. */
+  const GENUINE = refusal(CATALOG, "Missing").data;
+  const MESSAGE = refusal(CATALOG, "Missing").message;
 
-  /** What a separately loaded copy of this module produces: same shape, own class. */
+  function data(change: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      type: "executablemd.document-target-failure",
+      kind: GENUINE.kind,
+      selector: GENUINE.selector,
+      matches: [...GENUINE.matches],
+      available: [...GENUINE.available],
+      ...change,
+    };
+  }
+
+  function shell(payload: unknown, message = MESSAGE): Error {
+    const error = new Error(message);
+    error.name = "DocumentTargetError";
+    Object.assign(error, { data: payload });
+    return error;
+  }
+
+  /** What a separately loaded copy produces: same shape, its own class. */
   function foreignError(): Error {
     class DocumentTargetError extends Error {
-      readonly data = FAILURE;
+      readonly data = Object.freeze(data());
       constructor() {
         super(MESSAGE);
         this.name = "DocumentTargetError";
@@ -759,81 +776,182 @@ describe("Tier DT — structural recognition", () => {
     return new DocumentTargetError();
   }
 
-  it("DT52: a failure from another loaded copy is recognized", function* () {
+  it("DT52: a failure from another loaded copy is read on the same terms", function* () {
     const foreign = foreignError();
     expect(foreign instanceof DocumentTargetError).toBe(false);
     expect(isDocumentTargetError(foreign)).toBe(true);
     expect(asDocumentTargetError(foreign)?.data.kind).toBe("no-match");
-    // Rebuilt, not adopted: the arrays a caller reads are this module's.
-    expect(parseDocumentTargetFailure(FAILURE)?.available).not.toBe(FAILURE.available);
   });
 
   it("DT53: this module's own failure is recognized", function* () {
-    expect(isDocumentTargetError(refusal(SECTIONS, "Missing"))).toBe(true);
+    const own = refusal(CATALOG, "Missing");
+    expect(isDocumentTargetError(own)).toBe(true);
+    expect(asDocumentTargetError(own)?.data).toEqual(own.data);
   });
 
-  it("DT54: every hostile or unreadable candidate is refused", function* () {
-    const withData = (data: unknown): Error => {
-      const error = new Error(MESSAGE);
-      error.name = "DocumentTargetError";
-      Object.assign(error, { data });
-      return error;
-    };
-    const mutate = (change: Record<string, unknown>) => Object.freeze({ ...FAILURE, ...change });
+  /**
+   * The reconstruction claim, made where it can fail. A boundary that returned
+   * the candidate would pass every field assertion above and still hand a
+   * caller arrays somebody else can rewrite.
+   */
+  it("DT54: recognition returns a fresh local error, never the candidate", function* () {
+    const foreign = foreignError();
+    const safe = asDocumentTargetError(foreign);
 
-    const hostile: unknown[] = [
-      undefined,
-      null,
-      "a string",
-      new Error(MESSAGE),
-      // Untagged, wrongly tagged, unfrozen, and over- or under-populated data.
-      withData({ ...FAILURE }),
-      withData(mutate({ type: "other.tag" })),
-      withData(mutate({ kind: "made-up" })),
-      withData(Object.freeze({ ...FAILURE, extra: 1 })),
-      withData(Object.freeze({ type: FAILURE.type, kind: "no-match", selector: "Missing" })),
-      // A list holding something that is not a canonical reference.
-      withData(mutate({ available: Object.freeze([1]) })),
-      // `matches` populated under a kind that has none.
-      withData(mutate({ matches: Object.freeze(["Alpha"]) })),
-      // A property that refuses to answer.
-      withData(
-        Object.freeze(
-          Object.defineProperties(
-            { type: FAILURE.type, kind: "no-match", matches: [], available: [] },
-            {
-              selector: {
-                get() {
-                  throw new Error("hostile");
-                },
-                enumerable: true,
-              },
-            },
-          ),
-        ),
-      ),
+    expect(safe).not.toBe(foreign);
+    expect(safe).toBeInstanceOf(DocumentTargetError);
+    const original = foreign as unknown as { data: { available: unknown } };
+    expect(safe?.data).not.toBe(original.data);
+    expect(safe?.data.available).not.toBe(original.data.available);
+    expect(Object.isFrozen(safe?.data)).toBe(true);
+    expect(Object.isFrozen(safe?.data.available)).toBe(true);
+  });
+
+  it("DT55: a mutable nested list is copied, and later mutation changes nothing", function* () {
+    const available = ["Alpha", "Beta"];
+    // Frozen outer data around a list its owner can still rewrite.
+    const candidate = shell(Object.freeze(data({ available })));
+    const safe = asDocumentTargetError(candidate);
+    expect(safe?.data.available).toEqual(["Alpha", "Beta"]);
+
+    available.push("Injected");
+    available[0] = "Rewritten";
+    expect(safe?.data.available).toEqual(["Alpha", "Beta"]);
+    expect(safe?.message).toBe(MESSAGE);
+  });
+
+  it("DT56: a revoked Proxy cannot reach through a result already built", function* () {
+    const revocable = Proxy.revocable(["Alpha", "Beta"], {});
+    const candidate = shell(Object.freeze(data({ available: revocable.proxy })));
+    const safe = asDocumentTargetError(candidate);
+    expect(safe?.data.available).toEqual(["Alpha", "Beta"]);
+
+    revocable.revoke();
+    // Reading the result must not touch the revoked original.
+    expect(safe?.data.available).toEqual(["Alpha", "Beta"]);
+    expect(safe?.message).toBe(MESSAGE);
+    expect(String(safe)).toContain("Alpha");
+    // A candidate whose Proxy is already revoked is simply refused.
+    expect(isDocumentTargetError(candidate)).toBe(false);
+    expect(asDocumentTargetError(candidate)).toBe(undefined);
+  });
+
+  it("DT57: data-level extras are refused, enumerable, hidden, or symbol-keyed", function* () {
+    const enumerable = shell(Object.freeze(data({ extra: "payload" })));
+    expect(isDocumentTargetError(enumerable)).toBe(false);
+
+    const hidden = Object.freeze(
+      Object.defineProperty(data(), "extra", { value: "/etc/passwd", enumerable: false }),
+    );
+    expect(isDocumentTargetError(shell(hidden))).toBe(false);
+
+    const symbolic = Object.freeze(
+      Object.defineProperty(data(), Symbol.for("payload"), {
+        value: "/etc/passwd",
+        enumerable: true,
+      }),
+    );
+    expect(isDocumentTargetError(shell(symbolic))).toBe(false);
+  });
+
+  it("DT58: a list entry that is not a canonical target is refused", function* () {
+    const rejected: unknown[][] = [
+      ["../../etc/passwd"],
+      ["Alpha/../Beta"],
+      ["Alpha Beta"],
+      ["Alpha\u0009Beta"],
+      ["Alpha Beta"],
+      ["a%2fb"],
+      ["Alpha", "Alpha "],
+      [1],
+      [null],
+      // A sparse list is not a dense one.
+      Object.assign(Array.from({ length: 2 }) as unknown[], { 0: "Alpha" }),
     ];
-    for (const candidate of hostile) {
+    for (const available of rejected) {
+      expect(isDocumentTargetError(shell(Object.freeze(data({ available }))))).toBe(false);
+    }
+  });
+
+  it("DT59: fields no selection could have produced are refused", function* () {
+    const inconsistent: Record<string, unknown>[] = [
+      // `no-match` whose selector really does match the catalog.
+      data({ kind: "no-match", selector: "Alpha", matches: [] }),
+      // `no-match` carrying matches.
+      data({ kind: "no-match", matches: ["Alpha"] }),
+      // `multiple-matches` with one match.
+      data({ kind: "multiple-matches", selector: "Alpha", matches: ["Alpha"] }),
+      // `multiple-matches` claiming a match outside the catalog.
+      data({ kind: "multiple-matches", selector: "**", matches: ["Alpha", "Gamma"] }),
+      // `invalid-selector` whose selector parses perfectly well.
+      data({ kind: "invalid-selector", selector: "Alpha" }),
+      // A kind outside the closed set.
+      data({ kind: "made-up" }),
+      // A missing member.
+      (() => {
+        const partial = data();
+        delete partial["available"];
+        return partial;
+      })(),
+      // A member of the wrong type.
+      data({ available: "Alpha" }),
+      data({ selector: 7 }),
+    ];
+    for (const candidate of inconsistent) {
+      expect(isDocumentTargetError(shell(Object.freeze(candidate)))).toBe(false);
+    }
+  });
+
+  it("DT60: the Error shell is closed too", function* () {
+    const withCause = shell(Object.freeze(data()));
+    Object.assign(withCause, { cause: new Error("foreign") });
+    expect(isDocumentTargetError(withCause)).toBe(false);
+
+    const withPayload = shell(Object.freeze(data()));
+    Object.assign(withPayload, { path: "/etc/passwd" });
+    expect(isDocumentTargetError(withPayload)).toBe(false);
+
+    // A diagnostic that does not derive from the data it claims.
+    expect(isDocumentTargetError(shell(Object.freeze(data()), "something else"))).toBe(false);
+
+    for (const candidate of [undefined, null, "a string", new Error(MESSAGE), {}]) {
       expect(isDocumentTargetError(candidate)).toBe(false);
       expect(asDocumentTargetError(candidate)).toBe(undefined);
     }
   });
 
-  it("DT55: a recognized failure carries no cause and no extra payload", function* () {
-    const withCause = new Error(MESSAGE);
-    withCause.name = "DocumentTargetError";
-    Object.assign(withCause, { data: FAILURE, cause: new Error("foreign") });
-    expect(isDocumentTargetError(withCause)).toBe(false);
+  /**
+   * The payload question asked the way a consumer would ask it: after the
+   * boundary, is any of it still reachable by the ordinary means of passing an
+   * error on?
+   */
+  it("DT61: no planted payload survives the boundary", function* () {
+    const planted = Object.freeze(
+      Object.defineProperty(data(), Symbol.for("secret"), {
+        value: "s3cret",
+        enumerable: true,
+      }),
+    );
+    // Refused outright, so nothing to survive.
+    expect(asDocumentTargetError(shell(planted))).toBe(undefined);
 
-    const withPayload = new Error(MESSAGE);
-    withPayload.name = "DocumentTargetError";
-    Object.assign(withPayload, { data: FAILURE, path: "/etc/passwd" });
-    expect(isDocumentTargetError(withPayload)).toBe(false);
-
-    // A message that does not derive from the data it claims.
-    const wrongMessage = new Error("something else");
-    wrongMessage.name = "DocumentTargetError";
-    Object.assign(wrongMessage, { data: FAILURE });
-    expect(isDocumentTargetError(wrongMessage)).toBe(false);
+    // And for a candidate that is accepted, the result carries only the
+    // contract: no extra own member, string or symbol, on the data or the error.
+    const safe = asDocumentTargetError(foreignError());
+    expect(safe).toBeDefined();
+    expect(Object.getOwnPropertyNames(safe?.data ?? {}).sort()).toEqual([
+      "available",
+      "kind",
+      "matches",
+      "selector",
+      "type",
+    ]);
+    expect(Object.getOwnPropertySymbols(safe?.data ?? {})).toEqual([]);
+    expect(Object.keys(safe ?? {}).sort()).toEqual(["data", "name"]);
+    expect(Object.getOwnPropertySymbols(safe ?? {})).toEqual([]);
+    expect(JSON.stringify({ ...safe })).not.toContain("s3cret");
+    expect(String(safe)).toBe(`DocumentTargetError: ${MESSAGE}`);
+    // A journal round trip rebuilds the same data from the same fields.
+    expect(parseDocumentTargetFailure(JSON.parse(JSON.stringify(safe?.data)))).toEqual(safe?.data);
   });
 });

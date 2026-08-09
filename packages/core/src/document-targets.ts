@@ -157,12 +157,72 @@ function stringList(value: unknown): string[] | undefined {
 }
 
 /**
+ * The canonical labels a canonical target encodes.
+ *
+ * Only called on an entry already proven canonical, so decoding cannot fail;
+ * the guard is here because this reads data a candidate supplied.
+ */
+function targetLabels(target: string): string[] | undefined {
+  const labels: string[] = [];
+  for (const level of target.split("/")) {
+    const decoded = decodePercentEncoded(level);
+    if (decoded === undefined) {
+      return undefined;
+    }
+    labels.push(decoded);
+  }
+  return labels;
+}
+
+/** A dense list of canonical encoded targets, copied out of the candidate. */
+function targetList(value: unknown): string[] | undefined {
+  const items = stringList(value);
+  if (items === undefined) {
+    return undefined;
+  }
+  return items.every((item) => isCanonicalTarget(item)) ? items : undefined;
+}
+
+/**
+ * Whether these fields describe an outcome selection could actually have
+ * reached.
+ *
+ * The check re-derives the outcome rather than trusting the three fields to
+ * agree: the selector is parsed, matched against the catalog the candidate
+ * supplied, and the result compared with the matches it claims. A record whose
+ * kind, selector, matches, and catalog cannot all be true at once is refused,
+ * so an inconsistent journal or a hand-built candidate cannot describe a
+ * selection that never happened.
+ */
+function consistentOutcome(fields: TargetFailureFields): boolean {
+  const levels = parseSelector(fields.selector);
+  if (fields.kind === "invalid-selector") {
+    return levels === undefined && fields.matches.length === 0;
+  }
+  if (levels === undefined) {
+    return false;
+  }
+  const derived = fields.available.filter((target) => {
+    const labels = targetLabels(target);
+    return labels !== undefined && matchPath(levels, labels);
+  });
+  if (fields.kind === "no-match") {
+    return derived.length === 0 && fields.matches.length === 0;
+  }
+  return derived.length > 1 && sameList(derived, fields.matches);
+}
+
+/**
  * Read a candidate's failure fields, rebuilding every one of them.
  *
  * Total: an unreadable property, a missing one, a kind outside the closed set,
- * a sparse or non-string list, and matches on a kind that has none are all "not
- * this shape" rather than a throw. Nothing the candidate owns is retained — the
- * arrays that come back are new.
+ * a sparse list, an entry that is not a canonical encoded target, and a
+ * combination of kind, selector, matches and catalog that no selection could
+ * have produced are all "not this shape" rather than a throw.
+ *
+ * Nothing the candidate owns is retained. Every entry is read once and copied
+ * into a fresh array, so a list that is mutated afterwards — or reached through
+ * a Proxy that is later revoked — cannot change what comes back.
  */
 function targetFailureFields(value: unknown): TargetFailureFields | undefined {
   return attempt(() => {
@@ -171,20 +231,16 @@ function targetFailureFields(value: unknown): TargetFailureFields | undefined {
     }
     const kind = KINDS.find((candidate) => candidate === property(value, "kind"));
     const selector = property(value, "selector");
-    const matches = stringList(property(value, "matches"));
-    const available = stringList(property(value, "available"));
+    const matches = targetList(property(value, "matches"));
+    const available = targetList(property(value, "available"));
     if (kind === undefined || typeof selector !== "string") {
       return undefined;
     }
     if (matches === undefined || available === undefined) {
       return undefined;
     }
-    // `matches` is the ambiguity list and nothing else; a populated one under
-    // any other kind is not the closed shape this contract describes.
-    if (kind !== "multiple-matches" && matches.length > 0) {
-      return undefined;
-    }
-    return { kind, selector, matches, available };
+    const fields = { kind, selector, matches, available };
+    return consistentOutcome(fields) ? fields : undefined;
   });
 }
 
@@ -199,23 +255,49 @@ function sealFailure(fields: TargetFailureFields): DocumentTargetFailure {
   });
 }
 
+/** Exactly the members failure data describes, and nothing else. */
+const FAILURE_DATA_MEMBERS: readonly string[] = [
+  "available",
+  "kind",
+  "matches",
+  "selector",
+  "type",
+];
+
 /**
- * The failure data this value carries, if it carries valid, tagged, frozen
- * data.
+ * Whether this object's own members are exactly the contract's.
  *
- * Every field is checked, the member count with them, and that the object is
- * frozen: extra keys are not the shape this contract describes, and a mutable
- * one is not the shape a constructor here produces.
+ * Own *property names* rather than enumerable keys, and own symbols with them:
+ * a non-enumerable extra is still payload the contract does not describe, and a
+ * symbol-keyed one survives spreading and `Object.assign`, which are exactly the
+ * mechanisms a consumer uses to pass data on.
+ */
+function hasOnlyDataMembers(value: object): boolean {
+  const names = attempt(() => [...Object.getOwnPropertyNames(value)].sort());
+  if (names === undefined || names.length !== FAILURE_DATA_MEMBERS.length) {
+    return false;
+  }
+  if (!names.every((name, index) => name === FAILURE_DATA_MEMBERS[index])) {
+    return false;
+  }
+  return attempt(() => Object.getOwnPropertySymbols(value).length) === 0;
+}
+
+/**
+ * The failure data this value carries, if it carries valid, tagged data.
+ *
+ * Every field is checked, the exact member set with them, and the outcome the
+ * fields describe is re-derived rather than trusted. What comes back is built
+ * here from validated parts: the candidate's own arrays are never adopted, so a
+ * nested list that is mutable, mutated later, or reached through a revocable
+ * Proxy cannot reach a caller.
  */
 export function parseDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined {
   return attempt(() => {
     if (!isRecord(value) || property(value, "type") !== DOCUMENT_TARGET_FAILURE) {
       return undefined;
     }
-    if (attempt(() => Object.isFrozen(value)) !== true) {
-      return undefined;
-    }
-    if (attempt(() => Object.keys(value).length) !== 5) {
+    if (!hasOnlyDataMembers(value)) {
       return undefined;
     }
     const fields = targetFailureFields(value);
@@ -223,16 +305,33 @@ export function parseDocumentTargetFailure(value: unknown): DocumentTargetFailur
   });
 }
 
+/** Exactly the members a journal's failure record holds: the data, untagged. */
+const RECORD_MEMBERS: readonly string[] = ["available", "kind", "matches", "selector"];
+
 /**
  * The failure a journal record describes, rebuilt and sealed.
  *
  * The record is untagged — its place inside a recorded root-import selection is
  * what identifies it — so this validates the fields and supplies the tag,
- * rather than requiring a tag the journal never held.
+ * rather than requiring a tag the journal never held. The member set is closed
+ * all the same: an extra key is data this contract does not describe, and a
+ * journal is not a place to carry undescribed data forward from.
  */
 export function recordedDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined {
-  const fields = targetFailureFields(value);
-  return fields === undefined ? undefined : sealFailure(fields);
+  return attempt(() => {
+    if (!isRecord(value)) {
+      return undefined;
+    }
+    const names = attempt(() => [...Object.getOwnPropertyNames(value)].sort());
+    if (names === undefined || names.length !== RECORD_MEMBERS.length) {
+      return undefined;
+    }
+    if (!names.every((name, index) => name === RECORD_MEMBERS[index])) {
+      return undefined;
+    }
+    const fields = targetFailureFields(value);
+    return fields === undefined ? undefined : sealFailure(fields);
+  });
 }
 
 /**
@@ -329,46 +428,61 @@ export function documentTargetError(data: DocumentTargetFailure): DocumentTarget
 }
 
 /**
- * Whether this failure satisfies the whole contract, not merely the tag.
+ * The validated failure data this error carries, if it satisfies the whole
+ * contract rather than merely the tag.
  *
  * Structural throughout, so a failure constructed by a separately loaded copy
- * of this package is recognized on exactly the same terms as one constructed
- * here. The name is checked rather than the class for the same reason: a second
+ * of this package is read on exactly the same terms as one constructed here.
+ * The name is checked rather than the class for the same reason: a second
  * copy's constructor is a different function producing the same name.
  *
- * Stricter than `parseDocumentTargetFailure` because recognition hands the
- * object onward: the message has to be the one its own data derives, there can
- * be no cause, and no member beyond the contract — otherwise a candidate could
- * carry a path, a foreign object, or a second message past this boundary under
- * a recognized tag.
+ * The shell is checked as strictly as the data. The message has to be the one
+ * the data derives, so a diagnostic cannot disagree with the fields it claims;
+ * there can be no cause and no enumerable member beyond the contract, so a
+ * candidate cannot carry a path, a foreign object, or a second message under a
+ * recognized tag.
  */
-export function isDocumentTargetError(error: unknown): error is DocumentTargetError {
-  return (
-    attempt(() => {
-      if (!isError(error)) {
-        return false;
-      }
-      const data = parseDocumentTargetFailure(property(error, "data"));
-      if (data === undefined) {
-        return false;
-      }
-      if (property(error, "name") !== "DocumentTargetError") {
-        return false;
-      }
-      if (property(error, "message") !== documentTargetMessage(data)) {
-        return false;
-      }
-      if (property(error, "cause") !== undefined) {
-        return false;
-      }
-      return hasOnlyContractMembers(error);
-    }) === true
-  );
+function readDocumentTargetError(error: unknown): DocumentTargetFailure | undefined {
+  return attempt(() => {
+    if (!isError(error)) {
+      return undefined;
+    }
+    const data = parseDocumentTargetFailure(property(error, "data"));
+    if (data === undefined) {
+      return undefined;
+    }
+    if (property(error, "name") !== "DocumentTargetError") {
+      return undefined;
+    }
+    if (property(error, "message") !== documentTargetMessage(data)) {
+      return undefined;
+    }
+    if (property(error, "cause") !== undefined) {
+      return undefined;
+    }
+    return hasOnlyContractMembers(error) ? data : undefined;
+  });
 }
 
-/** The document-target failure this error is, by identity. */
+/** Whether this failure satisfies the whole document-target contract. */
+export function isDocumentTargetError(error: unknown): boolean {
+  return readDocumentTargetError(error) !== undefined;
+}
+
+/**
+ * The document-target failure this error describes, as a local error.
+ *
+ * A fresh error built from reconstructed data, never the candidate itself.
+ * Nothing here has a fail-stop's reason to preserve object identity — this is
+ * an ordinary invocation failure, and what a caller needs is the outcome, not
+ * the instance that reported it. Returning the candidate would hand on whatever
+ * it owns: nested arrays somebody else can still mutate, a revocable Proxy, a
+ * prototype with accessors. Rebuilding costs one allocation and removes all of
+ * it, so the result stays readable however the original is treated afterwards.
+ */
 export function asDocumentTargetError(error: unknown): DocumentTargetError | undefined {
-  return isDocumentTargetError(error) ? error : undefined;
+  const data = readDocumentTargetError(error);
+  return data === undefined ? undefined : new DocumentTargetError(data);
 }
 
 /** Whether two failures describe the same selection outcome, field by field. */

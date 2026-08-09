@@ -2848,15 +2848,35 @@ derived from the data, quotes the selector as JSON, and lists canonical encoded
 references, so a heading holding a control character cannot reach a diagnostic
 literally.
 
-Recognition is structural and total. The data carries a stable namespaced tag,
-so a failure built by a separately loaded copy of the package is recognized on
-the same terms as one built locally — `instanceof` cannot answer that question
-across two copies. Recognition also requires the name, the message its own data
-derives, frozen data with exactly the described members, no cause, and no other
-enumerable member: a recognized failure is handed onward by identity, so a
-candidate carrying a path or a foreign object is refused rather than adopted.
-The data is rebuilt from validated parts wherever it crosses a boundary, so
-nothing a candidate owns is retained.
+Recognition is structural, total, and reconstructing. The data carries a stable
+namespaced tag, so a failure built by a separately loaded copy of the package is
+read on the same terms as one built locally — `instanceof` cannot answer that
+question across two copies.
+
+`asDocumentTargetError()` never returns the candidate. It validates every field
+and builds a **fresh local error** from the result, so nothing the candidate
+owns is handed on: a nested list stays correct after its owner mutates it, and a
+list reached through a revocable Proxy stays readable after the Proxy is
+revoked. This is an ordinary invocation failure with no fail-stop reason to
+preserve object identity, so rebuilding costs one allocation and removes every
+way payload could travel.
+
+A candidate is read only when all of this holds:
+
+- the data carries exactly `type`, `kind`, `selector`, `matches`, and
+  `available`, with no other own member — enumerable, non-enumerable, or
+  symbol-keyed;
+- `matches` and `available` are dense lists whose every entry is an exact
+  canonical target;
+- `matches` is empty for `invalid-selector` and `no-match`, and holds more than
+  one entry for `multiple-matches`; and
+- the fields describe an outcome selection could have reached: the selector is
+  parsed and matched against the catalog the data supplies, and the result must
+  be the matches it claims.
+
+The Error shell is checked as strictly: the fixed name, the message its own data
+derives, no cause, and no enumerable member beyond the contract. Diagnostics are
+derived from the reconstructed canonical data alone.
 
 ##### A failed selection is recorded, not merely failed
 
@@ -2878,6 +2898,34 @@ the same way, is stale input. No authored effect runs in either case.
 The recorded selector is sanitized invocation metadata, retained only so an
 ordinary failed execution can be reproduced. It never occupies the exact-target
 field and never reaches a workflow definition.
+
+##### A recorded root selection is a closed protocol
+
+The recorded root import is parsed as a closed protocol with exactly two
+supported shapes: a repository selection carrying the path, the content, and an
+optional exact canonical target; and a failed selection carrying the path, the
+content, and an exact failure record. An unknown kind, a missing or unreadable
+member, a member of the wrong type, an extra member, a noncanonical target, and
+a failure record that is not exactly this contract are each **malformed**.
+
+Malformed is not the same answer as "this event is not the root import".
+Collapsing the two is what would let a corrupted record fall through to the
+recorded terminal result, replaying an outcome the record no longer describes.
+
+Because the record carries the content it was taken from, the selection is
+verified against it rather than merely parsed: a recorded exact target must
+still resolve to itself in the recorded content, and a recorded failure must be
+exactly the failure the recorded selector produces against that content. A
+catalog, a match list, or a kind that the recorded document contradicts is
+therefore malformed too.
+
+A malformed record fails before the recorded terminal result can be reused, with
+one fixed, cause-free diagnostic. It never delegates, never replays the recorded
+terminal error, never executes authored work, and never appends new history.
+
+A root import whose recorded result is not `ok` is left alone: a root can fail
+for reasons that are not about selection, and those failures are not this
+protocol's to interpret.
 
 ### 5.5 The Component Api
 
@@ -7410,7 +7458,10 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT34–DT39 | Projection | Preamble, ancestor direct content and the selected subtree are retained; siblings are absent; a non-leaf keeps its descendants; a sole title stays |
 | DT40–DT43 | Positions | A retained element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
 | DT44–DT47 | Inspection | The catalog is reported without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
-| DT52–DT55 | Recognition | A failure from a separately loaded copy is recognized; hostile, unreadable, mutable, over-populated, cause-bearing and payload-bearing candidates are all refused |
+| DT52/DT53 | Recognition | A failure from a separately loaded copy, and one built here, are read on the same terms |
+| DT54–DT56 | Reconstruction | The result is a fresh local error, never the candidate; a mutable nested list is copied and later mutation changes nothing; a revoked Proxy cannot reach through a result already built |
+| DT57–DT59 | Closed data | Enumerable, non-enumerable and symbol-keyed extras, entries that are not canonical targets, sparse lists, and fields no selection could have produced are all refused |
+| DT60/DT61 | Closed shell | A cause, an enumerable payload, and a message that does not derive from its data are refused; no planted payload survives stringification, spreading, symbol enumeration, or a journal round trip |
 
 ### Tier TX — Targeted execution and replay
 
@@ -7428,6 +7479,8 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX22/TX23 | Recorded content | An untargeted journal replays untargeted; replay projects the recorded content, not the file on disk |
 | TX24 | Failed selection | A journal from a selector that matched nothing never answers a later valid one |
 | TX25–TX27 | Failed replay | The same failing selector replays its own recorded failure with no authored effect; a different failure kind or a different selector is stale; live and replayed failures are the same structural error |
+| TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a noncanonical or unresolvable target, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
+| TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
 
 ### Tier SL — Own-scope context updates
 

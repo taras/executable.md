@@ -56,6 +56,7 @@ import {
   asDocumentTargetError,
   documentTargetError,
   documentTargetFailure,
+  isCanonicalTarget,
   recordedDocumentTargetFailure,
   sameDocumentTargetFailure,
 } from "./document-targets.ts";
@@ -250,10 +251,7 @@ function* durableImportComponent(
   if (selection.kind === "target-failure") {
     const failure = recordedDocumentTargetFailure(selection.failure);
     if (failure === undefined) {
-      throw new Error(
-        "The recorded root document import describes a failed target selection this version " +
-          "cannot read.",
-      );
+      throw new Error(UNREADABLE_ROOT_RECORD);
     }
     throw documentTargetError(failure);
   }
@@ -347,34 +345,101 @@ type SelectionOutcome =
   | { kind: "exact"; target: string }
   | { kind: "failed"; failure: DocumentTargetFailure };
 
-/** The recorded root import this event is, when it is one that can be read. */
-function recordedRootImport(
-  event: Yield,
-): { content: string; selection: SelectionOutcome } | undefined {
-  if (
-    event.description.type !== "import_component" ||
-    event.description.name !== "__root__" ||
-    event.result.status !== "ok"
-  ) {
-    return undefined;
+/**
+ * What the fixed diagnostic says when a recorded root import cannot be read,
+ * and all it says.
+ *
+ * Cause-free: the record is journal data, and quoting it back would put
+ * whatever it holds into a diagnostic.
+ */
+const UNREADABLE_ROOT_RECORD = "The recorded root document import cannot be read by this version.";
+
+/**
+ * What a recorded event turned out to be.
+ *
+ * "Not the root import" and "the root import, malformed" are deliberately
+ * different answers. Collapsing them into one absent value is what would let a
+ * corrupted record fall through to the recorded terminal result, which is the
+ * failure this distinction exists to prevent.
+ */
+type RootImportRecord =
+  | { kind: "unrelated" }
+  | { kind: "malformed" }
+  | { kind: "read"; content: string; selection: SelectionOutcome };
+
+const UNRELATED: RootImportRecord = { kind: "unrelated" };
+const MALFORMED: RootImportRecord = { kind: "malformed" };
+
+/**
+ * Parse a recorded root import as a closed protocol.
+ *
+ * Two selection shapes are supported and nothing else: a repository selection
+ * with an optional canonical target, and a failed selection with an exact
+ * failure record. An unknown kind, a missing or mistyped member, an extra
+ * member, a noncanonical target, and failure data that no selection could have
+ * produced are each malformed rather than absent.
+ *
+ * A result that is not `ok` is left alone. A root import can fail for reasons
+ * that have nothing to do with selection — an unreadable file — and those
+ * recorded failures are not this protocol's to interpret.
+ */
+function recordedRootImport(event: Yield): RootImportRecord {
+  if (event.description.type !== "import_component" || event.description.name !== "__root__") {
+    return UNRELATED;
+  }
+  if (event.result.status !== "ok") {
+    return UNRELATED;
   }
   const record = event.result.value;
   if (!isJsonObject(record)) {
-    return undefined;
+    return MALFORMED;
   }
   const content = record["content"];
-  if (typeof content !== "string") {
-    return undefined;
+  const path = record["path"];
+  if (typeof content !== "string" || typeof path !== "string") {
+    return MALFORMED;
   }
-  if (record["kind"] === "target-failure") {
+  const kind = record["kind"];
+  const members = Object.keys(record).length;
+
+  if (kind === "repository") {
+    const target = record["target"];
+    if (target === undefined) {
+      return members === 3 ? { kind: "read", content, selection: { kind: "whole" } } : MALFORMED;
+    }
+    if (members !== 4 || typeof target !== "string" || !isCanonicalTarget(target)) {
+      return MALFORMED;
+    }
+    // The recorded content is here, so the target is verified against it rather
+    // than merely parsed: a well-formed target the recorded document does not
+    // offer describes a selection that never happened.
+    const resolved = resolveDocumentTarget(path, content, target);
+    if (!resolved.ok || resolved.value !== target) {
+      return MALFORMED;
+    }
+    return { kind: "read", content, selection: { kind: "exact", target } };
+  }
+
+  if (kind === "target-failure") {
     const failure = recordedDocumentTargetFailure(record["failure"]);
-    return failure === undefined ? undefined : { content, selection: { kind: "failed", failure } };
+    if (members !== 4 || failure === undefined) {
+      return MALFORMED;
+    }
+    // Same standard for a failure: the recorded selector must fail against the
+    // recorded content in exactly the way the record claims. That verifies the
+    // catalog and the matches too, which no amount of shape checking could.
+    const rederived = resolveDocumentTarget(path, content, failure.selector);
+    if (rederived.ok) {
+      return MALFORMED;
+    }
+    const actual = asDocumentTargetError(rederived.error);
+    if (actual === undefined || !sameDocumentTargetFailure(actual.data, failure)) {
+      return MALFORMED;
+    }
+    return { kind: "read", content, selection: { kind: "failed", failure } };
   }
-  const target = record["target"];
-  if (target === undefined) {
-    return { content, selection: { kind: "whole" } };
-  }
-  return typeof target === "string" ? { content, selection: { kind: "exact", target } } : undefined;
+
+  return MALFORMED;
 }
 
 /** What this run's selector decides against the content the journal recorded. */
@@ -448,8 +513,14 @@ function holdRootSelection(root: RootDocumentSource): Operation<void> {
   return ReplayGuard.around({
     *check([event], next) {
       const recorded = recordedRootImport(event);
-      if (recorded === undefined) {
+      if (recorded.kind === "unrelated") {
         return yield* next(event);
+      }
+      // Refused here, so a corrupted record can never reach the recorded
+      // terminal result. Nothing is delegated, nothing is executed, and no
+      // history is appended.
+      if (recorded.kind === "malformed") {
+        throw new Error(UNREADABLE_ROOT_RECORD);
       }
       const requested = requestedSelection(root, recorded.content);
       if (!sameSelection(recorded.selection, requested)) {

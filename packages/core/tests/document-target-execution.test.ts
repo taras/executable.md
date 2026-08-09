@@ -34,6 +34,7 @@ import {
   DocumentTargetError,
   isDocumentTargetError,
 } from "../src/document-targets.ts";
+import { isJsonObject, parseJson } from "../src/json.ts";
 import { fileSource, formatDocumentReference, inlineSource } from "../src/root-source.ts";
 import type { RootDocumentSource } from "../src/root-source.ts";
 import { asText } from "./helpers.ts";
@@ -576,3 +577,157 @@ describe("Tier TX — targeted replay", () => {
     expect(replayed).not.toContain("rewritten beta");
   });
 });
+
+/**
+ * Tier TX — a corrupted root-import record fails closed.
+ *
+ * "Not the root import" and "the root import, malformed" have to be different
+ * answers. A boundary that returns one absent value for both delegates a
+ * corrupted record onward, and `durableRun` then reuses the recorded terminal
+ * result — replaying a failure or a success the record no longer describes.
+ *
+ * Every case here starts from a *valid* completed journal and corrupts only the
+ * recorded selection, so what is being measured is the parse and nothing else.
+ * Each is resumed twice: once with the selector that produced the journal, once
+ * with a selector that would succeed against a healthy record. Both must be
+ * refused with the fixed diagnostic, and neither may expand anything or append
+ * history.
+ */
+describe("Tier TX — malformed recorded selections", () => {
+  const UNREADABLE = "The recorded root document import cannot be read by this version.";
+
+  /** A completed journal whose root import recorded a failed selection. */
+  function* failedJournal(): Operation<InMemoryStream> {
+    const stream = new InMemoryStream();
+    yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream);
+    return stream;
+  }
+
+  /** Rewrite the recorded root-import selection, keeping everything else. */
+  function* corrupt(
+    stream: InMemoryStream,
+    change: (record: Record<string, unknown>) => Record<string, unknown>,
+  ): Operation<InMemoryStream> {
+    const corrupted = new InMemoryStream();
+    for (const event of stream.snapshot()) {
+      const record =
+        event.type === "yield" &&
+        event.description.name === "__root__" &&
+        event.result.status === "ok"
+          ? event.result.value
+          : undefined;
+      if (event.type === "yield" && isJsonObject(record)) {
+        yield* corrupted.append({
+          ...event,
+          result: { status: "ok", value: parseJson(change({ ...record })) },
+        });
+        continue;
+      }
+      yield* corrupted.append(event);
+    }
+    return corrupted;
+  }
+
+  /** Every way a corrupted record must be refused, resumed both ways. */
+  function* refuses(
+    change: (record: Record<string, unknown>) => Record<string, unknown>,
+  ): Operation<void> {
+    const healthy = yield* failedJournal();
+    const before = (yield* corrupt(healthy, change)).snapshot().length;
+
+    for (const target of ["Missing", "Beta"]) {
+      const stream = yield* corrupt(healthy, change);
+      const seen: Probes = { names: [], ids: [] };
+      const error = yield* failure(inlineSource(SECTIONS, { target }), stream, seen);
+
+      expect((error as Error).message).toBe(UNREADABLE);
+      expect((error as Error).cause).toBe(undefined);
+      // Not the recorded failure, and not a document-target failure at all.
+      expect(isDocumentTargetError(error)).toBe(false);
+      expect((error as Error).message).not.toContain("Missing");
+      // Nothing expanded, and no history was appended on top of the corruption.
+      expect(seen.names).toEqual([]);
+      expect(stream.snapshot().length).toBe(before);
+    }
+  }
+
+  it("TX28: a missing or non-array `available` is refused", function* () {
+    yield* refuses((record) => ({
+      ...record,
+      failure: omit(record["failure"], "available"),
+    }));
+    yield* refuses((record) => ({
+      ...record,
+      failure: { ...asRecord(record["failure"]), available: "Beta" },
+    }));
+  });
+
+  it("TX29: an unknown selection kind is refused", function* () {
+    yield* refuses((record) => ({ ...record, kind: "something-else" }));
+    yield* refuses((record) => omit(record, "kind"));
+  });
+
+  it("TX30: extra data in the record or the failure is refused", function* () {
+    yield* refuses((record) => ({ ...record, extra: "payload" }));
+    yield* refuses((record) => ({
+      ...record,
+      failure: { ...asRecord(record["failure"]), extra: "payload" },
+    }));
+  });
+
+  it("TX31: a noncanonical target entry is refused", function* () {
+    for (const available of [["../../etc/passwd"], ["Beta "], ["a%2fb"]]) {
+      yield* refuses((record) => ({
+        ...record,
+        failure: { ...asRecord(record["failure"]), available },
+      }));
+    }
+    // The same rule on a successful repository selection's own target.
+    const healthy = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Beta" }), healthy, { names: [], ids: [] });
+    const stream = yield* corrupt(healthy, (record) => ({ ...record, target: "beta" }));
+    const error = yield* failure(inlineSource(SECTIONS, { target: "Beta" }), stream);
+    expect((error as Error).message).toBe(UNREADABLE);
+  });
+
+  it("TX32: semantically inconsistent kind and matches are refused", function* () {
+    // `no-match` carrying matches, and a selector that really does match.
+    yield* refuses((record) => ({
+      ...record,
+      failure: { ...asRecord(record["failure"]), matches: ["Beta"] },
+    }));
+    yield* refuses((record) => ({
+      ...record,
+      failure: { ...asRecord(record["failure"]), selector: "Beta" },
+    }));
+    // `multiple-matches` with a single match.
+    yield* refuses((record) => ({
+      ...record,
+      failure: {
+        ...asRecord(record["failure"]),
+        kind: "multiple-matches",
+        selector: "Beta",
+        matches: ["Beta"],
+      },
+    }));
+  });
+
+  it("TX33: a valid record still replays, so the refusals are not vacuous", function* () {
+    const stream = yield* failedJournal();
+    const seen: Probes = { names: [], ids: [] };
+    const replayed = yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream, seen);
+    expect(isDocumentTargetError(replayed)).toBe(true);
+    expect((replayed as Error).message).not.toBe(UNREADABLE);
+    expect(seen.names).toEqual([]);
+  });
+});
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? { ...(value as object) } : {};
+}
+
+function omit(value: unknown, key: string): Record<string, unknown> {
+  const record = asRecord(value);
+  delete record[key];
+  return record;
+}

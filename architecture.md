@@ -642,6 +642,13 @@ selection is an outcome too, and is recorded and compared as one — otherwise a
 journal left by a selector that matched nothing would answer a later request for
 a section that does exist.
 
+A recorded selection is a closed protocol, and a record that does not satisfy it
+is refused rather than delegated. "This event is not the root import" and "the
+root import, malformed" are different answers: one continues, the other fails
+before the recorded terminal result can be reused, without executing authored
+work or appending history. The record carries the content it was taken from, so
+the selection is verified against that content rather than merely parsed.
+
 ## Expansion identity
 
 Core describes the executable element currently being expanded:
