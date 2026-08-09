@@ -15,7 +15,7 @@ props:
 <ReviewSection heading="Correctness"
   clean="✅ Small PR — correctness review skipped.">
 
-<Show when={props.pr.stats.totalChanges > 20}>
+<If condition={props.pr.stats.totalChanges > 20}>
 
 <Sample>
 
@@ -61,6 +61,6 @@ DIFF:
 
 </Sample>
 
-</Show>
+</If>
 
 </ReviewSection>

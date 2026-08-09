@@ -11,7 +11,7 @@ props:
 <CommentReviewData pr={props.pr} as="reviewData" />
 
 <Capture as="classificationResult">
-<Show when={reviewData.hasRepliesToClassify}>
+<If condition={reviewData.hasRepliesToClassify}>
 
 <Sample>
 
@@ -28,11 +28,11 @@ Format: [index] DISMISS or [index] ACCEPT
 
 </Sample>
 
-</Show>
+</If>
 </Capture>
 
 <Capture as="sampleResult">
-<Show when={reviewData.hasPairs}>
+<If condition={reviewData.hasPairs}>
 
 <Sample>
 
@@ -47,7 +47,7 @@ If none are obvious: "No obvious comments found."
 
 </Sample>
 
-</Show>
+</If>
 </Capture>
 
 <CommentReviewState
@@ -58,14 +58,14 @@ If none are obvious: "No obvious comments found."
   as="state"
  />
 
-<Show when={state.hasFindings}>
+<If condition={state.hasFindings}>
 
 <SuggestRemoval findings={state.pendingFindings} dismissedReplies={state.newDismissReplies} />
 
-</Show>
+</If>
 
-<Show when={state.hasChecklist}>
+<If condition={state.hasChecklist}>
 
 {state.checklistMd}
 
-</Show>
+</If>
