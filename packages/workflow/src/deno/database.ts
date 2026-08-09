@@ -54,6 +54,7 @@ import {
   type WorkflowRunRecord,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
+import { routeWorkflowRunJournal } from "./journal-route.ts";
 import type {
   RunConnection,
   RunConnectionLease,
@@ -265,7 +266,7 @@ function createHandle(connection: OpenConnection): Handle {
     });
   }
 
-  const journal: DurableStream = {
+  const ordinaryJournal: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
       const entries = yield* mustSucceed(read(() => readJournalEntries(database)));
       return entries.map((entry) => entry.event);
@@ -276,6 +277,7 @@ function createHandle(connection: OpenConnection): Handle {
     },
   };
 
+  let journal: DurableStream | undefined;
   const handle: WorkflowRunDatabase = {
     get record() {
       return record;
@@ -285,7 +287,12 @@ function createHandle(connection: OpenConnection): Handle {
       return retrieval;
     },
 
-    journal,
+    get journal() {
+      if (journal === undefined) {
+        throw new WorkflowTransactionError("the WorkflowRun journal route is not installed.");
+      }
+      return journal;
+    },
 
     transact,
 
@@ -405,6 +412,7 @@ function createHandle(connection: OpenConnection): Handle {
   };
 
   lease = connection.connections.registerLease(handle, runConnection);
+  journal = routeWorkflowRunJournal(handle, ordinaryJournal);
 
   return {
     database: handle,

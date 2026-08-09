@@ -64,6 +64,7 @@ import {
   type WorkflowRunConnections,
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
+import { useJournalRouting } from "./journal-route.ts";
 import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
 import { SavepointObservation } from "./savepoints.ts";
@@ -111,6 +112,7 @@ export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Oper
   yield* ensure(() => {
     connections.close();
   });
+  yield* useJournalRouting(connections);
   yield* usePrivateWorkspace(connections);
 
   yield* WorkflowRunStorage.around(

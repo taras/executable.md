@@ -319,12 +319,27 @@ root and otherwise retain their established behavior.
 Events arrive already filtered:
 
 ```text
-DurableEvent → secret gate → journal append
+DurableEvent → secret gate → Deno journal router → journal append
 ```
 
 Storage performs no filtering of its own — a second policy in a second place is
 a second thing to keep in agreement with the first — and a gate that rejects or
 is cancelled leaves no row at all.
+
+An unbound router append follows the ordinary standalone journal path and takes
+its own serialized connection turn. Only a publication continuation may bind a
+transaction destination, and that binding is lexical to the publication rather
+than the operation's execution. The route validates the exact database lease,
+connection generation, transaction identity, private token and open state
+before delegating to the existing `transaction.journal`; it does not duplicate
+insertion SQL. Missing, foreign, fabricated, completed, closed, cross-run and
+stale authority reaches no SQL. A route for another WorkflowRun delegates to an
+enclosing route instead of hiding it. The provider's ordinary destination and
+each publication-local routed destination are terminal `{ at: "min" }`
+handlers. An enclosing loaded copy with the same stable contextual name cannot
+acknowledge an append before the provider either selects the ordinary path or
+performs exact route validation. `readAll()` remains ordinary replay and neither
+routes nor invokes the secret gate.
 
 ### 9.6 One authoritative connection, one operation
 
@@ -421,9 +436,27 @@ last-seen metadata. The supplied private Workspace body runs in an inner scope,
 and final live/current validation waits for that scope's children and resources
 to finish teardown.
 
-Successful effect coordination finishes its mutation scope before capturing
-the root. The provider-level coordinator that orders mutation teardown, root
-capture and filtered journal publication is not part of this storage layer.
+Structured durable operations accept an explicit provider-neutral live
+coordinator. The default executes once, serializes execution success or failure
+into the existing protocol `Result`, invokes the existing Yield publication
+continuation exactly once, and returns that same result only after publication.
+The continuation uses the durable stream's ordered append fence. A backing
+append failure activates fail-stop state and raises `DurablePersistenceError`
+with the adapter error as its cause; it writes no compensating `Close`, and
+later durable work cannot execute or append even when workflow code catches the
+failure. A marked pre-persistence policy rejection remains the policy's ordinary
+failure. There is no generic durable validation hook: a caller or provider
+validates before constructing the durable effect. Replay bypasses the
+coordinator, execution, publication and live append; partial replay coordinates
+only its live suffix. Cancellation cannot append or resolve late. The
+callback-based durable-effect factory remains unchanged.
+
+The shared Workspace operation wrapper explicitly selects a contextual
+Workspace coordinator. Its default fails before execution or publication, and
+installing a provider does not enlist unrelated durable operations. Successful
+Workspace effect coordination finishes its mutation scope before capturing the
+root. The Deno coordinator that orders mutation teardown, root capture and
+filtered journal publication atomically is not part of this storage layer.
 
 The private restoration materializer loads a fully validated retained root and
 rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink
@@ -503,8 +536,7 @@ also left unchanged.
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
 leases and stale-owner recovery; public Workspace mutation and filesystem
-effects; provider-neutral live effect coordination and filtered journal
-routing; provider-level atomic Workspace effect/journal publication; public
-root selection, history checkpoints and forks; `<File>` integration;
+effects; provider-level atomic Workspace effect/journal publication; public root
+selection, history checkpoints and forks; `<File>` integration;
 workflow-owned worktrees; and deterministic Git and GitHub effects. Retained
 roots and private restoration do not expose any of those behaviors.

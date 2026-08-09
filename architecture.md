@@ -380,6 +380,26 @@ historical execution that reached it. Replay never asks current state to prove a
 past effect: a file written and later deleted is absent at the frontier, while
 both completed effects still restore in order.
 
+Structured durable operations accept an explicit provider-neutral live
+coordinator. The default coordinator executes once, converts execution success
+or failure to the existing durable protocol `Result`, calls the existing Yield
+publication continuation once, and returns that same result only after
+publication completes. The continuation publishes through the durable stream's
+ordered append fence. A backing append failure activates fail-stop state and
+raises `DurablePersistenceError` with the adapter error as its cause; it writes
+no compensating `Close`, and catching it cannot admit later durable work. A
+marked pre-persistence policy rejection remains an ordinary policy failure.
+There is no generic durable validation hook: validation owned by a caller or
+provider occurs before it constructs the durable effect. Replay, including the
+replayed prefix of a partial run, bypasses the coordinator, execution and live
+publication. Callback-based durable effects keep their existing path.
+
+The shared Workspace durable-operation wrapper selects a contextual Workspace
+coordinator explicitly. Its default fails before execution or publication, so
+installing no provider cannot leak a mutation outside its transaction. Selecting
+Workspace coordination for one operation does not enlist unrelated durable
+operations in the same scope.
+
 Every Workspace-local expansion publishes one effect through one effect
 transaction:
 
@@ -472,8 +492,22 @@ after SQLite has restored the prior frontier.
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider
 exposes no public Workspace mutation effect, history selection or fork
-operation at this layer. Provider-neutral durable coordination, filtered
-journal routing, and atomic Workspace effect publication are also absent.
+operation at this layer. Provider-neutral durable coordination and explicit
+filtered-journal routing are present, while the Deno Workspace coordinator that
+combines mutation, root publication and journal publication atomically is
+absent.
+
+The Deno journal adapter routes an append ordinarily when no destination is
+bound. A publication may instead bind one exact transaction destination for its
+own lexical scope after the existing secret gate. The route validates the
+database lease, connection generation, transaction identity, token and open
+state before delegating to the existing `transaction.journal`; it contains no
+insertion SQL of its own. A nested route for another run delegates past itself,
+and `readAll()` always follows ordinary replay without routing or secret
+filtering. The provider-owned ordinary destination and each publication-local
+routed destination are terminal `{ at: "min" }` handlers, so an enclosing
+loaded copy with the same stable contextual name cannot suppress an append or
+run ahead of exact-token validation.
 
 The initial topology requires neither writable FUSE nor native subprocess
 access and does not bundle `workerd`. A Cloudflare-hosted or workerd-backed
@@ -793,6 +827,9 @@ Status is measured against main.
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; Workspace effect publication is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
+| live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
+| Workspace coordination API | fails closed by default and lets a Workspace operation explicitly select provider coordination | built on the #365 stack; the atomic Deno Workspace handler is unbuilt |
+| explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
