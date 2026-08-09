@@ -93,6 +93,10 @@
   // suite exercises it.
   "exclude": [
     "packages/durable-streams/demo/**",
+    // This proof creates and imports a physical package copy through Deno's
+    // temporary-directory and module-loader APIs; the runtime exclusions keep
+    // the same file out of the Node and Bun execution suites.
+    "packages/workflow/tests/workspace-effect-loaded-copy.test.ts",
     "packages/web/client/main.tsx",
     "packages/web/client/request.ts"
   ]
