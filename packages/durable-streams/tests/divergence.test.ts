@@ -266,6 +266,7 @@ describe("divergence detection", () => {
     ];
     const stream = new InMemoryStream(events);
 
+    const before = stream.snapshot();
     try {
       yield* durableRun(
         function* (): Workflow<string> {
@@ -284,6 +285,40 @@ describe("divergence detection", () => {
         expect(e.totalCount).toBe(3);
       }
     }
+    expect(stream.snapshot()).toEqual(before);
+  });
+
+  it("generator failure cannot close over unconsumed replay entries", function* () {
+    const original = new Error("current workflow failed");
+    const events: DurableEvent[] = [
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "call", name: "removed" },
+        result: { status: "ok", value: "recorded" },
+      },
+    ];
+    const stream = new InMemoryStream(events);
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          throw original;
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected terminal divergence");
+    }
+    expect(failure.name).toBe("TerminalDivergenceError");
+    expect(failure.cause).toBe(original);
+    expect(stream.snapshot()).toEqual(events);
   });
 
   it("continues past close — journal has Close but generator keeps yielding (completed workflow stays completed)", function* () {

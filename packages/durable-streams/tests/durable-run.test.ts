@@ -8,14 +8,70 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { spawn, withResolvers, type Operation } from "effection";
 import {
   type DurableEvent,
+  DurablePersistenceError,
+  type DurableStream,
   InMemoryStream,
   type Json,
   type Workflow,
+  durableAction,
   durableCall,
   durableRun,
 } from "../mod.ts";
+
+class PausedYieldStream implements DurableStream {
+  readonly appendStarted = withResolvers<void>();
+  readonly allowAppend = withResolvers<void>();
+  readonly inner = new InMemoryStream();
+
+  constructor(readonly order: string[]) {}
+
+  *readAll(): Operation<DurableEvent[]> {
+    return yield* this.inner.readAll();
+  }
+
+  *append(event: DurableEvent): Operation<void> {
+    if (event.type === "yield") {
+      this.order.push("append:started");
+      this.appendStarted.resolve();
+      yield* this.allowAppend.operation;
+    }
+    yield* this.inner.append(event);
+    if (event.type === "yield") {
+      this.order.push("append:completed");
+    }
+  }
+}
+
+class FailOnceStream implements DurableStream {
+  readonly inner: InMemoryStream;
+  private failed = false;
+
+  constructor(
+    readonly failure: Error,
+    events: DurableEvent[] = [],
+  ) {
+    this.inner = new InMemoryStream(events);
+  }
+
+  *readAll(): Operation<DurableEvent[]> {
+    return yield* this.inner.readAll();
+  }
+
+  *append(event: DurableEvent): Operation<void> {
+    if (!this.failed) {
+      this.failed = true;
+      throw this.failure;
+    }
+    yield* this.inner.append(event);
+  }
+
+  snapshot(): DurableEvent[] {
+    return this.inner.snapshot();
+  }
+}
 
 /** Track which functions were actually called during live execution. */
 function createCallTracker() {
@@ -212,43 +268,143 @@ describe("durableRun", () => {
   });
 
   it("persist-before-resume: generator does not advance until write completes", function* () {
-    const stream = new InMemoryStream();
     const order: string[] = [];
-
-    // Hook into append to track ordering
-    stream.onAppend = (event) => {
-      if (event.type === "yield") {
-        order.push(`persist:${event.type}`);
-      }
-    };
+    const stream = new PausedYieldStream(order);
+    let resumed = false;
 
     function* workflow(): Workflow<string> {
       yield* durableCall("step1", () => {
         order.push("execute:step1");
         return Promise.resolve("one" as const);
       });
+      resumed = true;
       order.push("resumed:after-step1");
-
-      yield* durableCall("step2", () => {
-        order.push("execute:step2");
-        return Promise.resolve("two" as const);
-      });
-      order.push("resumed:after-step2");
-
       return "done";
     }
 
-    yield* durableRun(workflow, { stream });
+    const task = yield* spawn(() => durableRun(workflow, { stream }));
+    yield* stream.appendStarted.operation;
+    expect(resumed).toBe(false);
+    expect(stream.inner.snapshot()).toHaveLength(0);
 
-    // Verify ordering: execute → persist → resume for each step
+    stream.allowAppend.resolve();
+    expect(yield* task).toBe("done");
+
     expect(order).toEqual([
       "execute:step1",
-      "persist:yield",
+      "append:started",
+      "append:completed",
       "resumed:after-step1",
-      "execute:step2",
-      "persist:yield",
-      "resumed:after-step2",
     ]);
+  });
+
+  it("append failure cannot resolve a live effect successfully without a Yield", function* () {
+    const appendFailure = new Error("yield append failed");
+    const stream = new FailOnceStream(appendFailure);
+    let resumed = false;
+    let failure: unknown;
+
+    function* workflow(): Workflow<string> {
+      yield* durableCall("step", () => Promise.resolve("completed" as const));
+      resumed = true;
+      return "unjournaled-success";
+    }
+
+    try {
+      yield* durableRun(workflow, { stream });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(resumed).toBe(false);
+    expect(stream.snapshot()).toHaveLength(0);
+    expect(failure).toBeInstanceOf(DurablePersistenceError);
+    if (!(failure instanceof DurablePersistenceError)) {
+      throw new Error("expected durable persistence failure");
+    }
+    expect(failure.cause).toBe(appendFailure);
+  });
+
+  it("a failed successful root Close append does not write a compensating Close", function* () {
+    const appendFailure = new Error("root close append failed");
+    const stream = new FailOnceStream(appendFailure);
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          return "done";
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(stream.snapshot()).toEqual([]);
+    expect(failure).toBeInstanceOf(DurablePersistenceError);
+    if (!(failure instanceof DurablePersistenceError)) {
+      throw new Error("expected durable persistence failure");
+    }
+    expect(failure.cause).toBe(appendFailure);
+  });
+
+  it("callback effect append failure cannot become a workflow Close", function* () {
+    const appendFailure = new Error("action yield append failed");
+    const stream = new FailOnceStream(appendFailure);
+    let resumed = false;
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          yield* durableAction("step", (resolve) => {
+            resolve("completed");
+            return () => {};
+          });
+          resumed = true;
+          return "unjournaled-success";
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(resumed).toBe(false);
+    expect(stream.snapshot()).toEqual([]);
+    expect(failure).toBeInstanceOf(DurablePersistenceError);
+    if (!(failure instanceof DurablePersistenceError)) {
+      throw new Error("expected durable persistence failure");
+    }
+    expect(failure.cause).toBe(appendFailure);
+  });
+
+  it("caught persistence failure still prevents root termination", function* () {
+    const appendFailure = new Error("caught yield append failed");
+    const stream = new FailOnceStream(appendFailure);
+    let caught = false;
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          try {
+            yield* durableCall("step", () => Promise.resolve("completed"));
+          } catch {
+            caught = true;
+          }
+          return "must-not-close";
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(caught).toBe(true);
+    expect(failure).toBeInstanceOf(DurablePersistenceError);
+    expect(stream.snapshot()).toEqual([]);
   });
 
   it("actor handoff: Process B resumes from Process A's events", function* () {

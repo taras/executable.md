@@ -23,6 +23,11 @@
 import type { Operation } from "effection";
 import { type DurableContext, DurableCtx } from "./context.ts";
 import { Divergence } from "./divergence.ts";
+import {
+  activeDurabilityFailure,
+  appendDurableEvent,
+  rememberDurabilityFailure,
+} from "./durability.ts";
 import { StaleInputError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
@@ -81,7 +86,6 @@ function checkReplay<T>(
   resolve: Resolve<EffectionResult<T>>,
   routine: CoroutineView,
   ctx: DurableContext,
-  validate?: () => void,
 ): ReplayResult<T> {
   const entry = ctx.replayIndex.peekYield(ctx.coroutineId);
 
@@ -111,6 +115,7 @@ function checkReplay<T>(
         ]);
 
         if (decision.type === "throw") {
+          rememberDurabilityFailure(ctx, decision.error);
           resolve({ ok: false, error: decision.error });
           return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
         }
@@ -138,22 +143,13 @@ function checkReplay<T>(
             coroutineId: ctx.coroutineId,
             description: desc,
           });
+        rememberDurabilityFailure(ctx, error);
         resolve({ ok: false, error });
         return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
       }
 
       // All guards approved — consume the entry and advance cursor
       ctx.replayIndex.consumeYield(ctx.coroutineId);
-
-      try {
-        validate?.();
-      } catch (error) {
-        resolve({
-          ok: false,
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-        return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
-      }
 
       // Feed stored result synchronously
       resolve(protocolToEffection<T>(entry.result));
@@ -172,6 +168,7 @@ function checkReplay<T>(
       ]);
 
       if (decision.type === "throw") {
+        rememberDurabilityFailure(ctx, decision.error);
         resolve({ ok: false, error: decision.error });
         return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
       }
@@ -209,6 +206,11 @@ export function createDurableEffect<T>(
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
+      const durabilityFailure = activeDurabilityFailure(ctx);
+      if (durabilityFailure) {
+        resolve({ ok: false, error: durabilityFailure });
+        return (exit) => exit(VOID_OK);
+      }
       const replay = checkReplay<T>(desc, resolve, routine, ctx);
       if (replay.path === "replayed") {
         return replay.teardown;
@@ -238,7 +240,7 @@ export function createDurableEffect<T>(
         // down, the append is cancelled.
         routine.scope.run(function* () {
           try {
-            yield* ctx.stream.append(event);
+            yield* appendDurableEvent(ctx, event);
             resolve(protocolToEffection<T>(result));
           } catch (err) {
             resolve({
@@ -304,13 +306,10 @@ export function createDurableEffect<T>(
  *
  * @param desc Structured description for the journal and divergence detection
  * @param execute Returns an Operation to run during live execution
- * @param options.validate Runs before live execution or replay restoration; a
- * thrown error is not persisted as this operation's result
  */
 export function createDurableOperation<T extends Json>(
   desc: EffectDescription,
   execute: () => Operation<T>,
-  options: { validate?: () => void } = {},
 ): DurableEffect<T> {
   return {
     description: `${desc.type}(${desc.name})`,
@@ -321,25 +320,26 @@ export function createDurableOperation<T extends Json>(
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
       const ctx = routine.scope.expect<DurableContext>(DurableCtx);
-      const replay = checkReplay<T>(desc, resolve, routine, ctx, options.validate);
+      const durabilityFailure = activeDurabilityFailure(ctx);
+      if (durabilityFailure) {
+        resolve({ ok: false, error: durabilityFailure });
+        return (exit) => exit(VOID_OK);
+      }
+      const replay = checkReplay<T>(desc, resolve, routine, ctx);
       if (replay.path === "replayed") {
         return replay.teardown;
       }
 
       // ── LIVE PATH ──
-      try {
-        options.validate?.();
-      } catch (error) {
-        resolve({
-          ok: false,
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-        return (exit) => exit(VOID_OK);
-      }
-
       // Run the entire execute → capture → persist → resolve sequence
       // as a structured operation in the routine's scope.
       routine.scope.run(function* () {
+        const active = activeDurabilityFailure(ctx);
+        if (active) {
+          resolve({ ok: false, error: active });
+          return;
+        }
+
         let result: Result;
         try {
           const value = yield* execute();
@@ -357,7 +357,7 @@ export function createDurableOperation<T extends Json>(
         };
 
         try {
-          yield* ctx.stream.append(event);
+          yield* appendDurableEvent(ctx, event);
           resolve(protocolToEffection<T>(result));
         } catch (err) {
           resolve({

@@ -195,6 +195,10 @@ describe("replay guard", () => {
       },
     ];
     const stream = new InMemoryStream(events);
+    const before = stream.snapshot();
+    const stale = new StaleInputError(
+      "File changed: ./test.txt (recorded: abc123, current: def456)",
+    );
 
     // Cache simulates current file having a DIFFERENT hash
     const cache = new Map<string, string>([["./test.txt", "def456"]]);
@@ -212,9 +216,7 @@ describe("replay guard", () => {
           if (currentSHA && currentSHA !== recordedHash) {
             return {
               outcome: "error",
-              error: new StaleInputError(
-                `File changed: ${filePath} (recorded: ${recordedHash}, current: ${currentSHA})`,
-              ),
+              error: stale,
             };
           }
         }
@@ -236,10 +238,11 @@ describe("replay guard", () => {
       );
       throw new Error("expected StaleInputError");
     } catch (e) {
-      expect(e).toBeInstanceOf(StaleInputError);
+      expect(e).toBe(stale);
       expect((e as Error).message).toContain("File changed");
       expect((e as Error).message).toContain("./test.txt");
     }
+    expect(stream.snapshot()).toEqual(before);
   });
 
   it("multiple guards — error from any guard halts replay", function* () {

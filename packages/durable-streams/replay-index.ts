@@ -18,6 +18,8 @@ export class ReplayIndex {
   private closes = new Map<CoroutineId, Close>();
   /** Coroutines where replay has been disabled (run-live mode). */
   private disabled = new Set<CoroutineId>();
+  /** Retained coroutine identities reached by the current definition. */
+  private claimed = new Set<CoroutineId>();
 
   constructor(events: DurableEvent[]) {
     for (const event of events) {
@@ -52,6 +54,21 @@ export class ReplayIndex {
   /** Returns true if replay has been disabled for this coroutine. */
   isReplayDisabled(coroutineId: CoroutineId): boolean {
     return this.disabled.has(coroutineId);
+  }
+
+  /** Mark a retained coroutine identity as reached by the current run. */
+  claim(coroutineId: CoroutineId): void {
+    this.claimed.add(coroutineId);
+    if (!this.closes.has(coroutineId)) {
+      return;
+    }
+
+    const retainedIds = new Set([...this.yields.keys(), ...this.closes.keys()]);
+    for (const retainedId of retainedIds) {
+      if (retainedId.startsWith(`${coroutineId}.`)) {
+        this.claimed.add(retainedId);
+      }
+    }
   }
 
   /**
@@ -113,30 +130,34 @@ export class ReplayIndex {
     return false;
   }
 
-  /**
-   * Return the first non-disabled coroutine with unconsumed yields.
-   *
-   * NOTE: Closed coroutines are skipped because their yields were consumed
-   * by the child's own replay path (via runDurableChild). This means
-   * orphaned children (recorded in the journal but never spawned in the
-   * current run) are not detected here. Orphan detection requires tracking
-   * which coroutine IDs were visited during the current run, which is a
-   * future enhancement.
-   */
-  firstUnconsumed():
+  /** Return the first retained coroutine not aligned with the current subtree. */
+  firstUnaligned(subtreeId: CoroutineId):
     | {
         coroutineId: CoroutineId;
         cursor: number;
         totalYields: number;
       }
     | undefined {
-    for (const [coroutineId, entries] of this.yields.entries()) {
+    if (this.disabled.has(subtreeId)) {
+      return undefined;
+    }
+
+    const coroutineIds = new Set([...this.yields.keys(), ...this.closes.keys()]);
+    for (const coroutineId of coroutineIds) {
+      if (coroutineId !== subtreeId && !coroutineId.startsWith(`${subtreeId}.`)) {
+        continue;
+      }
       if (this.disabled.has(coroutineId)) {
         continue;
       }
       if (this.closes.has(coroutineId)) {
+        if (!this.claimed.has(coroutineId)) {
+          const entries = this.yields.get(coroutineId) ?? [];
+          return { coroutineId, cursor: 0, totalYields: entries.length };
+        }
         continue;
       }
+      const entries = this.yields.get(coroutineId) ?? [];
       const cursor = this.cursors.get(coroutineId) ?? 0;
       if (cursor < entries.length) {
         return { coroutineId, cursor, totalYields: entries.length };

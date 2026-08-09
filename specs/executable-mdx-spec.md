@@ -1273,8 +1273,22 @@ projected caller content.
 
 The two namespaces may not overlap. `service=<binding>` validates the binding
 name and checks both environments before attaching a process. Ordinary durable
-eval validates its declared exports against live names before execution or
-replay restoration and before appending an eval event. `ephemeral eval`
+eval first transforms the block to discover its declared exports, then validates
+them against live names before constructing its durable effect. An invalid eval
+is document validation: it never becomes a `DurableEffect` and appends no eval
+`Yield`. A valid partial replay performs the same validation before yielding an
+effect, so a diagnostic from the original run leaves later recorded effects
+aligned. If retained history instead contains a successful eval `Yield` that the
+current definition no longer yields, the existing replay guard, divergence and
+stale-input rules reject that incompatible history; validation never consumes
+the recorded result or substitutes an unjournaled error. If collision handling
+terminates the document before another durable effect is reached, the durable
+root detects the unaligned eval `Yield` before writing `Close(err)`, raises
+`TerminalDivergenceError` with the collision as its cause, and leaves the
+retained journal unchanged. Root and child termination apply this check to the
+whole retained coroutine subtree, including completed children the current
+definition never claimed. A compatible definition can still replay it.
+`ephemeral eval`
 validates its exports against durable names before execution; it may atomically
 replace an existing live binding. A failed block publishes none of its exports.
 Values from the live overlay are never substituted into a durable effect's
@@ -1459,8 +1473,8 @@ processor. Instead:
 
 #### What is journaled
 
-`evalFactory` wraps execution in `createDurableOperation`. Diagnostic journal
-shape:
+After transformation and live-binding collision validation, `evalFactory` wraps
+execution in `createDurableOperation`. Diagnostic journal shape:
 
 ```json
 { "type": "eval", "name": "eval:root:0", "language": "js" }
@@ -1516,7 +1530,7 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/service-host.ts` | shared XMD service handshake observer and supervised host-process adapter |
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
-| `packages/workflow/src/service-denial.ts` | non-delegating workflow service denial middleware |
+| `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the tested non-delegating provider for future workflow start and resume scopes (#366) |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -4441,14 +4455,23 @@ than convert — including through a teardown aggregate, which must not launder
 it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
 unaffected and remain printed errors.
 
-**Divergence errors are rethrown on the same terms.** A `DivergenceError`, an
-`EarlyReturnDivergenceError`, and a `ContinuePastCloseDivergenceError` all say
-the journal no longer describes this run, so a generic catch that converted one
-into a printed error would let expansion continue to the *next* durable operation —
-whose own mismatch is then the failure reported, at a position that has nothing
-to do with where the journal actually stopped describing the run. Every one of
-these is discovered through the same cycle-safe cause traversal, so what the
-caller receives is the failure itself rather than the wrapper it travelled in.
+**Divergence errors are rethrown on the same terms.** A `DivergenceError`, a
+`TerminalDivergenceError` or its `EarlyReturnDivergenceError` specialization,
+and a `ContinuePastCloseDivergenceError` all say the journal no longer describes
+this run, so a generic catch that converted one into a printed error would let
+expansion continue to the *next* durable operation — whose own mismatch is then
+the failure reported, at a position that has nothing to do with where the
+journal actually stopped describing the run. Every one of these is discovered
+through the same cycle-safe cause traversal, so what the caller receives is the
+failure itself rather than the wrapper it travelled in.
+
+**Backing-journal persistence failures are rethrown on the same terms.** A
+failed `Yield` append raises `DurablePersistenceError` before the effect
+consumer can resume successfully. A failed `Close` append raises the same
+error. Its cause is the storage adapter's error, and neither case writes a
+compensating `Close(err)` that would misstate the persistence failure as a
+document outcome. Pre-persistence policy rejection remains the policy's
+ordinary failure and may be recorded by a separately admitted `Close(err)`.
 
 **Durability discovery traverses the whole cause graph.** No wrapper keeps a
 durability failure from being found, including a content failure a component
@@ -5260,7 +5283,8 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `componentDirs?` — component search directories (default:
   `["components", "."]`)
 - `modifiers?` — custom modifier factories registered alongside the
-  built-ins (`exec`, `silent`, `eval`, `persist`, `timeout`, `daemon`)
+  built-ins (`exec`, `silent`, `eval`, `ephemeral`, `persist`, `timeout`,
+  `daemon`, `service`)
 - `secretDetection?` — detect credentials before durable events persist
   (default: enabled)
 
@@ -6409,13 +6433,13 @@ visible warning blocks, gather into a separate error report).
 | FA6 | Both at once | A fatal error is still found when the wrapper holding it is itself cyclic |
 | FA7 | Documentation failures | A `DocumentationError` is discovered the same way |
 | FA8 | Ordinary errors are unaffected | A cyclic ordinary error is printed and the next block still runs |
-| FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `EarlyReturnDivergenceError`, and `ContinuePastCloseDivergenceError` are each discovered as fatal, bare and wrapped |
-| FA10 | Precedence, either order | Each of the four outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
+| FA9 | Every durability failure | `StaleInputError`, `DivergenceError`, `TerminalDivergenceError`, `EarlyReturnDivergenceError`, `ContinuePastCloseDivergenceError`, and `DurablePersistenceError` are each discovered as fatal, bare and wrapped |
+| FA10 | Precedence, either order | Each durability failure outranks a `DocumentationError` in an `AggregateError`, whichever comes first |
 | FA11 | Precedence through a teardown | The same holds for an `InvocationTeardownError`'s stage failures |
 | FA12 | Precedence at any depth | Nesting either one deeper than the other does not change the answer |
 | FA13 | No durability failure | A `DocumentationError` is reported when the graph holds none, and `durabilityFailure` finds nothing |
 | FA14 | Precedence with a cycle | A mixed graph that is also cyclic still reports the durability failure |
-| FA15 | A content failure hides nothing fatal | A durability failure beneath a `ContentError` — set by a subclass and by assignment — is found by both `durabilityFailure` and `fatalCause`, for each of the four kinds |
+| FA15 | A content failure hides nothing fatal | A durability failure beneath a `ContentError` — set by a subclass and by assignment — is found by both `durabilityFailure` and `fatalCause`, for every kind |
 | FA16 | Wherever the content failure sits | The same holds beneath an ordinary cause, inside an `AggregateError`, inside an `InvocationTeardownError`, and through all three at once |
 | FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
 | FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |
@@ -6729,12 +6753,13 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | R2 | Live overlay hidden from interpolation | `{server}` remains literal rather than becoming an endpoint string |
 | R3 | `ephemeral eval` executes during partial replay | Live bindings and middleware are reconstructed without a journal entry |
 | R4 | Service publication collision | A durable or live binding with the requested name refuses attachment before spawn |
-| R5 | Durable export collides with a service | Live execution and partial replay both reject before execution or restoration and append no eval event |
+| R5 | Durable export collides with a service | Live execution and valid partial replay diagnose the block before constructing an eval effect; a later durable effect executes or restores in alignment, and no eval `Yield` appears |
 | R6 | Ephemeral export collides with durable state | The block is rejected before execution and publishes no partial export |
 | R7 | Ephemeral update of a live binding | A later ephemeral block may atomically replace an existing live name |
-| R8 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
-| R9 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
-| R10 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
+| R8 | Incompatible retained eval history | Genuine history from an earlier component definition fails fatally before restoring its now-incompatible eval result; effect-level mismatch and immediate root termination both append neither replacement `Yield` nor root `Close`, leave the retained prefix byte-for-byte unchanged, and permit the compatible definition to replay it |
+| R9 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
+| R10 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
+| R11 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
 
 ### Tier S — Provider component pattern (integration)
 

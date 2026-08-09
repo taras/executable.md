@@ -6,10 +6,19 @@
  * coroutineId and childCounter.
  */
 
-import { type Context, createContext } from "effection";
+import { type Context, createContext, type Operation } from "effection";
 import type { ReplayIndex } from "./replay-index.ts";
 import type { DurableStream } from "./stream.ts";
 import type { CoroutineId } from "./types.ts";
+
+export interface DurableAppendFence {
+  hold(): Operation<void>;
+}
+
+export interface DurabilityState {
+  failure?: Error;
+  appendFence?: DurableAppendFence;
+}
 
 export interface DurableContext {
   /** Shared replay index (built from stream on startup). */
@@ -20,6 +29,8 @@ export interface DurableContext {
   coroutineId: CoroutineId;
   /** Counter for assigning child IDs. */
   childCounter: number;
+  /** Protocol failure shared by the root and every durable child. */
+  durability?: DurabilityState;
 }
 
 /**

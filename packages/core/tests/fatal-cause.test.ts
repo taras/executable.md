@@ -13,8 +13,10 @@ import { scoped } from "effection";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,
+  DurablePersistenceError,
   EarlyReturnDivergenceError,
   StaleInputError,
+  TerminalDivergenceError,
 } from "@executablemd/durable-streams";
 import { InvocationTeardownError } from "../src/invocation.ts";
 import { ContentError, DocumentationError, durabilityFailure, fatalCause } from "../src/errors.ts";
@@ -72,7 +74,9 @@ const DURABILITY_FAILURES: Array<() => Error> = [
       { type: "eval", name: "eval:reached" },
     ),
   () => new EarlyReturnDivergenceError("root", 2, 5),
+  () => new TerminalDivergenceError("root", 2, 5, { cause: new Error("document failed") }),
   () => new ContinuePastCloseDivergenceError("root", 5),
+  () => new DurablePersistenceError("yield", new Error("journal unavailable")),
 ];
 
 describe("Tier FA — Fatal error discovery", () => {

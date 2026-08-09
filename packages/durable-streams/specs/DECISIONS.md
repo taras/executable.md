@@ -135,23 +135,29 @@ Updated before completion of every phase and committed at the end of each phase.
   shape for `enter()` that will be aligned with Effection's exact Effect
   interface in Phase 1.
 
-## DEC-008: Three distinct divergence error types
+## DEC-008: Distinct divergence error types
 
 - **Phase:** 0 (Scaffolding)
 - **Date:** 2026-02-28
-- **Context:** Spec §6.2-6.3 defines three divergence conditions: description
-  mismatch, generator finishes early, generator continues past close.
+- **Context:** Spec §6.2-6.3 defines divergence at effect matching and at every
+  terminal boundary: return with retained effects, failure with retained
+  effects, and continuation past a recorded close.
 - **Options considered:**
   1. Single DivergenceError class with a `kind` field
-  2. Three separate error classes
-- **Decision:** Three classes: `DivergenceError`, `EarlyReturnDivergenceError`,
-  `ContinuePastCloseDivergenceError`. All share `name = "DivergenceError"`.
-- **Rationale:** Each carries different diagnostic fields (expected/actual
-  descriptions vs. consumed/total counts). Separate classes enable precise
-  `instanceof` checks in tests while sharing the same error name for catch-all
-  handling.
-- **Consequences:** Error handling code can match on the common name
-  `"DivergenceError"` or use instanceof for specific cases.
+  2. Separate error classes with a common terminal base
+- **Decision:** `DivergenceError` describes effect mismatch,
+  `TerminalDivergenceError` describes termination with unconsumed replay,
+  `EarlyReturnDivergenceError` specializes terminal divergence for a normal
+  return, and `ContinuePastCloseDivergenceError` describes continuation after a
+  recorded close.
+- **Rationale:** Effect mismatch carries expected/actual descriptions, while
+  terminal divergence carries consumed/total counts and may retain the active
+  execution failure as its cause. The common terminal base keeps the existing
+  early-return API compatible while covering exceptional termination honestly.
+- **Consequences:** No root or child `Close` is appended while its retained
+  subtree is unaligned. Reaching a completed child claims its retained subtree;
+  abandoning that child is terminal divergence. Error handling uses
+  `instanceof` rather than matching names.
 
 ## DEC-009: Workflow<T> = Generator<DurableEffect<unknown>, T, unknown>
 
@@ -308,16 +314,17 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Date:** 2026-02-28
 - **Context:** The spec §5 defines the persist-before-resume invariant with
   three strategies. Need to choose one for the Effection integration.
-- **Decision:** Strategy B — the effect's `enter()` calls `stream.append(event)`
-  and places `resolve()` inside the `.then()` callback. The generator does
-  not advance until the durable write completes.
+- **Decision:** Strategy B — the effect's live operation appends the event and
+  calls `resolve()` only after that operation completes. The generator does not
+  advance successfully until the durable write completes.
 - **Rationale:** This is the natural fit for Effection's async resolve model.
   The reducer waits for `resolve()` to be called, so deferring it until after
   the append guarantees persist-before-resume. Verified by the ordering test
   (execute → persist → resume for each step).
 - **Consequences:** Live execution has one async hop per effect (the stream
-  append). During replay, `resolve()` is called synchronously — zero async
-  overhead.
+  append). A rejected backing append raises `DurablePersistenceError`, retains
+  the adapter error as its cause, and cannot produce a compensating `Close`.
+  During replay, `resolve()` is called synchronously — zero async overhead.
 
 ## DEC-018: durableCall constrains T extends Json for serializability
 

@@ -55,7 +55,7 @@ interface Yield {
 }
 ```
 
-**`Close`** is written when a coroutine terminates — whether it completed, threw an error, or was cancelled. Close events are load-bearing: they tell the runtime on restart which coroutines finished cleanly and which need re-execution.
+**`Close`** is written when a coroutine terminates — whether it completed, threw an error, or was cancelled — after its retained subtree is aligned. Alignment requires every retained yield to be consumed and every retained child coroutine to be claimed by the current definition. Close events are load-bearing: they tell the runtime on restart which coroutines finished cleanly and which need re-execution. An unaligned termination is divergence and appends no `Close`.
 
 ### What goes into the journal
 
@@ -278,6 +278,12 @@ The transition from replay to live happens **per-coroutine**, not globally. In a
 
 This is the protocol's most critical invariant: **the `Yield` event must be durably written to the stream before `iterator.next()` is called**. If the process crashes between an effect resolving and the journal write completing, the effect will be re-executed on the next run — which is safe, because the generator hasn't advanced past that point yet.
 
+If the backing-stream write fails, the run raises `DurablePersistenceError`
+with the adapter error as its cause. It does not resume the effect successfully
+or write a compensating `Close(err)`. The same rule applies when a terminal
+`Close` cannot be persisted. A `guardDurableStream` gate rejection remains the
+gate's ordinary failure and may produce a separately admitted `Close(err)`.
+
 Violating this invariant (advancing the generator before the write) creates an unrecoverable gap: the journal would be missing an entry, and replay would feed the wrong result to a subsequent effect.
 
 ---
@@ -292,12 +298,14 @@ During replay, every yielded effect is validated against its journal entry. Only
 // → DivergenceError
 ```
 
-Two additional terminal conditions are checked:
+Three additional terminal conditions are checked:
 
 - **Generator finishes early**: the code returns before consuming all journal entries — effects were removed.
+- **Generator fails early**: the code throws before consuming all journal entries — the ordinary failure cannot close over retained effects the current execution never reached.
 - **Generator continues past close**: the journal shows the coroutine closed, but the code keeps yielding — effects were added.
+- **Completed child is abandoned**: retained child history has a `Close`, but the current definition never claims that coroutine identity.
 
-Both indicate the code has changed in a way that makes the stored history invalid. The solution for intentional code changes is `versionCheck`:
+All indicate the code has changed in a way that makes the stored history invalid. Early return raises `EarlyReturnDivergenceError`; early failure raises `TerminalDivergenceError` with the ordinary failure as its cause. Neither appends a terminal `Close`, so a compatible definition can still replay the retained history. The solution for intentional code changes is `versionCheck`:
 
 ```typescript
 function* orderWorkflow(orderId: string): Workflow<void> {

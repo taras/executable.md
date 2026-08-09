@@ -5,6 +5,21 @@
 import type { CoroutineId, EffectDescription } from "./types.ts";
 
 /**
+ * Raised when a durable event cannot be persisted.
+ *
+ * Persistence failures are protocol failures, not workflow outcomes. The
+ * adapter error remains available as the cause, and no compensating Close is
+ * written over the unpersisted event.
+ */
+export class DurablePersistenceError extends Error {
+  override name = "DurablePersistenceError";
+
+  constructor(eventType: "yield" | "close", cause: unknown) {
+    super(`Failed to persist durable ${eventType} event`, { cause });
+  }
+}
+
+/**
  * Raised when a persisted record does not describe a `DurableEvent`.
  *
  * `path` locates the offending member within the record, such as
@@ -66,24 +81,48 @@ export class DivergenceError extends Error {
 }
 
 /**
- * Raised when the generator finishes (returns) while the replay index
- * still has unconsumed entries for this coroutine. See spec §6.3.
+ * Raised when a workflow terminates while replay still has unconsumed entries.
+ * The retained journal describes effects that the current execution did not
+ * reach, so no terminal Close may be appended over that history.
  */
-export class EarlyReturnDivergenceError extends Error {
-  override name = "EarlyReturnDivergenceError";
+export class TerminalDivergenceError extends Error {
+  override name = "TerminalDivergenceError";
 
   coroutineId: CoroutineId;
   consumedCount: number;
   totalCount: number;
 
-  constructor(coroutineId: CoroutineId, consumedCount: number, totalCount: number) {
+  constructor(
+    coroutineId: CoroutineId,
+    consumedCount: number,
+    totalCount: number,
+    options: { cause?: unknown; message?: string } = {},
+  ) {
     super(
-      `Divergence: generator ${coroutineId} returned after ${consumedCount} yields, ` +
-        `but journal has ${totalCount} yield entries`,
+      options.message ??
+        `Divergence: workflow ${coroutineId} terminated after ${consumedCount} yields, ` +
+          `but journal has ${totalCount} yield entries`,
+      { cause: options.cause },
     );
     this.coroutineId = coroutineId;
     this.consumedCount = consumedCount;
     this.totalCount = totalCount;
+  }
+}
+
+/**
+ * Raised when the generator finishes (returns) while the replay index
+ * still has unconsumed entries for this coroutine. See spec §6.3.
+ */
+export class EarlyReturnDivergenceError extends TerminalDivergenceError {
+  override name = "EarlyReturnDivergenceError";
+
+  constructor(coroutineId: CoroutineId, consumedCount: number, totalCount: number) {
+    super(coroutineId, consumedCount, totalCount, {
+      message:
+        `Divergence: generator ${coroutineId} returned after ${consumedCount} yields, ` +
+        `but journal has ${totalCount} yield entries`,
+    });
   }
 }
 

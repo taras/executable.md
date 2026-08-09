@@ -16,12 +16,17 @@
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { DurableCtx } from "./context.ts";
-import { EarlyReturnDivergenceError } from "./errors.ts";
+import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
+import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
 import type { Close, DurableEvent, Json, Workflow, WorkflowValue } from "./types.ts";
+
+function unalignedReplay(replayIndex: ReplayIndex, coroutineId: string) {
+  return replayIndex.firstUnaligned(coroutineId);
+}
 
 /**
  * Run the ReplayGuard check phase over all Yield events.
@@ -59,7 +64,8 @@ export interface DurableRunOptions {
  * 3. Runs the workflow — replayed effects resolve synchronously from
  *    the index; live effects execute and persist before resuming.
  * 4. On completion, appends a Close event to the stream.
- * 5. On error, appends a Close(err) event.
+ * 5. Before any Close, rejects durability failures and retained coroutine
+ *    history the current definition did not align with.
  *
  * Returns the workflow's result value.
  *
@@ -84,12 +90,14 @@ export function* durableRun<T extends WorkflowValue>(
   // is already installed by the caller before yield*-ing into durableRun.
   const scope = yield* useScope();
 
-  scope.set(DurableCtx, {
+  const ctx = {
     replayIndex,
     stream,
     coroutineId,
     childCounter: 0,
-  });
+    durability: {},
+  };
+  scope.set(DurableCtx, ctx);
 
   // ── REPLAY GUARD: Check phase ──
   // Run before the workflow starts. Middleware can yield* for I/O (hash
@@ -111,26 +119,25 @@ export function* durableRun<T extends WorkflowValue>(
       throw new Error("Workflow was cancelled");
     }
   }
+  replayIndex.claim(coroutineId);
 
   try {
     // Workflow<T> is structurally assignable to Operation<T>, so
     // yield* accepts it directly — no cast needed.
     const result: T = yield* workflow();
 
-    // §6.3: Check for early return divergence.
-    // If the generator returned but the replay index has unconsumed yields,
-    // the workflow has diverged. Skip this check when replay has been
-    // disabled (run-live mode) — the workflow intentionally diverged and
-    // the Divergence API already approved it.
-    if (!replayIndex.isReplayDisabled(coroutineId)) {
-      const unconsumed = replayIndex.firstUnconsumed();
-      if (unconsumed) {
-        throw new EarlyReturnDivergenceError(
-          unconsumed.coroutineId,
-          unconsumed.cursor,
-          unconsumed.totalYields,
-        );
-      }
+    const durabilityFailure = activeDurabilityFailure(ctx);
+    if (durabilityFailure) {
+      throw durabilityFailure;
+    }
+
+    const unconsumed = unalignedReplay(replayIndex, coroutineId);
+    if (unconsumed) {
+      throw new EarlyReturnDivergenceError(
+        unconsumed.coroutineId,
+        unconsumed.cursor,
+        unconsumed.totalYields,
+      );
     }
 
     const closeEvent: Close = {
@@ -139,14 +146,25 @@ export function* durableRun<T extends WorkflowValue>(
       result: { status: "ok", value: result as Json },
     };
 
-    yield* stream.append(closeEvent);
+    yield* appendDurableEvent(ctx, closeEvent);
 
     return result;
   } catch (error) {
-    // Normalize the error once — use the same Error object for both the
-    // Close event and the rethrow so that live runs and replayed Close
-    // events carry identical error shapes.
     const primary = error instanceof Error ? error : new Error(String(error));
+    const durabilityFailure = activeDurabilityFailure(ctx, primary);
+    if (durabilityFailure) {
+      throw durabilityFailure;
+    }
+    const unconsumed = unalignedReplay(replayIndex, coroutineId);
+    if (unconsumed) {
+      throw new TerminalDivergenceError(
+        unconsumed.coroutineId,
+        unconsumed.cursor,
+        unconsumed.totalYields,
+        { cause: primary },
+      );
+    }
+
     const closeEvent: Close = {
       type: "close",
       coroutineId,
@@ -157,12 +175,15 @@ export function* durableRun<T extends WorkflowValue>(
     };
 
     try {
-      yield* stream.append(closeEvent);
-    } catch (appendError) {
-      const appendFailure =
-        appendError instanceof Error ? appendError : new Error(String(appendError));
+      yield* appendDurableEvent(ctx, closeEvent);
+    } catch (closeError) {
+      const closeDurabilityFailure = activeDurabilityFailure(ctx, closeError);
+      if (closeDurabilityFailure) {
+        throw closeDurabilityFailure;
+      }
+      const closeFailure = closeError instanceof Error ? closeError : new Error(String(closeError));
       throw new AggregateError(
-        [primary, appendFailure],
+        [primary, closeFailure],
         "Workflow failed and Close append also failed",
       );
     }

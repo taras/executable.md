@@ -14,9 +14,26 @@
  * produces at most one journal event.
  */
 
-import type { Operation } from "effection";
+import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
+
+export interface DurableEventRejectionOccurrence {
+  rejected: boolean;
+  error?: unknown;
+}
+
+const EventRejectionOccurrence = createContext<DurableEventRejectionOccurrence | undefined>(
+  "effectionx.durable-streams.event-rejection-occurrence",
+  undefined,
+);
+
+export function withDurableEventRejectionOccurrence(
+  occurrence: DurableEventRejectionOccurrence,
+  operation: () => Operation<void>,
+): Operation<void> {
+  return EventRejectionOccurrence.with(occurrence, operation);
+}
 
 /**
  * A check that runs before a durable event is persisted.
@@ -50,7 +67,16 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       // The gate sees a copy so "inspect or reject" is enforced rather than
       // merely documented: the backend always receives the event the effect
       // produced, whatever the gate did to the one it was handed.
-      yield* gate(structuredClone(event));
+      try {
+        yield* gate(structuredClone(event));
+      } catch (error) {
+        const occurrence = yield* EventRejectionOccurrence.get();
+        if (occurrence !== undefined) {
+          occurrence.rejected = true;
+          occurrence.error = error;
+        }
+        throw error;
+      }
       yield* stream.append(event);
     },
   };

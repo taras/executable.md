@@ -43,9 +43,11 @@ export type { HttpDurableStreamHandle, HttpDurableStreamOptions } from "./http-s
 export {
   ContinuePastCloseDivergenceError,
   DivergenceError,
+  DurablePersistenceError,
   EarlyReturnDivergenceError,
   MalformedDurableEventError,
   StaleInputError,
+  TerminalDivergenceError,
 } from "./errors.ts";
 
 // Divergence API — pluggable policy for replay mismatches (DEC-031)
