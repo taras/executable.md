@@ -18,8 +18,8 @@ importers:
         specifier: 0.1.4
         version: 0.1.4(effection@4.1.0)
       '@effectionx/fetch':
-        specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0)
+        specifier: 0.2.1
+        version: 0.2.1(effection@4.1.0)
       '@effectionx/fs':
         specifier: 0.3.0
         version: 0.3.0(effection@4.1.0)
@@ -198,8 +198,8 @@ importers:
         specifier: 0.1.4
         version: 0.1.4(effection@4.1.0)
       '@effectionx/fetch':
-        specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0)
+        specifier: 0.2.1
+        version: 0.2.1(effection@4.1.0)
       '@effectionx/fs':
         specifier: 0.3.0
         version: 0.3.0(effection@4.1.0)
@@ -285,8 +285,8 @@ importers:
         specifier: 0.6.0
         version: 0.6.0(effection@4.1.0)
       '@effectionx/fetch':
-        specifier: 0.2.0
-        version: 0.2.0(effection@4.1.0)
+        specifier: 0.2.1
+        version: 0.2.1(effection@4.1.0)
       '@effectionx/fs':
         specifier: 0.3.0
         version: 0.3.0(effection@4.1.0)
@@ -524,8 +524,8 @@ packages:
     peerDependencies:
       effection: ^3 || ^4
 
-  '@effectionx/fetch@0.2.0':
-    resolution: {integrity: sha512-0W15D9WuFUI6PEApaimxppacgk1WvJNxYwQ+P/tjWTzrPOUK8wrGlj6bqLrgfEaXqyOpdHbFI1eEz7wq1BDubw==}
+  '@effectionx/fetch@0.2.1':
+    resolution: {integrity: sha512-sHzICpjEP+/gj70rBlYdmC4W4B5oeEwEuVQHkJJnaCKDxzJ1h6lps95nijQAbjsT8QbSt9Tm3px8jg7gNXJm7g==}
     peerDependencies:
       effection: ^3 || ^4
 
@@ -2682,7 +2682,7 @@ snapshots:
       '@effectionx/timebox': 0.4.3(effection@4.1.0)
       effection: 4.1.0
 
-  '@effectionx/fetch@0.2.0(effection@4.1.0)':
+  '@effectionx/fetch@0.2.1(effection@4.1.0)':
     dependencies:
       '@effectionx/context-api': 0.6.0(effection@4.1.0)
       effection: 4.1.0

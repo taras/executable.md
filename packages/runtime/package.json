@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@effectionx/context-api": "0.6.0",
-    "@effectionx/fetch": "0.2.0",
+    "@effectionx/fetch": "0.2.1",
     "@effectionx/fs": "0.3.0",
     "@effectionx/node": "0.2.4",
     "@effectionx/process": "0.8.1",

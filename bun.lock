@@ -7,7 +7,7 @@
         "@durable-streams/client": "^0.2.2",
         "@effectionx/context-api": "0.6.0",
         "@effectionx/converge": "0.1.4",
-        "@effectionx/fetch": "0.2.0",
+        "@effectionx/fetch": "0.2.1",
         "@effectionx/fs": "0.3.0",
         "@effectionx/middleware": "0.1.1",
         "@effectionx/node": "0.2.4",
@@ -90,7 +90,7 @@
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/converge": "0.1.4",
-        "@effectionx/fetch": "0.2.0",
+        "@effectionx/fetch": "0.2.1",
         "@effectionx/fs": "0.3.0",
         "@effectionx/middleware": "0.1.1",
         "@effectionx/node": "0.2.4",
@@ -129,7 +129,7 @@
       "version": "0.7.0",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
-        "@effectionx/fetch": "0.2.0",
+        "@effectionx/fetch": "0.2.1",
         "@effectionx/fs": "0.3.0",
         "@effectionx/node": "0.2.4",
         "@effectionx/process": "0.8.1",
@@ -210,6 +210,7 @@
       "version": "0.7.0",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
+        "@effectionx/fs": "0.3.0",
         "@executablemd/core": "workspace:*",
         "@executablemd/durable-streams": "workspace:*",
         "@executablemd/runtime": "workspace:*",
@@ -240,7 +241,7 @@
 
     "@effectionx/converge": ["@effectionx/converge@0.1.4", "", { "dependencies": { "@effectionx/timebox": "0.4.3" }, "peerDependencies": { "effection": "^3 || ^4" } }, "sha512-M11KU7jK3gOFGI4RT+Bf6ITMJntzzoGEO2KPx9r8uBoR+Rgwiyeuq+OeIHkuiHLUC+bB1g93KOj7aKR/G0F1/Q=="],
 
-    "@effectionx/fetch": ["@effectionx/fetch@0.2.0", "", { "dependencies": { "@effectionx/context-api": "0.6.0" }, "peerDependencies": { "effection": "^3 || ^4" } }, "sha512-0W15D9WuFUI6PEApaimxppacgk1WvJNxYwQ+P/tjWTzrPOUK8wrGlj6bqLrgfEaXqyOpdHbFI1eEz7wq1BDubw=="],
+    "@effectionx/fetch": ["@effectionx/fetch@0.2.1", "", { "dependencies": { "@effectionx/context-api": "0.6.0" }, "peerDependencies": { "effection": "^3 || ^4" } }, "sha512-sHzICpjEP+/gj70rBlYdmC4W4B5oeEwEuVQHkJJnaCKDxzJ1h6lps95nijQAbjsT8QbSt9Tm3px8jg7gNXJm7g=="],
 
     "@effectionx/fs": ["@effectionx/fs@0.3.0", "", { "dependencies": { "@effectionx/context-api": "0.6.0" }, "peerDependencies": { "effection": "^3 || ^4" } }, "sha512-I8RSIU80twN1WdeYRPD3utRD+niORiS08U0+LPNphwum94rwa/wHQNQUtNe19Bfbll+3GQxvJF+M95dYZSVxdQ=="],
 
