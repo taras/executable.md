@@ -18,6 +18,48 @@ import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
+const inheritProvenance = Symbol.for("executablemd.durable-stream.inherit-provenance");
+
+interface ProvenancedDurableStream extends DurableStream {
+  [inheritProvenance]?: (target: DurableStream) => void;
+}
+
+/** Opaque proof that a stream is one specific backend or a guarded view of it. */
+export interface DurableStreamProvenance {
+  matches(stream: DurableStream): boolean;
+}
+
+/** Claim a stream identity without exposing the identity itself. */
+export function claimDurableStreamProvenance(stream: DurableStream): DurableStreamProvenance {
+  const source: ProvenancedDurableStream = stream;
+  if (source[inheritProvenance] !== undefined) {
+    throw new Error("this durable stream already has a provenance owner");
+  }
+  const members = new WeakSet<DurableStream>([stream]);
+  const inherit = (target: DurableStream): void => {
+    members.add(target);
+    Object.defineProperty(target, inheritProvenance, {
+      configurable: false,
+      enumerable: false,
+      value: inherit,
+      writable: false,
+    });
+  };
+  inherit(stream);
+  return Object.freeze({
+    matches(candidate: DurableStream): boolean {
+      return members.has(candidate);
+    },
+  });
+}
+
+function inheritDurableStreamProvenance(source: DurableStream, target: DurableStream): void {
+  const inherit = Reflect.get(source, inheritProvenance);
+  if (typeof inherit === "function") {
+    Reflect.apply(inherit, undefined, [target]);
+  }
+}
+
 export interface DurableEventRejectionOccurrence {
   rejected: boolean;
   error?: unknown;
@@ -60,7 +102,7 @@ export type DurableEventGate = (event: DurableEvent) => Operation<void>;
  * event with an `err` result, and that close crosses the gate on its own.
  */
 export function guardDurableStream(stream: DurableStream, gate: DurableEventGate): DurableStream {
-  return {
+  const guarded: DurableStream = {
     readAll: () => stream.readAll(),
 
     *append(event: DurableEvent): Operation<void> {
@@ -80,4 +122,6 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       yield* stream.append(event);
     },
   };
+  inheritDurableStreamProvenance(stream, guarded);
+  return guarded;
 }

@@ -6,6 +6,7 @@ import {
   type ActivateDurabilityFailure,
   durableCall,
   durableRun,
+  type DurableStream,
   InMemoryStream,
   type DurableEvent,
   type Json,
@@ -57,10 +58,11 @@ describe("Tier DLC — Workspace coordination selection", () => {
     const coordinated: string[] = [];
     const ordinary: string[] = [];
     yield* WorkspaceCoordination.around({
-      *run<T extends Json>([execute, publish, _activateFailure]: [
+      *run<T extends Json>([execute, publish, _activateFailure, _stream]: [
         () => Operation<T>,
         (result: Result) => Operation<void>,
         ActivateDurabilityFailure,
+        DurableStream,
       ]): Operation<Result> {
         coordinated.push("workspace");
         const result: Result = { status: "ok", value: yield* execute() };

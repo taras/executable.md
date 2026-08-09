@@ -2,6 +2,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import {
   type ActivateDurabilityFailure,
   type DurableEffect,
+  type DurableStream,
   type EffectDescription,
   type Json,
   type LiveDurableOperationCoordinator,
@@ -23,28 +24,6 @@ import {
   withPrivateWorkspaceTransaction,
   workflowRunTransactionToken,
 } from "./private.ts";
-
-export type WorkspaceEffectPhase =
-  | "transaction-open"
-  | "before-mutation"
-  | "mutation-complete"
-  | "mutation-rolled-back"
-  | "root-published"
-  | "before-publication"
-  | "publication-complete"
-  | "before-commit";
-
-interface WorkspaceEffectPhaseApi {
-  reach(phase: WorkspaceEffectPhase): Operation<void>;
-}
-
-export const WorkspaceEffectPhases: Api<WorkspaceEffectPhaseApi> =
-  createApi<WorkspaceEffectPhaseApi>("executablemd.workflow.deno.workspace.effect.phases", {
-    // deno-lint-ignore require-yield
-    *reach(_phase: WorkspaceEffectPhase): Operation<void> {
-      return undefined;
-    },
-  });
 
 export type DenoWorkspaceMutation<T extends Json> = (
   filesystem: DenoWorkspaceFilesystem,
@@ -75,6 +54,8 @@ const WorkspaceMutation: Api<WorkspaceMutationApi> = createApi<WorkspaceMutation
     },
   },
 );
+
+const workspaceEffectOwner = Symbol.for("executablemd.workflow.deno.workspace.effect.owner");
 
 interface DenoWorkspaceCoordinationApi {
   bind<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T>;
@@ -123,40 +104,43 @@ function* coordinateTransaction<T extends Json>(
   publish: (result: DurableResult) => Operation<void>,
 ): Operation<DurableResult> {
   const token = yield* workflowRunTransactionToken(database, transaction);
-  yield* WorkspaceEffectPhases.operations.reach("transaction-open");
-  yield* WorkspaceEffectPhases.operations.reach("before-mutation");
 
   let result: DurableResult;
   try {
     const value = yield* savepoint(runMutation(database, workspace, execute));
-    yield* WorkspaceEffectPhases.operations.reach("mutation-complete");
     result = { status: "ok", value };
-    yield* workspace.capture({ publish: true });
-    yield* WorkspaceEffectPhases.operations.reach("root-published");
+    const root = yield* workspace.capture();
+    yield* workspace.publish(root.rootId);
   } catch (error) {
     if (!isJournalableWorkspaceFailure(error)) {
       throw error;
     }
     result = { status: "err", error: serializeError(error) };
-    yield* WorkspaceEffectPhases.operations.reach("mutation-rolled-back");
   }
 
-  yield* WorkspaceEffectPhases.operations.reach("before-publication");
   yield* withEnlistedJournalRoute(database, transaction, token, publish(result));
-  yield* WorkspaceEffectPhases.operations.reach("publication-complete");
-  yield* WorkspaceEffectPhases.operations.reach("before-commit");
   return result;
 }
 
-function coordinator(database: WorkflowRunDatabase): LiveDurableOperationCoordinator {
+function coordinator(
+  connections: WorkflowRunConnections,
+  database: WorkflowRunDatabase,
+): LiveDurableOperationCoordinator {
   return {
     *run<T extends Json>(
       execute: () => Operation<T>,
       publish: (result: DurableResult) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
+      stream: DurableStream,
     ): Operation<DurableResult> {
       let transacted;
       try {
+        if (Reflect.get(execute, workspaceEffectOwner) !== database) {
+          throw new WorkflowTransactionError(
+            "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
+          );
+        }
+        connections.validateJournal(database, stream);
         transacted = yield* database.transact(function* (transaction) {
           return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
             coordinateTransaction(database, transaction, workspace, execute, publish),
@@ -173,23 +157,22 @@ function coordinator(database: WorkflowRunDatabase): LiveDurableOperationCoordin
   };
 }
 
-export function useDenoWorkspaceEffectCoordination(
-  connections: WorkflowRunConnections,
-): Operation<void> {
+export function useWorkspaceEffects(connections: WorkflowRunConnections): Operation<void> {
   return DenoWorkspaceCoordination.around(
     {
       *bind<T>([database, operation]: [WorkflowRunDatabase, Operation<T>]): Operation<T> {
         connections.validateLease(database);
         return yield* scoped(function* () {
-          const selected = coordinator(database);
+          const selected = coordinator(connections, database);
           yield* WorkspaceCoordination.around(
             {
-              *run<Candidate extends Json>([execute, publish, activateFailure]: [
+              *run<Candidate extends Json>([execute, publish, activateFailure, stream]: [
                 () => Operation<Candidate>,
                 (result: DurableResult) => Operation<void>,
                 ActivateDurabilityFailure,
+                DurableStream,
               ]): Operation<DurableResult> {
-                return yield* selected.run(execute, publish, activateFailure);
+                return yield* selected.run(execute, publish, activateFailure, stream);
               },
             },
             { at: "min" },
@@ -202,19 +185,24 @@ export function useDenoWorkspaceEffectCoordination(
   );
 }
 
-export function withDenoWorkspaceEffectCoordination<T>(
+export function withWorkspaceEffects<T>(
   database: WorkflowRunDatabase,
   operation: Operation<T>,
 ): Operation<T> {
   return DenoWorkspaceCoordination.operations.bind(database, operation);
 }
 
-export function createDenoWorkspaceOperation<T extends Json>(
+export function createWorkspaceProofEffect<T extends Json>(
   database: WorkflowRunDatabase,
   description: EffectDescription,
   mutate: DenoWorkspaceMutation<T>,
 ): DurableEffect<T> {
-  return createDurableWorkspaceOperation(description, () =>
-    WorkspaceMutation.operations.run(database, mutate),
-  );
+  const execute = () => WorkspaceMutation.operations.run(database, mutate);
+  Object.defineProperty(execute, workspaceEffectOwner, {
+    configurable: false,
+    enumerable: false,
+    value: database,
+    writable: false,
+  });
+  return createDurableWorkspaceOperation(description, execute);
 }

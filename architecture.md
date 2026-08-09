@@ -402,7 +402,12 @@ The shared Workspace durable-operation wrapper selects a contextual Workspace
 coordinator explicitly. Its default fails before execution or publication, so
 installing no provider cannot leak a mutation outside its transaction. Selecting
 Workspace coordination for one operation does not enlist unrelated durable
-operations in the same scope.
+operations in the same scope. The Deno adapter claims an opaque provenance for
+each WorkflowRun journal, which the existing secret guard preserves on its
+filtered wrapper. Before it opens a transaction, the adapter requires both the
+proof effect and the live stream to belong to the selected WorkflowRun. An
+in-memory stream, another run's journal, or an unproven wrapper is refused
+before mutation or publication.
 
 Every Workspace-local expansion publishes one effect through one effect
 transaction:
@@ -424,8 +429,11 @@ Successful effect coordination finishes the mutation scope, including child
 cleanup, before capturing the resulting root. The Deno provider installs that
 ordering for its adapter-private Workspace proof operation: the mutation
 savepoint, root publication, filtered routed Yield, and caller-owned transaction
-commit form one boundary. Public filesystem components and workflow lifecycle
-commands do not yet select that operation.
+commit form one boundary. The proof filesystem uses the pinned synchronous DOFS
+entry points for its string and byte-array surface, so cancellation leaves no
+eager promise or stream pull able to reach the connection after transaction
+authority ends. Public filesystem components and workflow lifecycle commands do
+not yet select that operation.
 
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the

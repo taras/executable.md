@@ -372,6 +372,7 @@ export function createDurableOperation<T extends Json>(
               yield* appendDurableEvent(ctx, event);
             },
             activateFailure,
+            ctx.stream,
           );
           resolve(protocolToEffection<T>(result));
         } catch (err) {

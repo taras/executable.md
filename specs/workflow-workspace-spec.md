@@ -817,7 +817,11 @@ lifecycle contracts; documents do not choose that topology.
 
 The Deno provider's adapter-private proof operation already coordinates one
 real DOFS mutation savepoint, immutable root publication and filtered durable
-Yield in the caller-owned transaction. It distinguishes a documented
+Yield in the caller-owned transaction. Before opening that transaction it
+requires the proof effect and guarded durable stream to carry the selected
+WorkflowRun's exact provider-owned authority. Its supported filesystem calls
+use synchronous pinned DOFS primitives, leaving no asynchronous continuation
+after mutation teardown. It distinguishes a documented
 filesystem refusal from infrastructure failure and cancellation, and activates
 the durable fail-stop fence for infrastructure failures. This foundation is not
 a public filesystem effect: `<File>`, `API.Files`, workflow start/resume and

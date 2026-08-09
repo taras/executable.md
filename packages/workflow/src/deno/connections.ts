@@ -1,6 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
+import {
+  claimDurableStreamProvenance,
+  type DurableStream,
+  type DurableStreamProvenance,
+} from "@executablemd/durable-streams";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { WorkspaceFilesystem } from "../../vendor/cloudflare-computer-dofs/generated/fs/filesystem.js";
@@ -36,6 +41,7 @@ export interface RunConnectionLease {
   readonly generation: ConnectionGeneration;
   readonly path: string;
   readonly database: WorkflowRunDatabase;
+  journalProvenance: DurableStreamProvenance | undefined;
   open: boolean;
 }
 
@@ -70,8 +76,10 @@ export interface RunConnection {
 export interface WorkflowRunConnections {
   at(path: string): RunConnection;
   registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease;
+  registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   closeLease(lease: RunConnectionLease): void;
   validateLease(database: WorkflowRunDatabase): RunConnectionLease;
+  validateJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   authorizeTransaction(
     database: WorkflowRunDatabase,
     transaction: WorkflowRunTransaction,
@@ -337,10 +345,21 @@ export function createWorkflowRunConnections(
         generation: connection.generation,
         path: connection.path,
         database,
+        journalProvenance: undefined,
         open: true,
       };
       leases.set(database, lease);
       return lease;
+    },
+
+    registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void {
+      const lease = validateLease(database);
+      if (lease.journalProvenance !== undefined) {
+        throw new WorkflowTransactionError(
+          "the WorkflowRun database journal identity is already installed.",
+        );
+      }
+      lease.journalProvenance = claimDurableStreamProvenance(journal);
     },
 
     closeLease(lease: RunConnectionLease): void {
@@ -348,6 +367,15 @@ export function createWorkflowRunConnections(
     },
 
     validateLease,
+
+    validateJournal(database: WorkflowRunDatabase, journal: DurableStream): void {
+      const provenance = validateLease(database).journalProvenance;
+      if (provenance === undefined || !provenance.matches(journal)) {
+        throw new WorkflowTransactionError(
+          "the live Workspace journal is foreign to the selected WorkflowRun database.",
+        );
+      }
+    },
     authorizeTransaction,
 
     issueToken(

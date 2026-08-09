@@ -7035,9 +7035,17 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC5 | Secret-filter refusal | The existing gate runs before routed insertion; rejection rolls back the outer transaction and activates no compensating event |
 | WAC6 | Cancellation | Cancellation before mutation, during mutation and during child teardown publishes no state or event |
 | WAC7 | Infrastructure fail-stop | A caught provider infrastructure failure retains identity, rolls back everything and prevents later Workspace and ordinary durable execution |
-| WAC8 | Concurrency isolation | An unrelated same-run append waits without enlisting while a different run remains usable inside the outer transaction scope |
+| WAC8 | Concurrency isolation | A second same-run handle waits cooperatively without enlisting while a different run remains usable inside the outer transaction scope |
 | WAC9 | Replay | A retained Workspace Yield bypasses the Deno coordinator and mutation completely |
-| WAC10 | Authority | Closed or foreign authority is refused before the mutation runs |
+| WAC10 | Effect authority | Missing, foreign, closed and stale proof authority is refused before savepoint SQL or mutation |
+| WAC11 | Publication provenance | An in-memory stream or another WorkflowRun journal is refused before mutation or publication and retains no event |
+| WAC12 | Post-publication rollback | A transaction-owner failure after the routed append rolls mutation, retained root, pointer and event back and fences later work |
+| WAC13 | Pre-commit cancellation | Cancellation after routed publication but before commit retains no mutation, root, pointer, Yield or Close |
+| WAC14 | DOFS continuation lifetime | Cancellation while a real adapter read or write is pending tears its scope down before savepoint rollback, leaves no asynchronous DOFS continuation and keeps the connection usable |
+| WAC15 | Mutation teardown failure | Child-teardown failure rolls the mutation and outer transaction back, activates that infrastructure failure and fences later work |
+| WAC16 | Current-root failure | A real current-root update refusal rolls the captured root, live mutation, pointer and event back |
+| WAC17 | Existing fail-stop precedence | An already-active `DurablePersistenceError` retains exact identity and prevents Workspace coordination and mutation |
+| WAC18 | Savepoint SQL failure | Actual savepoint create, rollback and release refusals poison the coordinated outer transaction and publish nothing |
 
 ### Tier WTX — WorkflowRun savepoints and transaction authority
 

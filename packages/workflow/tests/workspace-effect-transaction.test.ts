@@ -1,10 +1,12 @@
-import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
+import { constants, DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   durableCall,
   durableRun,
   guardDurableStream,
+  InMemoryStream,
   type DurableEvent,
   DurablePersistenceError,
   type Json,
@@ -12,16 +14,31 @@ import {
   type Yield,
 } from "@executablemd/durable-streams";
 import { ensure, type Operation, scoped, spawn, suspend, withResolvers } from "effection";
-import type { WorkflowRunDatabase } from "../mod.ts";
+import { createDurableWorkspaceOperation, type WorkflowRunDatabase } from "../mod.ts";
+import { createWorkflowRunConnections, type RunConnection } from "../src/deno/connections.ts";
 import {
-  createDenoWorkspaceOperation,
-  withDenoWorkspaceEffectCoordination,
-  WorkspaceEffectPhases,
-  type WorkspaceEffectPhase,
+  openWorkflowRunDatabase,
+  readRunRow,
+  WorkflowTransactionCommit,
+} from "../src/deno/database.ts";
+import { useJournalRouting } from "../src/deno/journal-route.ts";
+import { SavepointObservation, type SavepointObserver } from "../src/deno/savepoints.ts";
+import { initializeSchema } from "../src/deno/schema.ts";
+import {
+  createWorkspaceProofEffect,
+  useWorkspaceEffects,
+  withWorkspaceEffects,
 } from "../src/deno/workspace/effect.ts";
-import type { DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
+import { definitionToJson } from "../src/storage/definition.ts";
+import { canonicalJson } from "../src/storage/record.ts";
+import {
+  type DenoWorkspaceFilesystem,
+  WorkspaceFilesystemOperations,
+  type WorkspaceFilesystemOperationEvent,
+} from "../src/deno/workspace/filesystem.ts";
 import {
   setPrivateWorkspaceClock,
+  usePrivateWorkspace,
   withPrivateWorkspaceTransaction,
 } from "../src/deno/workspace/private.ts";
 import {
@@ -29,7 +46,9 @@ import {
   committedEventCount,
   createRun,
   refuseJournalInsertNamed,
+  request,
   runPath,
+  tamper,
   useStorageRoot,
   withStorage,
 } from "./support/storage.ts";
@@ -55,7 +74,7 @@ function* workspaceStep(
   name: string,
   mutate: (filesystem: DenoWorkspaceFilesystem) => Operation<Json>,
 ): Workflow<void> {
-  yield createDenoWorkspaceOperation(database, { type: "workspace-proof", name }, mutate);
+  yield createWorkspaceProofEffect(database, { type: "workspace-proof", name }, mutate);
 }
 
 function* inspectWorkspace(
@@ -98,6 +117,82 @@ function journalRoot(path: string, name: string): string | undefined {
   }
 }
 
+function retainedRootCount(path: string): number {
+  const sqlite = new DatabaseSync(path);
+  try {
+    const value = sqlite.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"];
+    return typeof value === "number" ? value : Number(value);
+  } finally {
+    sqlite.close();
+  }
+}
+
+function withDirectWorkspaceStorage<T>(
+  root: string,
+  name: string,
+  observe: SavepointObserver,
+  body: (database: WorkflowRunDatabase, connection: RunConnection) => Operation<T>,
+): Operation<T> {
+  return scoped(function* () {
+    const path = join(root, `${name}.sqlite`);
+    const connections = createWorkflowRunConnections(observe);
+    yield* ensure(() => connections.close());
+    const connection = connections.at(path);
+    const wanted = request({ runId: name });
+    const stamp = new Date(1_750_000_000_000).toISOString();
+    connection.database.exec("BEGIN IMMEDIATE");
+    const initializing = connection.beginTransaction();
+    try {
+      initializeSchema(connection.database, connection.dofs, () => {
+        connection.database
+          .prepare(
+            `INSERT INTO workflow_run
+              (id, run_id, definition, base, props, status, created_at, updated_at)
+              VALUES (1, ?, ?, ?, ?, 'running', ?, ?)`,
+          )
+          .run(
+            wanted.runId,
+            canonicalJson(definitionToJson(wanted.definition)),
+            wanted.base,
+            canonicalJson(wanted.props),
+            stamp,
+            stamp,
+          );
+      });
+      connection.validateTransaction(initializing);
+      connection.finishTransaction(initializing);
+      connection.database.exec("COMMIT");
+    } catch (error) {
+      if (initializing.open) {
+        connection.finishTransaction(initializing);
+      }
+      connection.database.exec("ROLLBACK");
+      throw error;
+    }
+
+    yield* useJournalRouting(connections);
+    yield* usePrivateWorkspace(connections);
+    yield* useWorkspaceEffects(connections);
+    const database = yield* openWorkflowRunDatabase({
+      connection,
+      connections,
+      record: readRunRow(connection.database, path),
+    });
+    return yield* body(database, connection);
+  });
+}
+
+function setSqliteAuthorizer(
+  database: DatabaseSync,
+  authorize: ((action: number, operation: string | null, name: string | null) => number) | null,
+): void {
+  const install = Reflect.get(database, "setAuthorizer");
+  if (typeof install !== "function") {
+    throw new Error("this Deno node:sqlite adapter does not expose setAuthorizer");
+  }
+  Reflect.apply(install, database, [authorize]);
+}
+
 describe("Tier WAC — atomic provider-level Workspace effects", () => {
   it("WAC1: mutation, root, filtered Yield and commit become visible together", function* () {
     const root = yield* useStorageRoot();
@@ -108,27 +203,33 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       yield* setPrivateWorkspaceClock(database, () => 1_750_000_000_000);
       const baseline = yield* inspectWorkspace(database, "/kept.txt");
       const path = runPath(root, runId);
-      const phases: WorkspaceEffectPhase[] = [];
-      yield* WorkspaceEffectPhases.around({
-        *reach([phase]: [WorkspaceEffectPhase]): Operation<void> {
-          phases.push(phase);
-          if (phase === "before-commit") {
-            const observer = new DatabaseSync(path);
-            try {
-              expect(committedEventCount(path)).toBe(0);
-              expect(
-                observer.prepare("SELECT current_root_id FROM workspace_state").get()?.[
-                  "current_root_id"
-                ],
-              ).toBe(baseline.root);
-              expect(
-                observer
-                  .prepare("SELECT COUNT(*) AS count FROM vfs_dirents WHERE name = 'kept.txt'")
-                  .get()?.["count"],
-              ).toBe(0);
-            } finally {
-              observer.close();
-            }
+      let gateCalls = 0;
+      let observePendingCommit = true;
+      const guarded = guardDurableStream(database.journal, function* (event) {
+        if (event.type === "yield") {
+          gateCalls += 1;
+        }
+      });
+      yield* WorkflowTransactionCommit.around({
+        *beforeCommit([candidate]: [WorkflowRunDatabase]): Operation<void> {
+          if (!observePendingCommit || candidate !== database) {
+            return;
+          }
+          const observer = new DatabaseSync(path);
+          try {
+            expect(committedEventCount(path)).toBe(0);
+            expect(
+              observer.prepare("SELECT current_root_id FROM workspace_state").get()?.[
+                "current_root_id"
+              ],
+            ).toBe(baseline.root);
+            expect(
+              observer
+                .prepare("SELECT COUNT(*) AS count FROM vfs_dirents WHERE name = 'kept.txt'")
+                .get()?.["count"],
+            ).toBe(0);
+          } finally {
+            observer.close();
           }
         },
       });
@@ -141,25 +242,15 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         return "done";
       }
 
-      expect(
-        yield* withDenoWorkspaceEffectCoordination(
-          database,
-          durableRun(workflow, { stream: database.journal }),
-        ),
-      ).toBe("done");
+      expect(yield* withWorkspaceEffects(database, durableRun(workflow, { stream: guarded }))).toBe(
+        "done",
+      );
+      observePendingCommit = false;
       const committed = yield* inspectWorkspace(database, "/kept.txt");
       expect(committed.content).toBe("atomic bytes");
       expect(committed.root).not.toBe(baseline.root);
       expect(journalRoot(path, "write")).toBe(committed.root);
-      expect(phases).toEqual([
-        "transaction-open",
-        "before-mutation",
-        "mutation-complete",
-        "root-published",
-        "before-publication",
-        "publication-complete",
-        "before-commit",
-      ]);
+      expect(gateCalls).toBe(1);
 
       const next = yield* database.transact(function* (transaction) {
         return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
@@ -201,10 +292,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         });
       }
 
-      yield* withDenoWorkspaceEffectCoordination(
-        database,
-        durableRun(workflow, { stream: database.journal }),
-      );
+      yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
       const inspected = yield* database.transact(function* (transaction) {
         return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
           return {
@@ -249,10 +337,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         }
       }
 
-      yield* withDenoWorkspaceEffectCoordination(
-        database,
-        durableRun(workflow, { stream: database.journal }),
-      );
+      yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
       expect(caught).toBeInstanceOf(Error);
       if (!(caught instanceof Error)) {
         throw new Error("the failed Workspace result did not restore an Error");
@@ -294,10 +379,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       }
 
       const failure = yield* raised(
-        withDenoWorkspaceEffectCoordination(
-          database,
-          durableRun(workflow, { stream: database.journal }),
-        ),
+        withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
       );
       expect(failure).toBeInstanceOf(DurablePersistenceError);
       expect(failure).toBe(caught);
@@ -334,7 +416,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       }
 
       const failure = yield* raised(
-        withDenoWorkspaceEffectCoordination(database, durableRun(workflow, { stream: guarded })),
+        withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
       );
       expect(failure).toBe(gateFailure);
       expect(gateCalls).toBe(1);
@@ -354,19 +436,13 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           const baseline = yield* inspectWorkspace(database, path);
           const reached = withResolvers<void>();
           const release = withResolvers<void>();
-          if (point === "before") {
-            yield* WorkspaceEffectPhases.around({
-              *reach([phase]: [WorkspaceEffectPhase]): Operation<void> {
-                if (phase === "before-mutation") {
-                  reached.resolve();
-                  yield* suspend();
-                }
-              },
-            });
-          }
 
           function* workflow(): Workflow<void> {
             yield* workspaceStep(database, `cancel-${point}`, function* (filesystem) {
+              if (point === "before") {
+                reached.resolve();
+                yield* suspend();
+              }
               yield* filesystem.writeFile(path, "cancelled");
               if (point === "during") {
                 reached.resolve();
@@ -389,10 +465,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           }
 
           const task = yield* spawn(() =>
-            withDenoWorkspaceEffectCoordination(
-              database,
-              durableRun(workflow, { stream: database.journal }),
-            ),
+            withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
           );
           yield* reached.operation;
           const halting = yield* spawn(() => task.halt());
@@ -409,20 +482,22 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
 
   it("WAC7: infrastructure failure poisons later Workspace and ordinary effects", function* () {
     const root = yield* useStorageRoot();
-    const infrastructureFailure = new Error("root publication phase failed");
 
     yield* withStorage(root, function* () {
-      const database = yield* createRun({ runId: "atomic-poison" });
+      const runId = "atomic-poison";
+      const database = yield* createRun({ runId });
       const baseline = yield* inspectWorkspace(database, "/poisoned.txt");
+      const path = runPath(root, runId);
       let caught: unknown;
       let laterWorkspace = 0;
       let laterOrdinary = 0;
-      yield* WorkspaceEffectPhases.around({
-        *reach([phase]: [WorkspaceEffectPhase]): Operation<void> {
-          if (phase === "root-published") {
-            throw infrastructureFailure;
-          }
-        },
+      tamper(path, (sqlite) => {
+        sqlite.exec(`
+          CREATE TRIGGER refuse_root_capture BEFORE INSERT ON workspace_roots
+          BEGIN
+            SELECT raise(ABORT, 'root capture refused');
+          END
+        `);
       });
 
       function* workflow(): Workflow<void> {
@@ -445,14 +520,12 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       }
 
       const escaped = yield* raised(
-        withDenoWorkspaceEffectCoordination(
-          database,
-          durableRun(workflow, { stream: database.journal }),
-        ),
+        withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
       );
-      expect(escaped).toBe(infrastructureFailure);
-      expect(caught).toBe(infrastructureFailure);
+      expect(escaped).toBe(caught);
+      expect(escaped).toBeInstanceOf(Error);
       expect({ laterWorkspace, laterOrdinary }).toEqual({ laterWorkspace: 0, laterOrdinary: 0 });
+      tamper(path, (sqlite) => sqlite.exec("DROP TRIGGER refuse_root_capture"));
       expect(yield* inspectWorkspace(database, "/poisoned.txt")).toEqual(baseline);
       expect(yield* database.journal.readAll()).toEqual([]);
     });
@@ -463,6 +536,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
 
     yield* withStorage(root, function* () {
       const first = yield* createRun({ runId: "atomic-concurrent-first" });
+      const sameRun = yield* createRun({ runId: "atomic-concurrent-first" });
       const second = yield* createRun({ runId: "atomic-concurrent-second" });
       const mutationStarted = withResolvers<void>();
       const releaseMutation = withResolvers<void>();
@@ -488,11 +562,11 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       }
 
       const effect = yield* spawn(() =>
-        withDenoWorkspaceEffectCoordination(first, durableRun(workflow, { stream: first.journal })),
+        withWorkspaceEffects(first, durableRun(workflow, { stream: first.journal })),
       );
       yield* mutationStarted.operation;
       const append = yield* spawn(function* () {
-        yield* first.journal.append(unrelated);
+        yield* sameRun.journal.append(unrelated);
         unrelatedFinished = true;
       });
       expect(unrelatedFinished).toBe(false);
@@ -517,12 +591,6 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         result: { status: "ok", value: "retained" },
       });
       let mutations = 0;
-      let phases = 0;
-      yield* WorkspaceEffectPhases.around({
-        *reach(): Operation<void> {
-          phases += 1;
-        },
-      });
       function* workflow(): Workflow<string> {
         yield* workspaceStep(database, "replayed", function* () {
           mutations += 1;
@@ -532,18 +600,21 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       }
 
       expect(
-        yield* withDenoWorkspaceEffectCoordination(
-          database,
-          durableRun(workflow, { stream: database.journal }),
-        ),
+        yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
       ).toBe("done");
-      expect({ mutations, phases }).toEqual({ mutations: 0, phases: 0 });
+      expect(mutations).toBe(0);
     });
   });
 
   it("WAC10: closed and foreign database authority reaches no mutation", function* () {
     const root = yield* useStorageRoot();
     let closed: WorkflowRunDatabase | undefined;
+    const savepoints: string[] = [];
+    yield* SavepointObservation.set((event) => {
+      if (event.kind === "create") {
+        savepoints.push(event.name);
+      }
+    });
 
     yield* withStorage(root, function* () {
       const first = yield* createRun({ runId: "atomic-authority-first" });
@@ -556,37 +627,494 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           return null;
         });
       }
+      savepoints.length = 0;
       expect(
         yield* raised(
-          withDenoWorkspaceEffectCoordination(
-            first,
-            durableRun(foreignWorkflow, { stream: first.journal }),
-          ),
+          withWorkspaceEffects(first, durableRun(foreignWorkflow, { stream: first.journal })),
         ),
       ).toBeInstanceOf(Error);
       expect(foreignMutations).toBe(0);
+      expect(savepoints).toEqual([]);
+
+      let missingMutations = 0;
+      function* missingWorkflow(): Workflow<void> {
+        yield createDurableWorkspaceOperation(
+          { type: "workspace-proof", name: "missing-authority" },
+          function* () {
+            missingMutations += 1;
+            return null;
+          },
+        );
+      }
+      expect(
+        yield* raised(
+          withWorkspaceEffects(first, durableRun(missingWorkflow, { stream: first.journal })),
+        ),
+      ).toBeInstanceOf(Error);
+      expect(missingMutations).toBe(0);
+      expect(savepoints).toEqual([]);
       expect(yield* first.journal.readAll()).toEqual([]);
       expect(yield* second.journal.readAll()).toEqual([]);
     });
     if (closed === undefined) {
       throw new Error("the closed database proof did not retain its handle");
     }
-    const database = closed;
-    let mutations = 0;
-    function* workflow(): Workflow<void> {
-      yield* workspaceStep(database, "closed", function* () {
-        mutations += 1;
-        return null;
+    const stale = closed;
+    yield* withStorage(root, function* () {
+      const current = yield* createRun({ runId: "atomic-authority-first" });
+      let mutations = 0;
+      function* workflow(): Workflow<void> {
+        yield* workspaceStep(stale, "closed", function* () {
+          mutations += 1;
+          return null;
+        });
+      }
+      savepoints.length = 0;
+      expect(
+        yield* raised(withWorkspaceEffects(stale, durableRun(workflow, { stream: stale.journal }))),
+      ).toBeInstanceOf(Error);
+      expect(mutations).toBe(0);
+      expect(savepoints).toEqual([]);
+      expect(yield* current.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC11: foreign publication destinations are refused before mutation", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const selected = yield* createRun({ runId: "atomic-destination-selected" });
+      const other = yield* createRun({ runId: "atomic-destination-other" });
+      const baseline = yield* inspectWorkspace(selected, "/wrong-destination.txt");
+
+      for (const stream of [new InMemoryStream(), other.journal]) {
+        let mutations = 0;
+        let caught: unknown;
+        let laterExecutions = 0;
+        function* workflow(): Workflow<void> {
+          try {
+            yield* workspaceStep(selected, "wrong-destination", function* (filesystem) {
+              mutations += 1;
+              yield* filesystem.writeFile("/wrong-destination.txt", "must not run");
+              return null;
+            });
+          } catch (error) {
+            caught = error;
+          }
+          yield* durableCall("fenced-after-wrong-destination", function* () {
+            laterExecutions += 1;
+            return null;
+          });
+        }
+
+        const failure = yield* raised(
+          withWorkspaceEffects(selected, durableRun(workflow, { stream })),
+        );
+        expect(failure).toBe(caught);
+        expect(failure).toBeInstanceOf(Error);
+        expect(mutations).toBe(0);
+        expect(laterExecutions).toBe(0);
+        expect(yield* inspectWorkspace(selected, "/wrong-destination.txt")).toEqual(baseline);
+        expect(yield* selected.journal.readAll()).toEqual([]);
+        expect(yield* other.journal.readAll()).toEqual([]);
+        if (stream instanceof InMemoryStream) {
+          expect(stream.snapshot()).toEqual([]);
+        }
+      }
+    });
+  });
+
+  it("WAC12: failure after routed publication rolls the whole transaction back", function* () {
+    const root = yield* useStorageRoot();
+    const commitFailure = new Error("transaction owner refused commit");
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-post-publication";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/post-publication.txt");
+      const roots = retainedRootCount(path);
+      let armed = true;
+      let gateCalls = 0;
+      let caught: unknown;
+      let laterExecutions = 0;
+      const guarded = guardDurableStream(database.journal, function* (event) {
+        if (event.type === "yield") {
+          gateCalls += 1;
+        }
       });
+      yield* WorkflowTransactionCommit.around({
+        // deno-lint-ignore require-yield
+        *beforeCommit([candidate]: [WorkflowRunDatabase]): Operation<void> {
+          if (armed && candidate === database) {
+            throw commitFailure;
+          }
+        },
+      });
+
+      function* workflow(): Workflow<void> {
+        try {
+          yield* workspaceStep(database, "post-publication", function* (filesystem) {
+            yield* filesystem.writeFile("/post-publication.txt", "rolled back");
+            return null;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        yield* durableCall("fenced-after-commit", function* () {
+          laterExecutions += 1;
+          return null;
+        });
+      }
+
+      const failure = yield* raised(
+        withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
+      );
+      armed = false;
+      expect(failure).toBe(commitFailure);
+      expect(caught).toBe(commitFailure);
+      expect(gateCalls).toBe(1);
+      expect(laterExecutions).toBe(0);
+      expect(yield* inspectWorkspace(database, "/post-publication.txt")).toEqual(baseline);
+      expect(retainedRootCount(path)).toBe(roots);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC13: cancellation before commit publishes no protocol event", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-cancel-before-commit";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/cancel-before-commit.txt");
+      const roots = retainedRootCount(path);
+      const reachedCommit = withResolvers<void>();
+      let armed = true;
+      let gateCalls = 0;
+      const guarded = guardDurableStream(database.journal, function* (event) {
+        if (event.type === "yield") {
+          gateCalls += 1;
+        }
+      });
+      yield* WorkflowTransactionCommit.around({
+        *beforeCommit([candidate]: [WorkflowRunDatabase]): Operation<void> {
+          if (armed && candidate === database) {
+            reachedCommit.resolve();
+            yield* suspend();
+          }
+        },
+      });
+      function* workflow(): Workflow<void> {
+        yield* workspaceStep(database, "cancel-before-commit", function* (filesystem) {
+          yield* filesystem.writeFile("/cancel-before-commit.txt", "rolled back");
+          return null;
+        });
+      }
+
+      const task = yield* spawn(() =>
+        withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
+      );
+      yield* reachedCommit.operation;
+      yield* task.halt();
+      armed = false;
+      expect(gateCalls).toBe(1);
+      expect(yield* inspectWorkspace(database, "/cancel-before-commit.txt")).toEqual(baseline);
+      expect(retainedRootCount(path)).toBe(roots);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC14: cancellation leaves no DOFS continuation beyond savepoint teardown", function* () {
+    const root = yield* useStorageRoot();
+    let activeOrder: string[] | undefined;
+    yield* SavepointObservation.set((event) => {
+      if (event.kind === "rollback") {
+        activeOrder?.push("savepoint-rollback");
+      }
+    });
+
+    yield* withStorage(root, function* () {
+      for (const kind of ["write", "read"] as const) {
+        yield* scoped(function* () {
+          const runId = `atomic-pending-${kind}`;
+          const database = yield* createRun({ runId });
+          if (kind === "read") {
+            const initialized = yield* database.transact(function* (transaction) {
+              return yield* withPrivateWorkspaceTransaction(
+                database,
+                transaction,
+                function* (workspace) {
+                  yield* workspace.filesystem.writeFile("/pending.txt", "baseline bytes");
+                  yield* workspace.capture({ publish: true });
+                },
+              );
+            });
+            if (!initialized.ok) {
+              throw initialized.error;
+            }
+          }
+          const baseline = yield* inspectWorkspace(database, "/pending.txt");
+          const reached = withResolvers<void>();
+          const order: string[] = [];
+          activeOrder = order;
+
+          function* workflow(): Workflow<void> {
+            yield* workspaceStep(database, `pending-${kind}`, function* (filesystem) {
+              if (kind === "write") {
+                yield* filesystem.writeFile("/pending.txt", "cancelled bytes");
+              } else {
+                yield* filesystem.readFile("/pending.txt");
+              }
+              return null;
+            });
+          }
+          yield* scoped(function* () {
+            yield* WorkspaceFilesystemOperations.around({
+              *reach([event]: [WorkspaceFilesystemOperationEvent]): Operation<void> {
+                if (
+                  event.stage === "after" &&
+                  event.kind === kind &&
+                  event.path === "/pending.txt"
+                ) {
+                  yield* ensure(function* () {
+                    order.push("filesystem-teardown");
+                  });
+                  order.push("filesystem-pending");
+                  reached.resolve();
+                  yield* suspend();
+                }
+              },
+            });
+            const task = yield* spawn(() =>
+              withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+            );
+            yield* reached.operation;
+            yield* task.halt();
+          });
+          activeOrder = undefined;
+          expect(order[0]).toBe("filesystem-pending");
+          expect(order.indexOf("filesystem-teardown")).toBeGreaterThan(0);
+          expect(order.indexOf("savepoint-rollback")).toBeGreaterThan(
+            order.indexOf("filesystem-teardown"),
+          );
+          expect(yield* inspectWorkspace(database, "/pending.txt")).toEqual(baseline);
+          expect(yield* database.journal.readAll()).toEqual([]);
+        });
+      }
+    });
+  });
+
+  it("WAC15: mutation-child teardown failure is infrastructure failure", function* () {
+    const root = yield* useStorageRoot();
+    const teardownFailure = new Error("mutation child teardown failed");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: "atomic-teardown-failure" });
+      const baseline = yield* inspectWorkspace(database, "/teardown.txt");
+      let caught: unknown;
+      let laterExecutions = 0;
+      function* workflow(): Workflow<void> {
+        try {
+          yield* workspaceStep(database, "teardown-failure", function* (filesystem) {
+            const ready = withResolvers<void>();
+            yield* spawn(function* () {
+              yield* ensure(function* () {
+                throw teardownFailure;
+              });
+              ready.resolve();
+              yield* suspend();
+            });
+            yield* ready.operation;
+            yield* filesystem.writeFile("/teardown.txt", "rolled back");
+            return null;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        yield* durableCall("fenced-after-teardown", function* () {
+          laterExecutions += 1;
+          return null;
+        });
+      }
+
+      const failure = yield* raised(
+        withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+      );
+      expect(failure).toBe(caught);
+      expect(failure).toBe(teardownFailure);
+      expect(laterExecutions).toBe(0);
+      expect(yield* inspectWorkspace(database, "/teardown.txt")).toEqual(baseline);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC16: current-root publication failure rolls retained state back", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-current-root-failure";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/current-root.txt");
+      const roots = retainedRootCount(path);
+      let caught: unknown;
+      let laterExecutions = 0;
+      tamper(path, (sqlite) => {
+        sqlite.exec(`
+          CREATE TRIGGER refuse_current_root BEFORE UPDATE OF current_root_id ON workspace_state
+          BEGIN
+            SELECT raise(ABORT, 'current root publication refused');
+          END
+        `);
+      });
+      function* workflow(): Workflow<void> {
+        try {
+          yield* workspaceStep(database, "current-root-failure", function* (filesystem) {
+            yield* filesystem.writeFile("/current-root.txt", "rolled back");
+            return null;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        yield* durableCall("fenced-after-current-root", function* () {
+          laterExecutions += 1;
+          return null;
+        });
+      }
+
+      const failure = yield* raised(
+        withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+      );
+      expect(failure).toBe(caught);
+      expect(failure).toBeInstanceOf(Error);
+      expect(laterExecutions).toBe(0);
+      tamper(path, (sqlite) => sqlite.exec("DROP TRIGGER refuse_current_root"));
+      expect(yield* inspectWorkspace(database, "/current-root.txt")).toEqual(baseline);
+      expect(retainedRootCount(path)).toBe(roots);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC17: an existing durability failure wins before Workspace coordination", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const runId = "atomic-existing-failure";
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/never-runs.txt");
+      refuseJournalInsertNamed(path, "first-failure");
+      let caught: unknown;
+      let workspaceExecutions = 0;
+      function* workflow(): Workflow<void> {
+        try {
+          yield* durableCall("first-failure", function* () {
+            return null;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        yield* workspaceStep(database, "blocked-workspace", function* (filesystem) {
+          workspaceExecutions += 1;
+          yield* filesystem.writeFile("/never-runs.txt", "blocked");
+          return null;
+        });
+      }
+
+      const failure = yield* raised(
+        withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+      );
+      allowJournalInserts(path);
+      expect(failure).toBe(caught);
+      expect(failure).toBeInstanceOf(DurablePersistenceError);
+      expect(workspaceExecutions).toBe(0);
+      expect(yield* inspectWorkspace(database, "/never-runs.txt")).toEqual(baseline);
+      expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC18: savepoint SQL failure poisons the coordinated outer transaction", function* () {
+    const root = yield* useStorageRoot();
+
+    for (const phase of ["create", "release", "rollback"] as const) {
+      let armed = false;
+      let operationName: string | undefined;
+      const observed: Array<{ kind: string; name: string }> = [];
+      const observe: SavepointObserver = (event) => {
+        observed.push(event);
+        if (armed && operationName === undefined && event.kind === "create") {
+          operationName = event.name;
+        }
+      };
+
+      yield* withDirectWorkspaceStorage(
+        root,
+        `atomic-savepoint-${phase}`,
+        observe,
+        function* (database, connection) {
+          const baseline = yield* inspectWorkspace(database, "/savepoint.txt");
+          const roots = retainedRootCount(connection.path);
+          let caught: unknown;
+          let laterExecutions = 0;
+          observed.length = 0;
+          armed = true;
+          setSqliteAuthorizer(connection.database, (action, operation, name) => {
+            if (!armed || action !== constants.SQLITE_SAVEPOINT) {
+              return constants.SQLITE_OK;
+            }
+            if (phase === "create" && operation === "BEGIN") {
+              return constants.SQLITE_DENY;
+            }
+            if (phase === "release" && operation === "RELEASE" && name === operationName) {
+              return constants.SQLITE_DENY;
+            }
+            if (phase === "rollback" && operation === "ROLLBACK" && name === operationName) {
+              return constants.SQLITE_DENY;
+            }
+            return constants.SQLITE_OK;
+          });
+
+          function* workflow(): Workflow<void> {
+            try {
+              yield* workspaceStep(database, `savepoint-${phase}`, function* (filesystem) {
+                yield* filesystem.writeFile("/savepoint.txt", "rolled back");
+                if (phase === "rollback") {
+                  throw new Error("force operation savepoint rollback");
+                }
+                return null;
+              });
+            } catch (error) {
+              caught = error;
+            }
+            yield* durableCall(`fenced-after-savepoint-${phase}`, function* () {
+              laterExecutions += 1;
+              return null;
+            });
+          }
+
+          const failure = yield* raised(
+            withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+          );
+          armed = false;
+          setSqliteAuthorizer(connection.database, null);
+          expect(failure).toBe(caught);
+          expect(failure).toBeInstanceOf(Error);
+          expect(laterExecutions).toBe(0);
+          expect(yield* inspectWorkspace(database, "/savepoint.txt")).toEqual(baseline);
+          expect(retainedRootCount(connection.path)).toBe(roots);
+          expect(yield* database.journal.readAll()).toEqual([]);
+          if (phase === "create") {
+            expect(observed.some((event) => event.kind === "create")).toBe(false);
+          } else {
+            expect(operationName).toBeDefined();
+            expect(
+              observed.some((event) => event.kind === phase && event.name === operationName),
+            ).toBe(false);
+          }
+        },
+      );
     }
-    expect(
-      yield* raised(
-        withDenoWorkspaceEffectCoordination(
-          database,
-          durableRun(workflow, { stream: database.journal }),
-        ),
-      ),
-    ).toBeInstanceOf(Error);
-    expect(mutations).toBe(0);
   });
 });

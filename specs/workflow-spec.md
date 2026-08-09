@@ -456,10 +456,18 @@ Workspace coordinator. Its default fails before execution or publication, and
 installing a provider does not enlist unrelated durable operations. Successful
 Workspace effect coordination finishes its mutation scope before capturing the
 root. The Deno provider binds an adapter-private proof operation to one exact
-WorkflowRun handle. Its coordinator opens the caller-owned transaction, runs
+WorkflowRun handle. The provider also owns an opaque provenance for that run's
+journal; the existing secret-filter wrapper preserves it. The coordinator
+refuses an effect or live stream that does not prove the selected run before it
+opens the caller-owned transaction. It runs
 the mutation in one operation savepoint, waits for mutation child teardown,
 captures and publishes the immutable root, and routes the already-filtered
 Yield through that transaction's journal before commit.
+
+The adapter-private proof filesystem invokes the pinned synchronous DOFS
+functions for its supported string and byte-array contract. It does not leave a
+Promise, response body or stream pull capable of reaching the authoritative
+connection after a cancelled mutation scope has torn down.
 
 A documented filesystem refusal is an operation result only after its mutation
 savepoint has rolled back successfully. It keeps the previous current root and

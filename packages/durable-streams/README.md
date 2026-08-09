@@ -296,7 +296,14 @@ same result after publication completes. Replay bypasses the coordinator,
 executor, continuation, and live append; a partially replayed run coordinates
 only its live suffix.
 
-The coordinator also receives an infrastructure-failure activator. A provider
+The coordinator receives the live durable stream and an infrastructure-failure
+activator. The stream lets a provider prove that publication belongs to the
+same durability boundary before it executes provider-owned work. A claimed
+stream carries an opaque provenance capability, and `guardDurableStream`
+preserves that provenance on its filtered wrapper without exposing the witness.
+An unrelated stream cannot claim the same destination.
+
+A provider
 whose execution and publication share a larger durability boundary calls it
 when that boundary cannot commit. It returns the first active failure by
 identity, so the provider throws that exact failure and later durable work stays
