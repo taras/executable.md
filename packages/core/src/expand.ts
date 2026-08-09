@@ -1403,9 +1403,10 @@ function* expandIf(
   } else if ("condition" in segment.expressions) {
     try {
       // Evaluated directly rather than through resolveExpressionProps: that
-      // helper rejects `undefined` and rewrites `NaN` as `null`, and both are
-      // conditions truthiness decides. The value selects a branch and is never
-      // journaled or forwarded as a prop, so it crosses no JSON boundary.
+      // helper normalizes its result through JSON, which rejects `undefined`,
+      // rewrites `NaN` as `null`, and throws on a BigInt. A condition is
+      // decided and discarded rather than passed on or recorded, so it takes
+      // any JavaScript value and crosses no serialization boundary.
       condition = yield* evaluateExpression(
         segment.expressions.condition,
         "If",

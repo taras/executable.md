@@ -114,8 +114,9 @@ export default define.page(function ControlFlow() {
         <code>condition</code>{" "}
         is the only prop, and the value it resolves to selects a branch by
         ordinary JavaScript truthiness. <code>false</code>, <code>0</code>,{" "}
-        <code>NaN</code>, <code>""</code>, <code>null</code>, and{" "}
-        <code>undefined</code>{" "}
+        <code>-0</code>, <code>0n</code>, <code>NaN</code>, <code>""</code>,
+        {" "}
+        <code>null</code>, and <code>undefined</code>{" "}
         take the false branch; everything else takes the true one — including
         {" "}
         <code>"false"</code>, <code>"0"</code>, <code>[]</code>, and{" "}

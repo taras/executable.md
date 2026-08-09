@@ -3499,17 +3499,25 @@ then selects a branch by ordinary JavaScript truthiness, `!!value`. A document
 branches on the value it already has: `<If condition={review.note}>` asks
 whether the reviewer wrote anything, with no conversion to a boolean first.
 
-**Falsy** — `false`, `0`, `NaN`, `""`, `null`, `undefined` — selects the false
-branch. Every other value is **truthy**, including `"false"`, `"0"`, `[]`, and
-`{}`. Those are JavaScript's familiar edges rather than a rule `<If>` invents: a
-non-empty string is truthy whatever it spells, and an empty array or object is a
-value rather than an absence. A document that means "no findings" writes
-`condition={findings.length === 0}`, not `condition={findings}`.
+**Falsy** — `false`, `0`, `-0`, `0n`, `NaN`, `""`, `null`, `undefined` — selects
+the false branch. Every other value is **truthy**, including `"false"`, `"0"`,
+`[]`, and `{}`. Those are JavaScript's familiar edges rather than a rule `<If>`
+invents: a non-empty string is truthy whatever it spells, and an empty array or
+object is a value rather than an absence. A document that means "no findings"
+writes `condition={findings.length === 0}`, not `condition={findings}`.
 
 An absent member of a declared object resolves to `undefined` and selects the
 false branch without an error, so a misspelled `review.aproved` reads as false.
 An undeclared root identifier still fails evaluation and is reported as an
 `<If>`-owned printed error.
+
+**The condition is not restricted to JSON.** An expression prop must be
+JSON-serializable because its value is passed to a component and recorded; a
+condition is neither. `<If>` takes whatever the expression evaluates to — a
+`BigInt`, a `Symbol`, a function, a class instance, `undefined`, `NaN`, `-0` —
+decides one branch with it, and discards it. The value is never interpolated,
+journaled, or forwarded, so it crosses no serialization boundary and no
+serialization rule constrains it.
 
 `<Else>` holds the alternative branch. It is optional, accepts no props, takes
 content, and may appear once as a **direct child** of its `<If>`. A nested
@@ -6917,7 +6925,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF11 | Nested `<If>` in the unselected branch | It never runs |
 | IF12 | Self-closing `<If>` | Renders nothing, with no error |
 | IF13 | Missing `condition` | Rejected; the body does not render |
-| IF14 | Falsy conditions | `false`, `0`, `NaN`, `""`, `null`, and `undefined` each select `<Else>`, with no error |
+| IF14 | Falsy conditions | `false`, `0`, `-0`, `0n`, `NaN`, `""`, `null`, and `undefined` each select `<Else>`, with no error |
 | IF15 | Truthy conditions | `true`, `1`, `"false"`, `"text"`, `[]`, and `{}` each select the leading branch, with no error |
 | IF16 | Absent member versus undeclared identifier | A misspelled member is falsy and silent; an undeclared identifier is quoted in the printed error |
 | IF17 | Unknown props | Literal and expression props other than `condition` are rejected |

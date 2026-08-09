@@ -1,12 +1,12 @@
 <Section title="Conditionals">
 
 `<If>` chooses one branch of a document and expands only that branch. The
-`condition` prop selects by ordinary JavaScript truthiness — `false`, `0`,
-`NaN`, `""`, `null`, and `undefined` take the false branch, everything else
-takes the true one, including `"false"`, `[]`, and `{}` — so a document branches
-on the value it already has. An optional `<Else>` block, written once as a
-direct child, holds the alternative; without `<Else>` a falsy condition renders
-nothing.
+`condition` prop selects by ordinary JavaScript truthiness — `false`, `0`, `-0`,
+`0n`, `NaN`, `""`, `null`, and `undefined` take the false branch, everything
+else takes the true one, including `"false"`, `[]`, and `{}` — so a document
+branches on the value it already has. An optional `<Else>` block, written once
+as a direct child, holds the alternative; without `<Else>` a falsy condition
+renders nothing.
 
 The unselected branch is not hidden output: it never expands, so nothing in it
 imports a component, runs a code block, reaches a provider, or creates a

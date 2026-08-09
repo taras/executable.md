@@ -179,6 +179,8 @@ describe("Tier IF — condition validation", () => {
     const cases: Array<[string, unknown]> = [
       ["false", false],
       ["0", 0],
+      ["-0", -0],
+      ["0n", 0n],
       ["NaN", NaN],
       ['""', ""],
       ["null", null],
