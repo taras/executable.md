@@ -51,6 +51,18 @@ import {
   withStorage,
 } from "./support/storage.ts";
 
+function sqliteConstant(name: string): number {
+  const value = Reflect.get(constants, name);
+  if (typeof value !== "number") {
+    throw new Error(`this Deno node:sqlite adapter does not expose ${name}`);
+  }
+  return value;
+}
+
+const SQLITE_SAVEPOINT = sqliteConstant("SQLITE_SAVEPOINT");
+const SQLITE_OK = sqliteConstant("SQLITE_OK");
+const SQLITE_DENY = sqliteConstant("SQLITE_DENY");
+
 function* raised(operation: Operation<unknown>): Operation<unknown> {
   try {
     yield* operation;
@@ -1110,19 +1122,19 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           observed.length = 0;
           armed = true;
           setSqliteAuthorizer(connection.database, (action, operation, name) => {
-            if (!armed || action !== constants.SQLITE_SAVEPOINT) {
-              return constants.SQLITE_OK;
+            if (!armed || action !== SQLITE_SAVEPOINT) {
+              return SQLITE_OK;
             }
             if (phase === "create" && operation === "BEGIN") {
-              return constants.SQLITE_DENY;
+              return SQLITE_DENY;
             }
             if (phase === "release" && operation === "RELEASE" && name === operationName) {
-              return constants.SQLITE_DENY;
+              return SQLITE_DENY;
             }
             if (phase === "rollback" && operation === "ROLLBACK" && name === operationName) {
-              return constants.SQLITE_DENY;
+              return SQLITE_DENY;
             }
-            return constants.SQLITE_OK;
+            return SQLITE_OK;
           });
 
           function* workflow(): Workflow<void> {
