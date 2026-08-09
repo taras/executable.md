@@ -2796,13 +2796,16 @@ function makeProjectFn(callerEnv: EvalEnv | undefined): ProjectFn {
       return segments;
     }
     return segments.map((seg) => {
-      if (seg.type === "component") {
+      if (seg.type === "component" && seg.name !== "Content") {
         return {
           ...seg,
           projectedEnv: callerEnv,
           children: project(seg.children),
         };
       }
+      // A `<Content />` passing through is a projection the invocation that
+      // wrote it already resolved: its content carries that invocation's env,
+      // and it is recognized by identity, which a copy would lose.
       return seg;
     });
   };
@@ -2815,6 +2818,11 @@ function makeProjectFn(callerEnv: EvalEnv | undefined): ProjectFn {
  * expansion frame is installed, so a current binding named `props` is used.
  * Slot validation errors are emitted once, at the first projection point,
  * tracked via the shared `state`.
+ *
+ * A projection point is wherever the body writes one, so this descends through
+ * every authored element on the way. Only the body is walked: what a projection
+ * resolves to belongs to the caller, and the caller's own body already
+ * substituted it.
  */
 function substituteSegmentList(
   segments: Segment[],
@@ -2824,7 +2832,10 @@ function substituteSegmentList(
   claim: ClaimFn,
 ): Segment[] {
   return segments.flatMap((segment): Segment[] => {
-    if (segment.type === "component" && segment.name === "Content") {
+    if (segment.type !== "component") {
+      return [segment];
+    }
+    if (segment.name === "Content") {
       const targetSlot = segment.props.slot;
       const pendingErrors = !state.errorsEmitted ? slots.errors : [];
       if (pendingErrors.length > 0) {
@@ -2839,10 +2850,23 @@ function substituteSegmentList(
         targetSlot !== undefined
           ? project((slots.named.get(String(targetSlot)) ?? []).map(stripSlotProp))
           : project(slots.default);
-      const element: ComponentElement = { ...segment, children: projected, selfClosing: false };
+      // `slot` names which of this invocation's slots to read, and reading
+      // them consumes it (§6.3.5). A resolved projection nested inside another
+      // invocation is ordinary content there, so it partitions by position.
+      const { slot: _, ...props } = segment.props;
+      const element: ComponentElement = {
+        ...segment,
+        props,
+        children: projected,
+        selfClosing: false,
+      };
       return [...pendingErrors, claim(element)];
     }
-    return [segment];
+    const children = substituteSegmentList(segment.children, slots, project, state, claim);
+    const untouched =
+      children.length === segment.children.length &&
+      children.every((child, index) => child === segment.children[index]);
+    return untouched ? [segment] : [{ ...segment, children }];
   });
 }
 

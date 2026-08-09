@@ -443,6 +443,26 @@ describe("Tier XP — expansion identity", () => {
     expect(twoProbes[0]).not.toBe(twoProbes[1]);
   });
 
+  // A projection written inside an iterating construct is one authored
+  // `<Content />` expanded once per item, so its identity has to come from the
+  // path it expands under rather than from the element. `<Each>` adds its item
+  // frame before the projection point is reached; dropping that frame, or
+  // deriving the projection from the element that carries it, is what this
+  // kills — both would report one identifier twice.
+  it("XP26: a projection nested in <Each> differs per iteration and reproduces itself", function* () {
+    const source = "<EachHost>\n<Probe />\n</EachHost>\n";
+    const definitions = {
+      EachHost: markdown("EachHost", '<Each in={[1, 2]} let="n">\n<Content />\n</Each>\n'),
+    };
+
+    const first = yield* identifiers(source, definitions);
+    const second = yield* identifiers(source, definitions);
+
+    expect(first).toHaveLength(2);
+    expect(first[0]).not.toBe(first[1]);
+    expect(second).toEqual(first);
+  });
+
   // The projection ordinal is the one discriminator that is not read off the
   // source, so it has to follow the component's own program order rather than
   // the order projections finish in. Two runs of one component, with the

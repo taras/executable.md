@@ -154,6 +154,22 @@ describe("Tier O — Eval scope hierarchy", () => {
     expect(timeline).toEqual(["start:projected", "start:own", "stop:projected", "stop:own"]);
   });
 
+  // O41: the same contract when the projection point sits inside another
+  // invocation. The wrapper completes before the provider retains its own
+  // resource, so a projection that had moved into the wrapper's scope would
+  // stop before `start:own` rather than after it.
+  it("O41: a nested <Content /> keeps the invocation's content scope", function* () {
+    const timeline: string[] = [];
+    const definitions = {
+      Provider: markdown("Provider", `<Wrapper><Content /></Wrapper>\n\n${WATCH_BLOCK_OWN}`),
+      Wrapper: markdown("Wrapper", "<Content />"),
+    };
+
+    yield* expandAll(`<Provider>\n${WATCH_BLOCK}\n</Provider>`, definitions, timeline);
+
+    expect(timeline).toEqual(["start:projected", "start:own", "stop:projected", "stop:own"]);
+  });
+
   // O11/O12: the same teardown order on a propagated body error, for both
   // component forms. The body throws after projecting, so the projected
   // resource is still alive when the invocation starts unwinding.

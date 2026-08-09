@@ -2837,6 +2837,14 @@ During expansion, this is a special case — it is not resolved from the
 file system. Instead, it is replaced by the caller's children,
 partitioned by slot assignment.
 
+A projection point is anywhere the body writes one: a top-level segment, a
+position inside an `<Output>` region, and equally a position nested inside
+another invocation, inside a structural construct, or several levels down. Only
+the body is walked. Content that arrives through a projection was written by the
+caller, whose own body resolved its projections already, so a `<Content />` that
+rides in on projected content belongs to the invocation that resolved it and is
+not re-read here.
+
 #### 6.3.1 Named slots
 
 Components can render caller-provided content in multiple distinct
@@ -2934,28 +2942,50 @@ presents the failure as `ContentError` under either error mode (§5.1.2), a catc
 there is the same explicit recovery, and the projected work still unwinds with
 the content scope.
 
-`substituteContent` resolves the slots:
+Substitution resolves the slots. It runs once per invocation, over the
+component's own body, and does the following:
 
-```typescript
-function substituteContent(
-  bodySegments: Segment[],
-  children: Segment[],
-  callerEnv: EvalEnv | undefined,
-): Segment[] {
-  const slots = partitionBySlot(children);
-  return bodySegments.flatMap((segment) => {
-    if (segment.type === "component" && segment.name === "Content") {
-      const targetSlot = segment.props.slot as string | undefined;
-      if (targetSlot !== undefined) {
-        // Named slot projection — strip slot prop from each child
-        return (slots.named.get(targetSlot) ?? []).map(stripSlotProp);
-      }
-      // Default slot projection
-      return slots.default;
-    }
-    return [segment];
-  });
-}
+1. Partition the caller's children into slot buckets (§6.3.3). The buckets and
+   the once-only error flag are shared by every projection point in the body.
+2. Walk the body segments. A segment that is not a component element is kept as
+   it is; a component element that is not `<Content />` is kept with its
+   children walked the same way, so a projection point is found wherever the
+   body writes one — nested inside another invocation, inside a structural
+   construct, or several levels down.
+3. At a `<Content />`, select the bucket its `slot` prop names, or the default
+   bucket when it has none. Named-slot children have their own `slot` prop
+   stripped (§6.3.2), and children of either kind are tagged with the caller's
+   binding environment so their expression props resolve where the JSX was
+   written.
+4. Replace the element with a **claimed** `<Content />`: the same element,
+   carrying the selected children and with its own `slot` prop removed. The
+   claim is recorded by object identity on the invocation that made it. The
+   selected children are not spliced into the body, because the claimed element
+   is what expansion needs in order to run them in the invocation's content
+   scope rather than its own.
+5. Emit the slot-name errors of §6.3.3 immediately before the first claimed
+   element, and only there.
+
+The walk covers the body and stops at what a projection resolves to. Content
+that arrives through a projection was written by the caller, whose own body
+substituted its projections already, so a claimed `<Content />` riding in on
+projected content is passed through untouched: re-reading it would give the
+enclosing component content addressed to someone else, and copying it would lose
+the claim its lifecycle depends on. A `<Content />` that no invocation claimed —
+one an author wrote in a document rather than a component body — never becomes a
+projection, however many bodies it passes through; it reaches component
+resolution and fails as the reserved name it is (§5.3).
+
+The `slot` prop is consumed by the projection that reads it. A resolved
+projection nested inside another invocation therefore carries no `slot` prop of
+its own and partitions into that invocation's default slot, like any other
+content written at that position. To place caller content in a named slot of a
+nested invocation, wrap it:
+
+```markdown
+<Layout>
+  <Section slot="header"><Content slot="header" /></Section>
+</Layout>
 ```
 
 Text interpolation is deferred until the expansion frame is installed. This
@@ -2989,7 +3019,9 @@ components that use `renderChildren()` continue to receive all content.
 If the component body does not contain `<Content />`, children from the
 invocation site are silently discarded. If the component body contains
 multiple `<Content />` or multiple `<Content slot="X" />`, each is
-replaced independently (all receive the same children for that slot).
+replaced independently (all receive the same children for that slot),
+and their depth in the body makes no difference: two at different depths
+behave exactly like two at top level.
 
 ### 6.4 Frontmatter interpolation: `{meta.key}` and `{props.key}`
 
@@ -6072,6 +6104,7 @@ visible warning blocks, gather into a separate error report).
 | C47 | **Nested enum rejected** | A property with `enum: [a, b]` nested inside an object/array item rejects a value outside the set → PropValidationError |
 | C48 | **No bare prop binding** | Declaring `name` makes `{props.name}` available but leaves `{name}` verbatim until authored code creates that binding |
 | C49 | **Validated object identity** | The environment and function-component argument observe the exact defaulted object returned by validation |
+| C50 | Nested `<Content />` | Caller content projects from a position inside another invocation, inside a structural construct, several levels deep, and inside an `<Output>` region; a nested named slot resolves and consumes its `slot` prop; wrapping a projection in `<Section slot="header">` reaches a nested invocation's named slot; two projections at different depths receive the same content; slot errors are still emitted once; an unclaimed `<Content />` passed through nested bodies stays the reserved-name failure |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -6306,6 +6339,7 @@ visible warning blocks, gather into a separate error report).
 | O5 | Projected content stops first | `start:own, start:projected, stop:projected, stop:own` — no `ephemeral()`, `scoped()` or wrapper in the component |
 | O6 | Ordering is the boundary's | Same order when the resource is acquired after the first projection: `start:projected, start:own, stop:projected, stop:own` |
 | O7 | Markdown `<Content />` lifetime | A provider retaining a resource *after* projecting still releases it after the projected content stops |
+| O41 | Nested `<Content />` lifetime | A projection written inside another invocation still runs in the projecting invocation's content scope: it outlives the wrapper and stops before the provider's own resource |
 | O11/O12 | Propagated body error | Both component forms stop projected content before releasing their own |
 | O13/O14 | Cancellation | Both forms tear down in the same order when halted mid-projection |
 | O15 | TypeScript nesting | Nested invocations leaf-first; siblings isolated |
@@ -6500,6 +6534,7 @@ Each row names the derivation it kills.
 | XP15 | Whose projection | The same content through two components differs; two probes inside one component differ by their own positions |
 | XP16 | Concurrent projections | Reversing which projection completes first does not move either identifier |
 | XP17 | Lazy | A projection operation constructed and never interpreted consumes no ordinal |
+| XP26 | Nested projection under iteration | One `<Content />` written inside `<Each>` gives each item its own identifier, and re-expansion reproduces the ordered pair — an identity taken from the element rather than the path it expands under would report one twice |
 
 ### Tier AF — Agent components as function components
 
