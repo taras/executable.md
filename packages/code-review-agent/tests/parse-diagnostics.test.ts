@@ -4,7 +4,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { parseDiagnostics } from "../src/parse-diagnostics.ts";
+import { buildDiagnostics, parseDiagnostics } from "../src/parse-diagnostics.ts";
 import type { DoctorResult, OxlintDiagnostic, PR } from "../src/types.ts";
 
 function makePR(additions = 100): PR {
@@ -56,6 +56,13 @@ function makeDiag(ruleId: string, file: string, line = 1, message = ""): OxlintD
 }
 
 describe("parseDiagnostics", () => {
+  it("builds directly from normalized diagnostics", function* () {
+    const result = buildDiagnostics([makeDiag("no-console", "src/a.ts")], makePR(), makeDoctor());
+
+    expect(result.total).toBe(1);
+    expect(result.groups[0].ruleId).toBe("no-console");
+  });
+
   it("PD1: groups diagnostics by ruleId", function* () {
     const raw = JSON.stringify([
       makeDiag("no-unused-vars", "src/a.ts"),
@@ -246,11 +253,17 @@ describe("parseDiagnostics", () => {
     expect(result.byCategory.structural.map((g) => g.ruleId)).toContain("no-unused-vars");
   });
 
-  it("PD8: malformed JSON returns empty diagnostics", function* () {
+  it("preserves tolerant parsing for malformed JSON", function* () {
     const result = parseDiagnostics("not valid json {{{", makePR(), makeDoctor());
 
     expect(result.total).toBe(0);
-    expect(result.density).toBe(0);
+    expect(result.groups).toHaveLength(0);
+  });
+
+  it("preserves tolerant parsing for unsupported JSON shapes", function* () {
+    const result = parseDiagnostics(JSON.stringify({ output: [] }), makePR(), makeDoctor());
+
+    expect(result.total).toBe(0);
     expect(result.groups).toHaveLength(0);
   });
 

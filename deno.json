@@ -59,7 +59,7 @@
     "test": "deno test --allow-all --frozen",
     "verify": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/verify.ts",
     "vendor:verify": "deno run --allow-read --allow-write=/tmp --allow-env --allow-run --cached-only --frozen scripts/verify-cloudflare-dofs.ts",
-    "check": "deno check --frozen",
+    "check": "deno check --frozen && deno check --frozen .reviews/components/*.ts",
     "check:jsr": "deno publish --dry-run --allow-dirty",
     "review": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.jsonl",
     "review:local": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.local.jsonl",

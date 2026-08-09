@@ -1,13 +1,10 @@
-/**
- * Parses raw Oxlint JSON output into structured Diagnostics.
- *
- * Groups by ruleId, categorizes into structural/verbosity/typeAware/other,
- * filters import noise when doctor recommends it, computes density, and
- * generates a human-readable summary string.
- */
-
+import type { DiagnosticGroup, Diagnostics, DoctorResult, OxlintDiagnostic, PR } from "./types.ts";
 import { categorizeRule } from "./categories.ts";
-import type { Diagnostics, DiagnosticGroup, DoctorResult, OxlintDiagnostic, PR } from "./types.ts";
+import { normalizeOxlintOutput } from "./parse-oxlint.ts";
+
+const IMPORT_NOISE_MARKERS = ["Cannot find module", "cannot find"];
+const SUMMARY_FILE_LIMIT = 3;
+const DENSITY_PRECISION = 1000;
 
 function emptyDiagnostics(): Diagnostics {
   return {
@@ -26,191 +23,190 @@ function emptyDiagnostics(): Diagnostics {
   };
 }
 
-function extractDiagnosticsArray(parsed: unknown): unknown[] {
-  if (Array.isArray(parsed)) {
-    return parsed;
-  }
-
-  if (parsed && typeof parsed === "object") {
-    const direct = (parsed as { diagnostics?: unknown }).diagnostics;
-    if (Array.isArray(direct)) {
-      return direct;
-    }
-
-    if (direct && typeof direct === "object") {
-      const nested = (direct as { diagnostics?: unknown }).diagnostics;
-      if (Array.isArray(nested)) {
-        return nested;
-      }
-    }
-  }
-
-  return [];
+function isImportNoise(diagnostic: OxlintDiagnostic): boolean {
+  return (
+    IMPORT_NOISE_MARKERS.some((marker) => diagnostic.message.includes(marker)) ||
+    diagnostic.ruleId.includes("import")
+  );
 }
 
-function parseRuleId(code: string): string {
-  const match = /\(([^)]+)\)/.exec(code);
-  return match?.[1] ?? code;
+function filteredDiagnostics(
+  raw: readonly OxlintDiagnostic[],
+  doctor: DoctorResult,
+): OxlintDiagnostic[] {
+  if (doctor.recommendation !== "type-aware-filtered") {
+    return [...raw];
+  }
+  return raw.filter((diagnostic) => !isImportNoise(diagnostic));
 }
 
-function normalizeDiagnostic(entry: unknown): OxlintDiagnostic | null {
-  if (!entry || typeof entry !== "object") {
-    return null;
+function groupedDiagnostics(raw: readonly OxlintDiagnostic[]): Map<string, OxlintDiagnostic[]> {
+  const groups = new Map<string, OxlintDiagnostic[]>();
+  for (const diagnostic of raw) {
+    const { ruleId } = diagnostic;
+    const group = groups.get(ruleId);
+    let next = [diagnostic];
+    if (group !== undefined) {
+      next = [...group, diagnostic];
+    }
+    groups.set(ruleId, next);
   }
+  return groups;
+}
 
-  const diagnostic = entry as Record<string, unknown>;
+function filesForGroup(instances: readonly OxlintDiagnostic[]): string[] {
+  const files = new Set<string>();
+  for (const diagnostic of instances) {
+    if (diagnostic.file.length > 0) {
+      files.add(diagnostic.file);
+    }
+  }
+  return [...files];
+}
 
-  const ruleId =
-    typeof diagnostic.ruleId === "string"
-      ? diagnostic.ruleId
-      : typeof diagnostic.code === "string"
-        ? parseRuleId(diagnostic.code)
-        : "unknown";
+function fileCountFor(raw: readonly OxlintDiagnostic[]): number {
+  const files = new Set<string>();
+  for (const diagnostic of raw) {
+    if (diagnostic.file.length > 0) {
+      files.add(diagnostic.file);
+    }
+  }
+  return files.size;
+}
 
-  const severity = diagnostic.severity === "error" ? "error" : "warning";
-  const message = typeof diagnostic.message === "string" ? diagnostic.message : "";
-
-  const file =
-    typeof diagnostic.file === "string"
-      ? diagnostic.file
-      : typeof diagnostic.filename === "string"
-        ? diagnostic.filename
-        : "";
-
-  const firstLabel = Array.isArray(diagnostic.labels) ? diagnostic.labels[0] : undefined;
-  const firstSpan =
-    firstLabel && typeof firstLabel === "object"
-      ? (firstLabel as { span?: unknown }).span
-      : undefined;
-
-  const line =
-    typeof diagnostic.line === "number"
-      ? diagnostic.line
-      : firstSpan &&
-          typeof firstSpan === "object" &&
-          typeof (firstSpan as { line?: unknown }).line === "number"
-        ? (firstSpan as { line: number }).line
-        : 0;
-
-  const column =
-    typeof diagnostic.column === "number"
-      ? diagnostic.column
-      : firstSpan &&
-          typeof firstSpan === "object" &&
-          typeof (firstSpan as { column?: unknown }).column === "number"
-        ? (firstSpan as { column: number }).column
-        : 0;
-
-  return {
+function diagnosticGroups(raw: readonly OxlintDiagnostic[]): DiagnosticGroup[] {
+  const groups = [...groupedDiagnostics(raw).entries()].map(([ruleId, instances]) => ({
     ruleId,
-    severity,
-    message,
-    file,
-    line,
-    column,
-  };
-}
-
-/**
- * Parse raw Oxlint JSON output into structured diagnostics.
- */
-export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
-  let raw: OxlintDiagnostic[];
-  try {
-    const parsed = JSON.parse(rawJson);
-    raw = extractDiagnosticsArray(parsed)
-      .map((entry) => normalizeDiagnostic(entry))
-      .filter((entry): entry is OxlintDiagnostic => entry !== null);
-  } catch {
-    return emptyDiagnostics();
-  }
-
-  const filtered =
-    doctor.recommendation === "type-aware-filtered"
-      ? raw.filter((d) => {
-          const msg = d.message ?? "";
-          return !msg.includes("Cannot find module") && !msg.includes("cannot find");
-        })
-      : raw;
-
-  const groupMap = new Map<string, OxlintDiagnostic[]>();
-  for (const d of filtered) {
-    const key = d.ruleId ?? "unknown";
-    const arr = groupMap.get(key);
-    if (arr) {
-      arr.push(d);
+    count: instances.length,
+    files: filesForGroup(instances),
+    instances,
+  }));
+  const ordered: DiagnosticGroup[] = [];
+  for (const group of groups) {
+    const index = ordered.findIndex((candidate) => candidate.count < group.count);
+    if (index === -1) {
+      ordered.push(group);
     } else {
-      groupMap.set(key, [d]);
+      ordered.splice(index, 0, group);
     }
   }
+  return ordered;
+}
 
-  // Build groups sorted by count descending
-  const groups: DiagnosticGroup[] = [...groupMap.entries()]
-    .map(([ruleId, instances]) => ({
-      ruleId,
-      count: instances.length,
-      files: [...new Set(instances.map((d) => d.file).filter(Boolean))],
-      instances,
-    }))
-    .sort((a, b) => b.count - a.count);
-
+function categorizedGroups(groups: readonly DiagnosticGroup[]): Diagnostics["byCategory"] {
   const byCategory: Diagnostics["byCategory"] = {
     structural: [],
     verbosity: [],
     typeAware: [],
     other: [],
   };
-
   for (const group of groups) {
-    const cats = categorizeRule(group.ruleId);
-    for (const cat of cats) {
-      byCategory[cat].push(group);
+    for (const category of categorizeRule(group.ruleId)) {
+      byCategory[category].push(group);
     }
   }
+  return byCategory;
+}
 
-  const total = filtered.length;
-  const allFiles = new Set(filtered.map((d) => d.file).filter(Boolean));
-  const fileCount = allFiles.size;
-  const ruleCount = groups.length;
-  const density =
-    pr.stats.additions > 0 ? Math.round((total / pr.stats.additions) * 1000) / 1000 : 0;
-
-  const lines: string[] = [];
-  lines.push(
-    `Oxlint: ${total} diagnostic${total !== 1 ? "s" : ""} across ${fileCount} file${fileCount !== 1 ? "s" : ""} (${ruleCount} rule${ruleCount !== 1 ? "s" : ""})`,
-  );
-  lines.push(`Density: ${density.toFixed(3)} violations/added-line`);
-  lines.push("");
-
-  for (const g of groups) {
-    const fileList = g.files.slice(0, 3).join(", ");
-    const more = g.files.length > 3 ? ` (+${g.files.length - 3})` : "";
-    lines.push(`  ${g.ruleId} (${g.count}): ${fileList}${more}`);
+function densityFor(pr: PR, total: number): number {
+  if (pr.stats.additions === 0) {
+    return 0;
   }
+  return Math.round((total / pr.stats.additions) * DENSITY_PRECISION) / DENSITY_PRECISION;
+}
 
-  // Coverage annotations
+function pluralized(count: number, singular: string, plural: string): string {
+  if (count === 1) {
+    return singular;
+  }
+  return plural;
+}
+
+interface SummaryInput {
+  total: number;
+  fileCount: number;
+  ruleCount: number;
+  density: number;
+  groups: readonly DiagnosticGroup[];
+  doctor: DoctorResult;
+}
+
+function summaryFor({
+  total,
+  fileCount,
+  ruleCount,
+  density,
+  groups,
+  doctor,
+}: SummaryInput): string {
+  const lines = [
+    `Oxlint: ${total} ${pluralized(total, "diagnostic", "diagnostics")} across ${fileCount} ${pluralized(fileCount, "file", "files")} (${ruleCount} ${pluralized(ruleCount, "rule", "rules")})`,
+    `Density: ${density.toFixed(3)} violations/added-line`,
+    "",
+  ];
+  for (const group of groups) {
+    const fileList = group.files.slice(0, SUMMARY_FILE_LIMIT).join(", ");
+    const moreFiles = group.files.length - SUMMARY_FILE_LIMIT;
+    let more = "";
+    if (moreFiles > 0) {
+      more = ` (+${moreFiles})`;
+    }
+    lines.push(`  ${group.ruleId} (${group.count}): ${fileList}${more}`);
+  }
+  appendDoctorNotes(lines, doctor);
+  return lines.join("\n");
+}
+
+function appendDoctorNotes(lines: string[], doctor: DoctorResult): void {
   if (doctor.bloatRulesMissing.length > 0) {
-    lines.push("");
     lines.push(
+      "",
       `Note: ${doctor.bloatRulesMissing.length} type-aware rules unavailable (${doctor.bloatRulesMissing.join(", ")}). Density may be understated.`,
     );
   }
-
   if (doctor.nativeSpecifiers.count > 0) {
-    lines.push("");
     lines.push(
+      "",
       `Note: ${doctor.nativeSpecifiers.count} source files use scheme specifiers (jsr:, npm:).`,
+      "Run `deno lint --fix` with no-scheme-specifiers plugin to migrate.",
     );
-    lines.push("Run `deno lint --fix` with no-scheme-specifiers plugin to migrate.");
   }
+}
 
+/** Group bounded Oxlint diagnostics for review policies. */
+export function buildDiagnostics(
+  raw: readonly OxlintDiagnostic[],
+  pr: PR,
+  doctor: DoctorResult,
+): Diagnostics {
+  const filtered = filteredDiagnostics(raw, doctor);
+  const groups = diagnosticGroups(filtered);
+  const total = filtered.length;
+  const fileCount = fileCountFor(filtered);
+  const density = densityFor(pr, total);
   return {
     groups,
     total,
     fileCount,
-    ruleCount,
-    byCategory,
-    summary: lines.join("\n"),
+    ruleCount: groups.length,
+    byCategory: categorizedGroups(groups),
+    summary: summaryFor({
+      total,
+      fileCount,
+      ruleCount: groups.length,
+      density,
+      groups,
+      doctor,
+    }),
     density,
   };
+}
+
+/** Parse raw Oxlint JSON into structured diagnostics. */
+export function parseDiagnostics(rawJson: string, pr: PR, doctor: DoctorResult): Diagnostics {
+  try {
+    return buildDiagnostics(normalizeOxlintOutput(rawJson), pr, doctor);
+  } catch {
+    return emptyDiagnostics();
+  }
 }

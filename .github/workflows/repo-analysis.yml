@@ -29,12 +29,14 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
           deno-version: v2.9.5
 
-      - name: Install dependencies
-        run: deno task deps
+      - name: Prepare the checked-out xmd binary
+        run: deno task setup
 
       - name: Build the checked-out xmd binary
         run: deno task build

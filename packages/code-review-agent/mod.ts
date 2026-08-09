@@ -6,8 +6,11 @@
  */
 
 export { parseDiff } from "./src/parse-diff.ts";
-export { parseDiagnostics } from "./src/parse-diagnostics.ts";
+export { buildDiagnostics, parseDiagnostics } from "./src/parse-diagnostics.ts";
 export { parseDoctorResult } from "./src/parse-doctor.ts";
+export { buildDoctorResult, isOxlintCrash, summarizeDoctorProbe } from "./src/doctor.ts";
+export { normalizeDiagnostic, normalizeOxlintOutput } from "./src/parse-oxlint.ts";
+export type { DoctorEnvironment, DoctorProbeInput, DoctorProbeSummary } from "./src/doctor.ts";
 export {
   buildCleanupAnalysis,
   clusterByFile,

@@ -7,16 +7,18 @@
 
 ## 1. Architecture
 
-A PR review is an executable markdown document. The document gathers
-the diff, parses it into a structured object, passes it through
-composable check components, optionally sends it to an LLM for
-semantic analysis, and posts the rendered output as a GitHub comment.
+A PR review is an executable Markdown document. Typed function components
+gather the diff, environment observations, and bounded diagnostics. Markdown
+then composes the policy components, model provider, and optional GitHub
+delivery.
 
 ```
 ReviewPR.md
-  ├─ Capture: git diff → rawDiff
-  ├─ Capture: git diff --name-status → rawFiles
-  ├─ eval: parseDiff(rawDiff, rawFiles) → pr
+  ├─ <Output> → execution failures fail the document
+  ├─ <GitHubAuth> → scoped exact-host GitHub authentication
+  ├─ ReviewContext → git diff and PR metadata → pr
+  ├─ Doctor → bounded environment recommendation
+  ├─ OxlintDiagnostics → normalized diagnostics
   │
   └─ DeepInfraProvider (or OllamaProvider)
        └─ Instructions (system prompt)
@@ -39,7 +41,7 @@ ReviewPR.md
                       └─ SemanticReview → Sample
 ```
 
-Three layers of concern, three layers of middleware:
+The review composition has three layers of concern:
 
 | Layer | Component | Responsibility |
 |---|---|---|
@@ -77,8 +79,12 @@ All executable.md core changes and the full agent implementation are complete:
 
 ## 3. Package: `@executablemd/code-review-agent`
 
-One export: `parseDiff`. Takes raw `git diff` and `git diff --name-status`
-output, returns a typed `PR` object.
+The package exports the published diff, diagnostics, Oxlint normalization, and
+Doctor parsing helpers. `parseDiff` takes raw `git diff` and
+`git diff --name-status` output and returns a typed `PR` object. Existing
+`parseDoctorResult` and tolerant `parseDiagnostics` behavior remains stable;
+strict Oxlint validation belongs to `normalizeOxlintOutput` at the review
+component boundary.
 
 ### 3.1 `PR` type
 
@@ -92,7 +98,7 @@ interface PR {
   deleted: DiffFile[];
   directories: Set<string>;
   addedSource: string;
-  diffPreview: string;       // addedSource truncated to 40K chars
+  diffPreview: string;       // addedSource truncated to 80K chars
   stats: {
     totalFiles: number;
     additions: number;
@@ -149,8 +155,7 @@ function parseDiff(
 - Test file detection: `*.test.ts`, `*.spec.ts`, `__tests__/`, `test/`
 - Config file detection: `*.config.*`, `.*rc`, `tsconfig*`, `package.json`
 - Type declaration detection: `*.d.ts`
-- `diffPreview`: `addedSource` truncated to 40,000 characters so the
-  correctness prompt stays within the provider context limit on large PRs
+- `diffPreview`: `addedSource` truncated to 80,000 characters
 - `directories`: unique top-level dirs at depth 2
 
 ### 3.4 Package structure
@@ -254,145 +259,36 @@ scope.around(Sample, function* ([context], next) {
 
 ### 4.4 `GitHubComment.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    marker:
-      type: string
-      default: "<!-- xmd-review -->"
-  additionalProperties: false
----
+CI roots place this component inside `<GitHubAuth>` and `<Output>`. `GitHubAuth`
+reads `GITHUB_TOKEN` once in a private generator closure and installs
+`@effectionx/fetch`'s `FetchApi` middleware around its projected content. It
+adds authorization only to HTTPS requests whose exact hostname is
+`api.github.com`, preserves request headers and bodies, and forwards the
+`shouldExpect` argument unchanged. Missing credentials and non-GitHub requests
+delegate unchanged. `GitHubComment` therefore keeps only request-specific
+headers such as `Content-Type`; it requires repository and PR metadata instead
+of silently returning an empty report.
 
-```ts eval
-const content = yield* renderChildren();
-const body = marker + "\n" + content;
-
-const token = process.env.GITHUB_TOKEN;
-const repo = process.env.GITHUB_REPOSITORY;
-const prNumber = process.env.PR_NUMBER;
-const [owner, name] = repo.split("/");
-const api = `https://api.github.com/repos/${owner}/${name}`;
-
-const headers = {
-  "Authorization": `Bearer ${token}`,
-  "Accept": "application/vnd.github+json",
-};
-
-const { json: comments } = yield* fetch(
-  `${api}/issues/${prNumber}/comments`, { headers }
-).expect();
-
-const existing = comments.find(c =>
-  c.user.type === "Bot" && c.body.includes(marker)
-);
-
-if (existing) {
-  yield* fetch(`${api}/issues/comments/${existing.id}`, {
-    method: "PATCH",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).expect();
-} else {
-  yield* fetch(`${api}/issues/${prNumber}/comments`, {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).expect();
-}
-
-return content;
-```
-````
+`GitHubComment.md` renders the report, reads the configured repository and PR
+metadata through contextual environment access, and uses the fluent
+`fetch().expect()` operations to create or update the marked comment. It
+requires its metadata and validates the comments payload. Authentication is
+inherited from the surrounding `GitHubAuth` provider; the component supplies
+only request-specific headers such as `Content-Type`.
 
 ### 4.5 `DeepInfraProvider.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    model:
-      type: string
-  required: [model]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch("https://api.deepinfra.com/v1/openai/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${process.env.DEEPINFRA_TOKEN}`,
-    },
-    body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 4096 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<Content />
-````
+`DeepInfraProvider` is a Markdown provider for the `Sample` API. It keeps
+request construction and response validation in its scoped middleware. The
+token is read through contextual environment access and stays in the private
+request operation; a successful 2xx response without model content fails the
+provider.
 
 ### 4.6 `OllamaProvider.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    model:
-      type: string
-    baseUrl:
-      type: string
-      default: "http://localhost:11434"
-  required: [model]
-  additionalProperties: false
----
-
-```ts persist eval
-const scope = yield* useScope();
-scope.around(Sample, function* ([context], next) {
-  if (context.model !== undefined && context.model !== model) {
-    return yield* next(context);
-  }
-
-  const messages = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
-  messages.push({ role: "user", content: context.content });
-
-  const result = yield* fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, temperature: 0 }),
-  })
-    .expect()
-    .json();
-
-  return result.choices[0].message.content;
-});
-```
-
-<Content />
-````
+`OllamaProvider` uses the same `Sample` provider contract with its configured
+local base URL. It validates that a successful response contains model
+content and otherwise fails the enclosing document.
 
 ---
 
@@ -779,54 +675,28 @@ const triggered = touchesPkg && !mentionsDeps;
 
 ### 5.10 `CommentReview.md`
 
-````markdown
----
-props:
-  type: object
-  properties:
-    pr:
-      type: object
-  required: [pr]
-  additionalProperties: false
----
+`CommentReview.md` keeps the authored `<Sample>`, `<Capture>`, and `<Show>`
+composition. `CommentReviewData.ts` performs pair extraction and bounded
+GitHub response parsing, while `CommentReviewState.ts` parses model responses
+and constructs the checklist and pending findings. Both are typed function
+components with explicit schemas; no procedural eval block crosses the
+Markdown boundary.
 
-```ts eval
-const pairs = [];
-const lines = pr.added.filter(l => !l.isTest);
-
-for (let i = 0; i < lines.length - 1; i++) {
-  const current = lines[i].content.trim();
-  const next = lines[i + 1].content.trim();
-  if (current.startsWith("//") && !next.startsWith("//") && next.length > 0) {
-    pairs.push({ comment: current, code: next });
-  }
-}
-
-const hasPairs = pairs.length >= 3;
-const pairsText = hasPairs
-  ? pairs.slice(0, 20).map(p =>
-      `COMMENT: ${p.comment}\nCODE: ${p.code}`
-    ).join("\n---\n")
-  : "";
+```markdown
+<CommentReviewData pr={pr} as="reviewData" />
+<Capture as="sampleResult">
+  <Show when={reviewData.hasPairs}>
+    <Sample>{reviewData.pairsText}</Sample>
+  </Show>
+</Capture>
+<CommentReviewState
+  pr={pr}
+  data={reviewData}
+  classificationResult={classificationResult}
+  sampleResult={sampleResult}
+  as="state"
+ />
 ```
-
-<If condition={hasPairs}>
-
-<Sample>
-
-Review these comment/code pairs. List ONLY obvious/redundant ones
-where the comment restates what the code does.
-
-Format: "- `<comment>` — restates `<code pattern>`"
-
-If none are obvious: "No obvious comments found."
-
-{pairsText}
-
-</Sample>
-
-</If>
-````
 
 ---
 
@@ -1043,180 +913,49 @@ Zero eval blocks.
 
 ## 7. Entry Points
 
-### 7.1 `.reviews/ReviewPR.md` (CI with DeepInfra)
+The CI and local roots keep workflow composition in Markdown. Both use
+`ReviewSetup`, `ReviewContext`, `Doctor`, and `OxlintDiagnostics`; the CI root
+places the complete review inside `<Output>` and wraps it in `GitHubAuth`.
+The local root uses the same composition without `GitHubComment`.
 
-````markdown
----
-title: PR Review
----
-
+```markdown
 <Output>
-
+<GitHubAuth>
+<ReviewSetup />
+<ReviewContext as="context" />
+<Doctor pr={context.pr} as="doctor" />
+<OxlintDiagnostics
+  files={changedTsFiles}
+  typeAware={doctor.recommendation !== "syntax-only"}
+  as="rawDiagnostics"
+/>
 ```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
+import { buildDiagnostics } from "@executablemd/code-review-agent";
+const diagnostics = buildDiagnostics(rawDiagnostics, context.pr, doctor);
 ```
-
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
 <DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
-  <Instructions system="You are a precise TypeScript code review assistant for the effectionx monorepo. Be concise. Report only findings, not praise.">
-    <GitHubComment>
-      <ReviewBody pr={pr} />
-    </GitHubComment>
-  </Instructions>
+  <GitHubComment>
+    <PrPolicyReport pr={context.pr} diagnostics={diagnostics} doctor={doctor} />
+  </GitHubComment>
 </DeepInfraProvider>
-
+</GitHubAuth>
 </Output>
-````
-
-### 7.2 `.reviews/ReviewPR.local.md` (local with Ollama)
-
-````markdown
----
-title: PR Review (local)
----
-
-```ts eval
-const BASE_SHA = process.env.BASE_SHA ?? "HEAD~1";
-const HEAD_SHA = process.env.HEAD_SHA ?? "HEAD";
 ```
 
-<Capture as="rawDiff">
-
-```bash exec
-git diff {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-<Capture as="rawFiles">
-
-```bash exec
-git diff --name-status {BASE_SHA}...{HEAD_SHA}
-```
-
-</Capture>
-
-```ts eval
-import { parseDiff } from "@executablemd/code-review-agent";
-
-const pr = parseDiff(rawDiff, rawFiles, {
-  title: process.env.PR_TITLE ?? "",
-  body: process.env.PR_BODY ?? "",
-  number: process.env.PR_NUMBER ?? "",
-});
-```
-
-<OllamaProvider model="qwen3:30b-a3b">
-  <Instructions system="You are a precise TypeScript code review assistant. Be concise. Report only findings, not praise.">
-    <ReviewBody pr={pr} />
-  </Instructions>
-</OllamaProvider>
-````
-
-Output goes to stdout. No `<GitHubComment>` wrapper.
-
----
+The two eval blocks in the checked-in roots only select bounded values and
+adapt package results. Git, GitHub, Oxlint execution, configuration, and
+normalization live in typed function components or package modules.
 
 ## 8. CI Workflow
 
-### `.github/workflows/review.yml`
-
-```yaml
-name: PR Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      - uses: denoland/setup-deno@v2
-
-      - name: Install dependencies
-        run: deno task deps
-
-      - name: Build the checked-out xmd binary
-        run: deno task build
-
-      - name: Run review
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
-        run: |
-          ./dist/xmd run .reviews/ReviewPR.md \
-            --component-dir .reviews/components \
-            --component-dir .reviews/policies \
-            --component-dir packages/core/components \
-            -j .reviews/journal.jsonl \
-            --verbose
-```
-
-The executable body of the CI root is enclosed in one top-level `<Output>`
-region. An execution failure therefore remains a failed `DocumentResult`,
-fails `execute()`, and makes `xmd run` exit nonzero. Review findings are report
-text and do not fail the run. The workflow does not inspect journal records or
-rendered error markers after the command; it only uploads the journal with
-`if: always()`.
-
-### Journal artifact
-
-The journal is uploaded by head SHA after every run, including failed runs, so
-an execution failure remains inspectable without making the artifact a second
-workflow result channel.
-
-### Durable-boundary safety
-
-Doctor compatibility probes emit aggregate facts only: diagnostic count,
-import-noise count or ratio, file counts, crash state, and available rule IDs.
-Actual Oxlint output is normalized before it enters a capture or durable event
-to `message`, `ruleId` or `code`, `severity`, `file`, and the minimal line and
-column span. PR review keeps diagnostics for changed files; repository analysis
-may keep all files. Source excerpts, causes, rendered source, URLs, and other
-arbitrary payload are discarded.
-
-GitHub credentials are created inside non-serializable header factories at the
-request site. Tokens are not placed in eval bindings or durable output, and
-secret detection remains enabled.
-
----
+The review workflow checks out the requested revision, installs the pinned
+Deno toolchain, runs `deno task setup`, and executes that checkout's
+`./dist/xmd` binary with the review component directories. Credentials stay
+in the workflow environment and are consumed by the scoped `GitHubAuth`
+provider. The CI root uses `<Output>` so execution errors fail the CLI while
+ordinary review findings remain successful report text. The journal is
+uploaded under `if: always()`; Actions does not parse journal records or
+rendered error markers.
 
 ## 9. Deterministic Analysis (separate CI jobs, unchanged)
 
@@ -1258,7 +997,9 @@ These block merges. The executable.md review is advisory.
     ConfigSourceMix.md           Config + source mixing
     AbstractionNames.md          Suspicious file names
     NewDependencies.md           Dependency justification
-    CommentReview.md             Pair extraction + LLM review
+    CommentReview.md             Prompt composition for comment review
+    CommentReviewData.ts         Pair extraction + GitHub response parsing
+    CommentReviewState.ts        Model-response and checklist state
 
     # Policy documents (zero JavaScript)
     ScopeCheck.md                Composes Threshold, Finding checks
@@ -1289,18 +1030,20 @@ These block merges. The executable.md review is advisory.
 | `ConfigSourceMix.md` | 1 | File classification for `<Finding>` |
 | `AbstractionNames.md` | 1 | Name pattern for `<Finding>` |
 | `NewDependencies.md` | 1 | Dependency check for `<Finding>` |
-| `CommentReview.md` | 1 | Pair extraction |
+| `CommentReview.md` | 0 | Prompt and capture composition |
+| `CommentReviewData.ts` | 0 | Pair extraction and GitHub response parsing |
+| `CommentReviewState.ts` | 0 | Model-response and checklist state |
 | **`ScopeCheck.md`** | **0** | |
 | **`StructuralBloat.md`** | **0** | |
 | **`VerbosityCheck.md`** | **0** | |
 | **`SemanticReview.md`** | **0** | |
 | **`ReviewBody.md`** | **0** | |
-| `ReviewPR.md` | 2 | Env vars + parseDiff |
-| `ReviewPR.local.md` | 2 | Env vars + parseDiff |
+| `ReviewPR.md` | 2 | Changed-file selection + diagnostic grouping |
+| `ReviewPR.local.md` | 2 | Changed-file selection + diagnostic grouping |
 
-17 eval blocks across 17 reusable components. 5 policy documents
-and `ReviewBody` have zero. The documents a team edits day-to-day
-contain no JavaScript.
+The authored Markdown keeps the review prompts and policy composition. The
+procedural components are typed TypeScript modules, while only short binding
+adapters remain in the two root documents.
 
 ---
 
@@ -1329,29 +1072,32 @@ output. All rules at `"warn"` — Oxlint collects signals, not verdicts.
 
 ### 13.1 Sensor configuration
 
-`.reviews/.oxlintrc.json` — committed config with `pedantic: "warn"`
-and `style: "warn"` enabled (14 bloat-relevant rules). All oxlint
-invocations in capture blocks reference this config via
-`--config .reviews/.oxlintrc.json`.
+`.reviews/.oxlintrc.json` — committed review-sensor config with
+`pedantic: "warn"` and `style: "warn"` enabled. All oxlint invocations
+reference this config via `--config .reviews/.oxlintrc.json`. The sensor
+turns off rule families that conflict with repository conventions: component
+filename casing, named-export and export-order rules, generator/function
+style rules, and mechanical import/key-order and magic-number rules (including
+`sort-imports`, `sort-keys`, and `no-magic-numbers`). The normal repository
+lint configuration remains authoritative for those rules; this
+review-only exclusion prevents the advisory report from treating required
+component structure as a finding.
 
-### 13.2 Environment detection (`Doctor.md`)
+### 13.2 Environment detection (`Doctor.ts`)
 
 The Doctor component probes the environment before oxlint runs:
 oxlint binary, tsgolint binary, `node_modules/`, tsconfig, scheme
 specifier scan (`jsr:`, `npm:`), and a type-aware test run. Outputs
 a recommendation: `type-aware`, `type-aware-filtered`, or
-`syntax-only`. Includes prose narration for local visibility.
-Its JSON output is wrapped in a `` ```json `` code fence and
-extracted via `<Capture select="code[lang=json]">` (see executable.md spec
-§6.5), isolating the structured data from surrounding narration.
+`syntax-only`. The typed function component returns the bounded Doctor
+object directly; raw process output never becomes a document binding.
 
 ### 13.3 PR-scoped analysis
 
-PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) scope oxlint
-to changed `.ts`/`.tsx` files only via `git diff --name-only` +
-`xargs`. Density against `pr.stats.additions` is only meaningful
-when diagnostics come from the same files the additions are in.
-Repo analysis entry points run on everything.
+PR entry points (`ReviewPR.md`, `ReviewPR.local.md`) pass the parsed changed
+`.ts`/`.tsx` paths to the typed `OxlintDiagnostics` component. Density against
+`pr.stats.additions` is only meaningful when diagnostics come from the same
+files the additions are in. Repo analysis entry points run on everything.
 
 ### 13.4 Density calibration
 
@@ -1422,3 +1168,36 @@ Local runs skip issue creation (no `GITHUB_TOKEN` → return empty).
 lint-plugins/
   no-scheme-specifiers.ts          Deno lint plugin
 ```
+
+## 14. Current review-infrastructure boundary
+
+The CI entrypoints are declarative compositions. Their executable shape is:
+
+```markdown
+<Output>
+  <GitHubAuth>
+    <ReviewSetup />
+    <ReviewContext as="context" />
+    <Doctor pr={context.pr} as="doctor" />
+    <OxlintDiagnostics files={changedTsFiles} as="diagnostics" />
+    <!-- provider and policy composition -->
+  </GitHubAuth>
+</Output>
+```
+
+`Doctor`, `ReviewContext`, `RepositoryInventory`, and `OxlintDiagnostics` are
+typed function components. They use contextual runtime operations directly;
+their props and return schemas stay explicit at the module boundary. Git and
+GitHub calls use argument-array `exec` and the fluent
+`fetch().expect().json()` operations. The code-review-agent package owns diff,
+Oxlint normalization, Doctor classification, and structured result
+construction. Raw process output, response objects, and credentials remain
+inside generator-local variables; only bounded values become document
+bindings. Markdown remains responsible for the visible composition and
+provider hierarchy.
+
+The review workflow runs `deno task setup` and then `./dist/xmd`, so the binary
+and executable Markdown are from the same checkout. The two CI roots use
+`<Output>` error mode: execution failures return a failed document result and a
+nonzero CLI exit, while ordinary finding text remains successful output. The
+journal is uploaded with `if: always()` and is not parsed by Actions.
