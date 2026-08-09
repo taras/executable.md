@@ -11,6 +11,7 @@ const DEFAULTS: DoctorResult = {
   filesAnalyzed: 0,
   filesSkipped: 0,
   importErrors: 0,
+  availableRuleIds: [],
   bloatRulesAvailable: [],
   bloatRulesMissing: [],
   recommendation: "syntax-only",
@@ -111,6 +112,9 @@ function parseDoctorObject(record: Record<string, unknown>): DoctorResult {
     filesAnalyzed: numberValue(record, "filesAnalyzed") ?? DEFAULTS.filesAnalyzed,
     filesSkipped: numberValue(record, "filesSkipped") ?? DEFAULTS.filesSkipped,
     importErrors: numberValue(record, "importErrors") ?? DEFAULTS.importErrors,
+    availableRuleIds: stringArrayValue(record, "availableRuleIds") ?? [
+      ...DEFAULTS.availableRuleIds,
+    ],
     bloatRulesAvailable: stringArrayValue(record, "bloatRulesAvailable") ?? [
       ...DEFAULTS.bloatRulesAvailable,
     ],

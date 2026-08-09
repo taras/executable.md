@@ -32,6 +32,7 @@ describe("Doctor analysis", () => {
     expect(summary.importErrors).toBe(1);
     expect(summary.filesAnalyzed).toBe(2);
     expect(summary.filesSkipped).toBe(1);
+    expect(summary.availableRuleIds).toEqual(["import/no-unresolved", "no-unused-vars"]);
   });
 
   it("classifies a type-aware crash without exporting raw process output", function* () {

@@ -23,6 +23,7 @@ export interface DoctorProbeSummary {
   filesAnalyzed: number;
   filesSkipped: number;
   importErrors: number;
+  availableRuleIds: string[];
   bloatRulesAvailable: string[];
   bloatRulesMissing: string[];
   recommendation: DoctorResult["recommendation"];
@@ -67,6 +68,10 @@ function noiseRatio(total: number, importNoise: number): number {
   return importNoise / total;
 }
 
+function availableRuleIds(diagnostics: readonly OxlintDiagnostic[]): string[] {
+  return [...new Set(diagnostics.map((diagnostic) => diagnostic.ruleId).filter(Boolean))].sort();
+}
+
 function isImportNoise(diagnostic: OxlintDiagnostic): boolean {
   return (
     diagnostic.message.includes("Cannot find module") ||
@@ -93,6 +98,7 @@ export function summarizeDoctorProbe(input: DoctorProbeInput): DoctorProbeSummar
     filesAnalyzed: files.size,
     filesSkipped: skippedFiles.size,
     importErrors: importNoise.length,
+    availableRuleIds: availableRuleIds(input.diagnostics),
     bloatRulesAvailable: rules.available,
     bloatRulesMissing: rules.missing,
     recommendation: recommendationFor(available, ratio),

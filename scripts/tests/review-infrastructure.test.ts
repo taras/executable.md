@@ -113,10 +113,10 @@ function* run(
       "---",
       "",
       "```ts eval",
-      "const value = yield* fetch(url, { method: 'POST', headers: { 'X-Caller': 'kept', 'Content-Type': 'application/custom' }, body: 'request-body' }).expect().json();",
+      "const value = yield* fetch(props.url, { method: 'POST', headers: { 'X-Caller': 'kept', 'Content-Type': 'application/custom' }, body: 'request-body' }).expect().json();",
       "```",
       "",
-      "{label}={value.message}",
+      "{props.label}={value.message}",
     ].join("\n"),
     "components/Wrapper.md": '<Probe label="nested" url="https://api.github.com/repos/nested" />',
     "components/NoExpect.md": [
