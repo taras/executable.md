@@ -1337,7 +1337,7 @@ A component invocation creates its eval scope on its own expansion frame and
 runs its body inside a task that scope owns:
 
 ```
-invocation frame           expansion providers, error mode, DurableCtx
+invocation frame           expansion providers, error mode, DurableContext
 └─ evalHost
    └─ A's loop task        the invocation's eval scope
       └─ body task         the component body, its resources and its middleware

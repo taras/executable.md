@@ -834,7 +834,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       yield* LiveFailure.set(liveFailure);
 
       // Create per-document eval scope (spec §3.1).
-      // Created in the same scope as durableRun so that DurableCtx
+      // Created in the same scope as durableRun so that DurableContext
       // (set by durableRun) is visible to eval code that calls
       // renderChildren → importComponent → createDurableOperation.
       const rootEvalScope = yield* useEvalScope();

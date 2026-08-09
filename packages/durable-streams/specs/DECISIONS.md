@@ -264,7 +264,7 @@ Updated before completion of every phase and committed at the end of each phase.
   runner/reducer or inside each effect.
 - **Decision:** Each `DurableEffect.enter()` handles its own replay/live
   dispatch internally, reading `DurableContext` from the scope via
-  `routine.scope.expect(DurableCtx)`.
+  `routine.scope.expect(DurableContext)`.
 - **Rationale:** Keeps the Effection reducer completely untouched. The reducer
   calls `enter()` on every effect — whether `enter()` resolves synchronously
   (replay) or asynchronously (live + persist) is invisible to it. This is
@@ -365,7 +365,7 @@ Updated before completion of every phase and committed at the end of each phase.
   the parent generator's try/catch).
 - **Consequences:** `durableAll` and `durableRace` delegate to Effection's
   native combinators. The durable layer wraps each child in an Operation
-  that (1) checks for replay short-circuit, (2) sets DurableCtx with a
+  that (1) checks for replay short-circuit, (2) sets DurableContext with a
   child coroutineId, and (3) emits Close events in finally. This is a
   thin wrapper that preserves Effection's error semantics perfectly.
 

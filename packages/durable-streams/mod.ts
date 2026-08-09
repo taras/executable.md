@@ -59,8 +59,7 @@ export { ReplayGuard } from "./replay-guard.ts";
 export type { ReplayOutcome } from "./replay-guard.ts";
 
 // Context
-export { DurableCtx } from "./context.ts";
-export type { DurableContext } from "./context.ts";
+export { DurableContext } from "./context.ts";
 
 // Serialization utilities
 export {

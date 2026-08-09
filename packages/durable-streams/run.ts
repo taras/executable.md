@@ -15,7 +15,7 @@
 
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
-import { DurableCtx } from "./context.ts";
+import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
@@ -97,7 +97,7 @@ export function* durableRun<T extends WorkflowValue>(
     childCounter: 0,
     durability: {},
   };
-  scope.set(DurableCtx, ctx);
+  scope.set(DurableContext, ctx);
 
   // ── REPLAY GUARD: Check phase ──
   // Run before the workflow starts. Middleware can yield* for I/O (hash

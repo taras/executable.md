@@ -1,12 +1,11 @@
 import { createContext, useScope } from "effection";
 import type { Context, Operation } from "effection";
-import { createDurableOperation, DurableCtx, StaleInputError } from "@executablemd/durable-streams";
-import type {
+import {
+  createDurableOperation,
   DurableContext,
-  EffectDescription,
-  Json,
-  Workflow,
+  StaleInputError,
 } from "@executablemd/durable-streams";
+import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
 
 /**
  * The loop a `<Break>` exits (spec §6.5 `<Loop>`).
@@ -191,5 +190,5 @@ export function* recordOutcome(identity: LoopIdentity, record: LoopRecord): Oper
 
 function* durableContext(): Operation<DurableContext | undefined> {
   const scope = yield* useScope();
-  return scope.get(DurableCtx);
+  return scope.get(DurableContext);
 }
