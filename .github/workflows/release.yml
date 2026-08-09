@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   # Refuse a tag the manifests do not declare (spec §2) — the binary's
@@ -99,6 +101,15 @@ jobs:
             --target ${{ matrix.target }} \
             --output dist/${{ matrix.artifact }} \
             packages/cli/src/compiled.ts
+
+      # Between the compile and the upload, so the provenance covers the bytes
+      # this job produced and an unattested binary never enters the artifact set
+      # `release` downloads. The whole matrix is `needs:` of `release`, so a
+      # failed attestation withholds the release rather than warning about it.
+      - name: Attest ${{ matrix.artifact }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ matrix.artifact }}
 
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

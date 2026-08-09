@@ -13,9 +13,9 @@ PRs merged since the last published release. A release is triggered by a
 maintainer publishing that draft via the GitHub Releases UI, which creates a
 `vX.Y.Z` tag from `main`. No workflow creates tags.
 
-The tag starts two workflows: `release.yml` compiles the `xmd` binaries and
-attaches them to the release, and `publish-packages.yml` publishes every
-`@executablemd/*` package to npm (primary) and JSR (secondary). npm publishes
+The tag starts two workflows: `release.yml` compiles the `xmd` binaries, attests
+each one, and attaches them to the release; `publish-packages.yml` publishes
+every `@executablemd/*` package to npm (primary) and JSR (secondary). npm publishes
 per package; JSR publishes all workspace packages together. Binaries come
 first: `publish-packages.yml` publishes nothing until `release.yml` succeeds,
 so npm versions never exist without matching binaries. Both workflows build
@@ -38,7 +38,7 @@ sequenceDiagram
     GH->>R: push: tags v*
     GH->>PP: push: tags v*
     R->>R: validate tag matches packages/cli/deno.json
-    R->>GH: compile xmd per target,<br/>attach binaries + checksums to the release
+    R->>GH: compile and attest xmd per target,<br/>attach binaries + checksums to the release
     PP->>PP: validate tag matches every manifest,<br/>wait for release.yml to succeed
     PP->>PO: one call per package,<br/>needs-ordered (deps first)
     M-->>PO: approve npm-publish environment
@@ -95,7 +95,13 @@ documents at the revision it checks.
   `--include packages/code-review-agent` and attaches the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
-  relaunches the binary as itself, which a source entrypoint cannot do.
+  relaunches the binary as itself, which a source entrypoint cannot do. Between
+  that compile and the upload, each matrix job attests its
+  `dist/${{ matrix.artifact }}` with a commit-pinned `actions/attest`, so GitHub
+  publishes build provenance for the exact bytes the job produced — one attested
+  subject per target, from one shared step. The `release` job needs the whole
+  `build` matrix, so a failed attestation withholds every binary instead of
+  releasing an unattested one.
 - **`review.yml`** and **`repo-analysis.yml`**: install the repository-pinned
   Deno and pnpm actions, run `deno task setup` and `deno task build`, and
   execute the checked-out `./dist/xmd` against the checked-out Markdown. Their CI roots use `<Output>`
@@ -205,6 +211,19 @@ npm validates the **calling** workflow's filename for `workflow_call`, not the
 reusable `publish-one.yml`. Binding the environment name makes npm reject OIDC
 tokens minted outside the gated environment.
 
+That same trusted publisher is what makes the packages carry provenance: npm
+generates it automatically for a public package published from a public
+repository over OIDC, which is exactly this path. `npm publish --provenance` is
+therefore intentionally absent — the flag would add nothing the identity npm
+already validated does not supply.
+
+The binaries carry provenance of their own (§3), attached to GitHub rather than
+to a registry. A consumer verifies a downloaded one against this repository:
+
+```sh
+gh attestation verify ./xmd-<target> -R taras/executable.md
+```
+
 ## 5. Protection configuration
 
 - The **`npm-publish` environment** requires reviewer approval and deploys
@@ -248,6 +267,12 @@ versions succeed. This holds per package on both registries: npm's guard runs
 per `publish-one.yml` call, and `deno publish` filters already-published
 workspace members individually — so a rerun after a partial publish picks up
 only what is missing. No dispatch path publishes outside a tag.
+
+A rerun of a `build` job compiles and attests again, and the release cannot
+publish until that attestation succeeds. The guarantee is that the released
+digest carries valid provenance from this repository, not that it was attested
+exactly once — GitHub accepts more than one attestation for a subject, and
+verification is satisfied by any valid one.
 
 ## 8. Browser assets (`@executablemd/web`)
 
