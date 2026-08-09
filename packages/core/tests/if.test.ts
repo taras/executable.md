@@ -175,32 +175,59 @@ describe("Tier IF — condition validation", () => {
     expect(run.output).not.toContain("body");
   });
 
-  it("IF14: a non-boolean condition is rejected without coercion", function* () {
-    const cases: Array<[string, string]> = [
-      ['<If condition="yes">x</If>', "a string"],
-      ["<If condition={1}>x</If>", "a number"],
-      ["<If condition={0}>x</If>", "a number"],
-      ["<If condition={null}>x</If>", "null"],
-      ["<If condition={[1]}>x</If>", "an array"],
-      ["<If condition={{a: 1}}>x</If>", "an object"],
+  it("IF14: every falsy condition selects the <Else> branch", function* () {
+    const cases: Array<[string, unknown]> = [
+      ["false", false],
+      ["0", 0],
+      ["-0", -0],
+      ["0n", 0n],
+      ["NaN", NaN],
+      ['""', ""],
+      ["null", null],
+      ["undefined", undefined],
     ];
-    for (const [source, kind] of cases) {
-      const run = yield* runIf(source);
-      const message = errorMessages(run.segments)[0] ?? "";
-      expect(message).toContain("must be a boolean");
-      expect(message).toContain(kind);
-      expect(run.output).not.toContain("x");
+    const selected: string[] = [];
+    for (const [label, value] of cases) {
+      const run = yield* runIf("<If condition={condition}>then<Else>else</Else></If>", {
+        env: { condition: value },
+      });
+      selected.push(`${label}: ${run.output}`);
+      expect(errorMessages(run.segments)).toHaveLength(0);
     }
+    expect(selected).toEqual(cases.map(([label]) => `${label}: else`));
   });
 
-  it("IF15: a non-boolean expression result is rejected", function* () {
-    const run = yield* runIf("<If condition={count}>x</If>", { env: { count: 3 } });
-    expect(errorMessages(run.segments)[0]).toContain("must be a boolean, not a number");
+  it("IF15: every truthy condition selects the leading branch", function* () {
+    const cases: Array<[string, unknown]> = [
+      ["true", true],
+      ["1", 1],
+      ['"false"', "false"],
+      ['"text"', "text"],
+      ["[]", []],
+      ["{}", {}],
+    ];
+    const selected: string[] = [];
+    for (const [label, value] of cases) {
+      const run = yield* runIf("<If condition={condition}>then<Else>else</Else></If>", {
+        env: { condition: value },
+      });
+      selected.push(`${label}: ${run.output}`);
+      expect(errorMessages(run.segments)).toHaveLength(0);
+    }
+    expect(selected).toEqual(cases.map(([label]) => `${label}: then`));
   });
 
-  it("IF16: an unresolvable condition expression is rejected", function* () {
-    const run = yield* runIf("<If condition={missing}>x</If>");
-    expect(errorMessages(run.segments)[0]).toContain("condition={missing}");
+  it("IF16: an absent member is falsy, an undeclared identifier is rejected", function* () {
+    const misspelled = yield* runIf("<If condition={review.aproved}>yes<Else>no</Else></If>", {
+      env: { review: { approved: true } },
+    });
+    expect(misspelled.output).toBe("no");
+    expect(errorMessages(misspelled.segments)).toHaveLength(0);
+
+    const undeclared = yield* runIf("<If condition={missing}>then<Else>else</Else></If>");
+    expect(errorMessages(undeclared.segments)[0]).toContain("condition={missing}");
+    expect(undeclared.output).not.toContain("then");
+    expect(undeclared.output).not.toContain("else");
   });
 
   it("IF17: unknown props are rejected", function* () {
@@ -383,7 +410,7 @@ describe("Tier IF — printed errors carry source positions", () => {
   });
 
   it("IF36: an origin adds the file path", function* () {
-    const run = yield* runIf("\n<If condition={1}>body</If>", {
+    const run = yield* runIf("\n<If>body</If>", {
       origin: { path: "Doc.md", baseOffset: 40, baseLine: 5 },
     });
     expect(errorMessages(run.segments)[0]).toContain("(Doc.md:6:1)");
@@ -410,7 +437,7 @@ describe("Tier IF — printed errors carry source positions", () => {
       return yield* expandSegments([element], {}, {}, new Set());
     });
     const message = errorMessages(segments)[0] ?? "";
-    expect(message).toBe('<If> requires a "condition" prop (a boolean).');
+    expect(message).toBe('<If> requires a "condition" prop.');
   });
 });
 
@@ -773,9 +800,9 @@ describe("Tier IF — error observation", () => {
     expect(missing.observed).toHaveLength(1);
     expect(missing.observed[0]).toContain('requires a "condition" prop');
 
-    const nonBoolean = yield* runRaiseProbe("<If condition={1}>body</If>");
-    expect(nonBoolean.observed).toHaveLength(1);
-    expect(nonBoolean.observed[0]).toContain("must be a boolean");
+    const unresolvable = yield* runRaiseProbe("<If condition={absent}>body</If>");
+    expect(unresolvable.observed).toHaveLength(1);
+    expect(unresolvable.observed[0]).toContain("condition={absent}");
 
     const structure = yield* runRaiseProbe('<If condition={true}>a<Else when="x">b</Else></If>');
     expect(structure.observed).toHaveLength(1);

@@ -112,11 +112,26 @@ export default define.page(function ControlFlow() {
       <h2>Choosing a branch</h2>
       <p>
         <code>condition</code>{" "}
-        is the only prop, and it must be a boolean — there is no truthy or falsy
-        coercion, so a string, number, array, or <code>null</code>{" "}
-        is an error rather than a branch. The optional <code>&lt;Else&gt;</code>
+        is the only prop, and the value it resolves to selects a branch by
+        ordinary JavaScript truthiness. <code>false</code>, <code>0</code>,{" "}
+        <code>-0</code>, <code>0n</code>, <code>NaN</code>, <code>""</code>,
         {" "}
+        <code>null</code>, and <code>undefined</code>{" "}
+        take the false branch; everything else takes the true one — including
+        {" "}
+        <code>"false"</code>, <code>"0"</code>, <code>[]</code>, and{" "}
+        <code>{"{}"}</code>, which are JavaScript's familiar edges rather than a
+        rule <code>&lt;If&gt;</code>{" "}
+        invents. So a document can branch on the value it already has, as in
+        {" "}
+        <code>{"<If condition={review.note}>"}</code>. The optional{" "}
+        <code>&lt;Else&gt;</code>{" "}
         block holds the alternative and is written once, as a direct child.
+      </p>
+      <p>
+        A misspelled member resolves to <code>undefined</code>{" "}
+        and quietly takes the false branch; an undeclared identifier is still an
+        error.
       </p>
       <CodeBlock>{SIMPLE}</CodeBlock>
 

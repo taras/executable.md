@@ -1,9 +1,12 @@
 <Section title="Conditionals">
 
 `<If>` chooses one branch of a document and expands only that branch. The
-`condition` prop is a boolean — there is no truthy or falsy coercion — and an
-optional `<Else>` block, written once as a direct child, holds the alternative.
-Without `<Else>` a false condition renders nothing.
+`condition` prop selects by ordinary JavaScript truthiness — `false`, `0`, `-0`,
+`0n`, `NaN`, `""`, `null`, and `undefined` take the false branch, everything
+else takes the true one, including `"false"`, `[]`, and `{}` — so a document
+branches on the value it already has. An optional `<Else>` block, written once
+as a direct child, holds the alternative; without `<Else>` a falsy condition
+renders nothing.
 
 The unselected branch is not hidden output: it never expands, so nothing in it
 imports a component, runs a code block, reaches a provider, or creates a
@@ -42,6 +45,12 @@ selected branch behaves like inline content and stays available after `</If>`.
 <Verdict as="failing" findings={["missing test", "stale doc"]} />
 <Capture as="failingReport"><If condition={!failing.passed}>Needs revision: {failing.summary}<Else>Approved</Else></If></Capture>
 <AssertEquals actual={failingReport} expected={"Needs revision: 2 findings"} />
+</Test>
+
+<Test name="If branches on a captured string without converting it first">
+<Capture as="note">needs a second look</Capture>
+<Capture as="noteReport"><If condition={note}>Note: {note}<Else>No note</Else></If></Capture>
+<AssertEquals actual={noteReport} expected={"Note: needs a second look"} />
 </Test>
 
 <Test name="Content around the selected branch keeps its order">

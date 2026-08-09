@@ -263,10 +263,11 @@ describe("Tier LOOP — bindings", () => {
       '<Loop max={2}><If condition={seen}>again<Else>first</Else></If><Capture as="seen">x</Capture></Loop>',
       { env: { seen: false } },
     );
-    // The capture rebinds `seen` to a non-boolean, so the second iteration's
-    // condition is rejected rather than coerced — bindings really do carry.
-    expect(run.output).toContain("first");
-    expect(errorMessages(run.segments)[0]).toContain("must be a boolean, not a string");
+    // The capture rebinds `seen` to a non-empty string, which the second
+    // iteration reads as truthy — bindings really do carry.
+    expect(run.output).toBe("firstagain");
+    expect(errorMessages(run.segments)).toHaveLength(0);
+    expect(run.env?.seen).toBe("x");
   });
 });
 
@@ -1255,13 +1256,14 @@ describe("Tier LOOP — replay validates the terminal record", () => {
       "props:",
       "  type: object",
       "  properties:",
-      "    condition: {}",
-      "  required: [condition]",
+      "    fail:",
+      "      type: boolean",
+      "  required: [fail]",
       "  additionalProperties: false",
       "---",
       "",
       "<Loop max={1}>",
-      "<If condition={props.condition}>step</If>",
+      '<If condition={props.fail}><Each in="one" let="item">{item}</Each></If>',
       "</Loop>",
       "",
       "<Output>",
@@ -1269,12 +1271,15 @@ describe("Tier LOOP — replay validates the terminal record", () => {
       "</Output>",
     ].join("\n");
 
-    const cut = yield* completeThenCut(FAILING, { condition: true });
+    const cut = yield* completeThenCut(FAILING, { fail: false });
     expect(outcomeRecords(cut).map((entry) => entry.outcome)).toEqual(["exhausted"]);
 
-    // A non-boolean condition makes the body fail under the documentation
-    // error mode, so this run derives `error` where the journal holds `exhausted`.
-    const replayed = yield* resume(FAILING, cut, { condition: 1 });
+    // The branch this run selects holds an <Each> whose `in` is not an array,
+    // so the body fails under the documentation error mode and this run derives
+    // `error` where the journal holds `exhausted`. The failing content performs
+    // no journaled operation, so the two runs disagree about the terminal
+    // record and about nothing before it.
+    const replayed = yield* resume(FAILING, cut, { fail: true });
 
     expect(replayed.failure).toBeInstanceOf(StaleInputError);
     expect(outcomeRecords(replayed.events).map((entry) => entry.outcome)).toEqual(["exhausted"]);
