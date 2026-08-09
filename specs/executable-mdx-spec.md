@@ -7060,6 +7060,9 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC21 | Selection refusal | A substituted or foreign provider selection is rejected before transaction or savepoint work and leaves no mutation, retained root, pointer change, Yield or Close |
 | WAC22 | Minimum-priority publication isolation | A minimum-priority same-named handler cannot observe or acknowledge publication; the real mutation, retained root, current pointer and filtered Yield commit together |
 | WAC23 | Minimum-priority failure isolation | A minimum-priority same-named handler cannot replace infrastructure-failure activation; the exact first failure rolls back mutation, roots and journal and fences later work |
+| WAC24 | Real host crash | A `SIGKILL` while the mutation, immutable root, current-root pointer and routed journal row are written and uncommitted leaves a second connection seeing only the baseline, and a fresh process recovers the baseline filesystem, root, retained counts and journal exactly |
+| WAC25 | Committed restart | A second process reopens a run whose Workspace effects committed in a process that has ended, observes the same filesystem, current root, ordered events, event identities and event-to-root associations, and performs no recorded effect again |
+| WAC26 | Historical reconstruction | A fresh process selects an older event's root through the adapter-private materializer, invalidates the authoritative negative resolution, rebuilds its exact topology, bytes, modes, hardlinks and symbolic links from that root's retained DOFS content, and resnapshots to the selected identity |
 
 ### Tier WTX — WorkflowRun savepoints and transaction authority
 

@@ -132,6 +132,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "creates and imports a physical temporary copy of the Workspace modules through Deno.makeTempDir and the Deno module loader",
     issue: "https://github.com/taras/executable.md/issues/365",
   },
+  {
+    path: "packages/workflow/tests/workspace-crash-recovery.test.ts",
+    reason:
+      "kills real Deno child processes with SIGKILL and reads the recovered node:sqlite WorkflowRun database they leave behind; the children run under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
 ];
 
 /**

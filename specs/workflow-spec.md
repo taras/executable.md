@@ -509,6 +509,21 @@ That identity fences later coordinators, executors and appends. An already
 active durability failure takes precedence. Cancellation at any phase publishes
 nothing.
 
+Losing the host is not one of those phases. A killed process runs no cleanup,
+so its caller-owned transaction stays open and SQLite's recovery decides the
+outcome. The mutation, the immutable root, the current-root pointer and the
+routed journal row are all written inside that transaction, and none of them is
+exposed afterwards. While the process is alive, another connection sees only
+the last committed state, so a crash publishes nothing that was not already
+visible before it.
+
+A later process therefore opens the last committed state and nothing else: the
+same live filesystem, the same current root, the same retained roots, manifest
+and blob references, and the same ordered journal with the same event
+identities and Workspace-root associations. Recorded effects replay rather than
+execute again, and the private restoration materializer reconstructs any
+retained root from that state without the process that wrote it.
+
 The provider-neutral coordinator receives the failure-activation continuation
 needed for this boundary. The default live coordinator ignores it and preserves
 ordinary success/failure publication. Replay bypasses coordination, and only an

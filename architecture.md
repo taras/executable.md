@@ -550,6 +550,18 @@ supplies a provider-neutral failure activator so a provider can retain that
 first infrastructure failure by identity; the default coordinator does not use
 it and keeps its existing behavior.
 
+Losing the host is not one of those outcomes, because nothing runs to handle
+it. A killed process leaves its transaction open, and SQLite's own recovery
+decides what the database holds next: the mutation, the immutable root, the
+current-root pointer and the routed event are all written by then, and none of
+them survives. While that process is alive another connection sees only the
+last committed state, so the boundary is the same one every other reader
+observes rather than a second rule for crashes. What a later process finds is
+that committed state — the filesystem, the current root, the retained roots and
+references, and the ordered journal with its event identities and root
+associations — from which it performs no recorded effect again and can
+materialize any retained root.
+
 The Deno journal adapter routes an append ordinarily when no destination is
 bound. A publication may instead bind one exact transaction destination for its
 own lexical scope after the existing secret gate. The route validates the
