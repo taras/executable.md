@@ -73,7 +73,39 @@ is the post-merge proof, and a failure there opens a `ci-main-red` issue.
 
 ## Verification
 
-One command runs everything that applies, concurrently:
+CI runs the complete Deno, Node, and Bun suites. Local verification is for a
+short feedback loop: run the smallest tests that exercise the behavior being
+changed, then rely on CI for exhaustive coverage.
+
+Use one of these forms while implementing:
+
+```bash
+# Tests affected by uncommitted changes
+deno task test --changed
+# Tests affected by the branch and worktree
+deno task test --changed=origin/main
+# Tests that import one source file
+deno task test --related=packages/core/src/expand.ts
+# A known regression test
+deno task test packages/core/tests/expand.test.ts
+```
+
+Prefer explicit test files when the behavior crosses a boundary the module
+graph cannot see, such as a subprocess, fixture, generated file, or dynamic
+import. `--related` and `--changed` select transitively through imports; they do
+not prove that every black-box consumer has been found. Add each known
+integration or regression test explicitly in that case.
+
+Before committing changes to source or tests, run `deno task lint`, `deno task
+check`, `deno task check:jsr`, and the affected Deno tests. Do not run the full
+test suite under each runtime merely for confidence: the `test-deno`,
+`test-node`, and `test-bun` CI jobs own that exhaustive pass. Run a full suite
+locally only when the change affects test discovery, a runtime adapter, shared
+test setup, or another boundary that makes affected-test selection incomplete,
+or when the user asks for it.
+
+To reproduce the complete applicable battery locally, one command runs it
+concurrently:
 
 ```bash
 deno task verify          # add --no-site to skip the site pair
@@ -116,18 +148,19 @@ the regression evidence is recorded.
 The site pair applies when `site/` changed, judged from the branch and the
 worktree, both sides of a rename included.
 
-Running the checks individually is still fine, and is what `verify` does for
-you. After making any changes to source files (`src/`) or test files (`tests/`),
-always run all four before committing:
+The complete battery consists of:
 
 1. **Lint + Format**: `deno task lint` (runs `oxlint` + `oxfmt --check`) — must
    produce 0 errors. Run `deno task fmt` to auto-fix formatting.
 2. **Typecheck**: `deno task check` — must produce no errors
-3. **Tests**: `deno task test` — all tests must pass with 0 failures
+3. **Tests**: `deno task test` — the full Deno suite; CI also runs the full
+   corpus under Node and Bun
 4. **JSR publishability**: `deno task check:jsr` — must end with
    `Success Dry run complete`
 
-Do not commit if any check fails. Fix the issue first, then re-run all four.
+Do not commit if a local check fails. Fix the issue first, then re-run the
+failed check and every affected test. CI remains responsible for the complete
+battery unless the change meets one of the full-suite conditions above.
 
 Each command derives its own scope, so a new package under `packages/` — and a
 new test file under any member's `tests/` — is covered without editing anything
