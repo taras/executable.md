@@ -1,19 +1,6 @@
 import type { DoctorResult, OxlintDiagnostic } from "./types.ts";
-import { TYPE_AWARE_RULES } from "./categories.ts";
+import { SENSOR_RULES, TYPE_AWARE_RULES } from "./categories.ts";
 
-const BLOAT_RULES = [
-  "no-unused-vars",
-  "no-inferrable-types",
-  "no-empty-function",
-  "no-empty-object-type",
-  "no-useless-empty-export",
-  "no-unnecessary-type-constraint",
-  "no-unnecessary-parameter-property-assignment",
-  "no-static-only-class",
-  "no-console",
-  "no-debugger",
-  ...TYPE_AWARE_RULES,
-];
 const TYPE_AWARE_RULE_SET = new Set<string>(TYPE_AWARE_RULES);
 const IMPORT_NOISE_RATIO = 0.3;
 const OXLINT_CRASH_PATTERN = /panic|oom|out of memory|fatal|segmentation fault/iu;
@@ -40,10 +27,10 @@ function bloatRulesFor(typeAwareAvailable: boolean): {
   missing: string[];
 } {
   if (typeAwareAvailable) {
-    return { available: [...BLOAT_RULES], missing: [] };
+    return { available: [...SENSOR_RULES], missing: [] };
   }
   return {
-    available: BLOAT_RULES.filter((rule) => !TYPE_AWARE_RULE_SET.has(rule)),
+    available: SENSOR_RULES.filter((rule) => !TYPE_AWARE_RULE_SET.has(rule)),
     missing: [...TYPE_AWARE_RULES],
   };
 }

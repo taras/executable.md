@@ -28,6 +28,14 @@ export const TYPE_AWARE_RULES = [
   "no-unnecessary-boolean-literal-compare",
 ] as const;
 
+/**
+ * The curated signal catalog the Oxlint policy enables explicitly, in the order
+ * the category lists declare them.
+ */
+export const SENSOR_RULES: readonly string[] = [
+  ...new Set<string>([...STRUCTURAL_RULES, ...VERBOSITY_RULES, ...TYPE_AWARE_RULES]),
+];
+
 const structuralSet = new Set<string>(STRUCTURAL_RULES);
 const verbositySet = new Set<string>(VERBOSITY_RULES);
 const typeAwareSet = new Set<string>(TYPE_AWARE_RULES);
