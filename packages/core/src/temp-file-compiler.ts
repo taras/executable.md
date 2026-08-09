@@ -14,7 +14,7 @@
  * `useTempFileCompiler()`.
  */
 
-import { call } from "effection";
+import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import type { EvalBlock } from "@executablemd/runtime";
 import { API } from "@executablemd/runtime";
@@ -23,7 +23,7 @@ import { API } from "@executablemd/runtime";
 // the packages from the binary and every eval block using them fails.
 import "@effectionx/converge";
 import "@effectionx/fetch";
-import { writeFile, unlink, mkdir } from "node:fs/promises";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -45,26 +45,34 @@ const EVAL_DIR = ".xmd-eval";
  *
  * Every host can load a file, which is what makes this the portable one;
  * Node's tsx loader in particular rejects the data: URI alternative.
+ *
+ * The generated file belongs to one private scope. Its removal is registered
+ * against the path before anything can create it, so the file is gone before
+ * this operation returns a block, throws, or finishes halting — and a removal
+ * that fails for any reason other than the file already being absent leaves
+ * that scope rather than being discarded.
  */
-export function* compileTempFile(
+export function compileTempFile(
   source: string,
   options?: { imports: string[] },
 ): Operation<EvalBlock> {
-  yield* call(() => mkdir(EVAL_DIR, { recursive: true }));
+  return scoped(function* () {
+    yield* ensureDir(EVAL_DIR);
 
-  const userImports = options?.imports ?? [];
-  const allImports = [...STANDARD_IMPORTS, ...userImports];
+    const userImports = options?.imports ?? [];
+    const allImports = [...STANDARD_IMPORTS, ...userImports];
 
-  const importLines = allImports.join("\n");
+    const importLines = allImports.join("\n");
 
-  const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
+    const moduleSource = [importLines, `export default function*(env) {`, source, `}`].join("\n");
 
-  const tmpPath = resolve(EVAL_DIR, `${randomUUID()}.ts`);
+    const tmpPath = resolve(EVAL_DIR, `${randomUUID()}.ts`);
+    yield* ensure(() => rm(tmpPath, { force: true }));
 
-  yield* call(() => writeFile(tmpPath, moduleSource, "utf-8"));
-  try {
+    yield* writeTextFile(tmpPath, moduleSource);
+
     const fileUrl = new URL(`file://${tmpPath}`).href;
-    const mod: { default: EvalBlock } = yield* call(() => import(fileUrl));
+    const mod: { default: EvalBlock } = yield* until(import(fileUrl));
 
     if (typeof mod.default !== "function") {
       throw new Error(
@@ -73,9 +81,7 @@ export function* compileTempFile(
     }
 
     return mod.default;
-  } finally {
-    unlink(tmpPath).catch(() => {});
-  }
+  });
 }
 
 /**
@@ -87,8 +93,8 @@ export function* compileTempFile(
 export function* useTempFileCompiler(): Operation<void> {
   yield* API.Env.around(
     {
-      *compile([source, options]) {
-        return yield* compileTempFile(source, options);
+      compile([source, options]) {
+        return compileTempFile(source, options);
       },
     },
     { at: "min" },

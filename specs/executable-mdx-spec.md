@@ -1122,6 +1122,22 @@ wraps it rather than racing it. The behavior-document policy in
 block, rejects static and dynamic imports, and delegates the rest to whatever
 the entrypoint installed.
 
+#### The generated file belongs to the compilation
+
+`useTempFileCompiler()` writes a file, so it owns one. Each compilation runs in
+a private scope, and the removal of `.xmd-eval/<uuid>.ts` is registered against
+that path before anything can create it. The file is therefore gone before the
+compilation settles, whichever way it settles: before a compiled block is
+returned, before a failing import reaches the caller, and before a cancelled
+compilation finishes halting. A removal that fails for any reason other than
+the file already being absent leaves that scope rather than being discarded.
+
+`.xmd-eval` is a relative literal, resolved against the host process's current
+working directory when a compilation chooses the path. Running
+`path/to/document.md` does not itself move that directory to the document's
+directory, and the contextual `API.Env.cwd` does not control it, because this
+compiler does not consult that Api.
+
 #### Standard imports
 
 Every generated eval module is prepended with standard imports:
@@ -6288,6 +6304,15 @@ visible warning blocks, gather into a separate error report).
 | CB1 | No eval blocks, no compiler | A document with no eval blocks executes with no `compile` middleware installed |
 | CB2 | Eval block, no compiler | An eval block with no middleware installed fails with `compiler not installed — install platform-specific middleware via API.Env.around()` |
 | CB3 | Caller's compiler wins | A compiler installed before `execute()` receives the block source; `execute()` neither replaces nor shadows it |
+
+### Tier TC — Temp-file compiler lifecycle (`temp-file-compiler`)
+
+| # | Test | Verify |
+|---|------|--------|
+| TC1 | Success removes the generated file | The write and the removal observed through `FsApi.around()` name the same `.xmd-eval/<uuid>.ts`, and the removal has completed when `compileTempFile()` returns the block |
+| TC2 | A failing import removes it first | Generated code that does not parse still propagates its import failure, and the removal has completed when that failure reaches the caller |
+| TC3 | Cancellation removes it first | A compilation halted while its write is suspended has no generated file left once `halt()` settles |
+| TC4 | A failing removal is not discarded | A removal that performs the real deletion and then fails leaves that exact error as the compilation's outcome, rather than a returned block or a substituted error |
 
 ### Tier I — Middleware conformance (eval modifiers)
 
