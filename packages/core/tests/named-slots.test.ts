@@ -1,9 +1,9 @@
 /**
- * Named slots tests — Tiers NS-A through NS-G.
+ * Named slots tests — Tiers NS-A through NS-H.
  *
  * Covers slot partitioning, content substitution, expansion integration,
- * slot prop reservation, renderChildren interaction, edge cases, and
- * boundary scanner confirmation.
+ * slot prop reservation, renderChildren interaction, edge cases,
+ * boundary scanner confirmation, and nested projection points.
  */
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
@@ -162,10 +162,6 @@ function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-A — Slot partitioning (unit)
-// ═══════════════════════════════════════════════════════════════════════════
-
 describe("Tier NS-A — Slot partitioning", () => {
   // deno-lint-ignore require-yield
   it("NS-A1: no slot props — all in default", function* () {
@@ -267,10 +263,6 @@ describe("Tier NS-A — Slot partitioning", () => {
     expect(result.named.get("header")!).toHaveLength(1);
   });
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-B — Content substitution (unit)
-// ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-B — Content substitution", () => {
   it("NS-B1: backward compat — no slots anywhere", function* () {
@@ -409,10 +401,6 @@ describe("Tier NS-B — Content substitution", () => {
     expect(output.indexOf("A")).toBeLessThan(output.indexOf("B"));
   });
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-C — Expansion integration
-// ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-C — Expansion integration", () => {
   it("NS-C1: basic named slot expansion", function* () {
@@ -617,10 +605,6 @@ describe("Tier NS-C — Expansion integration", () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-D — slot prop reservation
-// ═══════════════════════════════════════════════════════════════════════════
-
 describe("Tier NS-D — slot prop reservation", () => {
   it("NS-D1: slot in props frontmatter → error", function* () {
     const { props } = parseFrontmatter({
@@ -690,10 +674,6 @@ describe("Tier NS-D — slot prop reservation", () => {
     expect(result.errors[0]!.message).toContain("must match");
   });
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-E — renderChildren() interaction
-// ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-E — renderChildren interaction", () => {
   beforeAll(() => useTempFileCompiler());
@@ -813,10 +793,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
     }
   });
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-F — Edge cases
-// ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-F — Edge cases", () => {
   it("NS-F1: slot on self-closing component", function* () {
@@ -984,10 +960,6 @@ describe("Tier NS-F — Edge cases", () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-G — Boundary scanner (confirms no changes needed)
-// ═══════════════════════════════════════════════════════════════════════════
-
 describe("Tier NS-G — Boundary scanner", () => {
   // deno-lint-ignore require-yield
   it("NS-G1: slot parsed as string prop", function* () {
@@ -1030,10 +1002,6 @@ describe("Tier NS-G — Boundary scanner", () => {
     expect(segments[0]!.type).toBe("text");
   });
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tier NS-H — Nested projection points
-// ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tier NS-H — Nested projection points", () => {
   it("NS-H1: inside another component invocation", function* () {
@@ -1145,5 +1113,38 @@ describe("Tier NS-H — Nested projection points", () => {
     } finally {
       cleanup(tmpDir);
     }
+  });
+
+  it("NS-H9: an unclaimed <Content /> stays reserved through a nested wrapper", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", "<Echo><Content /></Echo>");
+    // Written in the document, where nothing projects: no invocation resolved
+    // it, so passing it through two nested bodies must not make it mean one.
+    const segments = scanSegments("<Host><Content /></Host>");
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host });
+    const errors = expanded.filter((segment) => segment.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toContain("<Content> is reserved");
+  });
+
+  it("NS-H10: a wrapped projection reaches a nested invocation's named slot", function* () {
+    const layout = makeComponent("Layout", 'LAYOUT(<Content slot="header" />)');
+    const section = makeComponent("Section", "<Content />");
+    const host = makeComponent(
+      "Host",
+      '<Layout><Section slot="header"><Content slot="header" /></Section></Layout>',
+    );
+    const headerComp = makeComponent("Header", "HEADER-TEXT");
+    const segments = scanSegments('<Host>\n<Header slot="header" />\ndefault text\n</Host>');
+    const expanded = yield* expandAll(segments, {
+      Layout: layout,
+      Section: section,
+      Host: host,
+      Header: headerComp,
+    });
+    const output = renderSegments(expanded);
+    expect(output).toContain("LAYOUT(HEADER-TEXT)");
+    // Host's default slot is not projected, so nothing else rides along.
+    expect(output).not.toContain("default text");
   });
 });
