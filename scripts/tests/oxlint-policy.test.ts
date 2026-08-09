@@ -1,9 +1,9 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { readTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { ensure } from "effection";
 import type { Operation } from "effection";
-import fs from "node:fs";
+import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -128,7 +128,6 @@ function* config(file: string): Operation<Config> {
   return parseConfig(yield* readTextFile(path.join(ROOT, file)), file);
 }
 
-/** The profile Oxlint actually applies to `subject`, resolved through `extends`. */
 function* profile(file: string, subject: string): Operation<Config> {
   const run = yield* runOxlint(file, ["--print-config", subject]);
   if (run.code !== 0) {
@@ -169,10 +168,12 @@ function enabled(rules: Record<string, unknown>): string[] {
     .sort();
 }
 
-/** A directory of this test's own; `@effectionx/fs` has no mkdtemp. */
+/** A directory of this test's own; `mkdtempSync` because `@effectionx/fs` has no mkdtemp. */
 function* scratch(prefix: string): Operation<string> {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
-  yield* ensure(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const directory = mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+  yield* ensure(function* () {
+    yield* rm(directory, { recursive: true, force: true });
+  });
   return directory;
 }
 
@@ -360,9 +361,9 @@ describe("Oxlint policy", () => {
   it("applies the shared test override to the files the sensor lints", function* () {
     const directory = yield* scratch("oxlint-policy");
     const body = 'export function probe() {\n  console.log("probe");\n}\n';
-    fs.mkdirSync(path.join(directory, "tests"));
-    fs.writeFileSync(path.join(directory, "tests", "probe.ts"), body);
-    fs.writeFileSync(path.join(directory, "probe.ts"), body);
+    yield* ensureDir(path.join(directory, "tests"));
+    yield* writeTextFile(path.join(directory, "tests", "probe.ts"), body);
+    yield* writeTextFile(path.join(directory, "probe.ts"), body);
 
     for (const file of [GATE, SENSOR]) {
       const run = yield* runOxlint(file, [
@@ -419,7 +420,7 @@ describe("Oxlint policy", () => {
   it("fails rather than reporting an empty policy when inheritance is broken", function* () {
     const directory = yield* scratch("oxlint-policy-broken");
     const broken = path.join(directory, "broken.json");
-    fs.writeFileSync(broken, JSON.stringify({ extends: ["./absent.json"] }));
+    yield* writeTextFile(broken, JSON.stringify({ extends: ["./absent.json"] }));
 
     const run = yield* runOxlint(broken, ["--print-config", SUBJECTS[0]]);
     const output = `${run.stdout}${run.stderr}`;

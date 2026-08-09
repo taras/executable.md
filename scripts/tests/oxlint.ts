@@ -34,19 +34,25 @@ export function* runOxlint(config: string, args: string[]): Operation<OxlintRun>
       cwd: ROOT,
     });
 
-    const decoder = new TextDecoder();
+    // A streaming decoder holds the bytes of a split multi-byte character until
+    // the next chunk, so the two pipes cannot share one.
+    const outDecoder = new TextDecoder();
+    const errDecoder = new TextDecoder();
     const out: string[] = [];
     const err: string[] = [];
     yield* proc.around({
       *stdout([bytes]) {
-        out.push(decoder.decode(bytes, { stream: true }));
+        out.push(outDecoder.decode(bytes, { stream: true }));
       },
       *stderr([bytes]) {
-        err.push(decoder.decode(bytes, { stream: true }));
+        err.push(errDecoder.decode(bytes, { stream: true }));
       },
     });
 
     const status = yield* proc.join();
+    out.push(outDecoder.decode());
+    err.push(errDecoder.decode());
+
     return { code: status.code, stdout: out.join(""), stderr: err.join("") };
   });
 }

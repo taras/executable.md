@@ -1083,8 +1083,13 @@ shared policy enables `correctness` and `suspicious`, leaves `pedantic` and
 rule families that conflict with repository conventions: component filename
 casing, named-export and export-order rules, generator/function style rules,
 mechanical import/key-order and magic-number rules, and readonly-parameter
-types. Because both uses inherit the same source, the sensor can never report a
-rule the gate disables.
+types.
+
+Inheritance does not make divergence impossible — Oxlint lets a later
+configuration override an inherited rule. The guarantee is that the committed
+sensor profile declares no built-in rule of its own, and that its active
+built-in set stays a subset of the gate's. `scripts/tests/oxlint-policy.test.ts`
+enforces both (OP2 and OP5) and fails verification if either stops holding.
 
 The gate profile, `.oxlintrc.json`, adds the local JavaScript plugin and the
 repository's blocking rules at error severity. Those stay out of the sensor: it

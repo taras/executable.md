@@ -250,10 +250,23 @@ oxlint.shared.json              plugins, categories, signal catalog, denials, te
 └── .reviews/.oxlintrc.json     sensor: advisory, and nothing else
 ```
 
-A profile therefore cannot enable a rule the shared policy disables, and the
-sensor's active built-in rules are a subset of the gate's. Both profiles repeat
-`"plugins"` because Oxlint reads the plugin set from the entry configuration
-alone: an inherited list adds to Oxlint's defaults rather than replacing them.
+Inheritance alone does not prevent divergence. Oxlint merges from first to last
+and the later configuration wins, so a profile that redeclared an inherited rule
+would override it. What holds the two profiles together is what they contain and
+what verification enforces:
+
+- the committed sensor profile declares no built-in rule, category, or override
+  of its own, so it applies the shared policy unmodified; and
+- the sensor's active built-in rule set must remain a subset of the gate's.
+
+`scripts/tests/oxlint-policy.test.ts` is what makes those two statements binding.
+OP2 fails if either profile grows a catalog of its own, and OP5 fails if the
+sensor's active set stops being a subset of the gate's for any representative
+path. A profile that overrode a shared rule would be caught there, not by Oxlint.
+
+Both profiles repeat `"plugins"` because Oxlint reads the plugin set from the
+entry configuration alone: an inherited list adds to Oxlint's defaults rather
+than replacing them.
 
 `oxlint.shared.json` is deliberately not a name Oxlint discovers on its own, so
 the file is reachable only through an explicit `extends`.
