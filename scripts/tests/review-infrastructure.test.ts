@@ -1,14 +1,15 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { FetchApi, type FetchResponse } from "@effectionx/fetch";
-import { readTextFile } from "@effectionx/fs";
+import { expandGlob, readTextFile } from "@effectionx/fs";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../../packages/core/src/execute.ts";
+import { Sample } from "../../packages/core/src/sample-api.ts";
 import { useTempFileCompiler } from "../../packages/core/src/temp-file-compiler.ts";
 import { forEach } from "@effectionx/stream-helpers";
-import { scoped, until } from "effection";
+import { each, scoped, until } from "effection";
 import type { Operation } from "effection";
 
 interface RequestRecord {
@@ -159,7 +160,7 @@ function* runDocumentResult(
   document: string,
   components: Record<string, string>,
   options: DocumentRunOptions = {},
-): Operation<{ ok: boolean; journal: string }> {
+): Operation<{ ok: boolean; journal: string; text: string }> {
   return yield* scoped(function* () {
     const environment = options.env;
     if (environment) {
@@ -199,8 +200,37 @@ function* runDocumentResult(
     });
     yield* forEach(function* () {}, execution.output);
     const result = yield* execution;
-    return { ok: result.ok, journal: JSON.stringify(stream.snapshot()) };
+    return {
+      ok: result.ok,
+      journal: JSON.stringify(stream.snapshot()),
+      text: result.ok && typeof result.value === "string" ? result.value.trim() : "",
+    };
   });
+}
+
+const OPERATIONAL_DIRS = [".reviews/components", ".reviews/policies", "packages/core/components"];
+
+/**
+ * Read operational components from the repository before `useStubFs` replaces
+ * the filesystem, so a run expands the shipped review documents rather than a
+ * copy. A `.ts` component is imported from its real path, so its stub entry
+ * only has to make the path resolve.
+ */
+function* operationalComponents(paths: string[]): Operation<Record<string, string>> {
+  const components: Record<string, string> = {};
+  for (const path of paths) {
+    components[path] = path.endsWith(".ts") ? "" : yield* readTextFile(path);
+  }
+  return components;
+}
+
+function props(values: Record<string, unknown>): string[] {
+  return [
+    "```js eval",
+    ...Object.entries(values).map(([name, value]) => `const ${name} = ${JSON.stringify(value)};`),
+    "```",
+    "",
+  ];
 }
 
 function* runDocument(
@@ -642,5 +672,262 @@ describe("review infrastructure", () => {
       },
     );
     expect(inventoryResult.ok).toBe(true);
+  });
+
+  it("retires the Show component from the review library", function* () {
+    const tag = /<\/?Show[\s/>]/;
+    const documents: string[] = [];
+    for (const entry of yield* each(expandGlob(".reviews/**/*.md"))) {
+      documents.push(entry.path);
+      const source = yield* readTextFile(entry.path);
+      expect([entry.path, tag.test(source)]).toEqual([entry.path, false]);
+      yield* each.next();
+    }
+    // The walk found the review library, so the scan above is not vacuous.
+    expect(documents.some((path) => path.endsWith(".reviews/components/Finding.md"))).toBe(true);
+    expect(documents.some((path) => path.endsWith("Show.md"))).toBe(false);
+
+    const focused = yield* readTextFile("packages/core/tests/unused-in-diff.test.ts");
+    expect(focused).toContain("components/UnusedInDiff.md");
+    expect(focused).not.toContain("Show.md");
+
+    const spec = yield* readTextFile("specs/code-review-agent-spec.md");
+    expect(spec).toContain("### 5.10 `CommentReview.md`");
+    expect(tag.test(spec)).toBe(false);
+    expect(spec).not.toContain("Show.md");
+    expect(spec).not.toContain("`Show`");
+  });
+
+  it("renders Finding's selected icon and message and suppresses its false case", function* () {
+    yield* useTempFileCompiler();
+    const components = yield* operationalComponents([".reviews/components/Finding.md"]);
+
+    const selected = yield* runDocumentResult(
+      '<Finding when={true} severity="error" message="Broken contract." />',
+      components,
+      { componentDirs: OPERATIONAL_DIRS },
+    );
+    expect(selected.ok).toBe(true);
+    expect(selected.text).toBe("🔴 Broken contract.");
+
+    const suppressed = yield* runDocumentResult(
+      '<Finding when={false} severity="error" message="Broken contract." />',
+      components,
+      { componentDirs: OPERATIONAL_DIRS },
+    );
+    expect(suppressed.ok).toBe(true);
+    expect(suppressed.text).toBe("");
+  });
+
+  it("renders OxlintSummary's clean section and its unavailable warning", function* () {
+    yield* useTempFileCompiler();
+    const components = yield* operationalComponents([
+      ".reviews/components/OxlintSummary.md",
+      ".reviews/components/ReviewSection.md",
+    ]);
+    const summary = (oxlintInstalled: boolean) =>
+      [
+        ...props({
+          diagnostics: { total: 0, summary: "1 warning" },
+          doctor: { oxlintInstalled, bloatRulesMissing: [] },
+        }),
+        "<OxlintSummary diagnostics={diagnostics} doctor={doctor} />",
+      ].join("\n");
+
+    const clean = yield* runDocumentResult(summary(true), components, {
+      componentDirs: OPERATIONAL_DIRS,
+    });
+    expect(clean.ok).toBe(true);
+    expect(clean.text).toBe("### Static Analysis\n\n✅ Oxlint found no issues.");
+
+    const unavailable = yield* runDocumentResult(summary(false), components, {
+      componentDirs: OPERATIONAL_DIRS,
+    });
+    expect(unavailable.ok).toBe(true);
+    // The selected branch keeps the blank lines the two suppressed blocks left
+    // behind, so this is exact rather than a containment check.
+    expect(unavailable.text).toBe(
+      [
+        "### Static Analysis",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "🟡 Oxlint not installed. Static analysis skipped.",
+      ].join("\n"),
+    );
+  });
+
+  it("suppresses ReleaseSpecWarning for ordinary files and warns on release changes", function* () {
+    yield* useTempFileCompiler();
+    const components = yield* operationalComponents([".reviews/components/ReleaseSpecWarning.md"]);
+    const warning = (files: string[]) =>
+      [...props({ files }), "<ReleaseSpecWarning files={files} />"].join("\n");
+
+    const ordinary = yield* runDocumentResult(
+      warning(["packages/core/src/expand.ts"]),
+      components,
+      {
+        componentDirs: OPERATIONAL_DIRS,
+      },
+    );
+    expect(ordinary.ok).toBe(true);
+    expect(ordinary.text).toBe("");
+
+    const changed = yield* runDocumentResult(
+      warning([".github/workflows/release.yml"]),
+      components,
+      { componentDirs: OPERATIONAL_DIRS },
+    );
+    expect(changed.ok).toBe(true);
+    expect(changed.text).toContain("> [!WARNING]");
+    expect(changed.text).toContain(
+      "> This PR changes release configuration (.github/workflows/release.yml) without touching",
+    );
+    expect(changed.text).not.toContain("ERROR");
+  });
+
+  it("expands UnusedInDiff and CommentReview to nothing without an If component", function* () {
+    yield* useTempFileCompiler();
+    const unusedComponents = yield* operationalComponents([".reviews/components/UnusedInDiff.md"]);
+    const unused = yield* runDocumentResult(
+      [
+        ...props({ pr: { added: [{ file: "a.ts", lineNumber: 1, content: "const plain = 1;" }] } }),
+        '<UnusedInDiff pr={pr} construct="type" message="{count}: {names}." />',
+      ].join("\n"),
+      unusedComponents,
+      { componentDirs: OPERATIONAL_DIRS },
+    );
+    expect(unused.ok).toBe(true);
+    expect(unused.text).toBe("");
+
+    const reviewComponents = yield* operationalComponents([
+      ".reviews/components/CommentReview.md",
+      ".reviews/components/CommentReviewData.ts",
+      ".reviews/components/CommentReviewState.ts",
+      ".reviews/components/SuggestRemoval.md",
+      "packages/core/components/Sample.md",
+    ]);
+    const requests: string[] = [];
+    yield* FetchApi.around({
+      *fetch([input]) {
+        requests.push(
+          input instanceof Request ? input.url : input instanceof URL ? input.href : input,
+        );
+        return response("[]");
+      },
+    });
+    const sampled: string[] = [];
+    yield* Sample.around({
+      // deno-lint-ignore require-yield
+      *sample([context]) {
+        sampled.push(context.content);
+        return "[sampled]";
+      },
+    });
+
+    const review = yield* runDocumentResult(
+      [...props({ pr: { added: [] } }), "<CommentReview pr={pr} />"].join("\n"),
+      reviewComponents,
+      {
+        componentDirs: OPERATIONAL_DIRS,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "taras/executable.md",
+          PR_NUMBER: "1",
+        },
+      },
+    );
+    expect(review.ok).toBe(true);
+    // The typed data component ran — it fetched the pull request's comments —
+    // while both captures and both trailing branches stayed empty.
+    expect(requests.some((url) => url.includes("/pulls/1/comments"))).toBe(true);
+    expect(review.text).toBe("");
+    expect(sampled).toEqual([]);
+  });
+
+  it("skips the ExtraneousCodePolicy sample below the review threshold", function* () {
+    yield* useTempFileCompiler();
+    const components = yield* operationalComponents([
+      ".reviews/policies/ExtraneousCodePolicy.md",
+      ".reviews/components/ReviewSection.md",
+      "packages/core/components/Sample.md",
+    ]);
+    function runPolicy(totalChanges: number): Operation<{ calls: string[]; text: string }> {
+      return scoped(function* () {
+        const calls: string[] = [];
+        yield* Sample.around({
+          // deno-lint-ignore require-yield
+          *sample([context]) {
+            calls.push(context.content);
+            return "[sampled]";
+          },
+        });
+        const result = yield* runDocumentResult(
+          [
+            ...props({
+              pr: {
+                stats: { totalChanges },
+                meta: { title: "Title", body: "Body" },
+                diffPreview: "+const value = 1;",
+              },
+              diagnostics: { summary: "no diagnostics", density: 0 },
+              doctor: { oxlintInstalled: true },
+            }),
+            "<ExtraneousCodePolicy pr={pr} diagnostics={diagnostics} doctor={doctor} />",
+          ].join("\n"),
+          components,
+          { componentDirs: OPERATIONAL_DIRS },
+        );
+        expect(result.ok).toBe(true);
+        return { calls, text: result.text };
+      });
+    }
+
+    const small = yield* runPolicy(20);
+    expect(small.calls).toEqual([]);
+    expect(small.text).toBe("### Correctness\n\n✅ Small PR — correctness review skipped.");
+
+    // The same probe records a call when the branch is selected, so the empty
+    // result above is non-execution rather than a probe that never wired up.
+    const large = yield* runPolicy(21);
+    expect(large.calls).toHaveLength(1);
+    expect(large.calls[0]).toContain("You are reviewing a TypeScript PR for EXTRANEOUS code only.");
+    expect(large.text).toContain("[sampled]");
+    expect(large.text).not.toContain("ERROR");
+  });
+
+  it("renders RepoCleanupPolicy's clean section without running either branch", function* () {
+    yield* useTempFileCompiler();
+    const components = yield* operationalComponents([
+      ".reviews/policies/RepoCleanupPolicy.md",
+      ".reviews/components/ReviewSection.md",
+      "packages/core/components/Sample.md",
+    ]);
+    const calls: string[] = [];
+    yield* Sample.around({
+      // deno-lint-ignore require-yield
+      *sample([context]) {
+        calls.push(context.content);
+        return "[sampled]";
+      },
+    });
+
+    const clean = yield* runDocumentResult(
+      [
+        ...props({
+          diagnostics: { total: 0, summary: "MUST NOT RENDER" },
+          doctor: { oxlintInstalled: true },
+          fileList: "packages/core/src/expand.ts",
+        }),
+        "<RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} />",
+      ].join("\n"),
+      components,
+      { componentDirs: OPERATIONAL_DIRS },
+    );
+    expect(clean.ok).toBe(true);
+    expect(clean.text).toBe("### Cleanup Policy\n\n✅ No code health issues detected.");
+    expect(calls).toEqual([]);
   });
 });

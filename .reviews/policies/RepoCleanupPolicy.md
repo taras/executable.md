@@ -17,7 +17,7 @@ props:
 <ReviewSection heading="Cleanup Policy"
   clean="✅ No code health issues detected.">
 
-<Show when={props.diagnostics.total > 0 && !!props.cleanupAnalysis}>
+<If condition={props.diagnostics.total > 0 && !!props.cleanupAnalysis}>
 
 <Sample>
 
@@ -61,12 +61,12 @@ Example of a good item:
 
 </Sample>
 
-</Show>
+</If>
 
-<Show when={props.diagnostics.total > 0 && !props.cleanupAnalysis}>
+<If condition={props.diagnostics.total > 0 && !props.cleanupAnalysis}>
 
 {props.diagnostics.summary}
 
-</Show>
+</If>
 
 </ReviewSection>

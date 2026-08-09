@@ -32,15 +32,14 @@ function doc(lines: AddedLine[], construct: string): string {
   ].join("\n");
 }
 
-// The real components are read before useStubFs replaces the filesystem, so
-// the tests exercise the shipped .reviews sources rather than a copy.
+// The real component is read before useStubFs replaces the filesystem, so the
+// tests exercise the shipped .reviews source rather than a copy. Its `<If>` is
+// a native directive, so the stub filesystem supplies no component for it.
 function* render(lines: AddedLine[], construct: string): Operation<string> {
   const unusedInDiff = yield* readTextFile(".reviews/components/UnusedInDiff.md");
-  const show = yield* readTextFile(".reviews/components/Show.md");
 
   yield* useStubFs({
     "components/UnusedInDiff.md": unusedInDiff,
-    "components/Show.md": show,
     "doc.md": doc(lines, construct),
   });
 
@@ -52,11 +51,21 @@ describe("UnusedInDiff", () => {
   it("renders the disclosure with symbol, location, count and reason", function* () {
     const output = yield* render([added("core/src/a.ts", 24, "type Orphan = string;")], "type");
 
-    expect(output).toContain("<details>");
-    expect(output).toContain("<summary>🟡 1 with no consumers: Orphan.</summary>");
-    expect(output).toContain("| `Orphan` | `core/src/a.ts:24` | 1 |");
-    expect(output).toContain(WHY);
-    expect(output).not.toContain("ERROR");
+    // Exact so the selected branch's summary line, table header and row
+    // whitespace are locked, not merely present somewhere in the output.
+    expect(output.trim()).toBe(
+      [
+        "<details>",
+        "<summary>🟡 1 with no consumers: Orphan.</summary>",
+        "",
+        "| Symbol | Declared at | Refs in diff | Why flagged |",
+        "| --- | --- | --- | --- |",
+        `| \`Orphan\` | \`core/src/a.ts:24\` | 1 | ${WHY} (pre-existing usages not counted) |`,
+        "",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
   });
 
   it("does not flag a type named only by an import specifier", function* () {
