@@ -4596,7 +4596,15 @@ can act on. Each is discovered through the same cycle-safe traversal, each
 crosses a `ContentError` the way a durability failure does, and each is
 recognized by its structural tag rather than by class — so a failure a
 separately loaded copy of the runtime package constructed is found on the same
-terms as one this copy did.
+terms as one this copy did. Durability failures keep their own recognition
+unchanged; only Files failures are recognized structurally, because only that
+boundary is crossed by a second loaded copy.
+
+Recognition is strict, because a recognized failure travels onward as the exact
+object that was thrown. It must carry the fixed diagnostic for its kind, frozen
+data with no extra fields, and no cause. A failure that carries the right tag
+and anything else — a raw platform message, an errno beneath it — is not
+preserved: it is replaced by a fresh invariant carrying none of it.
 
 **Precedence is decided by kind rather than by position.** A wrapper carries
 whatever failed together, in whatever order the platform happened to collect

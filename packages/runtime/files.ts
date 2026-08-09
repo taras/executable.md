@@ -329,17 +329,66 @@ export interface FilesFatalFailure extends Error {
   readonly data: FilesFatalData;
 }
 
+/**
+ * Everything below reads values it did not create.
+ *
+ * A thrown value is whatever a provider threw, and a provider is as free to
+ * hand back a Proxy with a throwing `get` trap, an accessor that fails, or an
+ * object whose key enumeration explodes as it is to hand back a plain record.
+ * These parsers run from `fatalCause`, which every generic catch in the engine
+ * consults — so one of them throwing would replace the failure being classified
+ * with a failure *about classifying it*, at the exact moment the engine is
+ * deciding whether the execution may continue.
+ *
+ * So reading is total: every access that can fail goes through a helper that
+ * answers `undefined` instead, and each exported parser is additionally wrapped
+ * so that a shape nobody anticipated is simply not recognized.
+ */
+function attempt<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Whether this is an Error, without trusting its prototype chain. */
+function isError(value: unknown): value is Error {
+  return attempt(() => value instanceof Error) === true;
+}
+
+/** One property, read through a trap that may refuse or fail. */
+function property(target: object, name: string): unknown {
+  return attempt(() => Reflect.get(target, name));
+}
+
+/** How many own enumerable keys, when the object will say. */
+function keyCount(value: object): number | undefined {
+  return attempt(() => Object.keys(value).length);
+}
+
+function isFrozen(value: object): boolean {
+  return attempt(() => Object.isFrozen(value)) === true;
+}
+
 function dataOf(error: unknown): Record<string, unknown> | undefined {
-  if (!(error instanceof Error) || !("data" in error)) {
+  if (!isError(error)) {
     return undefined;
   }
-  const { data } = error;
+  const data = property(error, "data");
   return isRecord(data) ? data : undefined;
 }
+
+/** The one diagnostic each kind of infrastructure failure carries. */
+const FATAL_DIAGNOSTICS: ReadonlyMap<string, string> = new Map([
+  ["provider-unavailable", FILES_PROVIDER_UNAVAILABLE_MESSAGE],
+  ["operation-denied", FILES_OPERATION_DENIED_MESSAGE],
+  ["invariant", FILES_INVARIANT_MESSAGE],
+]);
 
 function reasonOf(value: unknown): FilesReason | undefined {
   return REASONS.find((reason) => reason === value);
@@ -364,42 +413,72 @@ function deniableOperation(value: unknown): FilesDeniableOperation | undefined {
 /**
  * The infrastructure failure data this Error carries, if it carries valid data.
  *
- * Every field is checked, and the member count with them: an object with extra
- * keys is not the shape this contract describes, and accepting it would let a
- * provider smuggle a path or a message through under a recognized tag.
+ * Every field is checked, the member count with them, and that the object is
+ * frozen: extra keys are not the shape this contract describes, and a mutable
+ * one is not the shape a constructor here produces. Accepting either would let
+ * a provider smuggle a path or a message through under a recognized tag.
  */
 export function parseFilesFatal(error: unknown): FilesFatalData | undefined {
-  const data = dataOf(error);
-  if (data === undefined || data.type !== FILES_FATAL) {
+  return attempt(() => {
+    const data = dataOf(error);
+    if (data === undefined || property(data, "type") !== FILES_FATAL || !isFrozen(data)) {
+      return undefined;
+    }
+    const members = keyCount(data);
+    const kind = property(data, "kind");
+    if (kind === "provider-unavailable" && members === 2) {
+      return Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" });
+    }
+    if (kind === "operation-denied" && members === 3) {
+      const operation = deniableOperation(property(data, "operation"));
+      if (operation !== undefined) {
+        return Object.freeze({ type: FILES_FATAL, kind: "operation-denied", operation });
+      }
+    }
+    if (kind === "invariant" && members === 3) {
+      const category = invariantCategory(property(data, "category"));
+      if (category !== undefined) {
+        return Object.freeze({ type: FILES_FATAL, kind: "invariant", category });
+      }
+    }
     return undefined;
-  }
-  const members = Object.keys(data).length;
-  if (data.kind === "provider-unavailable" && members === 2) {
-    return Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" });
-  }
-  if (data.kind === "operation-denied" && members === 3) {
-    const operation = deniableOperation(data.operation);
-    if (operation !== undefined) {
-      return Object.freeze({ type: FILES_FATAL, kind: "operation-denied", operation });
-    }
-  }
-  if (data.kind === "invariant" && members === 3) {
-    const category = invariantCategory(data.category);
-    if (category !== undefined) {
-      return Object.freeze({ type: FILES_FATAL, kind: "invariant", category });
-    }
-  }
-  return undefined;
+  });
 }
 
 /**
- * Whether this failure is a Files infrastructure failure.
+ * Whether this failure satisfies the whole public infrastructure-failure
+ * contract, not merely the tag.
  *
- * Structural, so a failure constructed by a separately loaded copy of this
- * package is recognized on the same terms as one constructed here.
+ * Recognition decides two different things at once, and the second is why this
+ * is stricter than `parseFilesFatal`. A recognized failure is **rethrown by
+ * identity** — the object that was thrown is the object a fail-stop records —
+ * so recognizing one is a decision to let that exact object travel onward. An
+ * Error that carries the right data but also a raw platform message, or a cause
+ * chain holding an errno and a path, would then carry all of that past the
+ * boundary the reason vocabulary exists to hold.
+ *
+ * So the diagnostic must be the fixed one for its kind, and there must be no
+ * cause. Anything else is a candidate that fails the contract: `invokeFiles`
+ * replaces it with a fresh invariant rather than preserving it.
+ *
+ * Structural throughout, so a failure constructed by a separately loaded copy
+ * of this package is recognized on exactly the same terms as one constructed
+ * here — `instanceof` answers false across two copies, which is the case this
+ * has to survive.
  */
 export function isFilesFatal(error: unknown): error is FilesFatalFailure {
-  return parseFilesFatal(error) !== undefined;
+  return (
+    attempt(() => {
+      const data = parseFilesFatal(error);
+      if (data === undefined || !isError(error)) {
+        return false;
+      }
+      if (property(error, "message") !== FATAL_DIAGNOSTICS.get(data.kind)) {
+        return false;
+      }
+      return property(error, "cause") === undefined;
+    }) === true
+  );
 }
 
 /**
@@ -539,17 +618,19 @@ export function fileWriteFailure(input: {
  * simply declines to recognize it.
  */
 export function parseFilesFailure(error: unknown): FilesFailureData | undefined {
-  const data = dataOf(error);
-  if (data === undefined || data.type !== FILES_ERROR || Object.keys(data).length !== 4) {
-    return undefined;
-  }
-  const operation = operationOf(data.operation);
-  const phase = phaseOf(data.phase);
-  const reason = reasonOf(data.reason);
-  if (operation === undefined || phase === undefined || reason === undefined) {
-    return undefined;
-  }
-  return Object.freeze({ type: FILES_ERROR, operation, phase, reason });
+  return attempt(() => {
+    const data = dataOf(error);
+    if (data === undefined || property(data, "type") !== FILES_ERROR || keyCount(data) !== 4) {
+      return undefined;
+    }
+    const operation = operationOf(property(data, "operation"));
+    const phase = phaseOf(property(data, "phase"));
+    const reason = reasonOf(property(data, "reason"));
+    if (operation === undefined || phase === undefined || reason === undefined) {
+      return undefined;
+    }
+    return Object.freeze({ type: FILES_ERROR, operation, phase, reason });
+  });
 }
 
 /**
@@ -561,35 +642,43 @@ export function parseFilesFailure(error: unknown): FilesFailureData | undefined 
  * rather than inventing a commit state.
  */
 export function parseFileWriteFailure(error: unknown): FileWriteFailureData | undefined {
-  const data = dataOf(error);
-  if (data === undefined || data.type !== FILES_ERROR || data.operation !== "write") {
-    return undefined;
-  }
-  const found = writePhaseOf(data.phase);
-  if (found === undefined) {
-    return undefined;
-  }
-  const [phase, rule] = found;
-  if (data.target !== rule.target) {
-    return undefined;
-  }
+  return attempt(() => {
+    const data = dataOf(error);
+    if (
+      data === undefined ||
+      property(data, "type") !== FILES_ERROR ||
+      property(data, "operation") !== "write"
+    ) {
+      return undefined;
+    }
+    const found = writePhaseOf(property(data, "phase"));
+    if (found === undefined) {
+      return undefined;
+    }
+    const [phase, rule] = found;
+    if (property(data, "target") !== rule.target) {
+      return undefined;
+    }
 
-  const reason = data.reason === undefined ? undefined : reasonOf(data.reason);
-  const cleanup = data.cleanup === undefined ? undefined : reasonOf(data.cleanup);
-  if (
-    (data.reason !== undefined && reason === undefined) ||
-    (data.cleanup !== undefined && cleanup === undefined) ||
-    violatesRule(rule, reason, cleanup)
-  ) {
-    return undefined;
-  }
+    const declared = property(data, "reason");
+    const declaredCleanup = property(data, "cleanup");
+    const reason = declared === undefined ? undefined : reasonOf(declared);
+    const cleanup = declaredCleanup === undefined ? undefined : reasonOf(declaredCleanup);
+    if (
+      (declared !== undefined && reason === undefined) ||
+      (declaredCleanup !== undefined && cleanup === undefined) ||
+      violatesRule(rule, reason, cleanup)
+    ) {
+      return undefined;
+    }
 
-  const members = 4 + (reason === undefined ? 0 : 1) + (cleanup === undefined ? 0 : 1);
-  if (Object.keys(data).length !== members) {
-    return undefined;
-  }
+    const members = 4 + (reason === undefined ? 0 : 1) + (cleanup === undefined ? 0 : 1);
+    if (keyCount(data) !== members) {
+      return undefined;
+    }
 
-  return writeData(phase, rule, reason, cleanup);
+    return writeData(phase, rule, reason, cleanup);
+  });
 }
 
 /** A successful write's outcome. */
@@ -609,16 +698,23 @@ export function fileWriteSuccess(publication: FileWriteSuccess["publication"]): 
  * `undefined` here as a protocol invariant too.
  */
 export function parseFileWriteSuccess(value: unknown): FileWriteSuccess | undefined {
-  if (!isRecord(value) || value.type !== FILES_WRITE_SUCCESS || Object.keys(value).length !== 2) {
+  return attempt(() => {
+    if (
+      !isRecord(value) ||
+      property(value, "type") !== FILES_WRITE_SUCCESS ||
+      keyCount(value) !== 2
+    ) {
+      return undefined;
+    }
+    const publication = property(value, "publication");
+    if (publication === "host-committed") {
+      return Object.freeze({ type: FILES_WRITE_SUCCESS, publication: "host-committed" });
+    }
+    if (publication === "transaction-staged") {
+      return Object.freeze({ type: FILES_WRITE_SUCCESS, publication: "transaction-staged" });
+    }
     return undefined;
-  }
-  if (value.publication === "host-committed") {
-    return Object.freeze({ type: FILES_WRITE_SUCCESS, publication: "host-committed" });
-  }
-  if (value.publication === "transaction-staged") {
-    return Object.freeze({ type: FILES_WRITE_SUCCESS, publication: "transaction-staged" });
-  }
-  return undefined;
+  });
 }
 
 /**

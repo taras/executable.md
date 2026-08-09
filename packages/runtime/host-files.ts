@@ -367,6 +367,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     // about the target: everything before the rename leaves the previous file
     // in place, and a rename that threw may have run or not.
     let step: FileWritePhase = "temporary";
+    // Whether the write reached its own end. Cleanup runs on every exit, and
+    // the two exits need different answers: one has a Result to compose with
+    // and the other does not.
+    let settled = false;
 
     yield* scoped(function* () {
       const temporary = `${target.path}.xmd-${randomUUID().slice(0, 8)}.tmp`;
@@ -375,7 +379,16 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
         try {
           yield* API.Fs.operations.remove(temporary, { force: true });
         } catch (error) {
-          cleanup = reasonOf(error);
+          if (settled) {
+            cleanup = reasonOf(error);
+            return;
+          }
+          // Cancellation is unwinding, so there is no outcome to report this
+          // beside — and manufacturing one would turn a halt into a write
+          // result. It leaves the scope as an infrastructure failure instead,
+          // carrying neither the platform's error nor the generated temporary's
+          // name, and the engine's fatal discovery finds it there.
+          throw new FilesInvariantError("teardown");
         }
       });
       try {
@@ -387,6 +400,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       } catch (error) {
         failed = reasonOf(error);
       }
+      settled = true;
     });
 
     if (failed !== undefined) {

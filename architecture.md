@@ -719,9 +719,23 @@ Both are discovered through one cycle-safe traversal of the whole cause graph,
 and precedence is decided by kind rather than by position: a durability failure
 first, then a Files infrastructure failure, then a documentation failure. The
 selected failure comes back by identity, because a fail-stop that records "the
-first error" has to record the one that happened. Recognition is structural —
-a stable tag on frozen data, never `instanceof` — so a failure a separately
-loaded copy constructed is found on the same terms as one this copy did.
+first error" has to record the one that happened.
+
+The two kinds are *recognized* by different mechanisms, and the difference is
+deliberate. A durability failure is recognized exactly as it always has been —
+by class, against the failure types durable-streams exports — and that is
+unchanged. A **Files** infrastructure failure is recognized structurally: a
+stable tag on frozen data, the fixed diagnostic for its kind, and no cause,
+never `instanceof`. It has to be, because the Files boundary is the one a
+separately loaded copy of a package reaches across, where `instanceof` answers
+false. Recognizing one is also a decision to let that exact object travel
+onward, so a candidate carrying anything else — a raw message, a cause chain,
+an extra field — fails the contract and is replaced by a fresh invariant rather
+than preserved.
+
+The traversal reads values it did not create, so every read in it is total: a
+thrown Proxy or a failing accessor narrows what discovery finds instead of
+replacing the failure being classified.
 
 ## The document filesystem boundary
 

@@ -387,14 +387,14 @@ function walkCauses<T>(
   opaque: OpaqueFailure | undefined,
   seen: Set<unknown>,
 ): T | undefined {
-  const selected = select(error);
+  const selected = attempt(() => select(error));
   if (selected !== undefined) {
     return selected;
   }
   if (typeof error !== "object" || error === null || seen.has(error)) {
     return undefined;
   }
-  if (opaque !== undefined && opaque(error)) {
+  if (opaque !== undefined && attempt(() => opaque(error)) === true) {
     return undefined;
   }
   seen.add(error);
@@ -407,16 +407,49 @@ function walkCauses<T>(
   return undefined;
 }
 
-/** The wrapper contracts a failure can aggregate other failures through. */
+/**
+ * The wrapper contracts a failure can aggregate other failures through.
+ *
+ * Every read here is of a value the engine did not create. A thrown object may
+ * be a Proxy, or carry an accessor that fails, and one of those refusing to
+ * answer must not become the failure this traversal was called to classify —
+ * every generic catch in expansion asks `fatalCause` first, so a throw here
+ * would replace the real failure with a failure about inspecting it. An
+ * unreadable wrapper simply aggregates nothing.
+ */
 function causesOf(error: object): unknown[] {
-  if (error instanceof InvocationTeardownError) {
-    return error.causes;
+  return (
+    attempt(() => {
+      if (error instanceof InvocationTeardownError) {
+        return members(error.causes);
+      }
+      if (error instanceof AggregateError) {
+        return members(error.errors);
+      }
+      if (error instanceof Error && error.cause !== undefined) {
+        return [error.cause];
+      }
+      return [];
+    }) ?? []
+  );
+}
+
+/** A wrapper's members, when it really holds a list of them. */
+function members(value: unknown): unknown[] {
+  return Array.isArray(value) ? [...value] : [];
+}
+
+/**
+ * Read a value that may refuse to be read.
+ *
+ * `undefined` means "this said nothing", which every caller here already treats
+ * as "not recognized" — so a hostile shape narrows what discovery finds rather
+ * than replacing what it was discovering.
+ */
+function attempt<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
   }
-  if (error instanceof AggregateError) {
-    return error.errors;
-  }
-  if (error instanceof Error && error.cause !== undefined) {
-    return [error.cause];
-  }
-  return [];
 }

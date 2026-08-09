@@ -20,7 +20,17 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, resource, scoped, sleep, spawn, suspend, until } from "effection";
+import {
+  ensure,
+  race,
+  resource,
+  scoped,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
@@ -103,6 +113,37 @@ const PLANTED = "/planted/absolute/path/secret.txt";
 
 function planted(code: string): Error {
   return Object.assign(new Error(`${code}: operation failed, at '${PLANTED}'`), { code });
+}
+
+/**
+ * The first Files infrastructure failure in a thrown graph.
+ *
+ * A destructor failure arrives wrapped in whatever Effection collected it with,
+ * so a test that only inspected the top of the graph would assert about the
+ * wrapper. Core owns the real traversal; this is the small local one a runtime
+ * test can have without importing the engine.
+ */
+function firstFilesFatal(error: unknown, seen = new Set<unknown>()): unknown {
+  if (parseFilesFatal(error) !== undefined) {
+    return error;
+  }
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return undefined;
+  }
+  seen.add(error);
+  const causes =
+    error instanceof AggregateError
+      ? error.errors
+      : error instanceof Error && error.cause !== undefined
+        ? [error.cause]
+        : [];
+  for (const cause of causes) {
+    const found = firstFilesFatal(cause, seen);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 /** Every field a failure carries, as one string, for a leak assertion. */
@@ -621,6 +662,72 @@ describe("Tier HF — host Files provider", () => {
     expect(settled).toBe("not settled");
     expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("first");
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  // HF12b: cleanup that fails *while cancellation is unwinding* is the one exit
+  // with no outcome to report beside it. Manufacturing one would turn a halt
+  // into a write result, and forwarding the platform's error would name a
+  // temporary the document never chose — so a fixed teardown invariant leaves
+  // the scope instead, and the engine's fatal discovery finds it there.
+  //
+  // Deterministic rather than raced: the write suspends after the temporary is
+  // created, the test waits to observe that it did, and only then halts.
+  it("HF12b: a cleanup failure during cancellation escapes as a teardown invariant", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+    const suspended = withResolvers<void>();
+    let settled: unknown = "not settled";
+
+    const write = yield* spawn(function* () {
+      yield* scoped(function* () {
+        yield* API.Fs.around({
+          *writeTextFile([path, content], next) {
+            yield* next(path, content);
+            suspended.resolve();
+            yield* suspend();
+          },
+          // deno-lint-ignore require-yield
+          *remove() {
+            throw planted("EPERM");
+          },
+        });
+        settled = yield* handler().writeTextFile({
+          cwd: fixture.workspace,
+          path: "notes.md",
+          content: "second",
+        });
+      });
+    });
+
+    yield* suspended.operation;
+    let thrown: unknown;
+    try {
+      yield* write.halt();
+    } catch (error) {
+      thrown = error;
+    }
+
+    // No Result was produced: the halt is not a write outcome.
+    expect(settled).toBe("not settled");
+    // And the failure that did leave is the fixed infrastructure one.
+    const teardown = firstFilesFatal(thrown);
+    expect(parseFilesFatal(teardown)).toEqual({
+      type: "executablemd.runtime.files-fatal/v1",
+      kind: "invariant",
+      category: "teardown",
+    });
+    expect(teardown instanceof Error ? teardown.message : "").toBe(
+      "Files provider invariant failed",
+    );
+    const text = inspected(teardown);
+    expect(text).not.toContain(PLANTED);
+    expect(text).not.toContain(".tmp");
+    expect(text).not.toContain("EPERM");
+    // The category is structural control data for a consumer deciding what to
+    // fence — it belongs in `data`, and never in the message.
+    expect(teardown instanceof Error ? teardown.message : "").not.toContain("teardown");
+    expect(teardown instanceof Error ? teardown.cause : "unset").toBeUndefined();
+    expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("first");
   });
 
   // HF13: the temporary directory is a resource, so its lifetime is the

@@ -17,22 +17,28 @@
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Err, Ok, resource, scoped, until } from "effection";
+import { ensure, Err, Ok, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { exists, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import {
   API,
   FILES_ERROR,
+  FILES_FATAL,
   FILES_WRITE_SUCCESS,
   Files,
   FilesError,
   FilesInvariantError,
   FilesOperationDeniedError,
+  hostFilesHandler,
+  parseFileWriteFailure,
+  parseFileWriteSuccess,
+  parseFilesFailure,
   parseFilesFatal,
   useHostFiles,
 } from "@executablemd/runtime";
 import type { FilePathInput, FileWriteInput, FileWriteSuccess } from "@executablemd/runtime";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { InvocationTeardownError } from "../src/invocation.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
@@ -480,6 +486,216 @@ describe("Tier FF — Files infrastructure failure", () => {
 
     expect(thrown).toBe(durability);
     expect(filesFatalFailure(thrown)).toBeUndefined();
+  });
+
+  // FF11: none of this parsing may throw. Every value it reads is a value a
+  // provider handed back, and a provider is as free to return a Proxy that
+  // refuses to be inspected as a plain record. These parsers run from
+  // `fatalCause`, which every generic catch in expansion consults — so one of
+  // them throwing would replace the failure being classified with a failure
+  // about classifying it, exactly when the engine is deciding whether the
+  // execution may continue.
+  it("FF11: hostile shapes are not recognized, and never throw", function* () {
+    const explode = () => {
+      throw new Error("EACCES: refused, at '/planted/secret.txt'");
+    };
+
+    const hostile: Array<{ name: string; build: () => unknown }> = [
+      {
+        name: "a throwing data accessor",
+        build: () =>
+          Object.defineProperty(new Error("wrapper"), "data", { get: explode, configurable: true }),
+      },
+      {
+        name: "data whose fields throw",
+        build: () =>
+          Object.assign(new Error("wrapper"), {
+            data: new Proxy({}, { get: explode }),
+          }),
+      },
+      {
+        name: "data whose key enumeration throws",
+        build: () =>
+          Object.assign(new Error("wrapper"), {
+            data: new Proxy(
+              { type: FILES_FATAL, kind: "provider-unavailable" },
+              { ownKeys: explode },
+            ),
+          }),
+      },
+      {
+        name: "an unreadable prototype",
+        build: () => new Proxy(new Error("wrapper"), { getPrototypeOf: explode }),
+      },
+      {
+        name: "a throwing cause",
+        build: () =>
+          Object.defineProperty(new Error("wrapper"), "cause", {
+            get: explode,
+            configurable: true,
+          }),
+      },
+      {
+        name: "unreadable aggregate members",
+        build: () =>
+          Object.defineProperty(new AggregateError([], "wrapper"), "errors", {
+            get: explode,
+            configurable: true,
+          }),
+      },
+      {
+        name: "aggregate members that are not a list",
+        build: () => Object.assign(new AggregateError([], "wrapper"), { errors: 7 }),
+      },
+      {
+        name: "unreadable teardown causes",
+        build: () =>
+          Object.defineProperty(new InvocationTeardownError([]), "causes", {
+            get: explode,
+            configurable: true,
+          }),
+      },
+    ];
+
+    for (const shape of hostile) {
+      const candidate = shape.build();
+      // Every parser answers, and none of them recognizes the shape.
+      expect(parseFilesFatal(candidate)).toBeUndefined();
+      expect(parseFilesFailure(candidate)).toBeUndefined();
+      expect(parseFileWriteFailure(candidate)).toBeUndefined();
+      expect(parseFileWriteSuccess(candidate)).toBeUndefined();
+      expect(fatalCause(candidate)).toBeUndefined();
+      expect(filesFatalFailure(candidate)).toBeUndefined();
+
+      // And a real failure underneath one is still found, so totality narrows
+      // what a hostile wrapper hides rather than what discovery reaches.
+      const planted = new FilesInvariantError("authority");
+      expect(fatalCause(new AggregateError([candidate, planted], "mixed"))).toBe(planted);
+    }
+  });
+
+  // FF12: a candidate that carries the right tag but breaks the rest of the
+  // contract is not preserved. Recognition is a decision to let that exact
+  // object travel onward by identity, so an Error carrying a raw platform
+  // message and a cause chain would carry both past the boundary the reason
+  // vocabulary exists to hold.
+  it("FF12: a correctly tagged but unsafe failure is replaced, not preserved", function* () {
+    const dir = yield* useFixture();
+
+    const unsafe: Array<{ name: string; build: () => Error }> = [
+      {
+        name: "a raw message",
+        build: () =>
+          Object.assign(new Error("EACCES: denied, at '/planted/secret.txt'"), {
+            data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+          }),
+      },
+      {
+        name: "a cause chain",
+        build: () =>
+          Object.assign(
+            new Error("Files provider is not installed", {
+              cause: new Error("ENOENT at /planted/secret.txt"),
+            }),
+            { data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }) },
+          ),
+      },
+      {
+        name: "mutable data",
+        build: () =>
+          Object.assign(new Error("Files provider is not installed"), {
+            data: { type: FILES_FATAL, kind: "provider-unavailable" },
+          }),
+      },
+      {
+        name: "an extra data field",
+        build: () =>
+          Object.assign(new Error("Files provider is not installed"), {
+            data: Object.freeze({
+              type: FILES_FATAL,
+              kind: "provider-unavailable",
+              path: "/planted/secret.txt",
+            }),
+          }),
+      },
+    ];
+
+    for (const shape of unsafe) {
+      const candidate = shape.build();
+      expect(filesFatalFailure(candidate)).toBeUndefined();
+
+      let thrown: unknown;
+      yield* scoped(function* () {
+        yield* useFiles({
+          // deno-lint-ignore require-yield
+          *readTextFile(): Operation<Result<string>> {
+            throw candidate;
+          },
+        });
+        try {
+          yield* invokeFiles(Files.operations.readTextFile({ cwd: dir, path: "notes.md" }));
+        } catch (error) {
+          thrown = error;
+        }
+      });
+
+      // Replaced rather than preserved, and nothing it carried came along.
+      expect(thrown).not.toBe(candidate);
+      expect(thrown).toBeInstanceOf(FilesInvariantError);
+      expect(parseFilesFatal(thrown)?.kind).toBe("invariant");
+      expect(thrown instanceof Error ? thrown.message : "").toBe("Files provider invariant failed");
+      expect(thrown instanceof Error ? thrown.cause : "unset").toBeUndefined();
+      expect(JSON.stringify(thrown instanceof Error ? { ...thrown } : {})).not.toContain("planted");
+    }
+  });
+
+  // FF13: a host cleanup that fails while cancellation is unwinding leaves the
+  // scope as an infrastructure failure, and the engine's own discovery is what
+  // has to find it — that is what makes it consumable by a coordinator deciding
+  // what to fence.
+  it("FF13: a cleanup failure during cancellation is discovered as fatal", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "notes.md"), "first");
+    const suspended = withResolvers<void>();
+    const files = hostFilesHandler();
+
+    const write = yield* spawn(function* () {
+      yield* scoped(function* () {
+        yield* API.Fs.around({
+          *writeTextFile([path, content], next) {
+            yield* next(path, content);
+            suspended.resolve();
+            yield* suspend();
+          },
+          // deno-lint-ignore require-yield
+          *remove() {
+            throw Object.assign(new Error("EPERM: denied, at '/planted/secret.txt'"), {
+              code: "EPERM",
+            });
+          },
+        });
+        yield* files.writeTextFile({ cwd: dir, path: "notes.md", content: "second" });
+      });
+    });
+
+    yield* suspended.operation;
+    let thrown: unknown;
+    try {
+      yield* write.halt();
+    } catch (error) {
+      thrown = error;
+    }
+
+    const selected = fatalCause(thrown);
+    expect(parseFilesFatal(selected)).toEqual({
+      type: "executablemd.runtime.files-fatal/v1",
+      kind: "invariant",
+      category: "teardown",
+    });
+    // Preserved by identity, which is what a shared fail-stop records.
+    expect(filesFatalFailure(thrown)).toBe(selected);
+    expect(String(selected)).not.toContain("planted");
+    expect(yield* readTextFile(join(dir, "notes.md"))).toBe("first");
   });
 
   // FF10: an ordinary failure is still an ordinary failure. The fatal rule is

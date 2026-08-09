@@ -114,6 +114,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "exercises Deno-private node:sqlite transaction identities and real SQLite savepoint failure behavior; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/365",
   },
+  {
+    path: "packages/core/tests/loaded-copy-files.test.ts",
+    reason:
+      "builds the second copy of the runtime's Files module with `deno bundle`, which is Deno's; the structural recognition it proves is runtime-neutral and is also covered by fatal-cause.test.ts under all three",
+    issue: DERIVED_SCOPE,
+  },
 ];
 
 /**
