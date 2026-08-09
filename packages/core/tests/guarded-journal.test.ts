@@ -97,6 +97,21 @@ function makeTmpDir(): string {
 }
 
 /**
+ * A fetch that asks the server to close the connection after each response.
+ * The test owns the server's lifetime, and stop() waits for every open
+ * connection — a pooled keep-alive connection held by the runtime's fetch
+ * client keeps teardown waiting on the client pool's eviction clock.
+ */
+function closingFetch(
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  headers.set("connection", "close");
+  return globalThis.fetch(input, { ...init, headers });
+}
+
+/**
  * A file backend shaped like the CLI's FileStream: it appends the shared
  * NDJSON record and answers readAll() from the events it accepted, so a test
  * can compare the bytes on disk against exactly those events.
@@ -226,7 +241,10 @@ describe("a guarded journal", () => {
   });
 
   it("keeps the rejected event out of an HTTP backend", function* () {
-    const server = new DurableStreamTestServer();
+    // port 0: the corpus runs under three runtimes concurrently, and a fixed
+    // port lets those servers collide — macOS shares the listen port between
+    // processes instead of refusing the second bind.
+    const server = new DurableStreamTestServer({ port: 0 });
     const baseUrl = yield* until(server.start());
     yield* ensure(() => until(server.stop()));
 
@@ -238,6 +256,7 @@ describe("a guarded journal", () => {
       streamId: "guarded-journal",
       producerId: "guarded-journal-test",
       epoch: 1,
+      fetch: closingFetch,
     });
     const stream = guardDurableStream(backend, rejecting([], isFirstExec));
 
