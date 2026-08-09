@@ -30,6 +30,7 @@ import {
 } from "./durability.ts";
 import { StaleInputError } from "./errors.ts";
 import {
+  type ActivateDurabilityFailure,
   defaultLiveDurableOperationCoordinator,
   type LiveDurableOperationCoordinator,
 } from "./live-coordinator.ts";
@@ -351,15 +352,27 @@ export function createDurableOperation<T extends Json>(
 
         try {
           const coordinator = options.coordinator ?? defaultLiveDurableOperationCoordinator;
-          const result = yield* coordinator.run(execute, function* (published) {
-            const event: Yield = {
-              type: "yield",
-              coroutineId: ctx.coroutineId,
-              description: desc,
-              result: published,
-            };
-            yield* appendDurableEvent(ctx, event);
-          });
+          const activateFailure: ActivateDurabilityFailure = (failure) => {
+            const existing = activeDurabilityFailure(ctx);
+            if (existing) {
+              return existing;
+            }
+            const error = failure instanceof Error ? failure : new Error(String(failure));
+            return rememberDurabilityFailure(ctx, error);
+          };
+          const result = yield* coordinator.run(
+            execute,
+            function* (published) {
+              const event: Yield = {
+                type: "yield",
+                coroutineId: ctx.coroutineId,
+                description: desc,
+                result: published,
+              };
+              yield* appendDurableEvent(ctx, event);
+            },
+            activateFailure,
+          );
           resolve(protocolToEffection<T>(result));
         } catch (err) {
           resolve({

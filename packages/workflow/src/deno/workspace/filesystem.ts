@@ -3,6 +3,7 @@ import { link as linkFile } from "../../../vendor/cloudflare-computer-dofs/gener
 import type { WorkspaceDirentResult } from "../../../vendor/cloudflare-computer-dofs/generated/fs/readdir.d.ts";
 import { rename as renamePath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/rename.js";
 import type { RunConnection } from "../connections.ts";
+import { throwWorkspaceFilesystemFailure } from "./errors.ts";
 
 export interface DenoWorkspaceEntry {
   readonly name: string;
@@ -50,16 +51,24 @@ export function createDenoWorkspaceFilesystem(
     return { kind, mode: value.mode, mtime: value.mtime, size: value.size };
   }
 
+  function* filesystemOperation<T>(operation: Operation<T>): Operation<T> {
+    try {
+      return yield* operation;
+    } catch (error) {
+      return throwWorkspaceFilesystemFailure(error);
+    }
+  }
+
   return {
     *readFile(path): Operation<Uint8Array> {
       authorize();
-      const stream = yield* until(filesystem.readFile(path));
-      return new Uint8Array(yield* until(new Response(stream).arrayBuffer()));
+      const stream = yield* filesystemOperation(until(filesystem.readFile(path)));
+      return new Uint8Array(yield* filesystemOperation(until(new Response(stream).arrayBuffer())));
     },
 
     *readTextFile(path): Operation<string> {
       authorize();
-      const value = yield* until(filesystem.readFile(path, "utf8"));
+      const value = yield* filesystemOperation(until(filesystem.readFile(path, "utf8")));
       if (typeof value !== "string") {
         throw new Error("the Workspace text read returned a byte stream");
       }
@@ -68,22 +77,22 @@ export function createDenoWorkspaceFilesystem(
 
     *stat(path): Operation<DenoWorkspaceStat> {
       authorize();
-      return stat(yield* until(filesystem.stat(path)));
+      return stat(yield* filesystemOperation(until(filesystem.stat(path))));
     },
 
     *lstat(path): Operation<DenoWorkspaceStat> {
       authorize();
-      return stat(yield* until(filesystem.lstat(path)));
+      return stat(yield* filesystemOperation(until(filesystem.lstat(path))));
     },
 
     *readlink(path): Operation<string> {
       authorize();
-      return yield* until(filesystem.readlink(path));
+      return yield* filesystemOperation(until(filesystem.readlink(path)));
     },
 
     *readdir(path): Operation<DenoWorkspaceEntry[]> {
       authorize();
-      const entries = yield* until(filesystem.readdir(path));
+      const entries = yield* filesystemOperation(until(filesystem.readdir(path)));
       return entries.map((entry: WorkspaceDirentResult) => ({
         name: entry.name,
         kind: entry.isFile ? "file" : entry.isDirectory ? "directory" : "symlink",
@@ -92,39 +101,49 @@ export function createDenoWorkspaceFilesystem(
 
     *writeFile(path, content, mode): Operation<void> {
       authorize();
-      yield* until(filesystem.writeFile(path, content, mode === undefined ? {} : { mode }));
+      yield* filesystemOperation(
+        until(filesystem.writeFile(path, content, mode === undefined ? {} : { mode })),
+      );
     },
 
     *mkdir(path, options = {}): Operation<void> {
       authorize();
-      yield* until(filesystem.mkdir(path, options));
+      yield* filesystemOperation(until(filesystem.mkdir(path, options)));
     },
 
     *remove(path, options = {}): Operation<void> {
       authorize();
-      yield* until(filesystem.rm(path, options));
+      yield* filesystemOperation(until(filesystem.rm(path, options)));
     },
 
     // deno-lint-ignore require-yield
     *rename(from, to): Operation<void> {
       authorize();
-      renamePath(dofs, from, to);
+      try {
+        renamePath(dofs, from, to);
+      } catch (error) {
+        throwWorkspaceFilesystemFailure(error);
+      }
     },
 
     *chmod(path, mode): Operation<void> {
       authorize();
-      yield* until(filesystem.chmod(path, mode));
+      yield* filesystemOperation(until(filesystem.chmod(path, mode)));
     },
 
     *symlink(target, path): Operation<void> {
       authorize();
-      yield* until(filesystem.symlink(target, path));
+      yield* filesystemOperation(until(filesystem.symlink(target, path)));
     },
 
     // deno-lint-ignore require-yield
     *link(existingPath, newPath): Operation<void> {
       authorize();
-      linkFile(dofs, existingPath, newPath);
+      try {
+        linkFile(dofs, existingPath, newPath);
+      } catch (error) {
+        throwWorkspaceFilesystemFailure(error);
+      }
     },
   };
 }

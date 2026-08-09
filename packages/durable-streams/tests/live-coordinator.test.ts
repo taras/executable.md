@@ -3,6 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { type Operation, spawn, suspend, withResolvers } from "effection";
 import {
   createDurableOperation,
+  type ActivateDurabilityFailure,
   durableAction,
   durableCall,
   durableRun,
@@ -381,5 +382,50 @@ describe("Tier DLC — live durable-operation coordination", () => {
     expect(yield* durableRun(workflow, { stream })).toBe("done");
     expect(executions).toBe(1);
     expect(yields(stream.snapshot())).toHaveLength(1);
+  });
+
+  it("DLC14: a coordinator activates one infrastructure failure by identity", function* () {
+    const infrastructureFailure = new Error("coordinated infrastructure failed");
+    const stream = new InMemoryStream();
+    let caught: unknown;
+    let laterExecutions = 0;
+    const coordinator: LiveDurableOperationCoordinator = {
+      *run<T extends Json>(
+        execute: () => Operation<T>,
+        _publish: (result: Result) => Operation<void>,
+        activateFailure: ActivateDurabilityFailure,
+      ): Operation<Result> {
+        try {
+          yield* execute();
+        } catch (error) {
+          throw activateFailure(error);
+        }
+        throw new Error("the infrastructure proof unexpectedly completed");
+      },
+    };
+
+    function* workflow(): Workflow<void> {
+      try {
+        yield* coordinatedStep(
+          "infrastructure",
+          function* () {
+            throw infrastructureFailure;
+          },
+          coordinator,
+        );
+      } catch (error) {
+        caught = error;
+      }
+      yield* durableCall("fenced", function* () {
+        laterExecutions += 1;
+        return null;
+      });
+    }
+
+    const escaped = yield* raised(durableRun(workflow, { stream }));
+    expect(escaped).toBe(infrastructureFailure);
+    expect(caught).toBe(infrastructureFailure);
+    expect(laterExecutions).toBe(0);
+    expect(stream.appendCount).toBe(0);
   });
 });

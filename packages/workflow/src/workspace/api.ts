@@ -1,5 +1,10 @@
 import { type Api, createApi } from "@effectionx/context-api";
-import type { Json, LiveDurableOperationCoordinator, Result } from "@executablemd/durable-streams";
+import type {
+  ActivateDurabilityFailure,
+  Json,
+  LiveDurableOperationCoordinator,
+  Result,
+} from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 
 export type WorkspaceCoordinationApi = LiveDurableOperationCoordinator;
@@ -21,6 +26,7 @@ export const WorkspaceCoordination: Api<WorkspaceCoordinationApi> =
     *run<T extends Json>(
       _execute: () => Operation<T>,
       _publish: (result: Result) => Operation<void>,
+      _activateFailure: ActivateDurabilityFailure,
     ): Operation<Result> {
       throw new WorkspaceCoordinationProviderError();
     },

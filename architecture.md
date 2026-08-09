@@ -421,9 +421,11 @@ staging, switching and committing, operate on the same transactional Workspace
 rather than invoking an untracked native Git side effect.
 
 Successful effect coordination finishes the mutation scope, including child
-cleanup, before capturing the resulting root. The provider-level coordinator
-that performs this ordering and journal publication is not installed at this
-layer.
+cleanup, before capturing the resulting root. The Deno provider installs that
+ordering for its adapter-private Workspace proof operation: the mutation
+savepoint, root publication, filtered routed Yield, and caller-owned transaction
+commit form one boundary. Public filesystem components and workflow lifecycle
+commands do not yet select that operation.
 
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the
@@ -482,8 +484,9 @@ materialize one privately through the authoritative connection. Capture runs
 inside the caller-owned transaction. Restoration runs in a nested savepoint,
 clears the authoritative resolution and blob caches, and resnapshots to the
 selected identity before release. Private Workspace transaction bodies finish
-their child teardown before final live/current validation; a later effect
-coordinator finishes its mutation scope before it invokes capture.
+their child teardown before final live/current validation. The Workspace effect
+coordinator also finishes its mutation savepoint scope before it invokes
+capture.
 
 Separately, every unsuccessful caller-owned transaction attempts top-level
 SQLite rollback and then
@@ -496,10 +499,21 @@ after SQLite has restored the prior frontier.
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider
 exposes no public Workspace mutation effect, history selection or fork
-operation at this layer. Provider-neutral durable coordination and explicit
-filtered-journal routing are present, while the Deno Workspace coordinator that
-combines mutation, root publication and journal publication atomically is
-absent.
+operation at this layer. Its adapter-private coordinator combines one mutation,
+immutable-root publication and one filtered journal result atomically for the
+provider-level proof; declarative `<File>` and workflow start/resume do not
+reach it yet.
+
+The coordinator treats only errors produced through its private filesystem
+adapter's documented path and mutation refusals as journalable operation
+failures. It rolls their savepoint back, keeps the prior current root, and
+commits one failed protocol Yield. Connection, savepoint, content, capture,
+routing, filtering, insertion, teardown and commit failures roll back the outer
+transaction and activate the durable run's first-failure fence. Cancellation is
+control flow: it publishes no failed result. The durable coordinator contract
+supplies a provider-neutral failure activator so a provider can retain that
+first infrastructure failure by identity; the default coordinator does not use
+it and keeps its existing behavior.
 
 The Deno journal adapter routes an append ordinarily when no destination is
 bound. A publication may instead bind one exact transaction destination for its
@@ -892,10 +906,10 @@ Status is measured against main.
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
-| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; Workspace effect publication is unbuilt |
+| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
-| Workspace coordination API | fails closed by default and lets a Workspace operation explicitly select provider coordination | built on the #365 stack; the atomic Deno Workspace handler is unbuilt |
+| Workspace coordination API | fails closed by default and lets a Workspace operation explicitly select provider coordination | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
@@ -909,7 +923,7 @@ Status is measured against main.
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, and privately restores them with cache-coherent savepoints | built on the #365 stack; public mutation and effect-transaction integration are unbuilt |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates an adapter-private mutation proof with its filtered Yield | built on the #365 stack; public mutation and workflow lifecycle reachability are unbuilt |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |

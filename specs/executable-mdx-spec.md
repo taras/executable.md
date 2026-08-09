@@ -7019,6 +7019,25 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC11 | Workspace isolation | Explicit Workspace selection leaves unrelated durable operations on the default coordinator |
 | DLC12 | Workspace replay | Replayed Workspace operations require no live provider |
 | DLC13 | Runtime-neutral boundary | Shared Workspace coordination source exposes no runtime or storage implementation type |
+| DLC14 | Provider infrastructure failure | A selected coordinator activates one first failure by identity and fences later execution and publication |
+
+### Tier WAC — Atomic provider-level Workspace coordination
+
+Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6 and [Workflow
+workspaces](./workflow-workspace-spec.md) §13.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAC1 | Atomic success | A real DOFS mutation, immutable root, current-root pointer and filtered Yield remain invisible until their one caller-owned transaction commits; the next serialized turn sees both state and event |
+| WAC2 | Supported topology | Write, overwrite, delete, rename, directory, mode, symlink and hardlink operations pass through the adapter-private proof operation |
+| WAC3 | Known operation failure | A documented filesystem refusal rolls back its mutation savepoint and commits one failed Yield against the previous root |
+| WAC4 | Backing insertion failure | A real journal refusal rolls back mutation, root, pointer and event, activates the exact `DurablePersistenceError`, and fences later work |
+| WAC5 | Secret-filter refusal | The existing gate runs before routed insertion; rejection rolls back the outer transaction and activates no compensating event |
+| WAC6 | Cancellation | Cancellation before mutation, during mutation and during child teardown publishes no state or event |
+| WAC7 | Infrastructure fail-stop | A caught provider infrastructure failure retains identity, rolls back everything and prevents later Workspace and ordinary durable execution |
+| WAC8 | Concurrency isolation | An unrelated same-run append waits without enlisting while a different run remains usable inside the outer transaction scope |
+| WAC9 | Replay | A retained Workspace Yield bypasses the Deno coordinator and mutation completely |
+| WAC10 | Authority | Closed or foreign authority is refused before the mutation runs |
 
 ### Tier WTX — WorkflowRun savepoints and transaction authority
 

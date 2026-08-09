@@ -815,6 +815,14 @@ is outside the initial local capability set; Worker Shell follows §10.3. A late
 Cloudflare-hosted or workerd-backed provider may install the same Workspace and
 lifecycle contracts; documents do not choose that topology.
 
+The Deno provider's adapter-private proof operation already coordinates one
+real DOFS mutation savepoint, immutable root publication and filtered durable
+Yield in the caller-owned transaction. It distinguishes a documented
+filesystem refusal from infrastructure failure and cancellation, and activates
+the durable fail-stop fence for infrastructure failures. This foundation is not
+a public filesystem effect: `<File>`, `API.Files`, workflow start/resume and
+history commands do not route to it in this slice.
+
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be
 delegated without changing the document language.

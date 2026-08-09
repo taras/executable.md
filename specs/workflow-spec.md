@@ -455,8 +455,28 @@ The shared Workspace operation wrapper explicitly selects a contextual
 Workspace coordinator. Its default fails before execution or publication, and
 installing a provider does not enlist unrelated durable operations. Successful
 Workspace effect coordination finishes its mutation scope before capturing the
-root. The Deno coordinator that orders mutation teardown, root capture and
-filtered journal publication atomically is not part of this storage layer.
+root. The Deno provider binds an adapter-private proof operation to one exact
+WorkflowRun handle. Its coordinator opens the caller-owned transaction, runs
+the mutation in one operation savepoint, waits for mutation child teardown,
+captures and publishes the immutable root, and routes the already-filtered
+Yield through that transaction's journal before commit.
+
+A documented filesystem refusal is an operation result only after its mutation
+savepoint has rolled back successfully. It keeps the previous current root and
+commits exactly one failed Yield against that root. Connection or authority,
+savepoint, DOFS, schema, corruption, capture, current-root, routing, filtering,
+serialization, insertion, teardown and commit failures instead roll back the
+outer transaction and activate the durable run's first infrastructure failure.
+That identity fences later coordinators, executors and appends. An already
+active durability failure takes precedence. Cancellation at any phase publishes
+nothing.
+
+The provider-neutral coordinator receives the failure-activation continuation
+needed for this boundary. The default live coordinator ignores it and preserves
+ordinary success/failure publication. Replay bypasses coordination, and only an
+explicit Workspace operation selects the Workspace coordinator. The Deno proof
+operation is adapter-private: public filesystem effects and workflow
+start/resume do not reach it.
 
 The private restoration materializer loads a fully validated retained root and
 rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink
@@ -536,7 +556,6 @@ also left unchanged.
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
 leases and stale-owner recovery; public Workspace mutation and filesystem
-effects; provider-level atomic Workspace effect/journal publication; public root
-selection, history checkpoints and forks; `<File>` integration;
+effects; public root selection, history checkpoints and forks; `<File>` integration;
 workflow-owned worktrees; and deterministic Git and GitHub effects. Retained
 roots and private restoration do not expose any of those behaviors.

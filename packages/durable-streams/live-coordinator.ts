@@ -2,11 +2,15 @@ import type { Operation } from "effection";
 import { serializeError } from "./serialize.ts";
 import type { Json, Result } from "./types.ts";
 
+/** Activates the first infrastructure failure for the enclosing durable run. */
+export type ActivateDurabilityFailure = (failure: unknown) => Error;
+
 /** Coordinates one live structured durable operation with its publication. */
 export interface LiveDurableOperationCoordinator {
   run<T extends Json>(
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
+    activateFailure: ActivateDurabilityFailure,
   ): Operation<Result>;
 }
 
@@ -15,6 +19,7 @@ export const defaultLiveDurableOperationCoordinator: LiveDurableOperationCoordin
   *run<T extends Json>(
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
+    _activateFailure: ActivateDurabilityFailure,
   ): Operation<Result> {
     let result: Result;
     try {

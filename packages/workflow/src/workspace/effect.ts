@@ -1,5 +1,6 @@
 import {
   createDurableOperation,
+  type ActivateDurabilityFailure,
   type DurableEffect,
   type EffectDescription,
   type Json,
@@ -13,8 +14,9 @@ const workspaceCoordinator: LiveDurableOperationCoordinator = {
   *run<T extends Json>(
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
+    activateFailure: ActivateDurabilityFailure,
   ): Operation<Result> {
-    return yield* WorkspaceCoordination.operations.run(execute, publish);
+    return yield* WorkspaceCoordination.operations.run(execute, publish, activateFailure);
   },
 };
 

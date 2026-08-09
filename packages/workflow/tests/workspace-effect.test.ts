@@ -3,6 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { readTextFile } from "@effectionx/fs";
 import { type Operation } from "effection";
 import {
+  type ActivateDurabilityFailure,
   durableCall,
   durableRun,
   InMemoryStream,
@@ -56,9 +57,10 @@ describe("Tier DLC — Workspace coordination selection", () => {
     const coordinated: string[] = [];
     const ordinary: string[] = [];
     yield* WorkspaceCoordination.around({
-      *run<T extends Json>([execute, publish]: [
+      *run<T extends Json>([execute, publish, _activateFailure]: [
         () => Operation<T>,
         (result: Result) => Operation<void>,
+        ActivateDurabilityFailure,
       ]): Operation<Result> {
         coordinated.push("workspace");
         const result: Result = { status: "ok", value: yield* execute() };

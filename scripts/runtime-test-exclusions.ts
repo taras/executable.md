@@ -120,6 +120,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "builds the second copy of the runtime's Files module with `deno bundle`, which is Deno's; the structural recognition it proves is runtime-neutral and is also covered by fatal-cause.test.ts under all three",
     issue: DERIVED_SCOPE,
   },
+  {
+    path: "packages/workflow/tests/workspace-effect-transaction.test.ts",
+    reason:
+      "proves Deno-private atomic Workspace coordination against the authoritative node:sqlite and DOFS adapter; node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/365",
+  },
 ];
 
 /**
