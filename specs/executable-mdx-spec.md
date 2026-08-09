@@ -1133,9 +1133,10 @@ compilation finishes halting. A removal that fails for any reason other than
 the file already being absent leaves that scope rather than being discarded.
 
 `.xmd-eval` is a relative literal, resolved against the host process's current
-working directory. That is the directory the process was started in: running
-`path/to/document.md` does not move it to the document's directory, and it is
-not the contextual `API.Env.cwd`, which this compiler does not consult.
+working directory when a compilation chooses the path. Running
+`path/to/document.md` does not itself move that directory to the document's
+directory, and the contextual `API.Env.cwd` does not control it, because this
+compiler does not consult that Api.
 
 #### Standard imports
 
