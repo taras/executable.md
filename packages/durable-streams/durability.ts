@@ -136,10 +136,7 @@ export function* appendDurableEvent(ctx: DurableContext, event: DurableEvent): O
 
   const occurrence: DurableEventRejectionOccurrence = { rejected: false };
   try {
-    yield* withDurableEventRejectionOccurrence(
-      occurrence,
-      () => ctx.stream.append(event),
-    );
+    yield* withDurableEventRejectionOccurrence(occurrence, () => ctx.stream.append(event));
   } catch (error) {
     if (occurrence.rejected && Object.is(error, occurrence.error)) {
       const failure = activeDurabilityFailure(ctx);

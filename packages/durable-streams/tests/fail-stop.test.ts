@@ -93,9 +93,7 @@ function durabilityClassErrors(): Error[] {
   ];
 }
 
-function* assertReusedPolicyErrorClassification(
-  guard: typeof guardDurableStream,
-): Operation<void> {
+function* assertReusedPolicyErrorClassification(guard: typeof guardDurableStream): Operation<void> {
   const sharedFailure = new Error("reused policy and adapter failure");
   const backend = new FailOnceStream(sharedFailure);
   let blockedExecutions = 0;
@@ -261,7 +259,10 @@ describe("durable fail-stop boundary", () => {
   });
 
   it("shares append occurrence classification across loaded copies", function* () {
-    const loadedCopy = yield* until(import("../guard.ts?loaded-copy=fail-stop"));
+    const loadedCopySpecifier = "../guard.ts" + "?loaded-copy=fail-stop";
+    const loadGuardCopy: () => Promise<typeof import("../guard.ts")> = () =>
+      import(loadedCopySpecifier);
+    const loadedCopy = yield* until(loadGuardCopy());
 
     expect(loadedCopy.guardDurableStream).not.toBe(guardDurableStream);
     yield* assertReusedPolicyErrorClassification(loadedCopy.guardDurableStream);
