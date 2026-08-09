@@ -66,7 +66,7 @@ import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@execu
 import { content } from "../component-api.ts";
 import { hasContent } from "../content-context.ts";
 import { ContentError } from "../errors.ts";
-import { checkFilePath, readFileText, writeFileText, writeReport } from "../files.ts";
+import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
 
@@ -100,8 +100,7 @@ export default printErrors(function* (props: Record<string, Json>): Operation<st
     // The children run only once the path is known to be usable, and the
     // destination is resolved only once they are done.
     const text = yield* rendered(requested);
-    const written = yield* writeFileText({ cwd: directory, path: requested, content: text });
-    const failure = writeReport(written);
+    const failure = yield* writeFileText({ cwd: directory, path: requested, content: text });
     if (failure !== undefined) {
       throw new FileAccessError(report(requested, failure));
     }

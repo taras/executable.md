@@ -425,14 +425,20 @@ describe("Tier FA — Fatal error discovery", () => {
     const files = new FilesInvariantError("savepoint");
     const doc = documentation();
 
-    // Every order of the three, and the answer never moves.
+    // All six orders of the three. Position is exactly what must not decide
+    // this, so a sample of the orderings would leave the claim partly untested —
+    // and the one ordering left out is the one that would ship the bug.
     for (const members of [
       [durability, files, doc],
-      [doc, files, durability],
-      [files, doc, durability],
       [durability, doc, files],
+      [files, durability, doc],
+      [files, doc, durability],
+      [doc, durability, files],
+      [doc, files, durability],
     ]) {
       expect(fatalCause(new AggregateError(members, "mixed"))).toBe(durability);
+      // The other wrapper the engine builds, with the same members.
+      expect(fatalCause(new InvocationTeardownError(members))).toBe(durability);
     }
 
     expect(fatalCause(new AggregateError([doc, files], "mixed"))).toBe(files);

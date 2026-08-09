@@ -29,6 +29,7 @@ import {
   FilesError,
   FilesInvariantError,
   FilesOperationDeniedError,
+  FilesProviderUnavailableError,
   hostFilesHandler,
   parseFileWriteFailure,
   parseFileWriteSuccess,
@@ -618,6 +619,69 @@ describe("Tier FF — Files infrastructure failure", () => {
             }),
           }),
       },
+      {
+        name: "a path-bearing name",
+        build: () =>
+          Object.assign(new Error("Files provider is not installed"), {
+            name: `FilesProviderUnavailableError: /planted/secret.txt`,
+            data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+          }),
+      },
+      {
+        name: "an extra Error-level path property",
+        build: () =>
+          Object.assign(new Error("Files provider is not installed"), {
+            name: "FilesProviderUnavailableError",
+            data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+            path: "/planted/secret.txt",
+          }),
+      },
+      {
+        name: "an enumerable symbol payload",
+        build: () => {
+          const error = Object.assign(new Error("Files provider is not installed"), {
+            name: "FilesProviderUnavailableError",
+            data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+          });
+          // Enumerable, so it survives a spread and an `Object.assign` copy —
+          // the two ways a consumer would carry a failure onward.
+          Object.defineProperty(error, Symbol.for("planted"), {
+            value: "/planted/secret.txt",
+            enumerable: true,
+          });
+          return error;
+        },
+      },
+      {
+        name: "hostile key enumeration",
+        build: () =>
+          new Proxy(
+            Object.assign(new Error("Files provider is not installed"), {
+              name: "FilesProviderUnavailableError",
+              data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+            }),
+            {
+              ownKeys() {
+                throw new Error("refused, at '/planted/secret.txt'");
+              },
+            },
+          ),
+      },
+      {
+        name: "hostile descriptor access",
+        build: () =>
+          new Proxy(
+            Object.assign(new Error("Files provider is not installed"), {
+              name: "FilesProviderUnavailableError",
+              data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+            }),
+            {
+              getOwnPropertyDescriptor() {
+                throw new Error("refused, at '/planted/secret.txt'");
+              },
+            },
+          ),
+      },
     ];
 
     for (const shape of unsafe) {
@@ -645,7 +709,24 @@ describe("Tier FF — Files infrastructure failure", () => {
       expect(parseFilesFatal(thrown)?.kind).toBe("invariant");
       expect(thrown instanceof Error ? thrown.message : "").toBe("Files provider invariant failed");
       expect(thrown instanceof Error ? thrown.cause : "unset").toBeUndefined();
+      // Neither stringification nor enumerable output retains the planted value.
+      expect(String(thrown)).not.toContain("planted");
       expect(JSON.stringify(thrown instanceof Error ? { ...thrown } : {})).not.toContain("planted");
+      expect(
+        JSON.stringify(
+          Object.getOwnPropertySymbols(thrown instanceof Error ? thrown : {}).map(String),
+        ),
+      ).not.toContain("planted");
+    }
+
+    // And the real constructors, which have to stay recognizable: the contract
+    // above is what they produce, not a stricter shape nothing satisfies.
+    for (const genuine of [
+      new FilesProviderUnavailableError(),
+      new FilesOperationDeniedError("temporary-directory"),
+      new FilesInvariantError("teardown"),
+    ]) {
+      expect(filesFatalFailure(genuine)).toBe(genuine);
     }
   });
 
@@ -696,6 +777,155 @@ describe("Tier FF — Files infrastructure failure", () => {
     expect(filesFatalFailure(thrown)).toBe(selected);
     expect(String(selected)).not.toContain("planted");
     expect(yield* readTextFile(join(dir, "notes.md"))).toBe("first");
+  });
+
+  // FF14: the `Result` a provider returns is only conventionally a Result. The
+  // TypeScript signature is a claim about the provider, not a guarantee, so a
+  // component that read `ok`, `value`, or `error` first would be the thing that
+  // ran the hostile accessor — outside anything that sanitizes. Every outcome is
+  // therefore inspected and rebuilt at the boundary.
+  it("FF14: a hostile Result never reaches a component", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "notes.md"), "existing");
+    const explode = () => {
+      throw new Error("EACCES: refused, at '/planted/secret.txt'");
+    };
+
+    const hostile: Array<{ name: string; build: () => unknown }> = [
+      {
+        name: "a throwing ok",
+        build: () => ({
+          get ok() {
+            return explode();
+          },
+        }),
+      },
+      { name: "a non-boolean ok", build: () => ({ ok: "yes", value: "x" }) },
+      { name: "no ok at all", build: () => ({ value: "x" }) },
+      {
+        name: "a throwing value",
+        build: () => ({
+          ok: true,
+          get value() {
+            return explode();
+          },
+        }),
+      },
+      {
+        name: "a throwing error",
+        build: () => ({
+          ok: false,
+          get error() {
+            return explode();
+          },
+        }),
+      },
+      { name: "a proxied container", build: () => new Proxy({}, { get: explode }) },
+      { name: "not an object at all", build: () => "committed" },
+    ];
+
+    // Every form, through every operation a document can reach.
+    const documents: Array<{ name: string; source: string; method: string }> = [
+      { name: "read", source: '<File path="notes.md" />\n\nAFTER', method: "readTextFile" },
+      {
+        name: "write",
+        source: '<File path="out.txt">content</File>\n\nAFTER',
+        method: "writeTextFile",
+      },
+      {
+        name: "check",
+        source: '<File path="out.txt">content</File>\n\nAFTER',
+        method: "checkFilePath",
+      },
+      {
+        name: "glob",
+        source: '<Glob include={["**/*"]} as="found" />\n\nAFTER',
+        method: "globFiles",
+      },
+      {
+        name: "tempdir",
+        source: "<TempDir>INSIDE</TempDir>\n\nAFTER",
+        method: "temporaryDirectory",
+      },
+    ];
+
+    for (const document of documents) {
+      for (const shape of hostile) {
+        const outcome = yield* run(dir, document.source, function* () {
+          yield* useHostFiles();
+          yield* Files.around({
+            // deno-lint-ignore require-yield
+            *[document.method]() {
+              return fromOutside(shape.build());
+            },
+          });
+        });
+
+        // A container that will not describe its own outcome is a provider
+        // contract failure, so the execution ends and later work stops.
+        expect(outcome.ok).toBe(false);
+        expect(parseFilesFatal(fatalCause(outcome.error))).toEqual({
+          type: "executablemd.runtime.files-fatal/v1",
+          kind: "invariant",
+          category: "protocol",
+        });
+        expect(outcome.output).not.toContain("AFTER");
+        expect(outcome.output).not.toContain("INSIDE");
+        expect(String(outcome.error)).not.toContain("planted");
+        expect(String(outcome.error)).not.toContain("EACCES");
+      }
+    }
+  });
+
+  // FF15: the one hostile shape that is *not* fatal. A non-write failure whose
+  // data does not validate has no claim about a target in it, and the vocabulary
+  // already has a sentence for an operation that failed for an unrecognized
+  // reason — so the document reads that and carries on. What it must not read is
+  // anything the provider put there.
+  it("FF15: malformed non-write failure data alone stays printable", function* () {
+    const dir = yield* useFixture();
+
+    const cases: Array<{ source: string; method: string; expected: string }> = [
+      {
+        source: '<File path="notes.md" />\n\nAFTER',
+        method: "readTextFile",
+        expected: 'cannot read "notes.md": the filesystem operation failed.',
+      },
+      {
+        source: '<Glob include={["**/*"]} as="found" />\n\nAFTER',
+        method: "globFiles",
+        expected: "cannot search the working directory: the filesystem operation failed.",
+      },
+      {
+        source: "<TempDir>INSIDE</TempDir>\n\nAFTER",
+        method: "temporaryDirectory",
+        expected: "cannot create a temporary directory: the filesystem operation failed.",
+      },
+    ];
+
+    for (const shape of cases) {
+      const outcome = yield* run(dir, shape.source, function* () {
+        yield* useHostFiles();
+        yield* Files.around({
+          // deno-lint-ignore require-yield
+          *[shape.method]() {
+            return Err(
+              Object.assign(new Error("EACCES: denied, at '/planted/secret.txt'"), {
+                data: { type: FILES_ERROR, operation: "read", phase: "nowhere" },
+                path: "/planted/secret.txt",
+              }),
+            );
+          },
+        });
+      });
+
+      expect(outcome.ok).toBe(true);
+      expect(outcome.output).toContain(shape.expected);
+      expect(outcome.output).not.toContain("/planted/secret.txt");
+      expect(outcome.output).not.toContain("EACCES");
+      // The document carried on, which is the whole difference from FF14.
+      expect(outcome.output).toContain("AFTER");
+    }
   });
 
   // FF10: an ordinary failure is still an ordinary failure. The fatal rule is

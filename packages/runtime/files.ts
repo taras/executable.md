@@ -390,6 +390,47 @@ const FATAL_DIAGNOSTICS: ReadonlyMap<string, string> = new Map([
   ["invariant", FILES_INVARIANT_MESSAGE],
 ]);
 
+/** The one class name each kind of infrastructure failure carries. */
+const FATAL_NAMES: ReadonlyMap<string, string> = new Map([
+  ["provider-unavailable", "FilesProviderUnavailableError"],
+  ["operation-denied", "FilesOperationDeniedError"],
+  ["invariant", "FilesInvariantError"],
+]);
+
+/**
+ * Everything a constructor here puts on the Error itself, and nothing else.
+ *
+ * `message` and `stack` are non-enumerable own properties of every Error, so
+ * what remains enumerable is exactly what a constructor assigned. Anything more
+ * is payload the contract does not describe — and since recognition hands the
+ * object onward by identity, payload travels with it.
+ */
+const FATAL_MEMBERS: readonly string[] = ["data", "name"];
+
+/**
+ * Whether the Error carries only the members its constructor assigns.
+ *
+ * Symbols are checked as well as string keys: a symbol-keyed enumerable
+ * property survives spreading and appears in `Object.assign`'d copies, so
+ * leaving it unexamined would let a path ride along through exactly the
+ * mechanisms a consumer uses to inspect a failure.
+ */
+function hasOnlyContractMembers(error: Error): boolean {
+  const keys = attempt(() => [...Object.keys(error)].sort());
+  if (keys === undefined || keys.length !== FATAL_MEMBERS.length) {
+    return false;
+  }
+  if (!keys.every((key, index) => key === FATAL_MEMBERS[index])) {
+    return false;
+  }
+  const payload = attempt(() =>
+    Object.getOwnPropertySymbols(error).filter(
+      (symbol) => Object.getOwnPropertyDescriptor(error, symbol)?.enumerable === true,
+    ),
+  );
+  return payload !== undefined && payload.length === 0;
+}
+
 function reasonOf(value: unknown): FilesReason | undefined {
   return REASONS.find((reason) => reason === value);
 }
@@ -457,14 +498,17 @@ export function parseFilesFatal(error: unknown): FilesFatalData | undefined {
  * chain holding an errno and a path, would then carry all of that past the
  * boundary the reason vocabulary exists to hold.
  *
- * So the diagnostic must be the fixed one for its kind, and there must be no
- * cause. Anything else is a candidate that fails the contract: `invokeFiles`
- * replaces it with a fresh invariant rather than preserving it.
+ * So the whole object has to match what a constructor here produces: the fixed
+ * name and diagnostic for its kind, frozen structural data with exactly the
+ * fields the kind describes, no cause, and no other enumerable member — string
+ * or symbol. Anything else is a candidate that fails the contract, and
+ * `invokeFiles` replaces it with a fresh invariant rather than preserving it.
  *
  * Structural throughout, so a failure constructed by a separately loaded copy
  * of this package is recognized on exactly the same terms as one constructed
  * here — `instanceof` answers false across two copies, which is the case this
- * has to survive.
+ * has to survive. That is also why the `name` is checked rather than the class:
+ * a second copy's constructor is a different function producing the same name.
  */
 export function isFilesFatal(error: unknown): error is FilesFatalFailure {
   return (
@@ -473,10 +517,16 @@ export function isFilesFatal(error: unknown): error is FilesFatalFailure {
       if (data === undefined || !isError(error)) {
         return false;
       }
+      if (property(error, "name") !== FATAL_NAMES.get(data.kind)) {
+        return false;
+      }
       if (property(error, "message") !== FATAL_DIAGNOSTICS.get(data.kind)) {
         return false;
       }
-      return property(error, "cause") === undefined;
+      if (property(error, "cause") !== undefined) {
+        return false;
+      }
+      return hasOnlyContractMembers(error);
     }) === true
   );
 }
