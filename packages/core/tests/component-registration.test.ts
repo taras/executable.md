@@ -12,7 +12,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
@@ -107,6 +107,9 @@ function* thrown(body: () => Operation<unknown>): Operation<Error | undefined> {
 
 function run(dir: string, componentDirs: string[] = [dir]): Operation<Json> {
   return scoped(function* () {
+    // `API.Files` has no host default, and `<TempDir>` is one of the components
+    // these cases resolve.
+    yield* useHostFiles();
     return yield* collect(
       yield* execute({ path: join(dir, "doc.md"), stream: new InMemoryStream(), componentDirs }),
     );
@@ -575,6 +578,7 @@ describe("Tier CR — selection is journaled", () => {
 
   function runOn(dir: string, stream: InMemoryStream): Operation<Json> {
     return scoped(function* () {
+      yield* useHostFiles();
       return yield* collect(
         yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
       );

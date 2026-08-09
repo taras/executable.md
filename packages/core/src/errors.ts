@@ -7,6 +7,8 @@ import {
   StaleInputError,
   TerminalDivergenceError,
 } from "@executablemd/durable-streams";
+import { asFilesFatal } from "@executablemd/runtime";
+import type { FilesFatalFailure } from "@executablemd/runtime";
 import { InvocationTeardownError } from "./invocation.ts";
 import type { ErrorSegment } from "./types.ts";
 
@@ -192,13 +194,13 @@ export type DurabilityFailure =
   | ContinuePastCloseDivergenceError;
 
 /** A failure that ends the execution rather than becoming a printed error. */
-export type FatalFailure = DocumentationError | DurabilityFailure;
+export type FatalFailure = DocumentationError | DurabilityFailure | FilesFatalFailure;
 
 /**
  * The error that ends the execution, if this failure carries one.
  *
  * Expansion turns a failure into a printed error the document can render, which
- * is right for anything the document itself got wrong. Two kinds are not that,
+ * is right for anything the document itself got wrong. Three kinds are not that,
  * and every generic catch in the engine rethrows them:
  *
  * - `DocumentationError` — the error mode has already decided this execution
@@ -212,31 +214,54 @@ export type FatalFailure = DocumentationError | DurabilityFailure;
  *   to a note. It would also bury *where* the journal stopped describing the
  *   run: expansion that carried on would reach another durable operation, whose
  *   own mismatch is then the one reported.
+ * - a **Files infrastructure failure** — no document filesystem provider is
+ *   installed, one refused an operation outright, or one broke its own
+ *   contract. None of those is a filesystem condition a document could have
+ *   caused or could act on, and a provider that is not there must not become a
+ *   printed comment that lets later siblings run as if the file work had
+ *   happened.
  *
  * This looks through the three ways the engine and the platform aggregate
  * failures and returns the fatal error itself rather than the wrapper, which is
- * the one worth reporting. The two kinds travel differently: a durability
- * failure stays fatal through the complete cause graph, while a
+ * the one worth reporting. The kinds travel differently: durability and Files
+ * failures stay fatal through the complete cause graph, while a
  * `DocumentationError` remains fatal unless it crossed an explicit
  * `ContentError` recovery boundary — a component that recovered decided what
  * the document reports. An uncaught private content transport restores its
  * original `DocumentationError` explicitly at the function-component boundary,
  * not through this traversal.
  *
- * **A durability failure outranks a documentation failure**, wherever each sits
- * in the graph. A wrapper carries whatever failed together, in whatever order
- * the platform happened to collect it, and one of those orders would otherwise
- * report the document's failure and let the loop record an `error` outcome onto
- * a journal already known not to describe this run. Precedence is therefore
- * decided by kind, not by position: the graph is searched for a durability
- * failure first, and only a graph without one reports a documentation failure.
+ * **Precedence is durability, then Files, then documentation**, wherever each
+ * sits in the graph. A wrapper carries whatever failed together, in whatever
+ * order the platform happened to collect it, and one of those orders would
+ * otherwise report the document's failure and let the loop record an `error`
+ * outcome onto a journal already known not to describe this run. Precedence is
+ * therefore decided by kind, not by position: each kind is searched for across
+ * the whole graph in turn, so nesting and aggregate member order cannot change
+ * the answer.
  *
- * The two searches reach different parts of the same graph. A content failure
- * ends the documentation search and not the durability one — see
- * `isRecoveredContent` for why the asymmetry is the point.
+ * The searches reach different parts of the same graph. A content failure ends
+ * the documentation search and neither of the others — see `isRecoveredContent`
+ * for why the asymmetry is the point.
  */
 export function fatalCause(error: unknown): FatalFailure | undefined {
-  return durabilityFailure(error) ?? documentationFailure(error);
+  return durabilityFailure(error) ?? filesFatalFailure(error) ?? documentationFailure(error);
+}
+
+/**
+ * The Files infrastructure failure this one carries, if any.
+ *
+ * Recognized structurally rather than with `instanceof`: two copies of the
+ * runtime package can be loaded at once, and a provider failure constructed by
+ * the other one has to be found on the same terms as one constructed here.
+ *
+ * Like durability discovery, this walks the whole graph and treats no node as a
+ * leaf. A `ContentError` in the chain says a component recovered from failed
+ * content and reported a failure of its own; that decides which *document*
+ * failure is reported, and a missing provider is not a document failure.
+ */
+export function filesFatalFailure(error: unknown): FilesFatalFailure | undefined {
+  return firstCause(error, asFilesFatal);
 }
 
 /**
@@ -260,8 +285,9 @@ export function documentationFailure(error: unknown): DocumentationError | undef
  * whether the document gets to read what happened.
  *
  * An `output` decision says yes — that is the whole difference between the mode
- * a region installs and the mode documentation installs. A `throw` decision and
- * a durability failure say no.
+ * a region installs and the mode documentation installs. A `throw` decision, a
+ * durability failure, and a Files infrastructure failure all say no: none of
+ * them is a decision about what the document reports.
  */
 export function decidedByOutput(failure: FatalFailure): boolean {
   return failure instanceof DocumentationError && failure.mode === "output";
@@ -318,12 +344,13 @@ type OpaqueFailure = (error: object) => boolean;
  * replaced — the component's contextual printed error would be built and then
  * discarded in favour of the child's.
  *
- * Durability discovery looks straight through it. Only the engine's own
+ * Durability and Files discovery look straight through it. Only the engine's own
  * projection failures are known to carry a documentation failure and nothing
  * else; this class is public, so an author constructs and subclasses it and may
  * put anything underneath — and a durability failure stays fatal however it is
- * wrapped (§6.11). Recovery decides which failure the document *reports*, and a
- * durability failure is not one of the things a document reports.
+ * wrapped (§6.11). Recovery decides which failure the document *reports*, and
+ * neither a durability failure nor a missing filesystem provider is one of the
+ * things a document reports.
  */
 function isRecoveredContent(error: object): boolean {
   return error instanceof ContentError;

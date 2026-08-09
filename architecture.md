@@ -42,6 +42,10 @@ Existing documents and code get aligned to this section retroactively.
 | blocker | execution needs input (auth, a human answer); not a failure |
 | suspension | a durable wait: a crash restarts into the same wait |
 | Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow |
+| document filesystem | the files a document names in its own text, reached only through `API.Files`; distinct from the host paths the engine's own control plane reads |
+| Files provider | the installed implementation of `API.Files` for a document execution: the host provider under `xmd run`, a transaction-bound provider under a workflow run. There is no default, and no provider falls back to another |
+| stable host namespace | the condition the host Files provider's containment is stated under: no other process replaces a directory, symlink, junction or reparse point between the moment a path is observed and the moment it is used |
+| Files infrastructure failure | a Files provider that is absent, that refuses an operation, or that broke its own contract; fatal like a durability failure, and never a printed error |
 | ephemeral | a replay classification for an operation, context or attachment that runs again to reconstruct live execution; its result is not substituted from the journal and it owns no durable workflow state |
 | live binding | an execution-owned value reconstructed ephemerally for the current document execution; it is visible only to constructs that explicitly consume the live binding overlay and never enters interpolation or the journal |
 | attached service | a scoped host process that publishes its authenticated loopback endpoint through the XMD service handshake protocol and remains supervised for the lifetime of its service attachment |
@@ -688,7 +692,7 @@ the process may terminate, and a later document execution arrives back at the
 same wait. An error that reveals a blocker (an expired login) reaches suspension
 through middleware; waiting itself is never raised.
 
-### 8. Durability failures are outside the model
+### 8. Durability and Files infrastructure failures are outside the model
 
 A durability failure (§6.11) says the journal no longer describes the document
 execution. No middleware sees it; it is never the document's own outcome. A
@@ -704,6 +708,55 @@ rejection is a persistence failure regardless of the error class the adapter
 throws. A pre-persistence policy rejection remains the policy's ordinary
 document failure; the guarded stream marks that boundary before the backing
 append and does not activate the fail-stop state.
+
+A Files infrastructure failure is outside the model on the same terms. A
+missing provider, a refused operation, and a provider that broke its own
+contract are none of them things the document did or can act on, and printing
+one would let every step after the file work run as though the file work had
+happened. No middleware converts one, and no printing boundary prints one.
+
+Both are discovered through one cycle-safe traversal of the whole cause graph,
+and precedence is decided by kind rather than by position: a durability failure
+first, then a Files infrastructure failure, then a documentation failure. The
+selected failure comes back by identity, because a fail-stop that records "the
+first error" has to record the one that happened. Recognition is structural —
+a stable tag on frozen data, never `instanceof` — so a failure a separately
+loaded copy constructed is found on the same terms as one this copy did.
+
+## The document filesystem boundary
+
+Contextual routing is not authority. `API.Files` decides *which* provider
+answers a document's file operations; what a provider is allowed to do is
+decided by the provider, from identities the contextual layer cannot supply.
+
+The Api's operations are whole semantic acts — read this path, replace this
+path, list what these patterns select — rather than steps a caller sequences.
+The one preliminary operation, `checkFilePath`, is deliberately weak: pure path
+arithmetic, no filesystem access, and it returns nothing usable. `<File>` calls
+it to decide whether a write's children may expand, and the later write repeats
+the same admission from the same authored path. Nothing is handed between them,
+so a check that was skipped or answered elsewhere authorizes nothing.
+
+The two providers make different containment claims, and both are stated rather
+than implied:
+
+- **`xmd run`** resolves document paths in the caller's own filesystem. It
+  refuses empty, absolute, and lexically escaping paths without touching the
+  filesystem, and refuses an observed outward symlink once resolution can see
+  one. That holds while the host namespace is stable; it is not a sandbox, and
+  closing the replacement window would require a native dependency this project
+  does not take.
+- **A workflow run** resolves document paths in the run-owned Workspace's
+  logical filesystem, inside the caller-owned transaction. A document path
+  never becomes a host path, so there is no host namespace to replace.
+
+Neither claim covers a native command a document runs.
+
+Failure data crosses the boundary as a plain frozen object under a stable tag,
+carrying a reason from a fixed vocabulary and the phase it came from. No
+message, errno code, resolved path, temporary name, or symlink target crosses.
+Consumers parse that data before reading a field; a write whose data does not
+validate is a provider-contract failure rather than a commit state to invent.
 
 ## Attempts
 
@@ -831,6 +884,9 @@ Status is measured against main.
 | Workspace coordination API | fails closed by default and lets a Workspace operation explicitly select provider coordination | built on the #365 stack; the atomic Deno Workspace handler is unbuilt |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
+| `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
+| host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
+| transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | unbuilt; the adapter is #227's second layer, and workflow effect coordination and CLI reachability remain unbuilt |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides and tests a non-delegating workflow service denial provider; #366 will install it in future start and resume scopes | built on main; no workflow CLI execution branch exists yet |

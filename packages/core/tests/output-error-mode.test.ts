@@ -18,7 +18,7 @@ import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { forEach } from "@effectionx/stream-helpers";
 import { execute } from "../src/execute.ts";
@@ -68,6 +68,8 @@ function run(files: Record<string, string>, stream = new InMemoryStream()): Oper
   return scoped(function* () {
     yield* useStubFs(files);
     yield* useStagedExec();
+    // `<File>` reaches `API.Files`, which has no host default.
+    yield* useHostFiles();
 
     const execution = yield* execute({ path: "doc.md", stream });
     const chunks: string[] = [];

@@ -18,7 +18,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, FsApi, rm, writeTextFile } from "@effectionx/fs";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
@@ -92,6 +92,9 @@ function runWith(
       yield* writeTextFile(path, source);
     }
     yield* useCwd(fixture.workspace);
+    // `API.Files` has no host default, so a suite driving `execute()` directly
+    // installs the provider the way an entrypoint does.
+    yield* useHostFiles();
     if (install) {
       yield* install();
     }

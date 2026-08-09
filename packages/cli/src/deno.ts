@@ -10,7 +10,7 @@
 import { main } from "effection";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useDenoService } from "./deno-service.ts";
@@ -32,5 +32,10 @@ await main(function* (args) {
     },
     { at: "min" },
   );
+  // Document filesystem access resolves in the caller's own filesystem here.
+  // It is installed explicitly, and at the same depth, because `API.Files` has
+  // no host default: a run with no provider must fail rather than reach the
+  // host by accident.
+  yield* useHostFiles();
   yield* runXmd(args, useDenoService);
 });

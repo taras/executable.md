@@ -17,7 +17,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
@@ -62,11 +62,16 @@ function useFixture(): Operation<Fixture> {
 }
 
 /**
- * Install the workspace as the contextual working directory.
+ * Install the workspace as the contextual working directory, and the host
+ * document filesystem provider beneath it.
  *
  * The document lives in the workspace too, but nothing depends on that:
  * `<File>` resolves against `Env.cwd`, which this installs explicitly rather
  * than inheriting from the process.
+ *
+ * `API.Files` has no host default, so a suite driving `execute()` directly
+ * installs the provider the way an entrypoint does. Everything below then
+ * exercises the real host adapter rather than a stand-in.
  */
 function* useWorkspaceCwd(fixture: Fixture): Operation<void> {
   yield* API.Env.around(
@@ -78,6 +83,7 @@ function* useWorkspaceCwd(fixture: Fixture): Operation<void> {
     },
     { at: "min" },
   );
+  yield* useHostFiles();
 }
 
 function run(fixture: Fixture, source: string): Operation<Json> {

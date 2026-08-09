@@ -6,19 +6,24 @@
  * finishes, fails, or is cancelled. Written self-closing it is an allocation:
  * the directory is retained at the invocation site so a later sibling can use
  * the path it renders, and removed with that scope.
+ *
+ * The directory comes from the installed `API.Files` provider, so this
+ * component neither creates nor removes anything itself. A provider that has no
+ * temporary directories to give — one whose whole filesystem is a database
+ * transaction — refuses the operation outright, and that refusal is fatal
+ * rather than a printed error: there is no directory to run inside, so the
+ * content must not run and the siblings after it must not proceed as though it
+ * had.
  */
 
-import { ensure, resource } from "effection";
 import type { Operation } from "effection";
 import { printErrors } from "../component-failures.ts";
-import { rm } from "@effectionx/fs";
-import { API } from "@executablemd/runtime";
+import { API, parseFilesFailure } from "@executablemd/runtime";
 import { ReplayGuard, StaleInputError } from "@executablemd/durable-streams";
-import { mkdtempSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { content, retain } from "../component-api.ts";
 import { hasContent } from "../content-context.ts";
+import { temporaryDirectory } from "../files.ts";
+import { reason } from "./fs-error-phrases.ts";
 
 export const props = {
   type: "object",
@@ -26,33 +31,34 @@ export const props = {
   additionalProperties: false,
 };
 
+/** A temporary directory that could not be created. */
+export class TempDirError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TempDirError";
+  }
+}
+
 /**
- * A directory this call created, named by its canonical path.
+ * A directory that lives as long as the acquiring scope.
  *
- * Creation is synchronous so that nothing can suspend between it and the
- * `ensure` that removes it. `until()` cannot cancel the promise it is waiting
- * on, so an asynchronous `mkdtemp` halted mid-flight would go on to create a
- * directory after the generator had already stopped — one nothing owns and
- * nothing removes. Reading the directory does not suspend either, so the whole
- * acquisition is a single uninterruptible step.
- *
- * `mkdtemp` names and creates at once, so the directory is never one an
- * earlier run left behind. The path is then canonicalized: on macOS `tmpdir()`
- * is a symlink (`/var/folders/…`) while a child process resolves it
- * (`/private/var/…`), and canonicalizing is what makes the rendered path,
- * `Env.cwd`, and a subprocess's own `cwd` the same string.
- *
- * `@effectionx/fs` has neither operation, so both come from Node.
+ * The provider owns creation and removal as one acquisition, so nothing can
+ * land between them and leave a directory nobody holds. What this adds is the
+ * unwrapping: an ordinary acquisition failure is a printed error naming no path
+ * — the directory is generated and the document never chose its name — while a
+ * provider that refuses the operation has already thrown past here.
  *
  * Exported for the lifetime tests, which drive acquisition directly. Not part
  * of the package's public surface — `mod.ts` does not re-export it.
  */
-export function useTemporaryDirectory(): Operation<string> {
-  return resource(function* (provide) {
-    const created = mkdtempSync(join(tmpdir(), "xmd-tempdir-"));
-    yield* ensure(() => rm(created, { recursive: true, force: true }));
-    yield* provide(realpathSync(created));
-  });
+export function* useTemporaryDirectory(): Operation<string> {
+  const acquired = yield* temporaryDirectory();
+  if (!acquired.ok) {
+    throw new TempDirError(
+      `cannot create a temporary directory: ${reason(parseFilesFailure(acquired.error)?.reason)}.`,
+    );
+  }
+  return acquired.value;
 }
 
 /**
