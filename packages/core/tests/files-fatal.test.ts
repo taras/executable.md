@@ -30,6 +30,7 @@ import {
   FilesInvariantError,
   FilesOperationDeniedError,
   FilesProviderUnavailableError,
+  fileWriteSuccess,
   hostFilesHandler,
   parseFileWriteFailure,
   parseFileWriteSuccess,
@@ -107,6 +108,30 @@ function run(dir: string, source: string, install?: () => Operation<void>): Oper
       output: chunks.join(""),
     };
   });
+}
+
+function invariantCategory(error: unknown): string | undefined {
+  const data = parseFilesFatal(fatalCause(error));
+  return data?.kind === "invariant" ? data.category : undefined;
+}
+
+/**
+ * Whether anything a hostile provider planted reached the outside.
+ *
+ * The rendered document, the failure's own text, its cause chain, and its
+ * enumerable data are the places a value could surface. Only the *outcome* is
+ * inspected — never the hostile object — so nothing here runs a trap the
+ * boundary was supposed to run first.
+ */
+function leaked(outcome: Outcome): boolean {
+  const failure = outcome.error;
+  const shown = [
+    outcome.output,
+    String(failure),
+    failure instanceof Error ? String(failure.cause) : "",
+    JSON.stringify(failure instanceof Error ? { ...failure } : {}),
+  ].join(" ");
+  return shown.includes("planted") || shown.includes("EACCES");
 }
 
 /**
@@ -782,99 +807,348 @@ describe("Tier FF — Files infrastructure failure", () => {
   // FF14: the `Result` a provider returns is only conventionally a Result. The
   // TypeScript signature is a claim about the provider, not a guarantee, so a
   // component that read `ok`, `value`, or `error` first would be the thing that
-  // ran the hostile accessor — outside anything that sanitizes. Every outcome is
-  // therefore inspected and rebuilt at the boundary.
+  // ran the hostile accessor — outside anything that sanitizes.
+  //
+  // Every shape below is a live Proxy **around a real `Ok`/`Err`**, so it keeps
+  // the declared type without a cast and, more importantly, its traps have never
+  // run when the provider hands it back. The first thing to touch them is the
+  // normalization boundary. Serializing one here instead would invoke the getter
+  // inside the test and prove only the handler-throw path FF7 already covers.
   it("FF14: a hostile Result never reaches a component", function* () {
     const dir = yield* useFixture();
     yield* writeTextFile(join(dir, "notes.md"), "existing");
-    const explode = () => {
-      throw new Error("EACCES: refused, at '/planted/secret.txt'");
-    };
 
-    const hostile: Array<{ name: string; build: () => unknown }> = [
+    /**
+     * A Result whose named member is there and refuses to be read.
+     *
+     * The `has` trap matters as much as the `get` one: a payload-free success is
+     * Effection's `Unit`, which has no `value` member at all, so a `get` trap
+     * alone would never be consulted and the case would test nothing.
+     */
+    function throwing<T>(result: Result<T>, member: string): Result<T> {
+      return new Proxy(result, {
+        has(target, property) {
+          return property === member ? true : Reflect.has(target, property);
+        },
+        get(target, property, receiver) {
+          if (property === member) {
+            throw new Error("EACCES: refused, at '/planted/secret.txt'");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    }
+
+    /** A Result whose named member is not there at all. */
+    function absent<T>(result: Result<T>, member: string): Result<T> {
+      return new Proxy(result, {
+        has(target, property) {
+          return property === member ? false : Reflect.has(target, property);
+        },
+        get(target, property, receiver) {
+          return property === member ? undefined : Reflect.get(target, property, receiver);
+        },
+      });
+    }
+
+    /** A Result that will not say how it settled. */
+    function undecided<T>(result: Result<T>): Result<T> {
+      return new Proxy(result, {
+        get(target, property, receiver) {
+          return property === "ok" ? "yes" : Reflect.get(target, property, receiver);
+        },
+      });
+    }
+
+    const ordinary = new Error("EACCES: denied, at '/planted/secret.txt'");
+
+    /**
+     * Which settlement each shape actually bites.
+     *
+     * A trap on `value` is never consulted by a failure, and one on `error` is
+     * never consulted by a success — so pairing every shape with every
+     * settlement would demand a fatal outcome from combinations that
+     * legitimately take the ordinary path, and the test would measure the wrong
+     * thing.
+     */
+    const shapes: Array<{
+      name: string;
+      settlements: ReadonlyArray<"success" | "failure">;
+      skip?: string;
+      hostile: <T>(result: Result<T>) => Result<T>;
+    }> = [
       {
         name: "a throwing ok",
-        build: () => ({
-          get ok() {
-            return explode();
-          },
-        }),
+        settlements: ["success", "failure"],
+        hostile: (result) => throwing(result, "ok"),
       },
-      { name: "a non-boolean ok", build: () => ({ ok: "yes", value: "x" }) },
-      { name: "no ok at all", build: () => ({ value: "x" }) },
+      {
+        name: "an absent ok",
+        settlements: ["success", "failure"],
+        hostile: (result) => absent(result, "ok"),
+      },
+      { name: "a non-boolean ok", settlements: ["success", "failure"], hostile: undecided },
       {
         name: "a throwing value",
-        build: () => ({
-          ok: true,
-          get value() {
-            return explode();
-          },
-        }),
+        settlements: ["success"],
+        hostile: (result) => throwing(result, "value"),
+      },
+      {
+        name: "an absent value",
+        settlements: ["success"],
+        // `checkFilePath` succeeds with no payload, and Effection spells that as
+        // its shared `Unit` — `{ ok: true }`, with no `value` member at all.
+        // Absence is the ordinary success there, which FF14c asserts positively.
+        skip: "checkFilePath",
+        hostile: (result) => absent(result, "value"),
       },
       {
         name: "a throwing error",
-        build: () => ({
-          ok: false,
-          get error() {
-            return explode();
-          },
-        }),
+        settlements: ["failure"],
+        hostile: (result) => throwing(result, "error"),
       },
-      { name: "a proxied container", build: () => new Proxy({}, { get: explode }) },
-      { name: "not an object at all", build: () => "committed" },
+      {
+        name: "an absent error",
+        settlements: ["failure"],
+        hostile: (result) => absent(result, "error"),
+      },
     ];
 
-    // Every form, through every operation a document can reach.
-    const documents: Array<{ name: string; source: string; method: string }> = [
-      { name: "read", source: '<File path="notes.md" />\n\nAFTER', method: "readTextFile" },
+    const operations: Array<{
+      name: string;
+      source: string;
+      method: string;
+      ok: () => Result<unknown>;
+    }> = [
+      {
+        name: "read",
+        source: '<File path="notes.md" />\n\nAFTER',
+        method: "readTextFile",
+        ok: () => Ok("existing"),
+      },
       {
         name: "write",
         source: '<File path="out.txt">content</File>\n\nAFTER',
         method: "writeTextFile",
+        ok: () => Ok(fileWriteSuccess("host-committed")),
       },
       {
-        name: "check",
+        name: "checkFilePath",
         source: '<File path="out.txt">content</File>\n\nAFTER',
         method: "checkFilePath",
+        ok: () => Ok(undefined),
       },
       {
         name: "glob",
         source: '<Glob include={["**/*"]} as="found" />\n\nAFTER',
         method: "globFiles",
+        ok: () => Ok(["notes.md"]),
       },
       {
         name: "tempdir",
         source: "<TempDir>INSIDE</TempDir>\n\nAFTER",
         method: "temporaryDirectory",
+        ok: () => Ok(dir),
       },
     ];
 
-    for (const document of documents) {
-      for (const shape of hostile) {
-        const outcome = yield* run(dir, document.source, function* () {
+    for (const operation of operations) {
+      for (const shape of shapes) {
+        if (shape.skip === operation.name) {
+          continue;
+        }
+        for (const settlement of shape.settlements) {
+          const settled = settlement === "success" ? operation.ok : () => Err(ordinary);
+          const outcome = yield* run(dir, operation.source, function* () {
+            yield* useHostFiles();
+            yield* Files.around({
+              // deno-lint-ignore require-yield
+              *[operation.method]() {
+                return shape.hostile(settled());
+              },
+            });
+          });
+
+          // A container that will not describe its own outcome is a provider
+          // contract failure: the execution ends and later work stops.
+          expect(outcome.ok).toBe(false);
+          expect(invariantCategory(outcome.error)).toBe("protocol");
+          expect(outcome.output).not.toContain("AFTER");
+          expect(outcome.output).not.toContain("INSIDE");
+          // No child of the write ever expanded, either.
+          expect(yield* exists(join(dir, "out.txt"))).toBe(false);
+          expect(leaked(outcome)).toBe(false);
+        }
+      }
+    }
+  });
+
+  // FF14b: the array a search returns is provider-controlled all the way down —
+  // its length and every element. The copy walks it by index through the same
+  // total reader, so a trap that refuses becomes the same fixed invariant rather
+  // than an exception escaping into expansion.
+  it("FF14b: a hostile search array becomes a sanitized invariant", function* () {
+    const dir = yield* useFixture();
+    const explode = () => {
+      throw new Error("EACCES: refused, at '/planted/secret.txt'");
+    };
+
+    const arrays: Array<{ name: string; build: () => string[] }> = [
+      {
+        name: "a throwing element",
+        build: () =>
+          new Proxy(["notes.md"], {
+            get(target, property, receiver) {
+              return property === "0" ? explode() : Reflect.get(target, property, receiver);
+            },
+          }),
+      },
+      {
+        name: "a throwing length",
+        build: () =>
+          new Proxy(["notes.md"], {
+            get(target, property, receiver) {
+              return property === "length" ? explode() : Reflect.get(target, property, receiver);
+            },
+          }),
+      },
+      {
+        name: "a refused element",
+        build: () =>
+          new Proxy(["notes.md"], {
+            has(target, property) {
+              return property === "0" ? false : Reflect.has(target, property);
+            },
+          }),
+      },
+      {
+        name: "an element that is not a string",
+        build: () =>
+          new Proxy(["notes.md"], {
+            get(target, property, receiver) {
+              return property === "0" ? 7 : Reflect.get(target, property, receiver);
+            },
+          }),
+      },
+    ];
+
+    for (const array of arrays) {
+      const outcome = yield* run(
+        dir,
+        '<Glob include={["**/*"]} as="found" />\n\nAFTER',
+        function* () {
           yield* useHostFiles();
           yield* Files.around({
             // deno-lint-ignore require-yield
-            *[document.method]() {
-              return fromOutside(shape.build());
+            *globFiles() {
+              return Ok(array.build());
             },
           });
-        });
+        },
+      );
 
-        // A container that will not describe its own outcome is a provider
-        // contract failure, so the execution ends and later work stops.
-        expect(outcome.ok).toBe(false);
-        expect(parseFilesFatal(fatalCause(outcome.error))).toEqual({
-          type: "executablemd.runtime.files-fatal/v1",
-          kind: "invariant",
-          category: "protocol",
-        });
-        expect(outcome.output).not.toContain("AFTER");
-        expect(outcome.output).not.toContain("INSIDE");
-        expect(String(outcome.error)).not.toContain("planted");
-        expect(String(outcome.error)).not.toContain("EACCES");
-      }
+      expect(outcome.ok).toBe(false);
+      expect(invariantCategory(outcome.error)).toBe("protocol");
+      expect(outcome.output).not.toContain("AFTER");
+      expect(leaked(outcome)).toBe(false);
     }
+
+    // The iterator is never consulted, because the walk is by index. A search
+    // whose only hostile trap is `Symbol.iterator` therefore copies cleanly —
+    // which is the derivation this kills: a `for…of` walk would have run it.
+    const untouched = yield* run(
+      dir,
+      '<Glob include={["**/*"]} as="found" />\n\nfound: {found}',
+      function* () {
+        yield* useHostFiles();
+        yield* Files.around({
+          // deno-lint-ignore require-yield
+          *globFiles() {
+            return Ok(
+              new Proxy(["b.md", "a.md"], {
+                get(target, property, receiver) {
+                  return property === Symbol.iterator
+                    ? explode()
+                    : Reflect.get(target, property, receiver);
+                },
+              }),
+            );
+          },
+        });
+      },
+    );
+    expect(untouched.ok).toBe(true);
+    expect(untouched.output).toContain("found: b.md,a.md");
+
+    // And what comes back is the document's own array: mutating the provider's
+    // afterwards does not reach the bound value.
+    const source = ["b.md", "a.md"];
+    const copied = yield* run(
+      dir,
+      '<Glob include={["**/*"]} as="found" />\n\nfound: {found}',
+      function* () {
+        yield* useHostFiles();
+        yield* Files.around({
+          // deno-lint-ignore require-yield
+          *globFiles() {
+            return Ok(source);
+          },
+        });
+      },
+    );
+    source.push("planted.md");
+    expect(copied.ok).toBe(true);
+    expect(copied.output).toContain("found: b.md,a.md");
+    expect(copied.output).not.toContain("planted.md");
+  });
+
+  // FF14c: a legitimate payload-free success is still a success. Effection
+  // spells one as its shared `Unit` — `{ ok: true }`, with no `value` member —
+  // so requiring the member to be present would reject the very thing the host
+  // adapter returns from `checkFilePath`.
+  it("FF14c: a payload-free success is accepted, however it is spelled", function* () {
+    const dir = yield* useFixture();
+
+    for (const admitted of [() => Ok(undefined), () => Ok(void 0)]) {
+      const outcome = yield* run(dir, '<File path="out.txt">content</File>\n\nAFTER', function* () {
+        yield* useHostFiles();
+        yield* Files.around({
+          // deno-lint-ignore require-yield
+          *checkFilePath() {
+            return admitted();
+          },
+        });
+      });
+
+      expect(outcome.ok).toBe(true);
+      expect(outcome.output).toContain("AFTER");
+      expect(yield* readTextFile(join(dir, "out.txt"))).toBe("content");
+    }
+
+    // A payload-free success that carries a payload anyway is not one. The
+    // payload arrives through a Proxy, so the declared type survives without a
+    // cast and the boundary is what first observes it.
+    const carrying = yield* run(dir, '<File path="out.txt">content</File>\n\nAFTER', function* () {
+      yield* useHostFiles();
+      yield* Files.around({
+        // deno-lint-ignore require-yield
+        *checkFilePath() {
+          return new Proxy(Ok(undefined), {
+            has(target, property) {
+              return property === "value" ? true : Reflect.has(target, property);
+            },
+            get(target, property, receiver) {
+              return property === "value"
+                ? "/planted/secret.txt"
+                : Reflect.get(target, property, receiver);
+            },
+          });
+        },
+      });
+    });
+    expect(carrying.ok).toBe(false);
+    expect(invariantCategory(carrying.error)).toBe("protocol");
+    expect(leaked(carrying)).toBe(false);
   });
 
   // FF15: the one hostile shape that is *not* fatal. A non-write failure whose
