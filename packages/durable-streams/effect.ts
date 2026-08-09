@@ -21,7 +21,7 @@
  */
 
 import type { Operation } from "effection";
-import { type DurableContext, DurableCtx } from "./context.ts";
+import { DurableContext } from "./context.ts";
 import { Divergence } from "./divergence.ts";
 import {
   activeDurabilityFailure,
@@ -209,7 +209,7 @@ export function createDurableEffect<T>(
       resolve: Resolve<EffectionResult<T>>,
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
-      const ctx = routine.scope.expect<DurableContext>(DurableCtx);
+      const ctx = routine.scope.expect<DurableContext>(DurableContext);
       const durabilityFailure = activeDurabilityFailure(ctx);
       if (durabilityFailure) {
         resolve({ ok: false, error: durabilityFailure });
@@ -328,7 +328,7 @@ export function createDurableOperation<T extends Json>(
       resolve: Resolve<EffectionResult<T>>,
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
-      const ctx = routine.scope.expect<DurableContext>(DurableCtx);
+      const ctx = routine.scope.expect<DurableContext>(DurableContext);
       const durabilityFailure = activeDurabilityFailure(ctx);
       if (durabilityFailure) {
         resolve({ ok: false, error: durabilityFailure });

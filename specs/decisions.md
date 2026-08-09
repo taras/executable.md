@@ -458,7 +458,7 @@ operations that cannot proceed without a provider (`importComponent`,
 `applyModifiers`, `codeBlock`, `content`) throw named missing-provider
 errors that identify the missing installation.
 
-Durable-streams' own contexts (e.g. `DurableCtx`) are unchanged: they
+Durable-streams' own contexts (e.g. `DurableContext`) are unchanged: they
 store durable runtime state, not overridable core operations.
 
 ---

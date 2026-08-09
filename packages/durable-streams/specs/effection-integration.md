@@ -355,7 +355,7 @@ interface DurableContext {
   childCounter: number;
 }
 
-const DurableCtx = createContext<DurableContext>("@effection/durable");
+const DurableContext = createContext<DurableContext>("@effection/durable");
 
 type Executor = (resolve: (result: Result) => void, reject: (error: Error) => void) => () => void;
 
@@ -364,7 +364,7 @@ function createDurableEffect<T>(desc: EffectDescription, execute: Executor): Dur
     description: `${desc.type}(${desc.name})`,
     effectDescription: desc,
     enter(resolve, routine) {
-      const ctx = routine.scope.expect<DurableContext>(DurableCtx);
+      const ctx = routine.scope.expect<DurableContext>(DurableContext);
       const entry = ctx.replayIndex.peekYield(ctx.coroutineId);
 
       if (entry) {
@@ -623,9 +623,9 @@ interface DurableContext {
 When `durableSpawn()` creates a child scope:
 
 ```typescript
-let parentCtx = scope.expect(DurableCtx);
+let parentCtx = scope.expect(DurableContext);
 let childId = `${parentCtx.coroutineId}.${parentCtx.childCounter++}`;
-childScope.set(DurableCtx, {
+childScope.set(DurableContext, {
   replayIndex: parentCtx.replayIndex, // shared
   stream: parentCtx.stream, // shared
   coroutineId: childId,
@@ -734,7 +734,7 @@ export function durableSpawn<T extends Json | void>(
   return ephemeral(
     (function* (): Operation<Task<T>> {
       const scope = yield* useScope();
-      const ctx = scope.expect<DurableContext>(DurableCtx);
+      const ctx = scope.expect<DurableContext>(DurableContext);
       const childId = `${ctx.coroutineId}.${ctx.childCounter++}`;
       return yield* spawn(() => runDurableChild(childWorkflow, childId, ctx));
     })(),
@@ -755,7 +755,7 @@ function* durableAll<T extends Json | void>(
   workflows: (() => Workflow<T> | Operation<T>)[],
 ): Operation<T[]> {
   const scope = yield* useScope();
-  const ctx = scope.expect<DurableContext>(DurableCtx);
+  const ctx = scope.expect<DurableContext>(DurableContext);
 
   const childOps: Operation<T>[] = workflows.map((workflow) => {
     const childId = `${ctx.coroutineId}.${ctx.childCounter++}`;
@@ -803,7 +803,7 @@ function* durableRace<T extends Json | void>(
   workflows: (() => Workflow<T> | Operation<T>)[],
 ): Operation<T> {
   const scope = yield* useScope();
-  const ctx = scope.expect<DurableContext>(DurableCtx);
+  const ctx = scope.expect<DurableContext>(DurableContext);
 
   const childOps: Operation<T>[] = workflows.map((workflow) => {
     const childId = `${ctx.coroutineId}.${ctx.childCounter++}`;
@@ -931,7 +931,7 @@ durable context, and runs the workflow:
 
 ```typescript
 const ctx = { replayIndex, stream, coroutineId, childCounter: 0, durability: {} };
-scope.set(DurableCtx, ctx);
+scope.set(DurableContext, ctx);
 replayIndex.claim(coroutineId);
 
 try {

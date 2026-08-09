@@ -27,7 +27,7 @@ import {
   useScope,
 } from "effection";
 import type { Operation, Task } from "effection";
-import { type DurableContext, DurableCtx } from "./context.ts";
+import { DurableContext } from "./context.ts";
 import {
   activeDurabilityFailure,
   appendDurableEvent,
@@ -46,7 +46,7 @@ import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
  *
  * It:
  *  1. Checks if the child already completed (has Close event) — short-circuits
- *  2. Sets DurableCtx on the child's scope with the child's coroutineId
+ *  2. Sets DurableContext on the child's scope with the child's coroutineId
  *  3. Runs the child workflow (its DurableEffects use the child's coroutineId)
  *  4. Appends Close(ok|err) when the child terminates
  *
@@ -102,7 +102,7 @@ function* runDurableChild<T extends WorkflowValue>(
     childCounter: 0,
     durability: parentCtx.durability,
   };
-  scope.set(DurableCtx, childCtx);
+  scope.set(DurableContext, childCtx);
 
   let closeEvent: Close | undefined;
   let suppressClose = false;
@@ -144,7 +144,7 @@ function* runDurableChild<T extends WorkflowValue>(
 
   try {
     // Run the child workflow. DurableEffects inside the child read
-    // DurableCtx from the scope, so they'll use childId.
+    // DurableContext from the scope, so they'll use childId.
     const result: T = yield* childWorkflow();
 
     const durabilityFailure = activeDurabilityFailure(childCtx);
@@ -224,7 +224,7 @@ export function durableSpawn<T extends WorkflowValue>(
   return ephemeral(
     (function* (): Operation<Task<T>> {
       const scope = yield* useScope();
-      const ctx = scope.expect<DurableContext>(DurableCtx);
+      const ctx = scope.expect<DurableContext>(DurableContext);
 
       // Assign deterministic child ID
       const childIndex = ctx.childCounter++;
@@ -256,7 +256,7 @@ export function durableAll<T extends WorkflowValue>(
   return ephemeral(
     (function* (): Operation<T[]> {
       const scope = yield* useScope();
-      const ctx = scope.expect<DurableContext>(DurableCtx);
+      const ctx = scope.expect<DurableContext>(DurableContext);
 
       // Build child Operations, one per workflow. Each gets its own
       // deterministic coroutineId and Close event handling.
@@ -303,7 +303,7 @@ export function durableRace<T extends WorkflowValue>(
   return ephemeral(
     (function* (): Operation<T> {
       const scope = yield* useScope();
-      const ctx = scope.expect<DurableContext>(DurableCtx);
+      const ctx = scope.expect<DurableContext>(DurableContext);
 
       // Build Operations for each child — each gets its own coroutineId
       // and Close event handling via runDurableChild.

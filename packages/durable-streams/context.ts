@@ -37,5 +37,5 @@ export interface DurableContext {
  * Effection Context for durable execution state.
  * Set on the root scope by durableRun(); inherited by child scopes.
  */
-export const DurableCtx: Context<DurableContext> =
+export const DurableContext: Context<DurableContext> =
   createContext<DurableContext>("@effection/durable");
