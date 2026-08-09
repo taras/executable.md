@@ -402,12 +402,13 @@ The shared Workspace durable-operation wrapper selects a contextual Workspace
 coordinator explicitly. Its default fails before execution or publication, so
 installing no provider cannot leak a mutation outside its transaction. Selecting
 Workspace coordination for one operation does not enlist unrelated durable
-operations in the same scope. The Deno adapter claims an opaque provenance for
-each WorkflowRun journal, which the existing secret guard preserves on its
-filtered wrapper. Before it opens a transaction, the adapter requires both the
-proof effect and the live stream to belong to the selected WorkflowRun. An
-in-memory stream, another run's journal, or an unproven wrapper is refused
-before mutation or publication.
+operations in the same scope. The Deno adapter retains the canonical module's
+non-operational identity for each WorkflowRun journal. The existing secret guard
+privately associates only its own wrapper, including nested official wrappers,
+with that same identity. Before it opens a transaction, the adapter requires
+both the exact proof executor and the publication identity to belong to the
+selected WorkflowRun. An in-memory stream, another run's journal, a copied
+property, or an unproven wrapper is refused before mutation or publication.
 
 Every Workspace-local expansion publishes one effect through one effect
 transaction:

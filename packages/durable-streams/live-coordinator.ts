@@ -1,6 +1,6 @@
 import type { Operation } from "effection";
+import type { DurablePublicationIdentity } from "./guard.ts";
 import { serializeError } from "./serialize.ts";
-import type { DurableStream } from "./stream.ts";
 import type { Json, Result } from "./types.ts";
 
 /** Activates the first infrastructure failure for the enclosing durable run. */
@@ -12,7 +12,7 @@ export interface LiveDurableOperationCoordinator {
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
     activateFailure: ActivateDurabilityFailure,
-    stream: DurableStream,
+    publicationIdentity: DurablePublicationIdentity | undefined,
   ): Operation<Result>;
 }
 
@@ -22,7 +22,7 @@ export const defaultLiveDurableOperationCoordinator: LiveDurableOperationCoordin
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
     _activateFailure: ActivateDurabilityFailure,
-    _stream: DurableStream,
+    _publicationIdentity: DurablePublicationIdentity | undefined,
   ): Operation<Result> {
     let result: Result;
     try {

@@ -7013,7 +7013,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC5 | Complete replay | Coordinator, execution, publication continuation and live append are all bypassed |
 | DLC6 | Partial replay | Only the live suffix enters coordination |
 | DLC7 | Cancellation | Cancellation during execution or publication produces no late or duplicate Yield |
-| DLC8 | Explicit selection | A selected coordinator affects only the operation that names it |
+| DLC8 | Explicit selection | A selected coordinator affects only the operation that names it and receives a non-operational publication identity rather than stream capabilities |
 | DLC9 | Callback compatibility | Callback-based durable effects retain their existing behavior |
 | DLC10 | Fail-closed Workspace | A missing Workspace provider fails before execution or publication |
 | DLC11 | Workspace isolation | Explicit Workspace selection leaves unrelated durable operations on the default coordinator |
@@ -7037,11 +7037,11 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC7 | Infrastructure fail-stop | A caught provider infrastructure failure retains identity, rolls back everything and prevents later Workspace and ordinary durable execution |
 | WAC8 | Concurrency isolation | A second same-run handle waits cooperatively without enlisting while a different run remains usable inside the outer transaction scope |
 | WAC9 | Replay | A retained Workspace Yield bypasses the Deno coordinator and mutation completely |
-| WAC10 | Effect authority | Missing, foreign, closed and stale proof authority is refused before savepoint SQL or mutation |
-| WAC11 | Publication provenance | An in-memory stream or another WorkflowRun journal is refused before mutation or publication and retains no event |
+| WAC10 | Effect authority | Exact proof executors work; missing, symbol-forged, foreign, closed and stale authority is refused before savepoint SQL or mutation |
+| WAC11 | Publication identity | The selected journal and nested canonical guards work; an in-memory stream, another run's journal, copied properties, the former symbol name and custom wrappers are refused before mutation or publication |
 | WAC12 | Post-publication rollback | A transaction-owner failure after the routed append rolls mutation, retained root, pointer and event back and fences later work |
 | WAC13 | Pre-commit cancellation | Cancellation after routed publication but before commit retains no mutation, root, pointer, Yield or Close |
-| WAC14 | DOFS continuation lifetime | Cancellation while a real adapter read or write is pending tears its scope down before savepoint rollback, leaves no asynchronous DOFS continuation and keeps the connection usable |
+| WAC14 | DOFS continuation lifetime | The proof adapter uses only pinned synchronous byte operations; cancellation before a call performs no mutation, cancellation after it rolls back, mutation teardown precedes savepoint rollback, and the connection remains usable |
 | WAC15 | Mutation teardown failure | Child-teardown failure rolls the mutation and outer transaction back, activates that infrastructure failure and fences later work |
 | WAC16 | Current-root failure | A real current-root update refusal rolls the captured root, live mutation, pointer and event back |
 | WAC17 | Existing fail-stop precedence | An already-active `DurablePersistenceError` retains exact identity and prevents Workspace coordination and mutation |

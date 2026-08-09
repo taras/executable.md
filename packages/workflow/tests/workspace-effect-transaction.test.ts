@@ -2,12 +2,14 @@ import { join } from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { readTextFile } from "@effectionx/fs";
 import {
   durableCall,
   durableRun,
   guardDurableStream,
   InMemoryStream,
   type DurableEvent,
+  type DurableStream,
   DurablePersistenceError,
   type Json,
   type Workflow,
@@ -15,12 +17,12 @@ import {
 } from "@executablemd/durable-streams";
 import { ensure, type Operation, scoped, spawn, suspend, withResolvers } from "effection";
 import { createDurableWorkspaceOperation, type WorkflowRunDatabase } from "../mod.ts";
-import { createWorkflowRunConnections, type RunConnection } from "../src/deno/connections.ts";
 import {
-  openWorkflowRunDatabase,
-  readRunRow,
-  WorkflowTransactionCommit,
-} from "../src/deno/database.ts";
+  createWorkflowRunConnections,
+  type RunConnection,
+  type WorkflowRunConnectionHooks,
+} from "../src/deno/connections.ts";
+import { openWorkflowRunDatabase, readRunRow } from "../src/deno/database.ts";
 import { useJournalRouting } from "../src/deno/journal-route.ts";
 import { SavepointObservation, type SavepointObserver } from "../src/deno/savepoints.ts";
 import { initializeSchema } from "../src/deno/schema.ts";
@@ -31,11 +33,7 @@ import {
 } from "../src/deno/workspace/effect.ts";
 import { definitionToJson } from "../src/storage/definition.ts";
 import { canonicalJson } from "../src/storage/record.ts";
-import {
-  type DenoWorkspaceFilesystem,
-  WorkspaceFilesystemOperations,
-  type WorkspaceFilesystemOperationEvent,
-} from "../src/deno/workspace/filesystem.ts";
+import { type DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
 import {
   setPrivateWorkspaceClock,
   usePrivateWorkspace,
@@ -132,10 +130,11 @@ function withDirectWorkspaceStorage<T>(
   name: string,
   observe: SavepointObserver,
   body: (database: WorkflowRunDatabase, connection: RunConnection) => Operation<T>,
+  hooks: WorkflowRunConnectionHooks = {},
 ): Operation<T> {
   return scoped(function* () {
     const path = join(root, `${name}.sqlite`);
-    const connections = createWorkflowRunConnections(observe);
+    const connections = createWorkflowRunConnections(observe, hooks);
     yield* ensure(() => connections.close());
     const connection = connections.at(path);
     const wanted = request({ runId: name });
@@ -197,24 +196,73 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
   it("WAC1: mutation, root, filtered Yield and commit become visible together", function* () {
     const root = yield* useStorageRoot();
     const runId = "atomic-success";
+    const path = join(root, `${runId}.sqlite`);
+    let selected: WorkflowRunDatabase | undefined;
+    let baselineRoot: string | undefined;
+    let observedRoutedAppend = false;
 
-    yield* withStorage(root, function* () {
-      const database = yield* createRun({ runId });
-      yield* setPrivateWorkspaceClock(database, () => 1_750_000_000_000);
-      const baseline = yield* inspectWorkspace(database, "/kept.txt");
-      const path = runPath(root, runId);
-      let gateCalls = 0;
-      let observePendingCommit = true;
-      const guarded = guardDurableStream(database.journal, function* (event) {
-        if (event.type === "yield") {
-          gateCalls += 1;
+    yield* withDirectWorkspaceStorage(
+      root,
+      runId,
+      () => {},
+      function* (database) {
+        selected = database;
+        yield* setPrivateWorkspaceClock(database, () => 1_750_000_000_000);
+        const baseline = yield* inspectWorkspace(database, "/kept.txt");
+        baselineRoot = baseline.root;
+        let gateCalls = 0;
+        const guardedOnce = guardDurableStream(database.journal, function* (event) {
+          if (event.type === "yield") {
+            gateCalls += 1;
+          }
+        });
+        const guarded = guardDurableStream(guardedOnce, function* () {});
+
+        function* workflow(): Workflow<string> {
+          yield* workspaceStep(database, "write", function* (filesystem) {
+            yield* filesystem.writeFile("/kept.txt", "atomic bytes", 0o640);
+            return "written";
+          });
+          return "done";
         }
-      });
-      yield* WorkflowTransactionCommit.around({
-        *beforeCommit([candidate]: [WorkflowRunDatabase]): Operation<void> {
-          if (!observePendingCommit || candidate !== database) {
+
+        expect(
+          yield* withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
+        ).toBe("done");
+        const committed = yield* inspectWorkspace(database, "/kept.txt");
+        expect(committed.content).toBe("atomic bytes");
+        expect(committed.root).not.toBe(baseline.root);
+        expect(journalRoot(path, "write")).toBe(committed.root);
+        expect(gateCalls).toBe(1);
+
+        const next = yield* database.transact(function* (transaction) {
+          return yield* withPrivateWorkspaceTransaction(
+            database,
+            transaction,
+            function* (workspace) {
+              return {
+                content: yield* workspace.filesystem.readTextFile("/kept.txt"),
+                root: yield* workspace.currentRoot(),
+                events: yield* transaction.journal.readAll(),
+              };
+            },
+          );
+        });
+        if (!next.ok) {
+          throw next.error;
+        }
+        expect(next.value.content).toBe("atomic bytes");
+        expect(next.value.root).toBe(committed.root);
+        expect(workspaceYields(next.value.events)).toHaveLength(1);
+        expect(observedRoutedAppend).toBe(true);
+      },
+      {
+        // deno-lint-ignore require-yield
+        *afterRoutedJournalAppend(candidate, event): Operation<void> {
+          if (candidate !== selected || event.type !== "yield") {
             return;
           }
+          observedRoutedAppend = true;
           const observer = new DatabaseSync(path);
           try {
             expect(committedEventCount(path)).toBe(0);
@@ -222,7 +270,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
               observer.prepare("SELECT current_root_id FROM workspace_state").get()?.[
                 "current_root_id"
               ],
-            ).toBe(baseline.root);
+            ).toBe(baselineRoot);
             expect(
               observer
                 .prepare("SELECT COUNT(*) AS count FROM vfs_dirents WHERE name = 'kept.txt'")
@@ -232,42 +280,8 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
             observer.close();
           }
         },
-      });
-
-      function* workflow(): Workflow<string> {
-        yield* workspaceStep(database, "write", function* (filesystem) {
-          yield* filesystem.writeFile("/kept.txt", "atomic bytes", 0o640);
-          return "written";
-        });
-        return "done";
-      }
-
-      expect(yield* withWorkspaceEffects(database, durableRun(workflow, { stream: guarded }))).toBe(
-        "done",
-      );
-      observePendingCommit = false;
-      const committed = yield* inspectWorkspace(database, "/kept.txt");
-      expect(committed.content).toBe("atomic bytes");
-      expect(committed.root).not.toBe(baseline.root);
-      expect(journalRoot(path, "write")).toBe(committed.root);
-      expect(gateCalls).toBe(1);
-
-      const next = yield* database.transact(function* (transaction) {
-        return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
-          return {
-            content: yield* workspace.filesystem.readTextFile("/kept.txt"),
-            root: yield* workspace.currentRoot(),
-            events: yield* transaction.journal.readAll(),
-          };
-        });
-      });
-      if (!next.ok) {
-        throw next.error;
-      }
-      expect(next.value.content).toBe("atomic bytes");
-      expect(next.value.root).toBe(committed.root);
-      expect(workspaceYields(next.value.events)).toHaveLength(1);
-    });
+      },
+    );
   });
 
   it("WAC2: supported topology mutations pass through the provider proof operation", function* () {
@@ -653,6 +667,30 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       ).toBeInstanceOf(Error);
       expect(missingMutations).toBe(0);
       expect(savepoints).toEqual([]);
+
+      let forgedMutations = 0;
+      function* forgedExecute(): Operation<null> {
+        forgedMutations += 1;
+        return null;
+      }
+      Object.defineProperty(
+        forgedExecute,
+        Symbol.for("executablemd.workflow.deno.workspace.effect.owner"),
+        { value: first },
+      );
+      function* forgedWorkflow(): Workflow<void> {
+        yield createDurableWorkspaceOperation(
+          { type: "workspace-proof", name: "forged-authority" },
+          forgedExecute,
+        );
+      }
+      expect(
+        yield* raised(
+          withWorkspaceEffects(first, durableRun(forgedWorkflow, { stream: first.journal })),
+        ),
+      ).toBeInstanceOf(Error);
+      expect(forgedMutations).toBe(0);
+      expect(savepoints).toEqual([]);
       expect(yield* first.journal.readAll()).toEqual([]);
       expect(yield* second.journal.readAll()).toEqual([]);
     });
@@ -686,8 +724,21 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const selected = yield* createRun({ runId: "atomic-destination-selected" });
       const other = yield* createRun({ runId: "atomic-destination-other" });
       const baseline = yield* inspectWorkspace(selected, "/wrong-destination.txt");
+      const copied: DurableStream = {
+        readAll: () => selected.journal.readAll(),
+        append: (event) => selected.journal.append(event),
+      };
+      for (const key of Reflect.ownKeys(selected.journal)) {
+        const descriptor = Object.getOwnPropertyDescriptor(selected.journal, key);
+        if (descriptor !== undefined) {
+          Object.defineProperty(copied, key, descriptor);
+        }
+      }
+      Object.defineProperty(copied, Symbol.for("executablemd.durable-stream.inherit-provenance"), {
+        value: () => undefined,
+      });
 
-      for (const stream of [new InMemoryStream(), other.journal]) {
+      for (const stream of [new InMemoryStream(), other.journal, copied]) {
         let mutations = 0;
         let caught: unknown;
         let laterExecutions = 0;
@@ -727,106 +778,130 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
   it("WAC12: failure after routed publication rolls the whole transaction back", function* () {
     const root = yield* useStorageRoot();
     const commitFailure = new Error("transaction owner refused commit");
+    const runId = "atomic-post-publication";
+    const path = join(root, `${runId}.sqlite`);
+    let selected: WorkflowRunDatabase | undefined;
+    let armed = false;
 
-    yield* withStorage(root, function* () {
-      const runId = "atomic-post-publication";
-      const database = yield* createRun({ runId });
-      const path = runPath(root, runId);
-      const baseline = yield* inspectWorkspace(database, "/post-publication.txt");
-      const roots = retainedRootCount(path);
-      let armed = true;
-      let gateCalls = 0;
-      let caught: unknown;
-      let laterExecutions = 0;
-      const guarded = guardDurableStream(database.journal, function* (event) {
-        if (event.type === "yield") {
-          gateCalls += 1;
+    yield* withDirectWorkspaceStorage(
+      root,
+      runId,
+      () => {},
+      function* (database) {
+        selected = database;
+        const baseline = yield* inspectWorkspace(database, "/post-publication.txt");
+        const roots = retainedRootCount(path);
+        let gateCalls = 0;
+        let caught: unknown;
+        let laterExecutions = 0;
+        const guarded = guardDurableStream(database.journal, function* (event) {
+          if (event.type === "yield") {
+            gateCalls += 1;
+          }
+        });
+        function* workflow(): Workflow<void> {
+          try {
+            yield* workspaceStep(database, "post-publication", function* (filesystem) {
+              yield* filesystem.writeFile("/post-publication.txt", "rolled back");
+              return null;
+            });
+          } catch (error) {
+            caught = error;
+          }
+          yield* durableCall("fenced-after-commit", function* () {
+            laterExecutions += 1;
+            return null;
+          });
         }
-      });
-      yield* WorkflowTransactionCommit.around({
+
+        armed = true;
+        const failure = yield* raised(
+          withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
+        );
+        armed = false;
+        expect(failure).toBe(commitFailure);
+        expect(caught).toBe(commitFailure);
+        expect(gateCalls).toBe(1);
+        expect(laterExecutions).toBe(0);
+        expect(yield* inspectWorkspace(database, "/post-publication.txt")).toEqual(baseline);
+        expect(retainedRootCount(path)).toBe(roots);
+        expect(yield* database.journal.readAll()).toEqual([]);
+      },
+      {
         // deno-lint-ignore require-yield
-        *beforeCommit([candidate]: [WorkflowRunDatabase]): Operation<void> {
-          if (armed && candidate === database) {
+        *beforeCommit(candidate): Operation<void> {
+          if (armed && candidate === selected) {
             throw commitFailure;
           }
         },
-      });
-
-      function* workflow(): Workflow<void> {
-        try {
-          yield* workspaceStep(database, "post-publication", function* (filesystem) {
-            yield* filesystem.writeFile("/post-publication.txt", "rolled back");
-            return null;
-          });
-        } catch (error) {
-          caught = error;
-        }
-        yield* durableCall("fenced-after-commit", function* () {
-          laterExecutions += 1;
-          return null;
-        });
-      }
-
-      const failure = yield* raised(
-        withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
-      );
-      armed = false;
-      expect(failure).toBe(commitFailure);
-      expect(caught).toBe(commitFailure);
-      expect(gateCalls).toBe(1);
-      expect(laterExecutions).toBe(0);
-      expect(yield* inspectWorkspace(database, "/post-publication.txt")).toEqual(baseline);
-      expect(retainedRootCount(path)).toBe(roots);
-      expect(yield* database.journal.readAll()).toEqual([]);
-    });
+      },
+    );
   });
 
   it("WAC13: cancellation before commit publishes no protocol event", function* () {
     const root = yield* useStorageRoot();
+    const runId = "atomic-cancel-before-commit";
+    const path = join(root, `${runId}.sqlite`);
+    const reachedPublication = withResolvers<void>();
+    let selected: WorkflowRunDatabase | undefined;
 
-    yield* withStorage(root, function* () {
-      const runId = "atomic-cancel-before-commit";
-      const database = yield* createRun({ runId });
-      const path = runPath(root, runId);
-      const baseline = yield* inspectWorkspace(database, "/cancel-before-commit.txt");
-      const roots = retainedRootCount(path);
-      const reachedCommit = withResolvers<void>();
-      let armed = true;
-      let gateCalls = 0;
-      const guarded = guardDurableStream(database.journal, function* (event) {
-        if (event.type === "yield") {
-          gateCalls += 1;
+    yield* withDirectWorkspaceStorage(
+      root,
+      runId,
+      () => {},
+      function* (database) {
+        selected = database;
+        const baseline = yield* inspectWorkspace(database, "/cancel-before-commit.txt");
+        const roots = retainedRootCount(path);
+        let gateCalls = 0;
+        const guarded = guardDurableStream(database.journal, function* (event) {
+          if (event.type === "yield") {
+            gateCalls += 1;
+          }
+        });
+        function* workflow(): Workflow<void> {
+          yield* workspaceStep(database, "cancel-before-commit", function* (filesystem) {
+            yield* filesystem.writeFile("/cancel-before-commit.txt", "rolled back");
+            return null;
+          });
         }
-      });
-      yield* WorkflowTransactionCommit.around({
-        *beforeCommit([candidate]: [WorkflowRunDatabase]): Operation<void> {
-          if (armed && candidate === database) {
-            reachedCommit.resolve();
+
+        const task = yield* spawn(() =>
+          withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
+        );
+        yield* reachedPublication.operation;
+        yield* task.halt();
+        expect(gateCalls).toBe(1);
+        expect(yield* inspectWorkspace(database, "/cancel-before-commit.txt")).toEqual(baseline);
+        expect(retainedRootCount(path)).toBe(roots);
+        expect(yield* database.journal.readAll()).toEqual([]);
+      },
+      {
+        *afterRoutedJournalAppend(candidate, event): Operation<void> {
+          if (candidate === selected && event.type === "yield") {
+            reachedPublication.resolve();
             yield* suspend();
           }
         },
-      });
-      function* workflow(): Workflow<void> {
-        yield* workspaceStep(database, "cancel-before-commit", function* (filesystem) {
-          yield* filesystem.writeFile("/cancel-before-commit.txt", "rolled back");
-          return null;
-        });
-      }
-
-      const task = yield* spawn(() =>
-        withWorkspaceEffects(database, durableRun(workflow, { stream: guarded })),
-      );
-      yield* reachedCommit.operation;
-      yield* task.halt();
-      armed = false;
-      expect(gateCalls).toBe(1);
-      expect(yield* inspectWorkspace(database, "/cancel-before-commit.txt")).toEqual(baseline);
-      expect(retainedRootCount(path)).toBe(roots);
-      expect(yield* database.journal.readAll()).toEqual([]);
-    });
+      },
+    );
   });
 
   it("WAC14: cancellation leaves no DOFS continuation beyond savepoint teardown", function* () {
+    const source = yield* readTextFile(
+      new URL("../src/deno/workspace/filesystem.ts", import.meta.url),
+    );
+    expect(source.includes("writeFileSync")).toBe(true);
+    expect(source.includes("readRangeSync")).toBe(true);
+    for (const forbidden of [
+      "until(",
+      "Response",
+      "ReadableStream",
+      "WorkspaceFilesystemOperations",
+    ]) {
+      expect(source.includes(forbidden)).toBe(false);
+    }
+
     const root = yield* useStorageRoot();
     let activeOrder: string[] | undefined;
     yield* SavepointObservation.set((event) => {
@@ -836,68 +911,42 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
 
     yield* withStorage(root, function* () {
-      for (const kind of ["write", "read"] as const) {
+      for (const phase of ["before", "after"] as const) {
         yield* scoped(function* () {
-          const runId = `atomic-pending-${kind}`;
+          const runId = `atomic-synchronous-${phase}`;
           const database = yield* createRun({ runId });
-          if (kind === "read") {
-            const initialized = yield* database.transact(function* (transaction) {
-              return yield* withPrivateWorkspaceTransaction(
-                database,
-                transaction,
-                function* (workspace) {
-                  yield* workspace.filesystem.writeFile("/pending.txt", "baseline bytes");
-                  yield* workspace.capture({ publish: true });
-                },
-              );
-            });
-            if (!initialized.ok) {
-              throw initialized.error;
-            }
-          }
           const baseline = yield* inspectWorkspace(database, "/pending.txt");
           const reached = withResolvers<void>();
           const order: string[] = [];
           activeOrder = order;
 
           function* workflow(): Workflow<void> {
-            yield* workspaceStep(database, `pending-${kind}`, function* (filesystem) {
-              if (kind === "write") {
-                yield* filesystem.writeFile("/pending.txt", "cancelled bytes");
-              } else {
-                yield* filesystem.readFile("/pending.txt");
+            yield* workspaceStep(database, `synchronous-${phase}`, function* (filesystem) {
+              yield* ensure(function* () {
+                order.push("mutation-teardown");
+              });
+              if (phase === "before") {
+                order.push("before-call");
+                reached.resolve();
+                yield* suspend();
               }
+              yield* filesystem.writeFile("/pending.txt", "cancelled bytes");
+              order.push("after-call");
+              reached.resolve();
+              yield* suspend();
               return null;
             });
           }
-          yield* scoped(function* () {
-            yield* WorkspaceFilesystemOperations.around({
-              *reach([event]: [WorkspaceFilesystemOperationEvent]): Operation<void> {
-                if (
-                  event.stage === "after" &&
-                  event.kind === kind &&
-                  event.path === "/pending.txt"
-                ) {
-                  yield* ensure(function* () {
-                    order.push("filesystem-teardown");
-                  });
-                  order.push("filesystem-pending");
-                  reached.resolve();
-                  yield* suspend();
-                }
-              },
-            });
-            const task = yield* spawn(() =>
-              withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
-            );
-            yield* reached.operation;
-            yield* task.halt();
-          });
+          const task = yield* spawn(() =>
+            withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal })),
+          );
+          yield* reached.operation;
+          yield* task.halt();
           activeOrder = undefined;
-          expect(order[0]).toBe("filesystem-pending");
-          expect(order.indexOf("filesystem-teardown")).toBeGreaterThan(0);
+          expect(order[0]).toBe(`${phase}-call`);
+          expect(order.indexOf("mutation-teardown")).toBeGreaterThan(0);
           expect(order.indexOf("savepoint-rollback")).toBeGreaterThan(
-            order.indexOf("filesystem-teardown"),
+            order.indexOf("mutation-teardown"),
           );
           expect(yield* inspectWorkspace(database, "/pending.txt")).toEqual(baseline);
           expect(yield* database.journal.readAll()).toEqual([]);

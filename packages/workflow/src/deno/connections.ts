@@ -2,10 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
-  claimDurableStreamProvenance,
+  claimDurablePublicationIdentity,
+  type DurableEvent,
+  type DurablePublicationIdentity,
   type DurableStream,
-  type DurableStreamProvenance,
 } from "@executablemd/durable-streams";
+import type { Operation } from "effection";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { WorkspaceFilesystem } from "../../vendor/cloudflare-computer-dofs/generated/fs/filesystem.js";
@@ -41,7 +43,7 @@ export interface RunConnectionLease {
   readonly generation: ConnectionGeneration;
   readonly path: string;
   readonly database: WorkflowRunDatabase;
-  journalProvenance: DurableStreamProvenance | undefined;
+  journalIdentity: DurablePublicationIdentity | undefined;
   open: boolean;
 }
 
@@ -79,7 +81,12 @@ export interface WorkflowRunConnections {
   registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   closeLease(lease: RunConnectionLease): void;
   validateLease(database: WorkflowRunDatabase): RunConnectionLease;
-  validateJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
+  validateJournal(
+    database: WorkflowRunDatabase,
+    identity: DurablePublicationIdentity | undefined,
+  ): void;
+  afterRoutedJournalAppend(database: WorkflowRunDatabase, event: DurableEvent): Operation<void>;
+  beforeCommit(database: WorkflowRunDatabase): Operation<void>;
   authorizeTransaction(
     database: WorkflowRunDatabase,
     transaction: WorkflowRunTransaction,
@@ -281,8 +288,19 @@ export class WorkflowConnectionStateError extends Error {
   override name = "WorkflowConnectionStateError";
 }
 
+export interface WorkflowRunConnectionHooks {
+  afterRoutedJournalAppend?(database: WorkflowRunDatabase, event: DurableEvent): Operation<void>;
+  beforeCommit?(database: WorkflowRunDatabase): Operation<void>;
+}
+
+// deno-lint-ignore require-yield
+function* noop(): Operation<void> {
+  return undefined;
+}
+
 export function createWorkflowRunConnections(
   observeSavepoint: SavepointObserver = () => {},
+  hooks: WorkflowRunConnectionHooks = {},
 ): WorkflowRunConnections {
   const entries = new Map<string, RunConnection>();
   const leases = new WeakMap<WorkflowRunDatabase, RunConnectionLease>();
@@ -345,7 +363,7 @@ export function createWorkflowRunConnections(
         generation: connection.generation,
         path: connection.path,
         database,
-        journalProvenance: undefined,
+        journalIdentity: undefined,
         open: true,
       };
       leases.set(database, lease);
@@ -354,12 +372,12 @@ export function createWorkflowRunConnections(
 
     registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void {
       const lease = validateLease(database);
-      if (lease.journalProvenance !== undefined) {
+      if (lease.journalIdentity !== undefined) {
         throw new WorkflowTransactionError(
           "the WorkflowRun database journal identity is already installed.",
         );
       }
-      lease.journalProvenance = claimDurableStreamProvenance(journal);
+      lease.journalIdentity = claimDurablePublicationIdentity(journal);
     },
 
     closeLease(lease: RunConnectionLease): void {
@@ -368,13 +386,26 @@ export function createWorkflowRunConnections(
 
     validateLease,
 
-    validateJournal(database: WorkflowRunDatabase, journal: DurableStream): void {
-      const provenance = validateLease(database).journalProvenance;
-      if (provenance === undefined || !provenance.matches(journal)) {
+    validateJournal(
+      database: WorkflowRunDatabase,
+      identity: DurablePublicationIdentity | undefined,
+    ): void {
+      const selected = validateLease(database).journalIdentity;
+      if (selected === undefined || selected !== identity) {
         throw new WorkflowTransactionError(
           "the live Workspace journal is foreign to the selected WorkflowRun database.",
         );
       }
+    },
+
+    afterRoutedJournalAppend(database: WorkflowRunDatabase, event: DurableEvent): Operation<void> {
+      validateLease(database);
+      return hooks.afterRoutedJournalAppend?.(database, event) ?? noop();
+    },
+
+    beforeCommit(database: WorkflowRunDatabase): Operation<void> {
+      validateLease(database);
+      return hooks.beforeCommit?.(database) ?? noop();
     },
     authorizeTransaction,
 

@@ -18,46 +18,51 @@ import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
-const inheritProvenance = Symbol.for("executablemd.durable-stream.inherit-provenance");
-
-interface ProvenancedDurableStream extends DurableStream {
-  [inheritProvenance]?: (target: DurableStream) => void;
+class PublicationIdentity {
+  #opaque = undefined;
 }
 
-/** Opaque proof that a stream is one specific backend or a guarded view of it. */
-export interface DurableStreamProvenance {
-  matches(stream: DurableStream): boolean;
-}
+/** Non-operational identity for one durable publication backend. */
+export type DurablePublicationIdentity = PublicationIdentity;
 
-/** Claim a stream identity without exposing the identity itself. */
-export function claimDurableStreamProvenance(stream: DurableStream): DurableStreamProvenance {
-  const source: ProvenancedDurableStream = stream;
-  if (source[inheritProvenance] !== undefined) {
-    throw new Error("this durable stream already has a provenance owner");
-  }
-  const members = new WeakSet<DurableStream>([stream]);
-  const inherit = (target: DurableStream): void => {
-    members.add(target);
-    Object.defineProperty(target, inheritProvenance, {
-      configurable: false,
-      enumerable: false,
-      value: inherit,
-      writable: false,
-    });
-  };
-  inherit(stream);
-  return Object.freeze({
-    matches(candidate: DurableStream): boolean {
-      return members.has(candidate);
+const publicationIdentities = (() => {
+  // This security identity is deliberately canonical-module-local. A loaded
+  // copy cannot enroll its wrappers into this copy's authority.
+  const identities = new WeakMap<DurableStream, DurablePublicationIdentity>();
+
+  return {
+    claim(stream: DurableStream): DurablePublicationIdentity {
+      if (identities.has(stream)) {
+        throw new Error("this durable stream already has a publication identity");
+      }
+      const identity = new PublicationIdentity();
+      identities.set(stream, identity);
+      return identity;
     },
-  });
+
+    inherit(source: DurableStream, target: DurableStream): void {
+      const identity = identities.get(source);
+      if (identity !== undefined) {
+        identities.set(target, identity);
+      }
+    },
+
+    get(stream: DurableStream): DurablePublicationIdentity | undefined {
+      return identities.get(stream);
+    },
+  };
+})();
+
+/** Claim the exact backend identity retained by a provider. */
+export function claimDurablePublicationIdentity(stream: DurableStream): DurablePublicationIdentity {
+  return publicationIdentities.claim(stream);
 }
 
-function inheritDurableStreamProvenance(source: DurableStream, target: DurableStream): void {
-  const inherit = Reflect.get(source, inheritProvenance);
-  if (typeof inherit === "function") {
-    Reflect.apply(inherit, undefined, [target]);
-  }
+/** @internal The live durable path reads identity without receiving stream authority. */
+export function durablePublicationIdentity(
+  stream: DurableStream,
+): DurablePublicationIdentity | undefined {
+  return publicationIdentities.get(stream);
 }
 
 export interface DurableEventRejectionOccurrence {
@@ -122,6 +127,6 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       yield* stream.append(event);
     },
   };
-  inheritDurableStreamProvenance(stream, guarded);
+  publicationIdentities.inherit(stream, guarded);
   return guarded;
 }

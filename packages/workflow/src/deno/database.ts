@@ -32,7 +32,6 @@
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { type Api, createApi } from "@effectionx/context-api";
 import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
@@ -91,18 +90,6 @@ const FINISH_EXECUTION = `UPDATE document_executions
   WHERE execution_id = ? AND stopped_at IS NULL`;
 const SELECT_EXECUTION = "SELECT * FROM document_executions WHERE execution_id = ?";
 const SELECT_EXECUTIONS = "SELECT * FROM document_executions ORDER BY sequence ASC";
-
-interface WorkflowTransactionCommitApi {
-  beforeCommit(database: WorkflowRunDatabase): Operation<void>;
-}
-
-export const WorkflowTransactionCommit: Api<WorkflowTransactionCommitApi> =
-  createApi<WorkflowTransactionCommitApi>("executablemd.workflow.deno.transaction.commit", {
-    // deno-lint-ignore require-yield
-    *beforeCommit(_database: WorkflowRunDatabase): Operation<void> {
-      return undefined;
-    },
-  });
 
 /** What opening needs from whoever found the file and checked its schema. */
 export interface OpenConnection {
@@ -263,7 +250,7 @@ function createHandle(connection: OpenConnection): Handle {
           return yield* body(transaction);
         });
 
-        yield* WorkflowTransactionCommit.operations.beforeCommit(handle);
+        yield* connection.connections.beforeCommit(handle);
 
         // Closed before the commit, not after: nothing may append to a
         // transaction whose contents are already decided.

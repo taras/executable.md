@@ -1,4 +1,3 @@
-import { type Api, createApi } from "@effectionx/context-api";
 import { type Operation } from "effection";
 import { chmod as chmodPath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/chmod.js";
 import { link as linkFile } from "../../../vendor/cloudflare-computer-dofs/generated/fs/link.js";
@@ -46,41 +45,6 @@ export interface DenoWorkspaceFilesystem {
   link(existingPath: string, newPath: string): Operation<void>;
 }
 
-export type WorkspaceFilesystemOperationKind =
-  | "read"
-  | "write"
-  | "stat"
-  | "lstat"
-  | "readlink"
-  | "readdir"
-  | "mkdir"
-  | "remove"
-  | "rename"
-  | "chmod"
-  | "symlink"
-  | "link";
-
-export interface WorkspaceFilesystemOperationEvent {
-  readonly stage: "before" | "after";
-  readonly kind: WorkspaceFilesystemOperationKind;
-  readonly path: string;
-}
-
-interface WorkspaceFilesystemOperationApi {
-  reach(event: WorkspaceFilesystemOperationEvent): Operation<void>;
-}
-
-export const WorkspaceFilesystemOperations: Api<WorkspaceFilesystemOperationApi> =
-  createApi<WorkspaceFilesystemOperationApi>(
-    "executablemd.workflow.deno.workspace.filesystem.operations",
-    {
-      // deno-lint-ignore require-yield
-      *reach(_event: WorkspaceFilesystemOperationEvent): Operation<void> {
-        return undefined;
-      },
-    },
-  );
-
 export function createDenoWorkspaceFilesystem(
   connection: RunConnection,
   authorize: () => void,
@@ -107,16 +71,9 @@ export function createDenoWorkspaceFilesystem(
     }
   }
 
-  function* execute<T>(
-    kind: WorkspaceFilesystemOperationKind,
-    path: string,
-    operation: () => T,
-  ): Operation<T> {
-    yield* WorkspaceFilesystemOperations.operations.reach({ stage: "before", kind, path });
+  function execute<T>(operation: () => T): T {
     authorize();
-    const value = filesystemOperation(operation);
-    yield* WorkspaceFilesystemOperations.operations.reach({ stage: "after", kind, path });
-    return value;
+    return filesystemOperation(operation);
   }
 
   function readBytes(path: string): Uint8Array {
@@ -126,28 +83,28 @@ export function createDenoWorkspaceFilesystem(
 
   return {
     *readFile(path): Operation<Uint8Array> {
-      return yield* execute("read", path, () => readBytes(path));
+      return execute(() => readBytes(path));
     },
 
     *readTextFile(path): Operation<string> {
-      const bytes = yield* execute("read", path, () => readBytes(path));
+      const bytes = execute(() => readBytes(path));
       return new TextDecoder().decode(bytes);
     },
 
     *stat(path): Operation<DenoWorkspaceStat> {
-      return stat(yield* execute("stat", path, () => statPath(dofs, path)));
+      return stat(execute(() => statPath(dofs, path)));
     },
 
     *lstat(path): Operation<DenoWorkspaceStat> {
-      return stat(yield* execute("lstat", path, () => lstatPath(dofs, path)));
+      return stat(execute(() => lstatPath(dofs, path)));
     },
 
     *readlink(path): Operation<string> {
-      return yield* execute("readlink", path, () => readLink(dofs, path));
+      return execute(() => readLink(dofs, path));
     },
 
     *readdir(path): Operation<DenoWorkspaceEntry[]> {
-      const entries = yield* execute("readdir", path, () => readDirectory(dofs, path));
+      const entries = execute(() => readDirectory(dofs, path));
       return entries.map((entry: WorkspaceDirentResult) => ({
         name: entry.name,
         kind: entry.isFile ? "file" : entry.isDirectory ? "directory" : "symlink",
@@ -156,33 +113,33 @@ export function createDenoWorkspaceFilesystem(
 
     *writeFile(path, content, mode): Operation<void> {
       const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
-      yield* execute("write", path, () =>
+      execute(() =>
         writeFileSync(dofs, path, bytes, mode === undefined ? {} : { mode }, filesystem.now),
       );
     },
 
     *mkdir(path, options = {}): Operation<void> {
-      yield* execute("mkdir", path, () => mkdirPath(dofs, path, options, filesystem.now));
+      execute(() => mkdirPath(dofs, path, options, filesystem.now));
     },
 
     *remove(path, options = {}): Operation<void> {
-      yield* execute("remove", path, () => removePath(dofs, path, options));
+      execute(() => removePath(dofs, path, options));
     },
 
     *rename(from, to): Operation<void> {
-      yield* execute("rename", from, () => renamePath(dofs, from, to));
+      execute(() => renamePath(dofs, from, to));
     },
 
     *chmod(path, mode): Operation<void> {
-      yield* execute("chmod", path, () => chmodPath(dofs, path, mode, filesystem.now));
+      execute(() => chmodPath(dofs, path, mode, filesystem.now));
     },
 
     *symlink(target, path): Operation<void> {
-      yield* execute("symlink", path, () => createSymlink(dofs, target, path, filesystem.now));
+      execute(() => createSymlink(dofs, target, path, filesystem.now));
     },
 
     *link(existingPath, newPath): Operation<void> {
-      yield* execute("link", existingPath, () => linkFile(dofs, existingPath, newPath));
+      execute(() => linkFile(dofs, existingPath, newPath));
     },
   };
 }

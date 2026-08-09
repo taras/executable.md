@@ -4,9 +4,10 @@ import { readTextFile } from "@effectionx/fs";
 import { type Operation } from "effection";
 import {
   type ActivateDurabilityFailure,
+  claimDurablePublicationIdentity,
   durableCall,
   durableRun,
-  type DurableStream,
+  type DurablePublicationIdentity,
   InMemoryStream,
   type DurableEvent,
   type Json,
@@ -55,15 +56,19 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC11: explicit Workspace selection leaves unrelated durable operations ordinary", function* () {
     const stream = new InMemoryStream();
+    const publicationIdentity = claimDurablePublicationIdentity(stream);
     const coordinated: string[] = [];
     const ordinary: string[] = [];
     yield* WorkspaceCoordination.around({
-      *run<T extends Json>([execute, publish, _activateFailure, _stream]: [
+      *run<T extends Json>([execute, publish, _activateFailure, identity]: [
         () => Operation<T>,
         (result: Result) => Operation<void>,
         ActivateDurabilityFailure,
-        DurableStream,
+        DurablePublicationIdentity | undefined,
       ]): Operation<Result> {
+        expect(identity).toBe(publicationIdentity);
+        expect(Reflect.get(identity ?? {}, "append")).toBe(undefined);
+        expect(Reflect.get(identity ?? {}, "readAll")).toBe(undefined);
         coordinated.push("workspace");
         const result: Result = { status: "ok", value: yield* execute() };
         yield* publish(result);

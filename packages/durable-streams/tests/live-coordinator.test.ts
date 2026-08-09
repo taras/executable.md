@@ -4,12 +4,14 @@ import { type Operation, spawn, suspend, withResolvers } from "effection";
 import {
   createDurableOperation,
   type ActivateDurabilityFailure,
+  claimDurablePublicationIdentity,
   durableAction,
   durableCall,
   durableRun,
   DurablePersistenceError,
   InMemoryStream,
   type DurableEvent,
+  type DurablePublicationIdentity,
   type DurableStream,
   type Json,
   type LiveDurableOperationCoordinator,
@@ -334,13 +336,19 @@ describe("Tier DLC — live durable-operation coordination", () => {
 
   it("DLC8: an explicit coordinator affects only its selected operation", function* () {
     const stream = new InMemoryStream();
+    const identity = claimDurablePublicationIdentity(stream);
     let coordinated = 0;
     let ordinary = 0;
     const coordinator: LiveDurableOperationCoordinator = {
       *run<T extends Json>(
         execute: () => Operation<T>,
         publish: (result: Result) => Operation<void>,
+        _activateFailure: ActivateDurabilityFailure,
+        publicationIdentity: DurablePublicationIdentity | undefined,
       ): Operation<Result> {
+        expect(publicationIdentity).toBe(identity);
+        expect(Reflect.get(publicationIdentity ?? {}, "append")).toBe(undefined);
+        expect(Reflect.get(publicationIdentity ?? {}, "readAll")).toBe(undefined);
         coordinated += 1;
         const result: Result = { status: "ok", value: yield* execute() };
         yield* publish(result);

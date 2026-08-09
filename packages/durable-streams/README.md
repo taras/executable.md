@@ -296,12 +296,13 @@ same result after publication completes. Replay bypasses the coordinator,
 executor, continuation, and live append; a partially replayed run coordinates
 only its live suffix.
 
-The coordinator receives the live durable stream and an infrastructure-failure
-activator. The stream lets a provider prove that publication belongs to the
-same durability boundary before it executes provider-owned work. A claimed
-stream carries an opaque provenance capability, and `guardDurableStream`
-preserves that provenance on its filtered wrapper without exposing the witness.
-An unrelated stream cannot claim the same destination.
+The coordinator receives a non-operational publication identity and an
+infrastructure-failure activator. The canonical durable-stream module keeps the
+association between a claimed backend and that identity in private weak state.
+`guardDurableStream` associates only the wrapper it constructs with its source's
+identity, including through nested guards. Streams expose no identity property
+or inheritance callback; copied properties, custom wrappers and wrappers from
+another loaded copy acquire no authority.
 
 A provider
 whose execution and publication share a larger durability boundary calls it

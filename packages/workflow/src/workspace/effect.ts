@@ -2,7 +2,7 @@ import {
   createDurableOperation,
   type ActivateDurabilityFailure,
   type DurableEffect,
-  type DurableStream,
+  type DurablePublicationIdentity,
   type EffectDescription,
   type Json,
   type LiveDurableOperationCoordinator,
@@ -16,9 +16,14 @@ const workspaceCoordinator: LiveDurableOperationCoordinator = {
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
     activateFailure: ActivateDurabilityFailure,
-    stream: DurableStream,
+    publicationIdentity: DurablePublicationIdentity | undefined,
   ): Operation<Result> {
-    return yield* WorkspaceCoordination.operations.run(execute, publish, activateFailure, stream);
+    return yield* WorkspaceCoordination.operations.run(
+      execute,
+      publish,
+      activateFailure,
+      publicationIdentity,
+    );
   },
 };
 

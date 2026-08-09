@@ -456,9 +456,11 @@ Workspace coordinator. Its default fails before execution or publication, and
 installing a provider does not enlist unrelated durable operations. Successful
 Workspace effect coordination finishes its mutation scope before capturing the
 root. The Deno provider binds an adapter-private proof operation to one exact
-WorkflowRun handle. The provider also owns an opaque provenance for that run's
-journal; the existing secret-filter wrapper preserves it. The coordinator
-refuses an effect or live stream that does not prove the selected run before it
+WorkflowRun handle through module-private executor identity. It retains the
+canonical durable-stream module's non-operational publication identity for that
+run's journal; the existing secret-filter wrapper privately preserves the
+identity only for wrappers it constructs. The coordinator refuses a foreign
+executor, publication identity, custom wrapper or copied property before it
 opens the caller-owned transaction. It runs
 the mutation in one operation savepoint, waits for mutation child teardown,
 captures and publishes the immutable root, and routes the already-filtered

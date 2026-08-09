@@ -2,7 +2,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import {
   type ActivateDurabilityFailure,
   type DurableEffect,
-  type DurableStream,
+  type DurablePublicationIdentity,
   type EffectDescription,
   type Json,
   type LiveDurableOperationCoordinator,
@@ -55,7 +55,18 @@ const WorkspaceMutation: Api<WorkspaceMutationApi> = createApi<WorkspaceMutation
   },
 );
 
-const workspaceEffectOwner = Symbol.for("executablemd.workflow.deno.workspace.effect.owner");
+const workspaceEffectOwners = (() => {
+  const owners = new WeakMap<object, WorkflowRunDatabase>();
+  return {
+    claim(execute: object, database: WorkflowRunDatabase): void {
+      owners.set(execute, database);
+    },
+
+    get(execute: object): WorkflowRunDatabase | undefined {
+      return owners.get(execute);
+    },
+  };
+})();
 
 interface DenoWorkspaceCoordinationApi {
   bind<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T>;
@@ -131,16 +142,16 @@ function coordinator(
       execute: () => Operation<T>,
       publish: (result: DurableResult) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
-      stream: DurableStream,
+      publicationIdentity: DurablePublicationIdentity | undefined,
     ): Operation<DurableResult> {
       let transacted;
       try {
-        if (Reflect.get(execute, workspaceEffectOwner) !== database) {
+        if (workspaceEffectOwners.get(execute) !== database) {
           throw new WorkflowTransactionError(
             "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
           );
         }
-        connections.validateJournal(database, stream);
+        connections.validateJournal(database, publicationIdentity);
         transacted = yield* database.transact(function* (transaction) {
           return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
             coordinateTransaction(database, transaction, workspace, execute, publish),
@@ -166,13 +177,13 @@ export function useWorkspaceEffects(connections: WorkflowRunConnections): Operat
           const selected = coordinator(connections, database);
           yield* WorkspaceCoordination.around(
             {
-              *run<Candidate extends Json>([execute, publish, activateFailure, stream]: [
+              *run<Candidate extends Json>([execute, publish, activateFailure, identity]: [
                 () => Operation<Candidate>,
                 (result: DurableResult) => Operation<void>,
                 ActivateDurabilityFailure,
-                DurableStream,
+                DurablePublicationIdentity | undefined,
               ]): Operation<DurableResult> {
-                return yield* selected.run(execute, publish, activateFailure, stream);
+                return yield* selected.run(execute, publish, activateFailure, identity);
               },
             },
             { at: "min" },
@@ -198,11 +209,6 @@ export function createWorkspaceProofEffect<T extends Json>(
   mutate: DenoWorkspaceMutation<T>,
 ): DurableEffect<T> {
   const execute = () => WorkspaceMutation.operations.run(database, mutate);
-  Object.defineProperty(execute, workspaceEffectOwner, {
-    configurable: false,
-    enumerable: false,
-    value: database,
-    writable: false,
-  });
+  workspaceEffectOwners.claim(execute, database);
   return createDurableWorkspaceOperation(description, execute);
 }
