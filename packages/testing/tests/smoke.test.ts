@@ -73,6 +73,7 @@ const EMBEDDED_TESTS = [
   "If selects the leading branch when the condition is true",
   "If resolves its condition from an existing binding",
   "If resolves a computed boolean expression",
+  "If branches on a captured string without converting it first",
   "Content around the selected branch keeps its order",
   "A capture from the selected branch stays available afterward",
   "The unselected branch creates no binding",

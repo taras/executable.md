@@ -3494,9 +3494,22 @@ All checks passed.
 `condition` is the only accepted prop; any other prop is an error. It resolves
 in the invocation's evaluation environment — an eval expression
 (`condition={verdict.passed}`) against the caller/projected env at expansion
-time, a JSON literal (`condition={true}`) at scan time — and **must be a
-boolean**. A string, number, `null`, array, or object is an error rather than a
-truthy or falsy value: `<If>` performs no coercion.
+time, a JSON literal (`condition={true}`) at scan time — and the resolved value
+then selects a branch by ordinary JavaScript truthiness, `!!value`. A document
+branches on the value it already has: `<If condition={review.note}>` asks
+whether the reviewer wrote anything, with no conversion to a boolean first.
+
+**Falsy** — `false`, `0`, `NaN`, `""`, `null`, `undefined` — selects the false
+branch. Every other value is **truthy**, including `"false"`, `"0"`, `[]`, and
+`{}`. Those are JavaScript's familiar edges rather than a rule `<If>` invents: a
+non-empty string is truthy whatever it spells, and an empty array or object is a
+value rather than an absence. A document that means "no findings" writes
+`condition={findings.length === 0}`, not `condition={findings}`.
+
+An absent member of a declared object resolves to `undefined` and selects the
+false branch without an error, so a misspelled `review.aproved` reads as false.
+An undeclared root identifier still fails evaluation and is reported as an
+`<If>`-owned printed error.
 
 `<Else>` holds the alternative branch. It is optional, accepts no props, takes
 content, and may appear once as a **direct child** of its `<If>`. A nested
@@ -3514,7 +3527,7 @@ region silently folded into the true branch. Like every other structural
 violation this is decided before the condition is evaluated, so neither branch
 runs.
 
-A true condition expands the children before `<Else>`; a false one expands the
+A truthy condition expands the children before `<Else>`; a falsy one expands the
 `<Else>` children, or nothing when there is no `<Else>`.
 
 **Only the selected branch does work.** The other branch is not hidden output:
@@ -3535,12 +3548,12 @@ segments that are spliced into the surrounding output, so `ErrorSegment` and
 exactly as elsewhere.
 
 `<If>` is **not an observation boundary**. Under the one-observation rule
-(§6.9), it reports only the errors it creates itself — an invalid condition, an
-unknown prop, a malformed `<Else>` — and hands back the selected branch's
-segments untouched, because they were already reported where they were
-produced. A failing element inside a selected branch therefore settles exactly
-once, as it would inline, and an ambient `throw` error mode still aborts at the
-first error.
+(§6.9), it reports only the errors it creates itself — a missing `condition`, a
+condition expression that fails to evaluate, an unknown prop, a malformed
+`<Else>` — and hands back the selected branch's segments untouched, because they
+were already reported where they were produced. A failing element inside a
+selected branch therefore settles exactly once, as it would inline, and an
+ambient `throw` error mode still aborts at the first error.
 
 Printed errors from `<If>` and `<Else>` carry the source location of the element
 that caused them, as `path:line:column` when the element came from a file and
@@ -6904,9 +6917,9 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF11 | Nested `<If>` in the unselected branch | It never runs |
 | IF12 | Self-closing `<If>` | Renders nothing, with no error |
 | IF13 | Missing `condition` | Rejected; the body does not render |
-| IF14 | No coercion | String, number (including `0`/`1`), `null`, array, and object are rejected |
-| IF15 | Non-boolean expression result | A numeric binding is rejected with its kind named |
-| IF16 | Unresolvable expression | The failing expression is quoted in the printed error |
+| IF14 | Falsy conditions | `false`, `0`, `NaN`, `""`, `null`, and `undefined` each select `<Else>`, with no error |
+| IF15 | Truthy conditions | `true`, `1`, `"false"`, `"text"`, `[]`, and `{}` each select the leading branch, with no error |
+| IF16 | Absent member versus undeclared identifier | A misspelled member is falsy and silent; an undeclared identifier is quoted in the printed error |
 | IF17 | Unknown props | Literal and expression props other than `condition` are rejected |
 | IF18 | `<Else>` outside `<If>` | Diagnosed; no component named `Else` is imported |
 | IF19 | Duplicate `<Else>` | A second `<Else>` is rejected |
@@ -6942,7 +6955,7 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF49 | Inline observation baseline | An `ErrorSegment` outside any `<If>` passes through `Component.raise` once |
 | IF50 | Selected branch observed once | The same error inside a selected branch is observed once, not twice |
 | IF51 | Unselected branch unobserved | An error in the unselected branch is observed zero times |
-| IF52 | `<If>`-owned errors observed once | Missing/non-boolean `condition` and a malformed `<Else>` each report once |
+| IF52 | `<If>`-owned errors observed once | A missing `condition`, an unresolvable condition expression, and a malformed `<Else>` each report once |
 | IF53 | Throwing error mode | An ambient `throw` error mode still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
 
@@ -6997,7 +7010,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | LOOP10 | Bindings carry forward | An iteration reads what an earlier one bound |
 | LOOP11 | Bindings survive the loop | The final value is readable after `</Loop>` |
 | LOOP12 | Last-iteration binding | A binding made in the final iteration survives |
-| LOOP13 | Body reads the shared env | An `<If>` in the body sees a binding an earlier iteration changed |
+| LOOP13 | Body reads the shared env | An `<If>` in the body reads the string an earlier iteration bound as truthy |
 | LOOP14 | Missing `max` | Rejected; the body does not render |
 | LOOP15 | Non-positive and fractional bounds | `0`, `-1`, and `1.5` are rejected |
 | LOOP16 | No coercion | String, boolean, `null`, array, and object bounds are rejected with their kind named |

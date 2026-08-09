@@ -1360,11 +1360,12 @@ const IF_PROPS = new Set(["condition"]);
  * environment, so a `<Capture>` it creates behaves like inline content and
  * stays available after `</If>`.
  *
- * It is not an observation boundary either. Errors it creates itself — an
- * invalid condition, an unknown prop, a malformed `<Else>` — are reported here,
- * exactly once. Everything the selected branch returns was already reported
- * where it was produced and is handed back untouched, so a `<Broken />` inside
- * a selected branch settles once, exactly as it would inline.
+ * It is not an observation boundary either. Errors it creates itself — a
+ * missing condition, a condition expression that fails to evaluate, an unknown
+ * prop, a malformed `<Else>` — are reported here, exactly once. Everything the
+ * selected branch returns was already reported where it was produced and is
+ * handed back untouched, so a `<Broken />` inside a selected branch settles
+ * once, exactly as it would inline.
  */
 function* expandIf(
   segment: ComponentElement,
@@ -1396,18 +1397,21 @@ function* expandIf(
     return;
   }
 
-  let condition: Json;
+  let condition: unknown;
   if ("condition" in segment.props) {
     condition = segment.props.condition;
   } else if ("condition" in segment.expressions) {
     try {
-      const resolved = yield* resolveExpressionProps(
-        {},
-        { condition: segment.expressions.condition },
+      // Evaluated directly rather than through resolveExpressionProps: that
+      // helper rejects `undefined` and rewrites `NaN` as `null`, and both are
+      // conditions truthiness decides. The value selects a branch and is never
+      // journaled or forwarded as a prop, so it crosses no JSON boundary.
+      condition = yield* evaluateExpression(
+        segment.expressions.condition,
         "If",
+        "condition",
         segment.projectedEnv,
       );
-      condition = resolved.condition;
     } catch (error) {
       owner.push(
         yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
@@ -1415,27 +1419,16 @@ function* expandIf(
       return;
     }
   } else {
-    owner.push(yield* raise(ifError(segment, '<If> requires a "condition" prop (a boolean).')));
+    owner.push(yield* raise(ifError(segment, '<If> requires a "condition" prop.')));
     return;
   }
 
-  if (typeof condition !== "boolean") {
-    owner.push(
-      yield* raise(
-        ifError(
-          segment,
-          `Prop "condition" on <If /> must be a boolean, not ${jsonKind(condition)}. ` +
-            "<If> does not coerce truthy or falsy values.",
-        ),
-      ),
-    );
-    return;
-  }
+  const selected = !!condition;
 
   // The false arm belongs to `<Else>`, which is consumed above, so its frame is
   // added here — otherwise both arms of one `<If>` expand under one path.
   const branchPath =
-    condition || structure.elseElement === undefined
+    selected || structure.elseElement === undefined
       ? path
       : extendPath(
           path,
@@ -1446,7 +1439,7 @@ function* expandIf(
         );
 
   yield* expandSegments(
-    condition ? structure.whenTrue : structure.whenFalse,
+    selected ? structure.whenTrue : structure.whenFalse,
     parentMeta,
     parentProps,
     hideSet,

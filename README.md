@@ -136,7 +136,7 @@ executable.md treats the root document like a component:
 
 ## Control flow
 
-`<If>` expands one branch and only one. `condition` must be a boolean — there is no truthy or falsy coercion — and the branch that is not selected never expands, so nothing in it imports a component, runs a block, or creates a binding.
+`<If>` expands one branch and only one. `condition` selects by ordinary JavaScript truthiness — `false`, `0`, `NaN`, `""`, `null`, and `undefined` take the false branch, and everything else takes the true one, including `"false"`, `[]`, and `{}` — and the branch that is not selected never expands, so nothing in it imports a component, runs a block, or creates a binding.
 
 ```md
 <If condition={hasFailures}>
