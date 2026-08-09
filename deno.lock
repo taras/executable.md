@@ -45,7 +45,7 @@
     "npm:@durable-streams/server@~0.3.8": "0.3.8",
     "npm:@effectionx/context-api@0.6.0": "0.6.0_effection@4.1.0",
     "npm:@effectionx/converge@0.1.4": "0.1.4_effection@4.1.0",
-    "npm:@effectionx/fetch@0.2.0": "0.2.0_effection@4.1.0",
+    "npm:@effectionx/fetch@0.2.1": "0.2.1_effection@4.1.0",
     "npm:@effectionx/fs@0.3.0": "0.3.0_effection@4.1.0",
     "npm:@effectionx/middleware@0.1.1": "0.1.1",
     "npm:@effectionx/node@0.2.4": "0.2.4_effection@4.1.0",
@@ -523,8 +523,8 @@
         "effection"
       ]
     },
-    "@effectionx/fetch@0.2.0_effection@4.1.0": {
-      "integrity": "sha512-0W15D9WuFUI6PEApaimxppacgk1WvJNxYwQ+P/tjWTzrPOUK8wrGlj6bqLrgfEaXqyOpdHbFI1eEz7wq1BDubw==",
+    "@effectionx/fetch@0.2.1_effection@4.1.0": {
+      "integrity": "sha512-sHzICpjEP+/gj70rBlYdmC4W4B5oeEwEuVQHkJJnaCKDxzJ1h6lps95nijQAbjsT8QbSt9Tm3px8jg7gNXJm7g==",
       "dependencies": [
         "@effectionx/context-api",
         "effection"
@@ -3954,7 +3954,7 @@
       "npm:@durable-streams/server@~0.3.8",
       "npm:@effectionx/context-api@0.6.0",
       "npm:@effectionx/converge@0.1.4",
-      "npm:@effectionx/fetch@0.2.0",
+      "npm:@effectionx/fetch@0.2.1",
       "npm:@effectionx/fs@0.3.0",
       "npm:@effectionx/middleware@0.1.1",
       "npm:@effectionx/node@0.2.4",
@@ -3983,7 +3983,7 @@
         "npm:@durable-streams/server@~0.3.8",
         "npm:@effectionx/context-api@0.6.0",
         "npm:@effectionx/converge@0.1.4",
-        "npm:@effectionx/fetch@0.2.0",
+        "npm:@effectionx/fetch@0.2.1",
         "npm:@effectionx/fs@0.3.0",
         "npm:@effectionx/middleware@0.1.1",
         "npm:@effectionx/node@0.2.4",
@@ -4062,7 +4062,7 @@
           "dependencies": [
             "npm:@effectionx/context-api@0.6.0",
             "npm:@effectionx/converge@0.1.4",
-            "npm:@effectionx/fetch@0.2.0",
+            "npm:@effectionx/fetch@0.2.1",
             "npm:@effectionx/fs@0.3.0",
             "npm:@effectionx/middleware@0.1.1",
             "npm:@effectionx/node@0.2.4",
@@ -4099,7 +4099,7 @@
         "packageJson": {
           "dependencies": [
             "npm:@effectionx/context-api@0.6.0",
-            "npm:@effectionx/fetch@0.2.0",
+            "npm:@effectionx/fetch@0.2.1",
             "npm:@effectionx/fs@0.3.0",
             "npm:@effectionx/node@0.2.4",
             "npm:@effectionx/process@0.8.1",

@@ -27,7 +27,7 @@
     "@secretlint/secretlint-rule-preset-recommend": "npm:@secretlint/secretlint-rule-preset-recommend@13.0.4",
     "@secretlint/types": "npm:@secretlint/types@13.0.4",
     "@effectionx/converge": "npm:@effectionx/converge@0.1.4",
-    "@effectionx/fetch": "npm:@effectionx/fetch@0.2.0",
+    "@effectionx/fetch": "npm:@effectionx/fetch@0.2.1",
     "@effectionx/fs": "npm:@effectionx/fs@0.3.0",
     "@effectionx/middleware": "npm:@effectionx/middleware@0.1.1",
     "@effectionx/node": "npm:@effectionx/node@0.2.4",
