@@ -1072,16 +1072,30 @@ output. All rules at `"warn"` — Oxlint collects signals, not verdicts.
 
 ### 13.1 Sensor configuration
 
-`.reviews/.oxlintrc.json` — committed review-sensor config with
-`pedantic: "warn"` and `style: "warn"` enabled. All oxlint invocations
-reference this config via `--config .reviews/.oxlintrc.json`. The sensor
-turns off rule families that conflict with repository conventions: component
-filename casing, named-export and export-order rules, generator/function
-style rules, and mechanical import/key-order and magic-number rules (including
-`sort-imports`, `sort-keys`, and `no-magic-numbers`). The normal repository
-lint configuration remains authoritative for those rules; this
-review-only exclusion prevents the advisory report from treating required
-component structure as a finding.
+`.reviews/.oxlintrc.json` — the committed review-sensor profile. All oxlint
+invocations reference it via `--config .reviews/.oxlintrc.json`.
+
+The profile holds no catalog of its own. It extends `oxlint.shared.json`, the
+one project-owned Oxlint policy the repository lint gate also extends, and adds
+nothing but the plugin list Oxlint requires in an entry configuration. That
+shared policy enables `correctness` and `suspicious`, leaves `pedantic` and
+`style` off, names the 14 curated bloat signals one at a time, and turns off the
+rule families that conflict with repository conventions: component filename
+casing, named-export and export-order rules, generator/function style rules,
+mechanical import/key-order and magic-number rules, and readonly-parameter
+types.
+
+Inheritance does not make divergence impossible — Oxlint lets a later
+configuration override an inherited rule. The guarantee is that the committed
+sensor profile declares no built-in rule of its own, and that its active
+built-in set stays a subset of the gate's. `scripts/tests/oxlint-policy.test.ts`
+enforces both (OP2 and OP5) and fails verification if either stops holding.
+
+The gate profile, `.oxlintrc.json`, adds the local JavaScript plugin and the
+repository's blocking rules at error severity. Those stay out of the sensor: it
+remains advisory and carries no error severity at all. Details of the shared
+policy, its catalog ownership, and its conformance suite are in
+`specs/oxlint-sensor-spec.md` §4 and §14.
 
 ### 13.2 Environment detection (`Doctor.ts`)
 
@@ -1157,8 +1171,10 @@ Local runs skip issue creation (no `GITHUB_TOKEN` → return empty).
 ### 13.9 Additional files
 
 ```
+oxlint.shared.json                 Canonical Oxlint policy both profiles extend
+
 .reviews/
-  .oxlintrc.json                   Sensor config (committed)
+  .oxlintrc.json                   Sensor profile (committed)
   components/
     CleanupIssues.md               Idempotent GitHub issue lifecycle
 
@@ -1195,6 +1211,16 @@ construction. Raw process output, response objects, and credentials remain
 inside generator-local variables; only bounded values become document
 bindings. Markdown remains responsible for the visible composition and
 provider hierarchy.
+
+`SENSOR_RULES` in that package's `categories.ts` is the one TypeScript catalog
+of curated signals; Doctor derives its available and missing rules from it
+rather than keeping a second list. The catalog is internal policy structure and
+is not a published export.
+
+`.reviews/components/EnsureOxlint.md` provisions the sensor's Oxlint 1.74.0 and
+tsgolint 0.25.0 by checksum, and the repository dependency inputs name the same
+two exact versions, so the policy the gate applies and the policy the sensor
+applies are evaluated by the same linter.
 
 The review workflow runs `deno task setup` and then `./dist/xmd`, so the binary
 and executable Markdown are from the same checkout. The two CI roots use

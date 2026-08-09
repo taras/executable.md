@@ -235,13 +235,41 @@ tells them exactly what to add.
 
 ---
 
-## 4. Oxlint Configuration (Sensor Mode)
+## 4. Oxlint Configuration
 
-### 4.1 `.oxlintrc.json`
+### 4.1 One shared policy, two profiles
 
-This config enables all bloat-relevant rules at `"warn"` severity.
-It is the sensor config — NOT the CI enforcement config. No rule
-is `"error"`. Oxlint always exits 0.
+`oxlint.shared.json` at the repository root is the project's whole built-in
+Oxlint policy. The gate and the sensor are profiles over it, each naming it
+through a native JSON `extends` path resolved relative to the profile's own
+location:
+
+```text
+oxlint.shared.json              plugins, categories, signal catalog, denials, test override
+├── .oxlintrc.json              gate: local JavaScript plugin and blocking rules
+└── .reviews/.oxlintrc.json     sensor: advisory, and nothing else
+```
+
+Inheritance alone does not prevent divergence. Oxlint merges from first to last
+and the later configuration wins, so a profile that redeclared an inherited rule
+would override it. What holds the two profiles together is what they contain and
+what verification enforces:
+
+- the committed sensor profile declares no built-in rule, category, or override
+  of its own, so it applies the shared policy unmodified; and
+- the sensor's active built-in rule set must remain a subset of the gate's.
+
+`scripts/tests/oxlint-policy.test.ts` is what makes those two statements binding.
+OP2 fails if either profile grows a catalog of its own, and OP5 fails if the
+sensor's active set stops being a subset of the gate's for any representative
+path. A profile that overrode a shared rule would be caught there, not by Oxlint.
+
+Both profiles repeat `"plugins"` because Oxlint reads the plugin set from the
+entry configuration alone: an inherited list adds to Oxlint's defaults rather
+than replacing them.
+
+`oxlint.shared.json` is deliberately not a name Oxlint discovers on its own, so
+the file is reachable only through an explicit `extends`.
 
 ```jsonc
 {
@@ -252,8 +280,8 @@ is `"error"`. Oxlint always exits 0.
   "categories": {
     "correctness": "warn",
     "suspicious": "warn",
-    "pedantic": "warn",
-    "style": "warn"
+    "pedantic": "off",
+    "style": "off"
   },
 
   "rules": {
@@ -275,11 +303,17 @@ is `"error"`. Oxlint always exits 0.
     "eslint/no-console": ["warn", { "allow": ["warn", "error"] }],
     "eslint/no-debugger": "warn",
 
+    "typescript/no-unnecessary-type-arguments": "warn",
+    "typescript/no-unnecessary-type-assertion": "warn",
+    "typescript/no-redundant-type-constituents": "warn",
+    "typescript/no-unnecessary-boolean-literal-compare": "warn",
+
     "eslint/func-style": "off",
     "eslint/no-magic-numbers": "off",
     "eslint/require-yield": "off",
     "eslint/sort-keys": "off",
     "eslint/sort-imports": "off",
+    "typescript/prefer-readonly-parameter-types": "off",
     "import/exports-last": "off",
     "import/group-exports": "off",
     "import/no-named-export": "off",
@@ -287,15 +321,16 @@ is `"error"`. Oxlint always exits 0.
     "import/consistent-type-specifier-style": "off",
     "unicorn/filename-case": "off",
 
-    "typescript/no-unnecessary-type-arguments": "warn",
-    "typescript/no-unnecessary-type-assertion": "warn",
-    "typescript/no-redundant-type-constituents": "warn",
-    "typescript/no-unnecessary-boolean-literal-compare": "warn"
+    "typescript/no-unsafe-assignment": "off",
+    "typescript/no-unsafe-return": "off",
+    "typescript/no-unsafe-member-access": "off",
+    "eslint/preserve-caught-error": "off",
+    "eslint/no-duplicate-imports": "off"
   },
 
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.spec.ts", "**/test/**"],
+      "files": ["**/*.test.ts", "**/*.spec.ts", "**/test/**", "**/tests/**"],
       "rules": {
         "eslint/no-console": "off",
         "eslint/no-empty-function": "off"
@@ -305,16 +340,58 @@ is `"error"`. Oxlint always exits 0.
 }
 ```
 
+The gate adds the local JavaScript plugin, five blocking rules, and one further
+test override. The sensor adds nothing:
+
+```jsonc
+// .oxlintrc.json
+{
+  "extends": ["./oxlint.shared.json"],
+  "plugins": ["typescript", "unicorn", "import"],
+  "jsPlugins": [{ "name": "local", "specifier": "./scripts/oxlint-plugin.js" }],
+  "rules": {
+    "eslint/curly": "error",
+    "local/no-module-scoped-registry": "error",
+    "local/no-section-divider-comments": "error",
+    "local/no-yield-in-finally": "error",
+    "local/prefer-effection-result": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts", "**/test/**", "**/tests/**"],
+      "rules": { "local/no-redundant-test-scope": "error" }
+    }
+  ]
+}
+
+// .reviews/.oxlintrc.json
+{
+  "extends": ["../oxlint.shared.json"],
+  "plugins": ["typescript", "unicorn", "import"]
+}
+```
+
+Oxlint merges inherited override arrays, so both test overrides apply to the
+gate and the shared one applies to the sensor.
+
 ### 4.2 Rule catalog
 
-The sensor collects the bloat-relevant rules that are compatible with the
-repository's component and generator conventions. It excludes filename-case,
-named-export, export-order, function-style, generator-yield, import-order,
-key-order, and magic-number rules from its advisory report. These exclusions apply only to
-the review sensor; the normal lint gate remains unchanged.
+Two things are enabled, and they are not the same thing. The
+`correctness` and `suspicious` categories are the project-compatible baseline
+both profiles inherit. The curated signal catalog is the list of 14 rules the
+policy names one at a time, and it is the list Doctor reports on and
+`categorizeRule` classifies.
 
-The remaining bloat-relevant rules are split into two groups by whether they
-require type information:
+`pedantic` and `style` are off. The filename-case, named-export, export-order,
+function-style, generator-yield, import-order, key-order, magic-number, and
+readonly-parameter rules conflict with the repository's component and generator
+conventions, and each stays explicitly `off` so a future category
+reclassification cannot revive it silently. The unsafe-access, caught-error, and
+duplicate-import rules are named candidates that stay off until adopted
+individually; no broad category is ever enabled to obtain one desired rule.
+
+The curated rules are split into two groups by whether they require type
+information:
 
 **Syntax-only (10 rules, always available):**
 
@@ -340,12 +417,34 @@ require type information:
 | `no-unnecessary-type-arguments` | Generic args matching defaults | `--type-aware` |
 | `no-unnecessary-boolean-literal-compare` | `x === true` when `x: boolean` | `--type-aware` |
 
+`SENSOR_RULES` in `packages/code-review-agent/src/categories.ts` is the
+TypeScript owner of this catalog — the union of `STRUCTURAL_RULES`,
+`VERBOSITY_RULES`, and `TYPE_AWARE_RULES`. Doctor derives its available and
+missing rules from it. The native JSON necessarily repeats the list, because the
+production sensor runs a standalone Oxlint binary against a JSON configuration;
+the conformance suite in §14 is the synchronization boundary.
+
 ### 4.3 Two uses of Oxlint in CI
 
 | Role | Config | Severity | Blocks merge | Output |
 |---|---|---|---|---|
-| **Sensor** (executable.md review job) | All 14 rules, `"warn"` | Advisory | No | JSON → LLM |
-| **Gate** (separate lint job) | Curated subset, `"error"` | Blocking | Yes | Human-readable |
+| **Sensor** (executable.md review job) | `.reviews/.oxlintrc.json`, shared policy only | Advisory | No | JSON → LLM |
+| **Gate** (separate lint job) | `.oxlintrc.json`, shared policy plus local rules | Blocking for its own rules | Yes | Human-readable |
+
+### 4.4 Toolchain alignment
+
+Policy comparison is only meaningful when both uses run the same linter, so the
+repository dependency and the binary the review job downloads name one exact
+version each:
+
+| Tool | Version | Declared in |
+|---|---|---|
+| Oxlint | 1.74.0 | `deno.json`, `package.json`, `.reviews/components/EnsureOxlint.md` |
+| tsgolint | 0.25.0 | `deno.json`, `.reviews/components/EnsureOxlint.md` |
+
+The pins are exact rather than caret ranges. A range plus a frozen lock would
+let a routine lock refresh expand the active rule set without any change to the
+production sensor; a policy upgrade is meant to be an explicit act.
 
 ---
 
@@ -948,7 +1047,9 @@ false positive and false negative rates.
 lint-plugins/
   no-scheme-specifiers.ts     Deno lint plugin
 
-.oxlintrc.json                Sensor config (all warn)
+oxlint.shared.json            Canonical built-in policy
+.oxlintrc.json                Gate profile (shared policy + local blocking rules)
+.reviews/.oxlintrc.json       Sensor profile (shared policy, advisory)
 
 packages/code-review-agent/
   src/
@@ -1002,6 +1103,29 @@ Markdown.
 | NS9 | Fix strips `npm:` + version | `"npm:express@4"` → `"express"` |
 | NS10 | Fix preserves scoped packages | `"npm:@types/node@22"` → `"@types/node"` |
 | NS11 | Message includes deno.json instruction | Contains `deno.json "imports"` |
+
+### Oxlint policy conformance
+
+`scripts/tests/oxlint-policy.test.ts` runs under Deno, Node, and Bun. It reads
+the three configuration sources and executes `oxlint --print-config` against a
+production module, a test module, and a review component.
+
+| # | Test | Verify |
+|---|------|--------|
+| OP1 | Canonical shared policy | Each profile's `extends` resolves to `oxlint.shared.json` |
+| OP2 | Catalog ownership | Shared owns plugins, categories, signals, denials, test override; profiles repeat none of it |
+| OP3 | Signal options | `no-unused-vars` and `no-console` keep the options density reads |
+| OP4 | Inheritance resolves | `--print-config` succeeds for both profiles on all three paths |
+| OP5 | Sensor subset | The sensor's active built-in rules are a subset of the gate's |
+| OP6 | Curated signals enabled | Every `SENSOR_RULES` entry is `warn` and categorizes as other than `other` |
+| OP7 | Denials hold | Every conflict and named candidate is off in both merged profiles |
+| OP8 | Sensor advisory | No JavaScript plugin, no `local/*` rule, no error severity |
+| OP9 | Gate blocking rules | `curly` and the four local rules stay errors |
+| OP10 | Overrides survive | Both test overrides reach the gate, the shared one reaches the sensor |
+| OP11 | Override applies | A `tests/` file reports no `no-console`; its sibling does |
+| OP12 | Doctor catalog | Available equals `SENSOR_RULES`; syntax-only misses exactly `TYPE_AWARE_RULES` |
+| OP13 | Version agreement | `EnsureOxlint.md`, `deno.json`, `package.json`, and the executed binary name one version |
+| OP14 | Broken inheritance | A missing inherited file fails the invocation instead of printing an empty policy |
 
 ### Doctor component
 

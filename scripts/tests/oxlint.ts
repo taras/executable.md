@@ -3,9 +3,9 @@
  * cover both the rule in `scripts/oxlint-rules/` and the config wiring that
  * enables it.
  */
-import { each, spawn } from "effection";
+import { scoped } from "effection";
 import type { Operation } from "effection";
-import { exec, Stdio } from "@effectionx/process";
+import { exec } from "@effectionx/process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,36 +20,46 @@ interface Diagnostic {
   labels: { span: { line: number } }[];
 }
 
+export interface OxlintRun {
+  code: number | undefined;
+  stdout: string;
+  stderr: string;
+}
+
+/** One oxlint invocation against `config`, with its report captured rather than printed. */
+export function* runOxlint(config: string, args: string[]): Operation<OxlintRun> {
+  return yield* scoped(function* () {
+    const proc = yield* exec("npx", {
+      arguments: ["--yes", "oxlint", "-c", config, ...args],
+      cwd: ROOT,
+    });
+
+    // A streaming decoder holds the bytes of a split multi-byte character until
+    // the next chunk, so the two pipes cannot share one.
+    const outDecoder = new TextDecoder();
+    const errDecoder = new TextDecoder();
+    const out: string[] = [];
+    const err: string[] = [];
+    yield* proc.around({
+      *stdout([bytes]) {
+        out.push(outDecoder.decode(bytes, { stream: true }));
+      },
+      *stderr([bytes]) {
+        err.push(errDecoder.decode(bytes, { stream: true }));
+      },
+    });
+
+    const status = yield* proc.join();
+    out.push(outDecoder.decode());
+    err.push(errDecoder.decode());
+
+    return { code: status.code, stdout: out.join(""), stderr: err.join("") };
+  });
+}
+
 export function* oxlint(args: string[]): Operation<string> {
-  // The report is an assertion subject, not test output.
-  yield* Stdio.around({
-    *stdout() {},
-    *stderr() {},
-  });
-
-  const proc = yield* exec("npx", {
-    arguments: ["--yes", "oxlint", "-c", ".oxlintrc.json", ...args],
-    cwd: ROOT,
-  });
-
-  const chunks: string[] = [];
-  const reading = yield* spawn(function* () {
-    for (const chunk of yield* each(proc.stdout)) {
-      chunks.push(new TextDecoder().decode(chunk));
-      yield* each.next();
-    }
-  });
-  const drainStderr = yield* spawn(function* () {
-    for (const _ of yield* each(proc.stderr)) {
-      yield* each.next();
-    }
-  });
-
-  yield* proc.join();
-  yield* reading;
-  yield* drainStderr;
-
-  return chunks.join("");
+  const run = yield* runOxlint(".oxlintrc.json", args);
+  return run.stdout;
 }
 
 /** Lines carrying a violation of `rule`, in source order. */

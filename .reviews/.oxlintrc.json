@@ -1,60 +1,7 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
 
-  "plugins": ["typescript", "unicorn", "import"],
+  "extends": ["../oxlint.shared.json"],
 
-  "categories": {
-    "correctness": "warn",
-    "suspicious": "warn",
-    "pedantic": "warn",
-    "style": "warn"
-  },
-
-  "rules": {
-    "eslint/no-unused-vars": ["warn", {
-      "args": "all",
-      "argsIgnorePattern": "^_",
-      "varsIgnorePattern": "^_",
-      "caughtErrorsIgnorePattern": "^_",
-      "destructuredArrayIgnorePattern": "^_",
-      "ignoreRestSiblings": true
-    }],
-    "typescript/no-inferrable-types": "warn",
-    "typescript/no-empty-object-type": "warn",
-    "typescript/no-useless-empty-export": "warn",
-    "typescript/no-unnecessary-type-constraint": "warn",
-    "typescript/no-unnecessary-parameter-property-assignment": "warn",
-    "unicorn/no-static-only-class": "warn",
-    "eslint/no-empty-function": "warn",
-    "eslint/no-console": ["warn", { "allow": ["warn", "error"] }],
-    "eslint/no-debugger": "warn",
-
-    "eslint/func-style": "off",
-    "eslint/no-magic-numbers": "off",
-    "eslint/require-yield": "off",
-    "eslint/sort-keys": "off",
-    "eslint/sort-imports": "off",
-    "typescript/prefer-readonly-parameter-types": "off",
-    "import/exports-last": "off",
-    "import/group-exports": "off",
-    "import/no-named-export": "off",
-    "import/prefer-default-export": "off",
-    "import/consistent-type-specifier-style": "off",
-    "unicorn/filename-case": "off",
-
-    "typescript/no-unnecessary-type-arguments": "warn",
-    "typescript/no-unnecessary-type-assertion": "warn",
-    "typescript/no-redundant-type-constituents": "warn",
-    "typescript/no-unnecessary-boolean-literal-compare": "warn"
-  },
-
-  "overrides": [
-    {
-      "files": ["**/*.test.ts", "**/*.spec.ts", "**/test/**"],
-      "rules": {
-        "eslint/no-console": "off",
-        "eslint/no-empty-function": "off"
-      }
-    }
-  ]
+  "plugins": ["typescript", "unicorn", "import"]
 }
