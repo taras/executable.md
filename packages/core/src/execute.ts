@@ -17,7 +17,10 @@ import {
   durableRun,
   createDurableOperation,
   ephemeral,
+  ReplayGuard,
+  StaleInputError,
   type DurableStream,
+  type Yield,
 } from "@executablemd/durable-streams";
 import { exec, readTextFile, cwd } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
@@ -35,7 +38,7 @@ import type {
   ReturnsSchema,
   Segment,
 } from "./types.ts";
-import { parseJson, parseJsonObject } from "./json.ts";
+import { isJsonObject, parseJson, parseJsonObject } from "./json.ts";
 import {
   compilePropsSchema,
   compileReturnsSchema,
@@ -43,7 +46,12 @@ import {
   validateProps,
 } from "./validate.ts";
 import { useParseCompiler } from "./components/parse-schema.ts";
-import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
+import {
+  isFunctionComponentPath,
+  parseMarkdownDefinition,
+  parseRootMarkdownDefinition,
+  resolveDocumentTarget,
+} from "./definition.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
   expandSegments,
@@ -129,7 +137,7 @@ export type ExecuteOptions = RootDocumentSource & ExecuteSettings;
  * implementation up again in the scope that is running now.
  */
 type DurableSelection =
-  | { kind: "repository"; path: string; content: string }
+  | { kind: "repository"; path: string; content: string; target?: string }
   | { kind: "registered"; origin: string; reserved: boolean };
 
 function* durableImportComponent(
@@ -145,10 +153,21 @@ function* durableImportComponent(
         // Inside the durable operation, so the journal holds the root's identity
         // and its text: a replay restores both without reading anything, whether
         // the source was a file or supplied.
+        //
+        // The selector resolves here too, against the text this operation is
+        // about to record, so the exact target the run executed is part of the
+        // record rather than something a later read has to rediscover. Only the
+        // exact target is recorded — a glob describes what the caller asked
+        // for, not what ran.
+        const path = rootSourcePath(root);
+        const content = yield* readRootSource(root);
+        const target =
+          root.target === undefined ? undefined : resolveDocumentTarget(path, content, root.target);
         return {
           kind: "repository",
-          path: rootSourcePath(root),
-          content: yield* readRootSource(root),
+          path,
+          content,
+          ...(target === undefined ? {} : { target }),
         };
       }
 
@@ -193,7 +212,7 @@ function* durableImportComponent(
     return found.definition;
   }
 
-  const { path, content } = selection;
+  const { path, content, target } = selection;
 
   // Function component: .ts file — import() the module
   if (isFunctionComponentPath(path)) {
@@ -238,12 +257,125 @@ function* durableImportComponent(
     return definition;
   }
 
-  // Markdown component: parse at runtime — deterministic from content
+  // Markdown component: parse at runtime — deterministic from content.
+  // A recorded target projects the recorded content, so a resumed run executes
+  // the same section from the same text the first run recorded, whatever the
+  // file on disk says now.
+  if (target !== undefined) {
+    return (yield* ephemeral(parseRootMarkdownDefinition(name, path, content, target))).definition;
+  }
   return yield* ephemeral(parseMarkdownDefinition(name, path, content));
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
   return typeof value === "function";
+}
+
+/** The recorded root import this event is, when it is one that can be read. */
+function recordedRootImport(event: Yield): { content: string; target?: string } | undefined {
+  if (
+    event.description.type !== "import_component" ||
+    event.description.name !== "__root__" ||
+    event.result.status !== "ok"
+  ) {
+    return undefined;
+  }
+  const record = event.result.value;
+  if (!isJsonObject(record)) {
+    return undefined;
+  }
+  const content = record["content"];
+  const target = record["target"];
+  if (typeof content !== "string" || (target !== undefined && typeof target !== "string")) {
+    return undefined;
+  }
+  return target === undefined ? { content } : { content, target };
+}
+
+/**
+ * Refuse to replay a run that was recorded against a different section.
+ *
+ * Only `type` and `name` decide whether a journal entry matches, and the root
+ * import's name is the same for every target — so without this, resuming with a
+ * different selector would restore the recorded content and then project a
+ * section the recorded run never executed.
+ *
+ * The current selector is resolved against the *recorded* content, so a glob
+ * that still names the same section replays and a glob that now names another
+ * one does not. A selector that has become invalid or ambiguous against that
+ * content is refused for the same reason: nothing here may guess which section
+ * a resumed run meant.
+ *
+ * This validates in the check phase rather than the decide phase because
+ * `durableRun` reuses a recorded root Close before any effect is replayed. A
+ * decision made later would never run for a completed journal, which is exactly
+ * the run whose recorded target must still be the one being asked for.
+ *
+ * A `StaleInputError`, so it propagates as a durability failure rather than
+ * being printed into the document.
+ */
+function refuseChangedRootTarget(root: RootDocumentSource): Operation<void> {
+  return ReplayGuard.around({
+    *check([event], next) {
+      const recorded = recordedRootImport(event);
+      if (recorded === undefined) {
+        return yield* next(event);
+      }
+      const requested = resolveRecordedTarget(root, recorded.content);
+      const compatible =
+        requested.kind === "whole"
+          ? recorded.target === undefined
+          : requested.kind === "exact" && requested.target === recorded.target;
+      if (!compatible) {
+        const stale = new StaleInputError(
+          `the recorded root document import ran ${describeRecorded(recorded.target)}, and this ` +
+            `run asks for ${describeRequested(requested)}. Re-run the document from the ` +
+            "start rather than resuming from a journal that recorded another section.",
+          { coroutineId: event.coroutineId, description: event.description },
+        );
+        if (requested.kind === "unresolved") {
+          stale.cause = requested.failure;
+        }
+        throw stale;
+      }
+      return yield* next(event);
+    },
+  });
+}
+
+/** What this run's selector names in the recorded content. */
+type RequestedTarget =
+  | { kind: "whole" }
+  | { kind: "exact"; target: string }
+  | { kind: "unresolved"; failure: unknown };
+
+function resolveRecordedTarget(root: RootDocumentSource, content: string): RequestedTarget {
+  if (root.target === undefined) {
+    return { kind: "whole" };
+  }
+  try {
+    return {
+      kind: "exact",
+      target: resolveDocumentTarget(rootSourcePath(root), content, root.target),
+    };
+  } catch (failure) {
+    return { kind: "unresolved", failure };
+  }
+}
+
+function describeRecorded(target: string | undefined): string {
+  return target === undefined ? "the whole document" : `the target ${JSON.stringify(target)}`;
+}
+
+function describeRequested(requested: RequestedTarget): string {
+  switch (requested.kind) {
+    case "whole":
+      return "the whole document";
+    case "exact":
+      return `the target ${JSON.stringify(requested.target)}`;
+    case "unresolved":
+      return "a target that recorded content no longer names exactly once";
+  }
 }
 
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>
@@ -863,6 +995,10 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         },
         { at: "min" },
       );
+
+      // Installed before the durable run, so the check phase sees the recorded
+      // root import before `durableRun` can reuse a recorded Close.
+      yield* refuseChangedRootTarget(root);
 
       // The policy is selected here — before the durable run and before any
       // document, frontmatter, prop, component, or eval code exists — so the

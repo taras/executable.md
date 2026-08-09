@@ -2351,9 +2351,16 @@ operation, with the read it leads to. What the journal holds is serializable: a
 repository selection records the chosen path and its content, and a registration
 records its origin, never its function.
 
+The root's selection carries one more member. A targeted root resolves its
+selector here too, against the text this operation is about to record, and
+records the **exact** target it resolved to — so the section the run executed is
+part of the record rather than something a later read rediscovers (§5.4). An
+untargeted root records no `target` member, which is what keeps journals written
+before targets existed readable.
+
 ```typescript
 type DurableSelection =
-  | { kind: "repository"; path: string; content: string }
+  | { kind: "repository"; path: string; content: string; target?: string }
   | { kind: "registered"; origin: string; reserved: boolean };
 
 function* durableImportComponent(
@@ -2605,6 +2612,210 @@ root's body therefore runs fail-fast — a structural violation, an invalid
 schema, an invalid value, a body error, and a failure raised after `<Return>`
 all complete `Err`, and body text emitted before the failure remains only on
 the output stream.
+
+#### Document targets
+
+A root document addresses its own sections. A **document target** is an
+addressable static heading in the document's root Markdown flow, named by the
+canonical path of heading labels that reaches it. Selecting one executes:
+
+1. the document preamble;
+2. the direct content of every ancestor needed to reach the target; and
+3. the selected heading's complete subtree.
+
+Sibling subtrees do not execute. Retained headings stay in the projected body,
+so the projection reads as a document rather than as an excerpt.
+
+##### Which headings are targets
+
+Only root-level Markdown heading nodes form the outline. A heading inside a
+block quote, a list, a fenced block, raw HTML, or component children is not one.
+
+Heading discovery does not parse raw XMD with a Markdown parser. A component's
+children are ordinary text to that parser, and a blank line among them ends the
+HTML block it inferred, which surfaces a child heading as a root heading.
+Discovery instead parses a copy of the body in which the boundary scanner's
+top-level component spans are replaced by spaces of the same length. Newline
+positions, offsets, and everything outside those spans are unchanged, so a
+heading found in the masked copy sits where it sits in the original, and the
+original supplies its text and its source.
+
+A heading's parent is the nearest preceding heading with a smaller depth.
+Skipped depths are ordinary. **Outermost** means the smallest heading depth
+present in the root flow, which need not be `h1`.
+
+When the document has exactly one outermost heading, that heading is the
+document **title**: it takes no level in any target path, it is no target
+itself, and its heading and direct content are retained in every projection
+beneath it. When the document has more than one outermost heading, each of them
+takes a path level. A document with no addressable heading has an empty
+catalog.
+
+A heading is **not addressable** when its own source overlaps executable
+component syntax, or contains an unescaped Executable MDX interpolation —
+`{meta.key}`, `{props.key}`, `{binding}`, and the dotted forms of each. Escaped
+interpolation (`\{meta.key\}`) is literal static text and stays addressable. A
+heading that renders no text is not addressable. An unaddressable heading
+required as a path level makes its whole subtree unaddressable; because the sole
+title is not a path level, static sections beneath a computed title remain
+addressable.
+
+##### Labels and canonical encoding
+
+A label is the statically rendered Markdown text of the heading: formatting and
+link destinations are removed, while visible text, inline-code text, and image
+alternative text are retained. The result is normalized to NFC, every run of
+Unicode whitespace collapses to one ASCII space, leading and trailing
+whitespace is trimmed, and case is preserved. There are no generated slugs,
+suffixes, case folding, or punctuation removal.
+
+A canonical target is the sequence of labels from the target's outermost
+addressable ancestor to the target, each percent-encoded and joined with raw
+`/`. Encoding leaves the RFC 3986 unreserved characters (`A-Z a-z 0-9 - . _ ~`)
+alone and escapes everything else as uppercase UTF-8 hexadecimal, so a `/`,
+`*`, `#`, or `%` inside a heading becomes `%2F`, `%2A`, `%23`, or `%25` and
+cannot be read as syntax.
+
+The catalog is in source order and retains duplicates: two sections whose
+canonical paths are equal stay two entries, so the ambiguity is observable.
+
+##### Selectors
+
+A document reference is:
+
+```text
+<encoded-document-path>#<target-selector-or-exact-target>
+```
+
+The first raw `#` separates the two. Raw `/` separates target levels and raw
+`*` and `**` are operators; the selector is split on those before its literal
+chunks are percent-decoded, which is what keeps `%2F` a slash inside one label
+and `%2A` a literal asterisk. Decoding is URI path decoding: `+` is a plus, not
+a space. Malformed escapes, byte sequences that are not UTF-8, NUL, a leading
+or trailing slash, and an empty level are all refused. Matching is
+case-sensitive.
+
+- A literal level matches one canonical label exactly, after decoding and label
+  normalization.
+- `*` within a level matches zero or more characters of that one label, and may
+  appear more than once.
+- A level that is exactly `**` matches zero or more complete path levels.
+
+There is no `?`, character class, brace, or backslash dialect. Within a
+wildcard level only the literal chunks are decoded and normalized; whitespace
+beside a wildcard is part of what the selector asked for, and only the beginning
+of the first chunk and the end of the last are trimmed. Matching compares
+Unicode code points and completes in time bounded by the product of the pattern
+and label sizes.
+
+A selector must resolve to exactly one catalog entry. Zero matches and several
+matches both fail. Diagnostics report canonical encoded references, so a
+duplicate canonical path is reported as an ambiguity rather than resolved.
+
+##### Projection
+
+Source ranges are defined against the original, unprojected body:
+
+- the **preamble** runs from the body start to immediately before the first
+  outermost heading;
+- an **ancestor's direct content** runs from its heading start to its first
+  child heading's start, or to its subtree end when it has no child heading;
+  and
+- the **selected subtree** runs from the selected heading's start to the next
+  heading of equal or smaller depth, or to the body end.
+
+The projected body is the preamble, each retained ancestor's direct content in
+order, and the selected subtree. For a sole outermost title, the title is the
+first retained ancestor even though it takes no level in the path.
+
+Each retained range is scanned separately, under the origin that range has in
+the original file — its path, its offset, and its line. The ranges are not
+concatenated and rescanned: skipped source must not renumber what follows it,
+because a retained element's source position is what its expansion identifier
+is derived from. A retained element therefore carries the same expansion ID in
+a targeted run as in a full one, and two targets that retain it agree with each
+other. The target string takes no part in expansion identity; a run's own
+identity is what distinguishes the effects of two target runs.
+
+Frontmatter, root props, `returns`, the return mode, and `<Output>` behavior are
+unchanged and apply to the projected body. Structural validation applies to the
+projected body too: an invalid skipped sibling is irrelevant, while an invalid
+retained range fails before any authored effect in the projection runs.
+
+##### Failure timing and durable identity
+
+Selection happens before the body expands. An invalid, unmatched, or ambiguous
+selector runs no authored document effect.
+
+The live root import records the **exact canonical target**, never the caller's
+selector. An untargeted import records no target member at all, so journals
+written before targets existed stay readable by untargeted runs.
+
+A replay guard validates the target before the recorded run is reused. It parses
+the recorded root content, resolves the current selector against *that* content,
+and requires the result to equal the recorded exact target; the recorded content
+is then what the projection is taken from. A different selector naming the same
+section replays. A different exact target, a targeted request against an
+untargeted record, an untargeted request against a targeted record, and a
+selector the recorded content no longer resolves are all stale input (§6.11).
+The check runs before a completed run's recorded terminal result can be reused,
+so a finished journal cannot answer for a section it never ran.
+
+##### Naming a root document
+
+`@executablemd/core` exposes the shared shapes:
+
+```ts
+interface FileRootDocument {
+  readonly path: string;
+  readonly source?: undefined;
+  readonly target?: string;
+}
+
+interface InlineRootDocument {
+  readonly path: "<eval>";
+  readonly source: string;
+  readonly target?: string;
+}
+
+type RootDocumentSource = FileRootDocument | InlineRootDocument;
+
+function fileSource(reference: string): FileRootDocument;
+function inlineSource(source: string, options?: { readonly target?: string }): InlineRootDocument;
+function formatDocumentReference(path: string, target?: string): string;
+```
+
+`fileSource()` splits a document reference at the first raw `#`, percent-decodes
+the path portion, and stores the fragment — still encoded — as `target`. It does
+not decode the fragment as one string, because `%2F` must stay distinguishable
+from a level separator. An empty path, a malformed escape, a byte sequence that
+is not UTF-8, and NUL each fail with a cause-free `TypeError` whose message is
+exactly `Invalid document reference`; the input is a command-line argument, and
+echoing it back would put arbitrary bytes into a diagnostic. A filename
+containing `#` is written `%23`, and one containing a literal `%HH` sequence is
+written `%25HH`.
+
+`formatDocumentReference()` takes a decoded path and, optionally, an
+already-canonical exact target. It encodes the path, validates the target rather
+than encoding it again, and joins them with `#`. It is the one formatter
+diagnostics, command output, and workflow handoff use. Making an authored glob
+canonical is the selector parser's work, not this function's.
+
+Existing programmatic `{ path }` values and `inlineSource(source)` remain valid
+and untargeted.
+
+An unresolvable target raises `DocumentTargetError`, whose `kind` is
+`invalid-selector`, `no-match`, or `multiple-matches`. It carries the requested
+`selector` as it arrived, the canonical encoded `matches` (empty except for
+`multiple-matches`), and every canonical encoded `available` target. Its data is
+rebuilt and frozen at the boundary, and its message quotes the selector as JSON
+and lists canonical encoded references, so a heading holding a control character
+cannot reach a diagnostic literally. It is an ordinary invocation failure, not a
+durability or `API.Files` failure. Because target resolution sits inside the
+durable root import, a failure reaching a caller through `execute()` arrives by
+name and message like every other failure crossing that boundary; the typed
+error is what `inspectDocument()` reports, and inspection is where a host
+resolves a selector before running anything.
 
 ### 5.5 The Component Api
 
@@ -5551,6 +5762,9 @@ workflow and returns a `DocumentExecution` handle. Options:
 - the root document source — either `path`, the path to the root markdown
   document, or an inline document built with `inlineSource(text)`, which carries
   the supplied text together with its `<eval>` identity
+- `target?` — a document target selector, still encoded, resolved against the
+  root before its body expands (§5.4). `fileSource(reference)` builds a file
+  root and its selector from one document reference
 - `stream` — the durable stream that journals the run
 - `props?` — JSON values supplied to the root document (default: `{}`)
 - `componentDirs?` — component search directories (default:
@@ -5675,9 +5889,18 @@ what it declares — without executing the document or creating a journal:
 - `returnMode` — `"text"` or `"value"`. An explicit `returns: { type: string }`
   produces the same effective schema as the default, so the mode is what tells
   the two apart.
+- `targets` — every document target the root addresses, as canonical encoded
+  fragments without the document path or a leading `#`, in document order,
+  duplicates retained (§5.4).
+- `target` — the exact canonical target the requested selector resolved to.
+  Present only when a target was requested and resolved, and never the caller's
+  glob.
 
 An invalid return schema fails inspection exactly as it fails execution: both
-load the definition through the same path.
+load the definition through the same path. So does an unresolvable target:
+inspection discovers and selects targets without expanding the document,
+evaluating a code block, importing a body component, or creating a journal, so
+a host resolves a selector to one exact target before anything runs.
 
 `DocumentExecution` is an `Operation<Result<Json>>`: `yield* execution`
 completes with `Ok(value)` on success and `Err(error)` on document,

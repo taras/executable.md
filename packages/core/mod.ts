@@ -130,8 +130,20 @@ export type {
   ExecutionApi,
   DocumentExecution,
 } from "./src/execute.ts";
-export { INLINE_SOURCE_PATH, inlineSource, rootSourcePath } from "./src/root-source.ts";
-export type { InlineRootDocument, RootDocumentSource } from "./src/root-source.ts";
+export {
+  fileSource,
+  formatDocumentReference,
+  INLINE_SOURCE_PATH,
+  inlineSource,
+  rootSourcePath,
+} from "./src/root-source.ts";
+export type {
+  FileRootDocument,
+  InlineRootDocument,
+  RootDocumentSource,
+} from "./src/root-source.ts";
+export { DocumentTargetError } from "./src/document-targets.ts";
+export type { DocumentTargetErrorKind } from "./src/document-targets.ts";
 export { inspectComponent, inspectDocument } from "./src/inspect.ts";
 export type {
   ComponentInfo,

@@ -31,6 +31,7 @@ Existing documents and code get aligned to this section retroactively.
 | definition base | the Git revision supplied to choose a workflow definition's pinned commit |
 | Repository base | the optional Git revision from which one named Workspace Repository initializes its primary checkout |
 | pinned commit | the commit obtained by resolving a base once; it remains the workflow run's starting repository state even as the run creates descendant commits |
+| document target | an addressable static heading in a root document's own Markdown flow, named by the canonical path of heading labels that reaches it; selecting one executes the preamble, each ancestor's own content, and that heading's complete subtree |
 | expansion | one logical evaluation of an authored executable element within a document execution |
 | expansion ID | a deterministic identifier for one logical expansion; restoring or retrying that expansion preserves the ID, while a distinct evaluation requested by the document receives another |
 | Git capability | the contextual interface through which workflow infrastructure queries the Git repository associated with the current working directory |
@@ -603,6 +604,33 @@ interpreter; graceful Worker shutdown alone is insufficient. Worker Shell
 exposes no native executable or host PATH and is not described as POSIX or
 native Bash.
 
+## Document targets
+
+A root document addresses its own sections. The outline is discovered from the
+document's static Markdown alone: only headings in the root flow are targets,
+and a heading is addressable only when its text is statically rendered — a
+heading generated inside a component, or one carrying an interpolation, has no
+stable address, and neither does anything beneath it. Discovery therefore
+parses a copy in which the scanner's top-level component spans are blanked,
+because a Markdown parser reading raw XMD cannot tell a component's children
+from the root flow.
+
+Selection resolves exactly once, before the document expands and before any
+authored effect runs. A selector may glob, but it must name exactly one catalog
+entry: naming none and naming several are both failures, and two sections that
+canonicalize to the same path stay two entries so the ambiguity is reported
+rather than resolved arbitrarily.
+
+The selector and the target it resolves to are different things, and only one
+of them is identity. A selector is invocation input — it describes what a
+caller asked for, and two callers may spell the same request differently. The
+**exact resolved target** is what ran, so it is what a document execution
+records durably, what a targeted workflow definition carries, and what a resumed
+run is checked against. A caller's glob is never recorded and never re-resolved
+against a newer checkout; a resumed run re-resolves the current selector against
+the *recorded* content and refuses to continue unless it still names the
+recorded target.
+
 ## Expansion identity
 
 Core describes the executable element currently being expanded:
@@ -638,6 +666,14 @@ JavaScript object identity.
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity without installing workflow
 middleware.
+
+Selecting a document target does not disturb any of this. Projection retains
+the original source ranges and scans each one under its own origin, so a
+retained element keeps the offset and line it was authored at, and with them
+its expansion ID. Two runs of the same document under different targets
+therefore agree on the ID of every element they both retain, and may share IDs
+without sharing effects — run identity and workflow-definition identity are
+what tell those runs apart.
 
 ## Two layers
 
@@ -992,6 +1028,7 @@ Status is measured against main.
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
+| document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack; `xmd targets`, targeted `xmd run`, and the targeted workflow definition are unbuilt |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |
