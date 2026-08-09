@@ -196,6 +196,64 @@ describe("durable fail-stop boundary", () => {
     }
   });
 
+  it("classifies a reused policy error by each append occurrence", function* () {
+    const sharedFailure = new Error("reused policy and adapter failure");
+    const backend = new FailOnceStream(sharedFailure);
+    let blockedExecutions = 0;
+    let laterExecutions = 0;
+    let policyCaught: unknown;
+    let persistenceCaught: unknown;
+    let failure: unknown;
+    const stream = guardDurableStream(
+      backend,
+      // deno-lint-ignore require-yield
+      function* (event) {
+        if (event.type === "yield" && event.description.name === "blocked") {
+          throw sharedFailure;
+        }
+      },
+    );
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          try {
+            yield* durableCall("blocked", () => {
+              blockedExecutions++;
+              return Promise.resolve("blocked");
+            });
+          } catch (error) {
+            policyCaught = error;
+          }
+          try {
+            yield* durableCall("later", () => {
+              laterExecutions++;
+              return Promise.resolve("completed");
+            });
+          } catch (error) {
+            persistenceCaught = error;
+          }
+          return "must-not-close";
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(blockedExecutions).toBe(1);
+    expect(laterExecutions).toBe(1);
+    expect(policyCaught).toBe(sharedFailure);
+    expect(persistenceCaught).toBe(failure);
+    expect(failure).toBeInstanceOf(DurablePersistenceError);
+    if (!(failure instanceof DurablePersistenceError)) {
+      throw new Error("expected durable persistence failure");
+    }
+    expect(failure.cause).toBe(sharedFailure);
+    expect(backend.appendAttempts).toBe(1);
+    expect(backend.snapshot()).toEqual([]);
+  });
+
   it("fences a later callback executor after a caught persistence failure", function* () {
     const adapterFailure = new Error("first append failed");
     const stream = new FailOnceStream(adapterFailure);

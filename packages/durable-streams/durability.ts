@@ -8,7 +8,7 @@ import {
   StaleInputError,
   TerminalDivergenceError,
 } from "./errors.ts";
-import { isDurableEventRejection, unwrapDurableEventRejection } from "./guard.ts";
+import { withDurableEventRejectionObserver } from "./guard.ts";
 import type { DurableEvent } from "./types.ts";
 
 interface AppendTurn {
@@ -131,16 +131,23 @@ export function* appendDurableEvent(ctx: DurableContext, event: DurableEvent): O
     throw admitted;
   }
 
+  let policyRejection: unknown;
+  let policyRejected = false;
   try {
-    yield* ctx.stream.append(event);
+    yield* withDurableEventRejectionObserver(
+      (error) => {
+        policyRejection = error;
+        policyRejected = true;
+      },
+      () => ctx.stream.append(event),
+    );
   } catch (error) {
-    if (isDurableEventRejection(error)) {
-      const rejection = unwrapDurableEventRejection(error);
+    if (policyRejected && Object.is(error, policyRejection)) {
       const failure = activeDurabilityFailure(ctx);
       if (failure) {
         throw failure;
       }
-      throw rejection;
+      throw error;
     }
     const active = activeDurabilityFailure(ctx);
     if (active) {

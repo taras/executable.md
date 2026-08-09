@@ -14,47 +14,21 @@
  * produces at most one journal event.
  */
 
-import type { Operation } from "effection";
+import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
-const EVENT_REJECTION = Symbol.for("@effectionx/durable-streams/event-rejection");
+type DurableEventRejectionObserver = (error: unknown) => void;
 
-class WrappedDurableEventRejection extends Error {
-  constructor(readonly rejection: unknown) {
-    super(rejection instanceof Error ? rejection.message : String(rejection), {
-      cause: rejection,
-    });
-  }
-}
+const EventRejectionObserver = createContext<DurableEventRejectionObserver>(
+  "@effectionx/durable-streams/event-rejection-observer",
+);
 
-function markEventRejection(error: unknown): Error {
-  const rejection = error instanceof Error ? error : new Error(String(error));
-  if (
-    Reflect.defineProperty(rejection, EVENT_REJECTION, {
-      value: true,
-      configurable: false,
-      enumerable: false,
-      writable: false,
-    })
-  ) {
-    return rejection;
-  }
-  return new WrappedDurableEventRejection(error);
-}
-
-export function isDurableEventRejection(error: unknown): boolean {
-  if (error instanceof WrappedDurableEventRejection) {
-    return true;
-  }
-  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
-    return false;
-  }
-  return Reflect.get(error, EVENT_REJECTION) === true;
-}
-
-export function unwrapDurableEventRejection(error: unknown): unknown {
-  return error instanceof WrappedDurableEventRejection ? error.rejection : error;
+export function withDurableEventRejectionObserver(
+  observer: DurableEventRejectionObserver,
+  operation: () => Operation<void>,
+): Operation<void> {
+  return EventRejectionObserver.with(observer, operation);
 }
 
 /**
@@ -92,7 +66,9 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       try {
         yield* gate(structuredClone(event));
       } catch (error) {
-        throw markEventRejection(error);
+        const observer = yield* EventRejectionObserver.get();
+        observer?.(error);
+        throw error;
       }
       yield* stream.append(event);
     },
