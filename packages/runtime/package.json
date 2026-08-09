@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./mod.ts",
+    "./files": "./files.ts",
     "./test": "./test/mod.ts"
   },
   "dependencies": {

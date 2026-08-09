@@ -22,6 +22,7 @@ import {
 import type { Operation } from "effection";
 import { when } from "@effectionx/converge";
 import { cwd, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
@@ -56,6 +57,7 @@ function writeDocument(dir: string, source: string): Operation<void> {
 /** One bounded run, so the document scope closes before effects are read. */
 function run(dir: string): Operation<Json> {
   return scoped(function* () {
+    yield* useHostFiles();
     return yield* collect(
       yield* execute({
         path: join(dir, "doc.md"),
@@ -114,6 +116,7 @@ describe("Tier TD — TempDir", () => {
 
     const stream = new InMemoryStream();
     const output = yield* scoped(function* () {
+      yield* useHostFiles();
       return yield* collect(
         yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
       );
@@ -381,6 +384,7 @@ describe("Tier TD — TempDir", () => {
     const stream = new InMemoryStream();
     const first = String(
       yield* scoped(function* () {
+        yield* useHostFiles();
         return yield* collect(
           yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
         );
@@ -401,6 +405,7 @@ describe("Tier TD — TempDir", () => {
       (event) => !(event.type === "close" && event.coroutineId === "root"),
     );
     const outcome = yield* scoped(function* () {
+      yield* useHostFiles();
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(partial),
@@ -423,6 +428,7 @@ describe("Tier TD — TempDir", () => {
   // one behind — whether it arrives while the directory is in use or before
   // the acquiring task has run at all.
   it("TD15: a cancelled acquisition leaves no directory behind", function* () {
+    yield* useHostFiles();
     const before = yield* temporaries();
 
     // Halted while the directory is live: the path is observed first, so the
@@ -467,6 +473,7 @@ describe("Tier TD — TempDir", () => {
     const stream = new InMemoryStream();
     const first = String(
       yield* scoped(function* () {
+        yield* useHostFiles();
         return yield* collect(
           yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
         );
@@ -483,6 +490,7 @@ describe("Tier TD — TempDir", () => {
       (event) => !(event.type === "close" && event.coroutineId === "root"),
     );
     const outcome = yield* scoped(function* () {
+      yield* useHostFiles();
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(partial),
@@ -521,6 +529,7 @@ describe("Tier TD — TempDir", () => {
     );
 
     const outcome = yield* scoped(function* () {
+      yield* useHostFiles();
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(),

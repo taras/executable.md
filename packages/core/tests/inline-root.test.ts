@@ -23,7 +23,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
@@ -131,6 +131,7 @@ function* useWorkspace(files: Record<string, string>): Operation<string> {
     },
     { at: "min" },
   );
+  yield* useHostFiles();
   return root;
 }
 

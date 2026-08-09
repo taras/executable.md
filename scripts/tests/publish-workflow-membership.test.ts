@@ -94,13 +94,20 @@ describe("release.yml binary compilation", () => {
       if (!commands.includes("deno compile")) {
         continue;
       }
+      // Every compile in the file, not only the first: a workflow may compile
+      // more than one entrypoint, and reading to a single named one would let
+      // the first invocation's flags answer for all of them.
+      //
       // A folded shell command: read from `deno compile` to the entrypoint that
-      // ends it, so line breaks and continuations do not matter.
-      const invocation = commands.slice(commands.indexOf("deno compile"));
-      const flags = invocation.slice(0, invocation.indexOf("packages/cli/src/compiled.ts"));
-      for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen"]) {
-        if (!flags.includes(flag)) {
-          compiles.push(`${entry} compiles without ${flag}`);
+      // ends it — the first `.ts` path after the flags — so line breaks and
+      // continuations do not matter.
+      for (const invocation of commands.split("deno compile").slice(1)) {
+        const entrypoint = invocation.search(/\S+\.ts\b/);
+        const flags = entrypoint === -1 ? invocation : invocation.slice(0, entrypoint);
+        for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen"]) {
+          if (!flags.includes(flag)) {
+            compiles.push(`${entry} compiles without ${flag}`);
+          }
         }
       }
     }

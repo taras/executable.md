@@ -34,6 +34,9 @@
       "@executablemd/runtime": [
         "./packages/runtime/mod.ts"
       ],
+      "@executablemd/runtime/files": [
+        "./packages/runtime/files.ts"
+      ],
       "@executablemd/runtime/test": [
         "./packages/runtime/test/mod.ts"
       ],

@@ -116,12 +116,31 @@ paths relative to cwd, and the engine's own file access is written that way:
 component search directories (`["./components", "./"]`) are relative, and
 resolved paths in the journal (`"components/Greeting.md"`) are relative.
 
-A component that resolves against the **contextual** working directory is the
-exception, because a relative path would resolve against the process's
-directory instead of the one it was given. `<File>` (§6.13) resolves its
-`path` prop against `Env.cwd` itself and hands the Fs Api the absolute result;
-`<Glob>` (§6.14) searches `Env.cwd` and returns relative paths. Nothing either
-resolves reaches a printed error or the journal.
+#### Document data and engine control plane
+
+Two kinds of filesystem access are separate boundaries, and the separation is
+what lets one document mean the same thing in two environments.
+
+**Document data** — the files a document names in its own text — goes through
+`API.Files`, a contextual Api of whole semantic operations. `<File>` (§6.13),
+`<Glob>` (§6.14), and `<TempDir>` (§6.11) speak only that Api, hold no host
+path, and never learn which provider answered. `xmd run` installs a host
+provider that resolves those paths in the caller's filesystem; a workflow run
+installs one whose paths name entries in a logical filesystem the run owns.
+The Api has **no host default**: with no provider installed, every operation
+fails the execution rather than reaching the host.
+
+**The engine's own control plane** — the root document, component search,
+replay guards, the eval compiler, the diagnostic journal, and the test target
+— reads host paths the caller selected, through the low-level `API.Fs`. Those
+are not document-addressable, and they stay where they are.
+
+A path a document authored is always relative and always resolved by the
+provider, against the contextual `Env.cwd` the component supplies with it.
+Nothing the provider resolves reaches a printed error or the journal: what
+crosses back is a reason from a fixed vocabulary (§6.13), never a resolved
+path, a symlink target, a temporary name, an errno code, or a platform
+message.
 
 #### The contextual working directory
 
@@ -4493,6 +4512,26 @@ remove the directory through structured concurrency, and there is no `retain`
 prop and no retention after failure. A future execution-level inspection policy
 may keep scoped resources without changing this component's contract.
 
+#### Where the directory comes from
+
+`<TempDir>` creates nothing itself. It asks the installed `API.Files` provider
+(§1.2) for a temporary directory, and the provider owns creation, the canonical
+path, and removal as one acquisition — so nothing can land between creating a
+directory and owning its removal, and a cancellation arriving mid-acquisition
+cannot leave one behind.
+
+A provider is allowed to have none to give. A run whose whole filesystem is a
+database transaction has no temporary directories, and inventing a logical one
+would put the content somewhere the run does not own — so that provider refuses
+the operation outright, with the fixed diagnostic `Files provider does not
+support temporary-directory`. The refusal is **fatal** on §6.13's terms: the
+content does not run, nothing is rendered, and no later sibling expands. It is
+never a printed error, because there is no directory for the document to work
+in and carrying on would mean carrying on somewhere else.
+
+With no provider installed at all, `<TempDir>` fails the same way and for the
+same reason (§6.13).
+
 #### Why the path is canonical
 
 `<TempDir>` renders the directory's resolved path, not the one the host's
@@ -4550,16 +4589,38 @@ something a document reports, and `ContentError` is a public type an author
 constructs and subclasses, so what one carries underneath is never taken as a
 guarantee that nothing fatal is inside it.
 
-**A durability failure takes precedence over a documentation failure, whatever
-the wrapper order.** A wrapper carries whatever failed together, in whatever
-order the platform happened to collect it: an `AggregateError`'s members and an
-`InvocationTeardownError`'s stage failures are both positional. Precedence is
-therefore decided by kind rather than by position — the cause graph is searched
-for a durability failure first, and only a graph without one reports a
-documentation failure. Position-based discovery would let one ordering of the
-same teardown report the document's failure instead, which `<Loop>` would then
-record as an ordinary `error` outcome onto a journal already known not to
-describe the run.
+**A Files infrastructure failure is fatal on the same terms.** A missing
+document filesystem provider, an operation a provider refuses, and a provider
+that broke its own contract (§6.13) are none of them things a document did or
+can act on. Each is discovered through the same cycle-safe traversal, each
+crosses a `ContentError` the way a durability failure does, and each is
+recognized by its structural tag rather than by class — so a failure a
+separately loaded copy of the runtime package constructed is found on the same
+terms as one this copy did. Durability failures keep their own recognition
+unchanged; only Files failures are recognized structurally, because only that
+boundary is crossed by a second loaded copy.
+
+Recognition is strict, because a recognized failure travels onward as the exact
+object that was thrown. It must carry the fixed diagnostic for its kind, frozen
+data with no extra fields, and no cause. A failure that carries the right tag
+and anything else — a raw platform message, an errno beneath it — is not
+preserved: it is replaced by a fresh invariant carrying none of it.
+
+**Precedence is decided by kind rather than by position.** A wrapper carries
+whatever failed together, in whatever order the platform happened to collect
+it: an `AggregateError`'s members and an `InvocationTeardownError`'s stage
+failures are both positional. The cause graph is therefore searched for a
+durability failure first, then for a Files infrastructure failure, and only a
+graph with neither reports a documentation failure. Position-based discovery
+would let one ordering of the same teardown report the document's failure
+instead, which `<Loop>` would then record as an ordinary `error` outcome onto a
+journal already known not to describe the run.
+
+Whichever is selected comes back **by identity** — the object that was thrown,
+not a replacement — because a fail-stop that records "the first error" has to
+record the one that happened. Only an output-mode `DocumentationError` is a
+decision a printing boundary may still act on; a durability failure and a Files
+infrastructure failure never are.
 
 This is a limitation of the current durable model, not of the component. The
 `import_component` entry recording that `<TempDir>` resolved to core's
@@ -4757,12 +4818,27 @@ reachable beneath it, carrying the same error segments the document reported —
 reporting the component's account costs nothing that a host inspecting the
 failure needs.
 
+#### The provider boundary
+
+`<File>` makes no filesystem call of its own. It calls `API.Files` (§1.2), a
+contextual Api of whole semantic operations, and what "the filesystem" means
+belongs to whichever provider is installed. `xmd run` installs a host provider;
+a workflow run installs one whose paths name entries in a logical filesystem
+the run owns. The component holds no host path, learns no resolved name, and
+receives no handle or capability — the two forms it performs are `readTextFile`
+and `writeTextFile`, and each is one call.
+
+What the component owns is **order**, and it owns it because ordering is what
+containment depends on.
+
 #### Containment
 
 Everything `<File>` touches stays inside `Env.cwd`, checked in two stages that
-answer different questions and therefore run at different times.
+answer different questions and therefore run at different times. Both stages
+are the provider's; the component decides when each happens.
 
-The **lexical** stage is path arithmetic against `Env.cwd` and nothing else.
+The **lexical** stage is `checkFilePath`: path arithmetic against `Env.cwd` and
+nothing else.
 An empty path, an absolute path, and a `..` escape are all decided there,
 before any filesystem call — so the failure reveals nothing about what the
 path named. Only a complete `..` segment escapes: a name that merely begins
@@ -4776,6 +4852,11 @@ For the write form this stage runs **before the children expand**. An unusable
 path costs nothing, and the printed error it produces is about the path rather
 than about whatever the children then did.
 
+`checkFilePath` returns nothing usable — no path, no resolved name, no handle,
+no capability. It answers one question, "may the children run?", and the answer
+authorizes nothing else. A check that was skipped, replaced by middleware, or
+answered by a different provider therefore cannot admit the write that follows.
+
 A lexical check is not enough on its own, because a symlink inside the
 directory can point anywhere. The **resolving** stage takes the part of the
 path that already exists — the file itself when it is there, the deepest
@@ -4784,24 +4865,37 @@ destination is still inside the directory is ordinary and is followed to the
 file it names; one that leaves is refused, before the content outside is read
 or changed.
 
-For the write form this stage runs **after the children have finished**, and
-immediately before the write. A child can change what a path means — replacing
-a directory with a symlink out of the workspace — so a destination resolved
-any earlier would not be the one the write lands on.
+For the write form this stage is inside `writeTextFile`, which runs **after the
+children have finished**. A child can change what a path means — replacing a
+directory with a symlink out of the workspace — so a destination resolved any
+earlier would not be the one the write lands on. That one call **repeats
+lexical admission** from the same authored path and contextual directory and
+then owns every later step: resolution, target classification, parent creation,
+and the commit. Nothing is handed between the two stages, which is why the
+earlier check cannot be turned into authority for the later write.
 
-Writes land through a sibling temporary file and a rename, which also closes
-the one case resolution cannot: a **dangling** symlink has nothing to resolve,
-and `rename` replaces the link rather than following it wherever it points.
-Removal of the temporary is registered before it is written, so the write is
-covered by it rather than the other way round, and removal is attempted on every
-exit including cancellation.
+The read form is one call, `readTextFile`, and that call owns admission,
+resolution, target classification, and the read together.
+
+A **host** provider lands writes through a sibling temporary file and a rename,
+which also closes the one case resolution cannot: a dangling symlink has
+nothing to resolve, and `rename` replaces the link rather than following it
+wherever it points. Removal of the temporary is registered before it is
+written, so the write is covered by it rather than the other way round, and
+removal is attempted on every exit including cancellation.
 
 Reading a path that does not exist, or a directory, fails naming which it was.
 
 #### The commit point
 
-The rename is the write's commit point, and the guarantees are stated around
-it:
+Every provider commits, but not every provider commits the same way, and the
+difference is visible only when a write fails. A host provider's commit is a
+rename; a transaction-bound provider's is a savepoint released into the
+transaction that owns it. A successful write renders nothing under either, so
+the distinction never reaches a document that succeeds.
+
+The rename is the **host** write's commit point, and the guarantees are stated
+around it:
 
 - A failure or a cancellation **before** the rename leaves the previous target
   exactly as it was. Nothing has replaced it yet.
@@ -4816,24 +4910,35 @@ write can be taken back.
 
 ##### What a failed write can say about the target
 
-`rename` is an operation on the contextual Fs Api, and an `around` handler may
+A failed write reports **where it stopped**, and where it stopped is what
+decides what may be said about the target. The provider names the phase; the
+component chooses the sentence. No other combination exists, and a provider
+that reports one is a provider that broke its contract (below).
+
+A rename is an operation on the contextual Fs Api, and an `around` handler may
 do work on both sides of `next()`. So a rename that **throws** may have thrown
-before the underlying rename ran, or after it succeeded, and the component
-cannot tell which. The three outcomes it reports are exactly what it can
-observe:
+before the underlying rename ran, or after it succeeded, and no provider can
+tell which.
 
 | Where the write stopped | What is reported |
 |---|---|
+| Admission, resolution, target, or parent creation | no outcome sentence — nothing was attempted on the target |
 | Preparation — writing the temporary | `The previous file is unchanged.` |
-| The rename threw | `Whether the replacement committed is unknown: the target holds either the complete previous content or the complete replacement, never a partial write.` |
-| The rename returned | `The file was written.` |
+| The commit threw | `Whether the replacement committed is unknown: the target holds either the complete previous content or the complete replacement, never a partial write.` |
+| The commit returned, cleanup failed | `The file was written.` |
+| A transaction rolled the change back | `The Workspace change was rolled back.` |
 
-Only the first and third are conclusions. The middle one is the honest answer:
-atomicity still holds, so it is one of two whole files, but which one is not
-knowable from here. Reporting that the previous file survived would be a guess,
-and wrong in exactly the case where a handler failed after committing.
+The unknown row is the honest answer rather than a missing one: atomicity still
+holds, so it is one of two whole files, but which one is not knowable from
+there. Reporting that the previous file survived would be a guess, and wrong in
+exactly the case where a handler failed after committing.
 
-A failed cleanup is orthogonal and composes with any of the three, appending:
+The last row belongs to a transaction-bound provider and cannot appear from a
+host one; equally, no host rename or temporary-leftover wording appears from a
+transaction-bound one. A rolled-back change is a conclusion — the write did not
+happen, and nothing is left over.
+
+A failed cleanup is orthogonal to all of them and appends:
 
 ```text
 A temporary file beside it may remain.
@@ -4849,17 +4954,88 @@ refusal exists to prevent.
 
 A platform error carries the path it failed on — `ENOTDIR: not a directory,
 stat '/private/var/…'` — so forwarding one would leak exactly what the rest of
-this withholds. Every filesystem call is wrapped, and nothing from the error it
-caught is reproduced: the errno code **selects** a phrase from a fixed
-allowlist, and an unrecognized code selects `the filesystem operation failed`.
-The code itself is never emitted. It is supplied by whatever implements the Fs
-Api, so it can hold a path, a newline, or a comment terminator as easily as
-`ENOENT` can.
+this withholds. Nothing from one crosses the provider boundary. What a provider
+returns is a **reason** drawn from a fixed vocabulary, and the reason *selects*
+a phrase; an unrecognized reason, and a condition the provider could not
+classify, both select `the filesystem operation failed`.
+
+The reasons are:
+
+```text
+empty-path, absolute-path, lexical-escape, resolved-escape, missing,
+directory, special-file, not-directory, permission-denied, read-only,
+too-many-symlinks, path-too-long, no-space, quota-exhausted, cross-device,
+busy, too-many-open-files, directory-not-empty, invalid-pattern,
+operation-failed
+```
+
+A failure carries that reason and the phase it came from, as a plain frozen
+object under a stable tag, and it is **parsed** before any field is read. Data
+that does not validate is treated as absent rather than trusted: for a non-write
+operation that means the generic phrase, and for a write it is a
+provider-contract failure (below), because every sentence a write could print
+makes a claim about whether the file was replaced.
+
+The outcome a provider returns is checked the same way, and the distinction
+matters more than it looks. An outcome that **will not say** what it is — one
+that does not report whether it succeeded, or whose success value or failure
+cannot be read at all — has described nothing, and is a provider-contract
+failure. An outcome that reads perfectly well but carries a failure the
+vocabulary does not recognize *has* described something, just not in terms this
+version knows: for a non-write operation that is the generic sentence and the
+document carries on.
+
+One operation qualifies that. Admitting a path succeeds with no value at all, so
+an outcome that carries none is its ordinary success; what is refused there is a
+value that cannot be read, and one that is present but is something other than
+nothing. Every other operation's success carries a value and requires it to be
+readable.
+
+Nothing a provider returned is passed onward. What reaches the component is
+rebuilt from the fields that validated — including a search's list of paths,
+which is copied, so what a document binds is not something the provider can
+still change.
 
 The error's class carries no authority either. A `FileAccessError` arriving
-from a wrapped call is replaced like any other, because a class says nothing
-about whether a message is safe to show — trusting one would let an Fs
-implementation choose the text of a printed error by choosing what to throw.
+from a provider call is replaced like any other, because a class says nothing
+about whether a message is safe to show — trusting one would let a provider
+choose the text of a printed error by choosing what to throw. Recognition is by
+structural tag rather than by `instanceof` for the same reason two copies of the
+runtime package can be loaded at once, and `instanceof` answers false across
+them.
+
+#### When the provider is the problem
+
+An ordinary filesystem condition is something the document did and can act on.
+Three things are not, and none of them becomes a printed error:
+
+- **No provider is installed.** Every operation fails with the fixed diagnostic
+  `Files provider is not installed`. The write form reaches it at
+  `checkFilePath`, so it lands before the children; the read form, `<Glob>`,
+  and `<TempDir>` reach it at their first call. Nothing falls back to the host.
+- **The provider refuses the operation.** `Files provider does not support
+  temporary-directory` is the one such refusal (§6.11).
+- **The provider broke its contract** — stale authority, a failed rollback, a
+  handler that threw, or result data that does not validate. All report
+  `Files provider invariant failed`, and which contract broke is structural
+  data for a consumer deciding what to fence rather than text: the category is
+  never interpolated into the message.
+
+All three **end the execution** (§6.11's rules for a durability failure apply
+here too): no printed error, no `<File>` output, no root or child `Close`, and
+no later sibling runs. A missing provider is an installation fault, and a
+document that carried on after one would run every step after the file work as
+though the file work had happened.
+
+Precedence among fatal failures is by kind rather than position: a durability
+failure first, then a Files infrastructure failure, then a documentation
+failure, wherever each sits in the cause graph.
+
+Cancellation is none of these. Halting resumes a generator rather than throwing,
+so no Result is manufactured and no printed error is created. A host provider's
+cleanup still runs; a cleanup that fails while cancellation is unwinding is
+reported as a sanitized teardown invariant rather than turning the cancellation
+into a write outcome.
 
 #### When cleanup fails
 
@@ -4894,19 +5070,31 @@ to remove.
 
 #### Threat model
 
-Containment is judged against the filesystem as `<File>` observes it. That is
-sound while the filesystem is stable, and every guarantee above is stated on
-that basis.
+Containment is the installed provider's claim, and the two providers make
+different ones.
+
+**`xmd run`** resolves document paths in the caller's own filesystem, and
+judges containment against that filesystem as it observes it. That is sound
+**while the host pathname namespace is stable**, and every guarantee above is
+stated on that basis.
 
 It is not a sandbox. Nothing prevents another process from replacing a
-directory with a symlink between the moment a path is validated and the moment
-it is used. Resolving a write's destination immediately before writing narrows
-that window and closes it for the case a document controls — its own children —
-but check-then-use does not become atomic by being ordered more carefully.
+directory, symlink, junction, or reparse point between the moment a path is
+observed and the moment it is used. Resolving a write's destination immediately
+before writing narrows that window and closes it for the case a document
+controls — its own children — but check-then-use does not become atomic by being
+ordered more carefully, and no capability the shipped runtimes expose closes it
+without a native dependency.
 
-Containment that does not depend on observed filesystem state — directory
-handles, `openat`-style resolution, or platform-enforced sandboxing — is issue
-#227.
+**A workflow run** resolves document paths in a logical filesystem the run
+owns. A document path never becomes a host path there, so there is no host
+namespace for another process to replace: lookup, symlink resolution, and
+traversal are all the provider's own, and a symlink target that looks like a
+host absolute path is an ordinary logical name.
+
+Neither claim covers a native command a document runs. A subprocess receives
+the contextual working directory and the caller's filesystem, and containing
+what it then does is not this component's boundary.
 
 #### Scope
 
@@ -4968,9 +5156,22 @@ which is not an order at all.
 Finding nothing is a result. An empty array succeeds and the document carries
 on; it is not a failure and not a printed error.
 
+#### Who searches
+
+`<Glob>` validates the shape of what the document wrote — a pattern that is
+empty, absolute, or begins by leaving cannot match anything a search produces —
+and then makes exactly one `API.Files` call (§1.2). The provider compiles the
+patterns, walks the tree, and returns the deduplicated, sorted, POSIX-relative
+files. No directory path, no partial listing, and no host path crosses back.
+
+An absolute pattern is judged by the pattern's own grammar rather than the
+running platform's: patterns match POSIX-relative paths everywhere, so a
+leading `/` is absolute wherever the document runs, and so is a drive-letter
+prefix. Deciding it from the host would make one document mean two things.
+
 #### The pattern dialect
 
-Patterns are the filesystem glob library's own, and `<Glob>` adds no syntax:
+Patterns are the provider's dialect, and `<Glob>` adds no syntax:
 
 - `*` matches within one path segment;
 - `**` crosses segments, and `**/` matches no directories as readily as many —
@@ -5013,10 +5214,9 @@ and a link to a directory is not descended into.
 
 That last rule is what keeps a search inside `Env.cwd` without judging any
 destination: traversal only ever follows real directories, so it cannot leave the
-working directory and cannot cycle. The filesystem library exposes symlink
-following, but nothing in it confines a resolved destination to the root or
-detects a traversal cycle, so following one cannot be offered safely. A later
-implementation may, if the library guarantees both.
+working directory and cannot cycle. Following one cannot be offered safely
+without confining a resolved destination to the root and detecting a traversal
+cycle, and no provider guarantees both today. A later one may.
 
 #### Failures
 
@@ -5039,9 +5239,9 @@ files". Only a whole leading `..` segment leaves: `..notes.md` is an ordinary
 name, and a `..` further along — `docs/../*.md` — is a path a search never
 produces, so it matches nothing for the ordinary reason.
 
-A pattern that cannot be compiled arrives as a `RegExp` error about a translated
-expression the author never wrote, and which pattern it was is not recoverable
-from it. The candidates are listed rather than one being named; they are the
+A pattern that cannot be compiled is reported by the provider as an
+`invalid-pattern` failure, and which pattern it was does not survive that
+boundary. The candidates are listed rather than one being named; they are the
 document's own text.
 
 #### Printed errors
@@ -5051,20 +5251,24 @@ traversal failure names **no path at all**: what failed is a directory under
 `Env.cwd` that the document never wrote, and §1.2 keeps absolute paths out of
 printed errors.
 
-As in §6.13, nothing from a caught platform error is reproduced. The errno code
-**selects** a phrase from the fixed allowlist the filesystem components share,
-and an unrecognized code selects `the filesystem operation failed`. The code
-itself is never emitted, and the error's class carries no authority either — a
-`GlobError` arriving from a wrapped call is replaced like any other, because a
-class says nothing about whether a message is safe to show.
+As in §6.13, nothing from a caught platform error is reproduced. The provider
+returns a reason from the shared vocabulary, the reason **selects** a phrase,
+and an unrecognized one selects `the filesystem operation failed`. The error's
+class carries no authority either — a `GlobError` arriving from a provider call
+is replaced like any other, because a class says nothing about whether a
+message is safe to show.
+
+A provider that is absent or that broke its contract is not a search failure at
+all. It ends the execution on §6.13's terms, and `<Glob>` binds nothing.
 
 #### Threat model
 
 As with `<File>`, the guarantee is about traversal rather than about the
-filesystem being stable. `<Glob>` never follows a symlink, so nothing it reads
-is chosen by one; but a directory that is real when it is read could be replaced
-afterwards, and this is not a sandbox. Containment that does not depend on
-observed filesystem state is issue #227.
+filesystem being stable. No provider follows a symlink, so nothing a search
+reads is chosen by one. Under `xmd run` a directory that is real when it is read
+could still be replaced afterwards: the host claim holds while the host pathname
+namespace is stable, and this is not a sandbox. A workflow run's traversal walks
+logical entries that no other process can replace.
 
 #### Scope
 
@@ -6443,6 +6647,8 @@ visible warning blocks, gather into a separate error report).
 | TD14 | Ordinary failures are unchanged | A failing block inside a `<TempDir>` still renders a printed error and the following sibling still runs |
 | TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
 | TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
+| TD18 | Provider-backed acquisition | Creation, the canonical path, and removal are one provider acquisition; with no provider installed the component fails the execution before rendering anything |
+| TD19 | A refused operation | A provider that denies `temporary-directory` fails the execution with the fixed diagnostic, renders no content, and lets no later sibling run |
 | TD17 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
 
 ### Tier PC — `<Parse>` and `<SafeParse>`
@@ -6502,6 +6708,12 @@ visible warning blocks, gather into a separate error report).
 | FL24 | Regular file as a path component | `parent/child.txt` with `parent` a file fails for both forms without naming the resolved path |
 | FL25 | The working directory itself | `.` and a path normalizing to it are contained, and fail as a directory rather than as an escape |
 | FL26 | Adversarial error shapes | A `code` holding an absolute path, markup and a newline, an inherited key (`toString`), a planted path in both message and code, and an externally thrown `FileAccessError` all produce the generic phrase; nothing planted reaches the document and the printed error stays one line |
+| FL28 | The check authorizes nothing | A provider whose `checkFilePath` refuses expands no children and receives no second call; the sibling after the component still runs |
+| FL29 | The write repeats admission | The semantic write is one call that re-admits the authored path and owns resolution, target, parents, and the commit — proven by FL18's child swapping the parent between the two |
+| FL30 | Every write phase | Admission, resolution, target, parents, temporary, commit, cleanup, and a rolled-back transaction each produce their own outcome sentence, and no other combination is constructable |
+| FL31 | Provider absence | With no provider installed the write fails the execution before its children, writes nothing, renders nothing, reaches no low-level `API.Fs` call, and stops the sibling after it |
+| FL32 | Malformed provider data | A write failure or success whose data does not validate is a provider-contract failure that ends the execution; a malformed non-write failure is the generic printed error and the document carries on |
+| FL33 | A handler that throws | An arbitrary throw becomes a fixed `protocol` invariant with no cause, message, errno text, or host value; an existing durability or Files failure beneath it is rethrown by identity instead |
 | FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 
 ### Tier FA — Fatal error discovery
@@ -6524,6 +6736,65 @@ visible warning blocks, gather into a separate error report).
 | FA17 | No resurrection | A `DocumentationError` a component recovered from is not reported as the outward failure, while the same one reached without crossing a content failure still is |
 | FA18 | Precedence behind a content failure | A durability failure beneath a recovered content failure outranks a documentation failure, in either wrapper order |
 | FA19 | Cycles through a content failure | A self-caused content failure and one whose cause points back at the wrapper holding it both terminate, and the durability failure is still found |
+| FA20 | Every Files infrastructure failure | Provider-unavailable, operation-denied, and each invariant category is discovered as fatal, bare and wrapped, and none is a durability failure |
+| FA21 | Discovery through every wrapper | A Files failure is found inside a teardown aggregate, an `AggregateError`, an ordinary `cause`, and all three at once |
+| FA22 | Files outranks documentation | In either aggregate order and either teardown order, for every kind |
+| FA23 | Durability outranks Files | In either order, for every durability kind |
+| FA24 | All three at once | Every ordering of a durability, a Files, and a documentation failure reports the durability one; a graph with the last two reports the Files one; nesting changes neither |
+| FA25 | A content failure hides no Files failure | Found beneath a `ContentError` set by subclass and by assignment, and preferred over a documentation failure the boundary would otherwise stop at |
+| FA26 | Cycles carrying a Files failure | A cyclic teardown graph and a self-caused content failure both terminate and still find it |
+| FA27 | A separately loaded runtime copy | A failure with no shared class identity is recognized by its structural tag; an object carrying a different tag is not |
+| FA28 | Decided by output | Only an output-mode `DocumentationError` is; a `throw` decision, every durability kind, and every Files kind are not |
+
+### Tier HF — The host Files provider
+
+Driven directly rather than through a document: what these assert is the
+contract a component cannot see. Every row runs on all five release targets
+(`filesystem-contract` in CI), because path arithmetic and `realpath` are the
+platform's.
+
+| # | Test | Verify |
+|---|------|--------|
+| HF1 | The check touches nothing | Empty, absolute, and lexically escaping paths are each refused with their own reason and no filesystem call at all; an admissible one answers `Ok(undefined)` |
+| HF2 | The round trip | A write commits, reports `host-committed`, reads back, and leaves no temporary beside the file |
+| HF3 | The search's shape | Sorted, deduplicated, POSIX-relative regular files; a symbolic link is not a result |
+| HF4 | Platform failures are Results | `realpath`, `stat`, and the read each fail with the right phase and reason, and neither the message, the code, nor the workspace path survives |
+| HF5 | Every write phase | Each of the eight phases produces data whose target claim matches it, and nothing planted survives |
+| HF6 | Escapes | A link out is refused at resolution for both forms, the destination is not named, and the outside file is unchanged |
+| HF7 | Internal links | Followed to the file they name; the link stays a link |
+| HF8 | Dangling links | Replaced rather than followed, and nothing is created where the link pointed |
+| HF9 | The observer contract | The private phases are announced in order, once each, for write, read, and search |
+| HF10, HF10b | Where the guarantee stops | A parent replaced synchronously between resolution and use is written through, and a target replaced between resolution and access is read through — the documented weakness, with atomicity still holding |
+| HF11 | The commit is one event | A fault before and after `next()` report the same unknown outcome, and one of the two runs really did commit |
+| HF12 | Cancellation | No Result is produced and no temporary is left |
+| HF12b | Cleanup failing as cancellation unwinds | There is no outcome to report it beside, so a fixed teardown invariant leaves the scope instead of a manufactured Result, carrying neither the platform's error nor the generated temporary's name |
+| HF13 | Temporary directories | Live and die with the acquiring scope; a halt before acquisition leaves nothing |
+| HF14 | Absence | Every operation throws provider-unavailable with the fixed diagnostic and no cause, and no low-level call is made |
+| HF15 | Installation | `useHostFiles()` installs beneath ordinary middleware, which can still wrap it |
+| HF16 | Directory links on every platform | A junction on Windows and a directory symlink elsewhere are refused on the same terms |
+| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims and prints every one it checked |
+
+### Tier FF — Files infrastructure failure
+
+| # | Test | Verify |
+|---|------|--------|
+| FF1 | Absence before children | A write with no provider fails the execution, expands no children, renders nothing, reaches no `API.Fs` call, and stops the following sibling |
+| FF2 | Every other form | Read, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
+| FF3 | A refused operation | Denial is fatal, carries its own fixed diagnostic, and renders no content |
+| FF4 | The check authorizes nothing | A refused check makes exactly one provider call; the children never run and the document carries on |
+| FF5 | Malformed write data | A phase and target that contradict each other, a reason outside the vocabulary, and an undescribable success are all fatal `protocol` invariants, and the category is not interpolated |
+| FF6 | Malformed non-write data | Becomes the generic printed error, leaks nothing, and the document carries on |
+| FF7 | An arbitrary throw | Replaced by a fixed invariant with no cause and no host value |
+| FF8 | Identity is preserved | A nested durability failure and a nested Files failure are each rethrown as the same object |
+| FF9 | Precedence at the wrapper | A durability failure beneath a Files invariant is the one preserved |
+| FF10 | Ordinary failures | A missing file is still a printed error and the sibling still runs |
+| FF11 | Hostile-shape inspection is total | A throwing `data` accessor, fields and key enumeration that refuse, an unreadable prototype, a throwing `cause`, unreadable or non-list aggregate members, and unreadable teardown causes are each declined rather than allowed to throw — none of them is a valid structural failure — and a real failure beneath one is still found |
+| FF12 | An unsafe tagged candidate is replaced, not preserved | The right tag plus a raw message, a cause chain, mutable data, an extra data field, a path-bearing `name`, an extra Error-level property, an enumerable symbol payload, or hostile enumeration each fail the identity contract; the planted value survives neither stringification nor enumeration, and the real constructors stay recognizable |
+| FF13 | Cancellation cleanup is discovered as fatal | A host cleanup that fails while cancellation unwinds is selected by the engine's own fatal discovery, by identity, with nothing of the platform's failure in it |
+| FF14 | A hostile outcome never reaches a component | A settlement that is absent, unreadable, or not a boolean is a provider-contract failure; so is a selected failure that is absent or unreadable, and a success value that is absent or unreadable for the operations that carry one — path admission's succeeds without a value (FF14c). A readable but invalid success payload is a contract failure too, while a readable but unrecognized non-write failure takes FF15's printable path. Where the outcome is a contract failure no child expands, no later sibling runs, and nothing planted escapes |
+| FF14b | Search results are recognized and copied totally | A refusing array brand, `length` or element is a fatal protocol violation; the walk never consults the iterator; and the array a document binds is its own copy |
+| FF14c | A payload-free success is accepted however it is spelled | Effection's `Unit` carries no `value` member, so an absent one is the ordinary path-admission success — while a present but unreadable one, and a present one that is not `undefined`, are fatal |
+| FF15 | Readable malformed failure data stays printable | A non-write failure whose data does not validate renders the generic sentence and the document carries on, with nothing the provider put there reaching it |
 
 ### Tier OM — The `output` error mode
 

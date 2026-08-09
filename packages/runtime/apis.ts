@@ -30,10 +30,15 @@
  *
  * - **Process** — subprocess lifecycle has its own cancellation semantics
  *   (killing processes on scope teardown). Middleware targets exec only.
- * - **Fs** — reading, writing, and inspecting files form a cohesive file-IO
- *   surface used together for component resolution, replay guards, and the
- *   `<File>` component. Middleware installed here sees a document's own file
- *   access on the same terms as the engine's.
+ * - **Fs** — the low-level host file surface: reading, writing, and inspecting
+ *   paths the engine itself resolves, for component lookup, replay guards, and
+ *   the root document. It is the host adapter's own dependency, not the
+ *   boundary a document's paths cross.
+ * - **Files** — document filesystem access, in whole semantic operations
+ *   (`files.ts`). `<File>`, `<Glob>`, and `<TempDir>` speak only this Api, so
+ *   the same document means the same thing whether its paths resolve in the
+ *   caller's filesystem or in a run-owned logical one. Its terminal handler
+ *   throws: an uninstalled provider must not silently reach the host.
  * - **Fetch** — HTTP has distinct timeout/body/abort semantics. Merging
  *   with Fs or Process would blur cancellation boundaries.
  * - **Env** — the host itself: metadata (env vars, platform) plus the two
@@ -84,6 +89,7 @@ import { exec as processExec } from "@effectionx/process";
 import { race, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeout as contextualTimeout } from "./config.ts";
+import { Files } from "./files.ts";
 import { Service } from "./service.ts";
 
 /**
@@ -342,6 +348,7 @@ interface EnvHandler {
 export const API: {
   Process: Api<ProcessHandler>;
   Fs: Api<FsHandler>;
+  Files: typeof Files;
   Fetch: Api<FetchHandler>;
   Env: Api<EnvHandler>;
   Service: typeof Service;
@@ -545,6 +552,7 @@ export const API: {
       );
     },
   }),
+  Files,
   Service,
 };
 

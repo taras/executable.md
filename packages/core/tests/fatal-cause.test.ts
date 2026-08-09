@@ -18,8 +18,21 @@ import {
   StaleInputError,
   TerminalDivergenceError,
 } from "@executablemd/durable-streams";
+import {
+  FILES_FATAL,
+  FilesInvariantError,
+  FilesOperationDeniedError,
+  FilesProviderUnavailableError,
+} from "@executablemd/runtime";
 import { InvocationTeardownError } from "../src/invocation.ts";
-import { ContentError, DocumentationError, durabilityFailure, fatalCause } from "../src/errors.ts";
+import {
+  ContentError,
+  decidedByOutput,
+  DocumentationError,
+  durabilityFailure,
+  fatalCause,
+  filesFatalFailure,
+} from "../src/errors.ts";
 import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -78,6 +91,39 @@ const DURABILITY_FAILURES: Array<() => Error> = [
   () => new ContinuePastCloseDivergenceError("root", 5),
   () => new DurablePersistenceError("yield", new Error("journal unavailable")),
 ];
+
+/**
+ * One of each Files infrastructure failure.
+ *
+ * All three are structurally tagged and carry no cause, so what a failing
+ * assertion has to distinguish is the kind, not the class.
+ */
+const FILES_FAILURES: Array<() => Error> = [
+  () => new FilesProviderUnavailableError(),
+  () => new FilesOperationDeniedError("temporary-directory"),
+  () => new FilesInvariantError("authority"),
+  () => new FilesInvariantError("savepoint"),
+  () => new FilesInvariantError("protocol"),
+  () => new FilesInvariantError("teardown"),
+];
+
+/**
+ * A Files failure as a **separately loaded copy** of the runtime package would
+ * build it.
+ *
+ * Two copies can be resolved at once — a repository component reaching its own
+ * runtime beside the engine's — and `instanceof` answers false across them. The
+ * structural tag is the whole mechanism, so this is built by hand rather than
+ * through the constructor: nothing about this object shares a class identity
+ * with the one core imported.
+ */
+function foreignFilesFatal(): Error {
+  const error = new Error("Files provider is not installed");
+  error.name = "FilesProviderUnavailableError";
+  return Object.assign(error, {
+    data: Object.freeze({ type: FILES_FATAL, kind: "provider-unavailable" }),
+  });
+}
 
 describe("Tier FA — Fatal error discovery", () => {
   it("FA1: an error that is its own cause terminates the search", function* () {
@@ -315,5 +361,156 @@ describe("Tier FA — Fatal error discovery", () => {
 
     expect(durabilityFailure(cyclic)).toBe(planted);
     expect(fatalCause(wrapper)).toBe(planted);
+  });
+
+  // FA20–FA27: a Files infrastructure failure is the third fatal kind. It is
+  // not something the document did and not something it can act on, so it
+  // travels like a durability failure — through every wrapper, and through a
+  // recovery boundary — and ranks between the two existing kinds.
+  it("FA20: every Files infrastructure failure is discovered as fatal", function* () {
+    for (const make of FILES_FAILURES) {
+      const planted = make();
+      expect(fatalCause(planted)).toBe(planted);
+      expect(filesFatalFailure(planted)).toBe(planted);
+
+      const wrapped = new AggregateError([planted], "wrapped");
+      expect(fatalCause(wrapped)).toBe(planted);
+      expect(filesFatalFailure(wrapped)).toBe(planted);
+
+      // Not a durability failure: the two questions stay separate.
+      expect(durabilityFailure(planted)).toBeUndefined();
+    }
+  });
+
+  it("FA21: a Files failure is found through every wrapper the engine builds", function* () {
+    const planted = new FilesProviderUnavailableError();
+
+    expect(fatalCause(new InvocationTeardownError([planted]))).toBe(planted);
+    expect(fatalCause(new AggregateError([new Error("other"), planted]))).toBe(planted);
+    expect(fatalCause(new Error("wrapper", { cause: planted }))).toBe(planted);
+
+    const deep = new InvocationTeardownError([
+      new AggregateError(
+        [new Error("noise"), new Error("component exploded", { cause: planted })],
+        "mixed",
+      ),
+    ]);
+    expect(fatalCause(deep)).toBe(planted);
+  });
+
+  it("FA22: a Files failure outranks a documentation failure in either order", function* () {
+    for (const make of FILES_FAILURES) {
+      const planted = make();
+      const doc = documentation();
+
+      expect(fatalCause(new AggregateError([doc, planted], "mixed"))).toBe(planted);
+      expect(fatalCause(new AggregateError([planted, doc], "mixed"))).toBe(planted);
+      expect(fatalCause(new InvocationTeardownError([doc, planted]))).toBe(planted);
+      expect(fatalCause(new InvocationTeardownError([planted, doc]))).toBe(planted);
+    }
+  });
+
+  it("FA23: a durability failure outranks a Files failure in either order", function* () {
+    for (const make of DURABILITY_FAILURES) {
+      const durability = make();
+      const files = new FilesInvariantError("protocol");
+
+      expect(fatalCause(new AggregateError([files, durability], "mixed"))).toBe(durability);
+      expect(fatalCause(new AggregateError([durability, files], "mixed"))).toBe(durability);
+    }
+  });
+
+  it("FA24: all three kinds at once resolve durability, then Files, then documentation", function* () {
+    const durability = stale();
+    const files = new FilesInvariantError("savepoint");
+    const doc = documentation();
+
+    // All six orders of the three. Position is exactly what must not decide
+    // this, so a sample of the orderings would leave the claim partly untested —
+    // and the one ordering left out is the one that would ship the bug.
+    for (const members of [
+      [durability, files, doc],
+      [durability, doc, files],
+      [files, durability, doc],
+      [files, doc, durability],
+      [doc, durability, files],
+      [doc, files, durability],
+    ]) {
+      expect(fatalCause(new AggregateError(members, "mixed"))).toBe(durability);
+      // The other wrapper the engine builds, with the same members.
+      expect(fatalCause(new InvocationTeardownError(members))).toBe(durability);
+    }
+
+    expect(fatalCause(new AggregateError([doc, files], "mixed"))).toBe(files);
+    expect(fatalCause(new AggregateError([files, doc], "mixed"))).toBe(files);
+
+    // Nesting cannot change it either: the shallowest member loses to the kind.
+    const nested = new AggregateError(
+      [doc, new InvocationTeardownError([new AggregateError([files], "inner")])],
+      "outer",
+    );
+    expect(fatalCause(nested)).toBe(files);
+  });
+
+  it("FA25: a content failure does not hide a Files failure it carries", function* () {
+    for (const make of FILES_FAILURES) {
+      const planted = make();
+      expect(filesFatalFailure(recovered(planted))).toBe(planted);
+      expect(fatalCause(recovered(planted))).toBe(planted);
+      expect(fatalCause(new AuthorContentError(planted))).toBe(planted);
+    }
+
+    // And against the documentation failure a recovery boundary would otherwise
+    // let the search stop at.
+    const files = new FilesInvariantError("teardown");
+    const contextual = new Error("component exploded", {
+      cause: recovered(new AggregateError([documentation(), files], "content")),
+    });
+    expect(fatalCause(contextual)).toBe(files);
+  });
+
+  it("FA26: a cyclic graph carrying a Files failure terminates and still finds it", function* () {
+    const planted = new FilesProviderUnavailableError();
+    const noise = new Error("noise");
+    const teardown = new InvocationTeardownError([noise, planted]);
+    noise.cause = teardown;
+
+    expect(fatalCause(teardown)).toBe(planted);
+
+    const cyclic = recovered();
+    const wrapper = new AggregateError([cyclic, planted], "mixed");
+    cyclic.cause = wrapper;
+    expect(filesFatalFailure(cyclic)).toBe(planted);
+  });
+
+  it("FA27: a Files failure from a separately loaded runtime copy is recognized", function* () {
+    const foreign = foreignFilesFatal();
+
+    // The mechanism, stated as a fact about this object: no class identity.
+    expect(foreign instanceof FilesProviderUnavailableError).toBe(false);
+
+    expect(filesFatalFailure(foreign)).toBe(foreign);
+    expect(fatalCause(new InvocationTeardownError([documentation(), foreign]))).toBe(foreign);
+
+    // A tag that is not this one is not recognized, so recognition is the tag
+    // rather than the presence of a `data` member.
+    const impostor = Object.assign(new Error("looks similar"), {
+      data: { type: "some.other/v1", kind: "provider-unavailable" },
+    });
+    expect(filesFatalFailure(impostor)).toBeUndefined();
+    expect(fatalCause(impostor)).toBeUndefined();
+  });
+
+  it("FA28: only an output-mode documentation failure is decided by output", function* () {
+    const output = new DocumentationError({ type: "error", message: "wrong" }, "output");
+    expect(decidedByOutput(output)).toBe(true);
+    expect(decidedByOutput(documentation())).toBe(false);
+
+    for (const make of FILES_FAILURES) {
+      expect(decidedByOutput(make())).toBe(false);
+    }
+    for (const make of DURABILITY_FAILURES) {
+      expect(decidedByOutput(make())).toBe(false);
+    }
   });
 });

@@ -5,10 +5,12 @@
  * `API` is available for middleware (`.around()`).
  * For normal calls, import operations directly.
  *
- * Six domain APIs:
+ * Seven domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
- * - `API.Fs` — filesystem (`readTextFile`, `writeTextFile`, `stat`, `glob`,
- *   `realpath`, `ensureDir`, `rename`, `remove`)
+ * - `API.Fs` — the low-level host filesystem (`readTextFile`, `writeTextFile`,
+ *   `stat`, `glob`, `realpath`, `ensureDir`, `rename`, `remove`)
+ * - `API.Files` — document filesystem access as whole semantic operations,
+ *   with no host default. `useHostFiles()` installs the host provider.
  * - `API.Fetch` — HTTP requests (`fetch`)
  * - `API.Env` — the host: variables, platform info, the command that invokes
  *   this xmd, and eval-block compilation
@@ -64,3 +66,47 @@ export type {
 } from "./service.ts";
 export { Config, timeout } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
+export {
+  asFilesFatal,
+  FILES_ERROR,
+  FILES_ERROR_MESSAGE,
+  FILES_FATAL,
+  FILES_INVARIANT_MESSAGE,
+  FILES_OPERATION_DENIED_MESSAGE,
+  FILES_PROVIDER_UNAVAILABLE_MESSAGE,
+  FILES_WRITE_SUCCESS,
+  Files,
+  FilesError,
+  FilesInvariantError,
+  FilesOperationDeniedError,
+  FilesProviderUnavailableError,
+  fileWriteFailure,
+  fileWriteSuccess,
+  filesFailure,
+  isFilesFatal,
+  parseFileWriteFailure,
+  parseFileWriteSuccess,
+  parseFilesFailure,
+  parseFilesFatal,
+} from "./files.ts";
+export type {
+  FilePathInput,
+  FilesDeniableOperation,
+  FilesErrorData,
+  FilesFailureData,
+  FilesFatalData,
+  FilesFatalFailure,
+  FilesHandler,
+  FilesInvariantCategory,
+  FilesOperation,
+  FilesPhase,
+  FilesReason,
+  FileWriteFailureData,
+  FileWriteInput,
+  FileWritePhase,
+  FileWriteSuccess,
+  FileWriteTarget,
+  GlobInput,
+} from "./files.ts";
+export { hostFilesHandler, useHostFiles } from "./host-files.ts";
+export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";

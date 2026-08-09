@@ -12,6 +12,7 @@ import type { SourceOrigin } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { DivergenceError, InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, Json, Result } from "@executablemd/durable-streams";
+import { useHostFiles } from "@executablemd/runtime";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -694,6 +695,7 @@ describe("Tier LOOP — document execution", () => {
 
   it("LOOP35: every iteration journals its own eval entry", function* () {
     const stream = new InMemoryStream();
+    yield* useHostFiles();
     yield* useStubFs({
       "test.md": ["<Loop max={3}>", "", "```js eval", "output('RAN');", "```", "", "</Loop>"].join(
         "\n",
@@ -713,6 +715,7 @@ describe("Tier LOOP — document execution", () => {
 
   it("LOOP36: content skipped by <Break> writes no journal entry", function* () {
     const stream = new InMemoryStream();
+    yield* useHostFiles();
     yield* useStubFs({
       "test.md": [
         "<Loop max={3}>",
@@ -746,6 +749,7 @@ describe("Tier LOOP — document execution", () => {
 
   it("LOOP37: a binding accumulates across iterations", function* () {
     const stream = new InMemoryStream();
+    yield* useHostFiles();
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -774,6 +778,7 @@ describe("Tier LOOP — document execution", () => {
 
   it("LOOP38: a component in the loop body is imported once per iteration", function* () {
     const stream = new InMemoryStream();
+    yield* useHostFiles();
     yield* useStubFs({
       "components/Step.md": "step\n",
       "test.md": "<Loop max={3}><Step /></Loop>",
@@ -800,6 +805,7 @@ describe("Tier LOOP — document execution", () => {
     ].join("\n");
 
     const stream = new InMemoryStream();
+    yield* useHostFiles();
     yield* useStubFs({ "test.md": DOC });
     yield* useEchoExec();
 
@@ -841,6 +847,7 @@ describe("Tier LOOP — document execution", () => {
 
   it("LOOP40: a <Break> chosen from a binding stops the document's loop", function* () {
     const stream = new InMemoryStream();
+    yield* useHostFiles();
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -882,6 +889,7 @@ describe("Tier LOOP — execution records", () => {
   function runDoc(doc: string, files: Record<string, string> = {}) {
     return scoped(function* () {
       const stream = new InMemoryStream();
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": doc, ...files });
       yield* useEchoExec();
       let output = "";
@@ -994,6 +1002,7 @@ describe("Tier LOOP — execution records", () => {
           reachedSecond.resolve();
         }
       };
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": DOC });
       yield* useEchoExec();
 
@@ -1082,6 +1091,7 @@ describe("Tier LOOP — execution records", () => {
           enteredThird.resolve();
         }
       };
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": DOC });
       yield* useEchoExec();
 
@@ -1105,6 +1115,7 @@ describe("Tier LOOP — execution records", () => {
     // The incomplete journal, read back and handed to a new execution.
     const resumed = yield* scoped(function* () {
       const stream = new InMemoryStream(interrupted);
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": DOC });
       yield* useEchoExec();
       const execution = yield* execute({
@@ -1184,6 +1195,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
   ) {
     return scoped(function* () {
       const stream = new InMemoryStream();
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": doc, ...files });
       yield* useEchoExec();
       yield* collect(yield* execute({ path: "test.md", stream, props }));
@@ -1201,6 +1213,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
   ) {
     return scoped(function* () {
       const stream = new InMemoryStream(journal);
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": doc, ...files });
       yield* useEchoExec();
       let failure: unknown;
@@ -1303,6 +1316,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
 
     const cut = yield* scoped(function* () {
       const stream = new InMemoryStream();
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": HELD });
       yield* useEchoExec();
       yield* collect(yield* execute({ path: "test.md", stream }));
@@ -1328,6 +1342,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
 
     const run = yield* scoped(function* () {
       const stream = new InMemoryStream();
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": "<Loop max={3}>a<Wrapped />b</Loop>" });
       yield* useEchoExec();
       // No generic catch sits above the component, so the wrapper reaches the
@@ -1367,6 +1382,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
 
     const run = yield* scoped(function* () {
       const stream = new InMemoryStream();
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": "<Loop max={3}>a<Mixed />b</Loop>" });
       yield* useEchoExec();
       // Thrown from a component, so it travels through the generic catch that
@@ -1429,6 +1445,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
 
     const complete = yield* scoped(function* () {
       const stream = new InMemoryStream();
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": DIVERGING });
       yield* useEchoExec();
       yield* collect(yield* execute({ path: "test.md", stream }));
@@ -1528,6 +1545,7 @@ describe("Tier BREAK — the projection boundary", () => {
 
   function runDoc(doc: string, files: Record<string, string>) {
     return scoped(function* () {
+      yield* useHostFiles();
       yield* useStubFs({ "test.md": doc, ...files });
       yield* useEchoExec();
       return asText(

@@ -16,17 +16,17 @@
  * be the answer to "that pattern was a mistake". The same stage refuses an
  * empty pattern, which matches nothing by construction.
  *
- * Everything else about matching belongs to the Fs Api's `glob`, which is the
- * dialect. This component adds no syntax of its own, which is why a leading dot
- * needs no special prop: `*` matches one, so a pattern that names a hidden file
- * finds it and a pattern that does not, does not.
+ * Everything else about matching belongs to the `API.Files` provider, which is
+ * the dialect and owns the whole search. This component adds no syntax of its
+ * own, which is why a leading dot needs no special prop: `*` matches one, so a
+ * pattern that names a hidden file finds it and a pattern that does not, does
+ * not.
  *
  * Only regular files come back. A symbolic link is a link rather than a file,
  * so it is never a result and a link to a directory is never descended into —
- * which is also what keeps traversal inside `Env.cwd` and free of cycles. The
- * Fs Api exposes symlink following, but nothing there confines a resolved
- * destination to the root or detects a traversal cycle, so following one cannot
- * be offered safely yet.
+ * which is also what keeps traversal inside `Env.cwd` and free of cycles.
+ * Following one cannot be offered safely yet: nothing here confines a resolved
+ * destination to the root or detects a traversal cycle.
  *
  * Printed errors name the pattern the document wrote, or nothing at all. A
  * traversal failure names no path: what failed is a directory somewhere under
@@ -40,10 +40,11 @@
  * the search runs again against whatever is on disk now.
  */
 
-import { isAbsolute } from "node:path";
 import type { Operation } from "effection";
 import { printErrors } from "../component-failures.ts";
-import { cwd, glob, stat } from "@executablemd/runtime";
+import { cwd, parseFilesFailure } from "@executablemd/runtime";
+import type { FilesFailureData } from "@executablemd/runtime";
+import { globFiles } from "../files.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
 
@@ -78,14 +79,11 @@ export default printErrors(function* (props: Record<string, Json>): Operation<st
   const include = patterns("include", props.include);
   const exclude = patterns("exclude", props.exclude);
 
-  const root = yield* directory();
-
-  // The Api reports directories and symlinks too, so a caller says which of
-  // them it wants. This one wants files.
-  const matched = yield* search({ root, patterns: include, exclude });
-  const files = matched.filter((entry) => entry.isFile).map((entry) => entry.path);
-
-  return [...new Set(files)].sort(byCodePoint);
+  const found = yield* globFiles({ cwd: yield* cwd(), include, exclude });
+  if (!found.ok) {
+    throw failed(parseFilesFailure(found.error), [...include, ...exclude]);
+  }
+  return found.value;
 });
 
 /**
@@ -117,7 +115,7 @@ function patterns(prop: string, value: Json | undefined): string[] {
           "give a pattern relative to the working directory.",
       );
     }
-    if (isAbsolute(pattern)) {
+    if (absolute(pattern)) {
       throw new GlobError(
         `${prop} pattern "${pattern}" is absolute; ` +
           "give a pattern relative to the working directory.",
@@ -132,95 +130,44 @@ function patterns(prop: string, value: Json | undefined): string[] {
 }
 
 /**
- * The contextual working directory, once it is known to be searchable.
+ * Whether a pattern names an absolute location.
  *
- * Checked here rather than left to the traversal, because the two failures read
- * very differently to an author: a directory that is missing or is a file is
- * something about the document's own environment, while a traversal failure is
- * something about one entry inside a directory that was fine.
+ * Decided from the pattern's own grammar rather than the running platform's.
+ * Patterns match POSIX-relative paths on every host — that is what makes one
+ * document mean one thing everywhere — so a leading `/` is absolute wherever
+ * this runs, and so is a drive-letter prefix, which is absolute on the host that
+ * has drives and matches nothing on the hosts that do not. A leading backslash
+ * is left alone: in this dialect it escapes the character after it.
  */
-function* directory(): Operation<string> {
-  const root = yield* cwd();
-
-  const info = yield* guard(stat(root));
-  if (!info.exists) {
-    throw new GlobError("the working directory does not exist.");
-  }
-  if (!info.isDirectory) {
-    throw new GlobError("the working directory is not a directory.");
-  }
-
-  return root;
-}
-
-interface Search {
-  root: string;
-  patterns: string[];
-  exclude: string[];
+function absolute(pattern: string): boolean {
+  return pattern.startsWith("/") || /^[A-Za-z]:[\\/]/.test(pattern);
 }
 
 /**
- * Run the search, reporting a pattern that cannot be compiled as the authoring
- * error it is.
+ * One sanitized sentence for a failed search.
  *
- * The Api compiles patterns as it starts, so an unusable one — an unterminated
- * character class — arrives as a `SyntaxError` from `RegExp` rather than as an
- * errno. It is separated from a traversal failure because it is the one failure
- * here the document can fix by editing a pattern, and because a `RegExp`
- * message describes a translated regular expression the author never wrote.
+ * The two questions an author can act on are separated from the rest. A working
+ * directory that is missing or is a file is something about the document's own
+ * environment; a pattern the dialect cannot compile — an unterminated character
+ * class — is something about the document's own text. Which pattern it was does
+ * not survive the provider boundary, so the sentence lists the candidates
+ * instead of naming one. They are the document's own text.
  *
- * Which pattern it was is not recoverable from the error, so the sentence lists
- * the candidates instead of naming one. They are the document's own text.
+ * Everything else names no path. What failed is the working directory or
+ * something under it, and both are absolute paths the document did not write
+ * (§1.2).
  */
-function* search(options: Search): Operation<Array<{ path: string; isFile: boolean }>> {
-  try {
-    return yield* glob(options);
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      const all = [...options.patterns, ...options.exclude];
-      throw new GlobError(
-        `one of these patterns cannot be used: ${all.map((p) => `"${p}"`).join(", ")}.`,
-      );
-    }
-    throw failed(error);
+function failed(data: FilesFailureData | undefined, candidates: string[]): GlobError {
+  if (data?.phase === "target" && data.reason === "missing") {
+    return new GlobError("the working directory does not exist.");
   }
-}
-
-/**
- * Run a filesystem operation, replacing whatever it throws with a sanitized
- * sentence.
- *
- * Nothing is passed through, including a `GlobError`: this component's own
- * checks throw outside guarded calls, so an error surfacing from inside one came
- * from the Api, and an error's class says nothing about whether its message is
- * safe to show.
- */
-function* guard<T>(operation: Operation<T>): Operation<T> {
-  try {
-    return yield* operation;
-  } catch (error) {
-    throw failed(error);
+  if (data?.phase === "target" && data.reason === "not-directory") {
+    return new GlobError("the working directory is not a directory.");
   }
-}
-
-/**
- * One sanitized sentence for a failed filesystem call.
- *
- * It names no path. What failed is the working directory or something under it,
- * and both are absolute paths the document did not write (§1.2).
- */
-function failed(error: unknown): GlobError {
-  return new GlobError(`cannot search the working directory: ${reason(error)}.`);
-}
-
-// Code point order, not `localeCompare`: what a document branches on must not
-// depend on the locale the host happens to be configured with.
-function byCodePoint(left: string, right: string): number {
-  if (left < right) {
-    return -1;
+  if (data?.phase === "pattern") {
+    return new GlobError(
+      `one of these patterns cannot be used: ${candidates.map((p) => `"${p}"`).join(", ")}.`,
+    );
   }
-  if (left > right) {
-    return 1;
-  }
-  return 0;
+  return new GlobError(`cannot search the working directory: ${reason(data?.reason)}.`);
 }
