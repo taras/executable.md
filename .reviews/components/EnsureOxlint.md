@@ -57,7 +57,7 @@ if (!oxlintSha || !tsgolintSha) {
 
 ```bash silent exec
 set -euo pipefail
-DIR="{dir}"
+DIR="{props.dir}"
 mkdir -p "$DIR"
 
 verify() {

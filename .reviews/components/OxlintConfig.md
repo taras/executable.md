@@ -12,7 +12,7 @@ props:
 import { ensureDir, writeTextFile } from "@executablemd/runtime";
 
 yield* ensureDir(".reviews");
-yield* writeTextFile(path, JSON.stringify({
+yield* writeTextFile(props.path, JSON.stringify({
   compilerOptions: {
     target: "ESNext",
     module: "ESNext",

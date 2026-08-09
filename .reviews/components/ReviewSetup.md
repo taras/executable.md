@@ -18,12 +18,12 @@ props:
 ```ts eval
 import { exec } from "@executablemd/runtime";
 
-if (pullModel) {
-  const installed = yield* exec({ command: ["ollama", "show", model] });
+if (props.pullModel) {
+  const installed = yield* exec({ command: ["ollama", "show", props.model] });
   if (installed.exitCode !== 0) {
-    const pulled = yield* exec({ command: ["ollama", "pull", model] });
+    const pulled = yield* exec({ command: ["ollama", "pull", props.model] });
     if (pulled.exitCode !== 0) {
-      throw new Error(pulled.stderr || `Unable to provision Ollama model ${model}`);
+      throw new Error(pulled.stderr || `Unable to provision Ollama model ${props.model}`);
     }
   }
 }
