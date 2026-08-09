@@ -1,7 +1,10 @@
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createApi } from "@effectionx/context-api";
 import { readTextFile } from "@effectionx/fs";
+import { glob } from "@executablemd/runtime";
 import { type Operation, scoped } from "effection";
 import {
   claimDurablePublicationIdentity,
@@ -71,6 +74,95 @@ function successfulProvider(observe?: (authority: WorkspaceCoordinationAuthority
       },
     },
   };
+}
+
+const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
+
+/**
+ * Every name that would mean a host reached the shared coordination surface.
+ *
+ * Storage and runtime implementation types, the adapter's private transaction
+ * identities, runtime detection, process globals, and any import that reaches
+ * an adapter, a vendored source or a host process.
+ */
+const FORBIDDEN = [
+  "node:sqlite",
+  "node:process",
+  "node:child_process",
+  "DatabaseSync",
+  "SQLite",
+  "sqlite",
+  "Cloudflare",
+  "DOFS",
+  "dofs",
+  "savepoint",
+  "Savepoint",
+  "SAVEPOINT",
+  "RunConnection",
+  "WorkflowRunConnections",
+  "WorkflowRunTransactionToken",
+  "ConnectionGeneration",
+  "TransactionIdentity",
+  "Deno",
+  "Bun",
+  "globalThis",
+  "navigator",
+  "src/deno/",
+  "/deno.ts",
+  "vendor/",
+  "@effectionx/process",
+];
+
+/**
+ * Source with its comments removed.
+ *
+ * These modules describe in prose that they name no host, and a search of the
+ * whole file would find that description rather than a boundary crossing.
+ */
+function code(source: string): string {
+  let output = "";
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index];
+    const following = source[index + 1];
+    if (character === "/" && following === "/") {
+      while (index < source.length && source[index] !== "\n") {
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "/" && following === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      output += character;
+      index += 1;
+      while (index < source.length && source[index] !== character) {
+        if (source[index] === "\\") {
+          output += source[index];
+          index += 1;
+        }
+        output += source[index];
+        index += 1;
+      }
+      output += character;
+      index += 1;
+      continue;
+    }
+    output += character;
+    index += 1;
+  }
+  return output;
+}
+
+function forbiddenNames(source: string): string[] {
+  const scanned = code(source);
+  return FORBIDDEN.filter((name) => scanned.includes(name));
 }
 
 describe("Tier DLC — Workspace coordination selection", () => {
@@ -149,26 +241,61 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(yieldEvents(stream.snapshot())).toHaveLength(1);
   });
 
-  it("DLC13: shared Workspace coordination source stays runtime-neutral", function* () {
-    const sources = [
-      yield* readTextFile(new URL("../src/workspace/api.ts", import.meta.url)),
-      yield* readTextFile(new URL("../src/workspace/effect.ts", import.meta.url)),
-    ];
-    const forbidden = [
+  it("DLC13: the whole shared coordination surface stays runtime-neutral", function* () {
+    // The scanner has to be able to fail, and it has to read code rather than
+    // prose: these modules explain in their own comments that they name no
+    // host, and a substring search would find the explanation.
+    expect(code(`const value = "DOFS"; // Cloudflare\n/* SQLite */`)).toBe(
+      `const value = "DOFS"; \n`,
+    );
+    expect(forbiddenNames(`import { DatabaseSync } from "node:sqlite";`)).toEqual([
       "node:sqlite",
       "DatabaseSync",
-      "SQLite",
-      "Cloudflare",
-      "DOFS",
-      "savepoint",
-      "ConnectionGeneration",
-      "TransactionIdentity",
-    ];
-    for (const source of sources) {
-      for (const name of forbidden) {
-        expect(source.includes(name)).toBe(false);
+      "sqlite",
+    ]);
+    expect(forbiddenNames("// the Deno adapter owns DOFS and its savepoints")).toEqual([]);
+
+    const found = (yield* glob({
+      root: REPOSITORY,
+      patterns: [
+        "packages/workflow/mod.ts",
+        "packages/workflow/src/**/*.ts",
+        "packages/durable-streams/*.ts",
+      ],
+      // Whole packages rather than named modules, so a coordination module
+      // added later is covered without this list being remembered. The single
+      // exception carries its reason: the HTTP stream is a client for a remote
+      // durable stream and reaches the platform's own `fetch`.
+      exclude: ["packages/workflow/src/deno/**", "packages/durable-streams/http-stream.ts"],
+    }))
+      .map((entry) => entry.path)
+      .sort();
+
+    // A pattern that matched nothing would report a clean boundary, so the
+    // surface every Workspace effect actually crosses is named here.
+    expect(found).toEqual(
+      expect.arrayContaining([
+        "packages/durable-streams/durability.ts",
+        "packages/durable-streams/effect.ts",
+        "packages/durable-streams/guard.ts",
+        "packages/durable-streams/live-coordinator.ts",
+        "packages/durable-streams/types.ts",
+        "packages/workflow/mod.ts",
+        "packages/workflow/src/storage/api.ts",
+        "packages/workflow/src/workspace/api.ts",
+        "packages/workflow/src/workspace/effect.ts",
+      ]),
+    );
+    expect(found.some((path) => path.includes("/src/deno/"))).toBe(false);
+
+    const crossings: Record<string, string[]> = {};
+    for (const path of found) {
+      const names = forbiddenNames(yield* readTextFile(join(REPOSITORY, path)));
+      if (names.length > 0) {
+        crossings[path] = names;
       }
     }
+    expect(crossings).toEqual({});
   });
 
   it("DLC15: live Workspace invocation authority is one-shot", function* () {
