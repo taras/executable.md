@@ -62,12 +62,13 @@
 
 import { ensure, main, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { exec } from "@effectionx/process";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { encodeBase64 } from "@std/encoding/base64";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { containedRun } from "./lib/contained-run.ts";
 import { assertSideEffectFree, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
 import { byteLength, generatedModule } from "./lib/web-client-module.ts";
 
@@ -113,7 +114,12 @@ const FONT_FACES: FontFace[] = [
 export const SIDE_EFFECT_FREE_MANIFESTS: URL[] = sideEffectFreeManifests(repoRoot);
 
 function* run(command: string, args: string[]): Operation<void> {
-  yield* exec(command, { arguments: args, cwd: new URL(repoRoot).pathname }).expect();
+  const exit = yield* containedRun(command, args, { cwd: new URL(repoRoot).pathname });
+  if (exit.code !== 0) {
+    throw new Error(
+      `${command} ${args.join(" ")} exited with ${exit.code ?? exit.signal}\n${exit.stderr}`,
+    );
+  }
 }
 
 /**
@@ -122,11 +128,20 @@ function* run(command: string, args: string[]): Operation<void> {
  * the battery's own per-command deadline settles a wedged command once and
  * reports it, so a worsening upstream defect stays visible instead of being
  * absorbed by an attempt count.
+ *
+ * The output path is chosen without touching the filesystem, and its removal
+ * is registered before the bundler starts. An interrupted build therefore has
+ * nothing on disk to leak before the bundler exists, and once it does, the
+ * removal runs strictly after `run`'s teardown has terminated and joined the
+ * bundler's process tree — nothing survives that could recreate the file.
+ * Creating the file up front instead would open a window where an abandoned
+ * in-flight creation lands after teardown, with no removal registered to
+ * cover it.
  */
 function* bundleClient(scratch?: string): Operation<string> {
   return yield* scoped(function* () {
-    const output = yield* until(Deno.makeTempFile({ dir: scratch, suffix: ".js" }));
-    yield* ensure(() => rm(output));
+    const output = join(scratch ?? tmpdir(), `${crypto.randomUUID()}.js`);
+    yield* ensure(() => rm(output, { force: true }));
     yield* run(Deno.execPath(), [
       "bundle",
       "--platform=browser",

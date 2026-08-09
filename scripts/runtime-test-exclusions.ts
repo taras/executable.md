@@ -45,7 +45,13 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
-      "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
+      "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath() — Deno-only",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/contained-run.test.ts",
+    reason:
+      "subject is scripts/lib/contained-run.ts, the process containment behind the Deno-only browser bundle build; the fixtures drive real process trees under Deno.execPath()",
     issue: DERIVED_SCOPE,
   },
   {
