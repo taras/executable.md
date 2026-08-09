@@ -1030,3 +1030,120 @@ describe("Tier NS-G — Boundary scanner", () => {
     expect(segments[0]!.type).toBe("text");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tier NS-H — Nested projection points
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Tier NS-H — Nested projection points", () => {
+  it("NS-H1: inside another component invocation", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", "<Echo>prefix <Content /> suffix</Echo>");
+    const segments = scanSegments("<Host>MATERIAL</Host>");
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host });
+    expect(renderSegments(expanded)).toContain("ECHO(prefix MATERIAL suffix)");
+  });
+
+  it("NS-H2: several levels deep", function* () {
+    const inner = makeComponent("Inner", "IN(<Content />)");
+    const outer = makeComponent("Outer", "OUT{<Content />}");
+    const host = makeComponent("Host", "<Outer><Inner>deep <Content /></Inner></Outer>");
+    const segments = scanSegments("<Host>MATERIAL</Host>");
+    const expanded = yield* expandAll(segments, { Inner: inner, Outer: outer, Host: host });
+    expect(renderSegments(expanded)).toContain("OUT{IN(deep MATERIAL)}");
+  });
+
+  it("NS-H3: named slot in a nested position", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", '<Echo><Content slot="header" /></Echo>\n\n<Content />');
+    const headerComp = makeComponent("Header", "HEADER-TEXT");
+    const segments = scanSegments('<Host>\n<Header slot="header" />\ndefault text\n</Host>');
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host, Header: headerComp });
+    const output = renderSegments(expanded);
+    expect(output).toContain("ECHO(HEADER-TEXT)");
+    expect(output).toContain("default text");
+    expect(output.indexOf("ECHO(HEADER-TEXT)")).toBeLessThan(output.indexOf("default text"));
+  });
+
+  it("NS-H4: two projections at different depths receive the same content", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", "top: <Content />\n\n<Echo><Content /></Echo>");
+    const segments = scanSegments("<Host>MATERIAL</Host>");
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host });
+    const output = renderSegments(expanded);
+    expect(output).toContain("top: MATERIAL");
+    expect(output).toContain("ECHO(MATERIAL)");
+  });
+
+  it("NS-H5: nested inside a top-level <Output> region", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", "<Output><Echo><Content /></Echo></Output>");
+    const segments = scanSegments("<Host>MATERIAL</Host>");
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host });
+    expect(renderSegments(expanded)).toContain("ECHO(MATERIAL)");
+  });
+
+  it("NS-H6: slot validation errors are still emitted once", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", "<Echo><Content /></Echo>\nsecond: <Content />");
+    const bad = makeComponent("Bad", "BAD");
+    const segments = scanSegments('<Host>\n<Bad slot="123invalid" />\n</Host>');
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host, Bad: bad });
+    const errors = expanded.filter((segment) => segment.type === "error");
+    expect(errors).toHaveLength(1);
+  });
+
+  it("NS-H7: nested inside a structural construct", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/HostCap.md": [
+          "---",
+          "props: { type: object, properties: {}, additionalProperties: false }",
+          "---",
+          '<Capture as="c">captured: <Content /></Capture>',
+          "<Output>host got: {c}</Output>",
+        ].join("\n"),
+        "doc.md": "<HostCap>MATERIAL</HostCap>",
+      });
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("host got: captured: MATERIAL");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  it("NS-H8: nested inside an iterating construct", function* () {
+    const tmpDir = makeTempDir();
+    try {
+      writeFiles(tmpDir, {
+        "components/EachHost.md": [
+          "---",
+          "props: { type: object, properties: {}, additionalProperties: false }",
+          "---",
+          '<Each in={[1, 2]} let="n">',
+          "item {n}: <Content />",
+          "</Each>",
+        ].join("\n"),
+        "doc.md": "<EachHost>MATERIAL</EachHost>",
+      });
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      expect(output).toContain("item 1: MATERIAL");
+      expect(output).toContain("item 2: MATERIAL");
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
