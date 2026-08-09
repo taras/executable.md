@@ -1132,8 +1132,10 @@ returned, before a failing import reaches the caller, and before a cancelled
 compilation finishes halting. A removal that fails for any reason other than
 the file already being absent leaves that scope rather than being discarded.
 
-`.xmd-eval` is resolved against the current working directory, so it is the
-running document's directory rather than a fixed location.
+`.xmd-eval` is a relative literal, resolved against the host process's current
+working directory. That is the directory the process was started in: running
+`path/to/document.md` does not move it to the document's directory, and it is
+not the contextual `API.Env.cwd`, which this compiler does not consult.
 
 #### Standard imports
 
@@ -6309,6 +6311,7 @@ visible warning blocks, gather into a separate error report).
 | TC1 | Success removes the generated file | The write and the removal observed through `FsApi.around()` name the same `.xmd-eval/<uuid>.ts`, and the removal has completed when `compileTempFile()` returns the block |
 | TC2 | A failing import removes it first | Generated code that does not parse still propagates its import failure, and the removal has completed when that failure reaches the caller |
 | TC3 | Cancellation removes it first | A compilation halted while its write is suspended has no generated file left once `halt()` settles |
+| TC4 | A failing removal is not discarded | A removal that performs the real deletion and then fails leaves that exact error as the compilation's outcome, rather than a returned block or a substituted error |
 
 ### Tier I — Middleware conformance (eval modifiers)
 

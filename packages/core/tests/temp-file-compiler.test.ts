@@ -162,4 +162,39 @@ describe("Tier TC — temp-file compiler lifecycle", () => {
 
     expect(recorder.written.length).toBe(1);
   });
+
+  // TC4: the removal is not best-effort. A cleanup that fails for any reason
+  // other than the file already being absent decides the compilation, so a
+  // caller cannot be handed a block whose scratch state is still on disk.
+  it("TC4: a failing removal fails the compilation instead of being discarded", function* () {
+    const recorder = yield* useRecorder();
+    const refused = new Error("TC4 sentinel: removal refused");
+    let outcome: unknown = "never settled";
+
+    // The interceptor lives inside this scope so the safety cleanup registered
+    // by the recorder — which runs outside it — can still remove what it must.
+    yield* scoped(function* () {
+      yield* FsApi.around({
+        *rm([path, options], next) {
+          if (generated(path) === undefined) {
+            return yield* next(path, options);
+          }
+          yield* next(path, options);
+          throw refused;
+        },
+      });
+
+      try {
+        yield* compileTempFile("env.compiled = true;");
+        outcome = "returned a block";
+      } catch (error) {
+        outcome = error;
+      }
+    });
+
+    // The exact error, neither swallowed nor replaced with one of its own.
+    expect(outcome).toBe(refused);
+    expect(recorder.written.length).toBe(1);
+    expect(yield* exists(recorder.written[0] ?? "")).toBe(false);
+  });
 });
