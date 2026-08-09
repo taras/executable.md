@@ -1053,6 +1053,40 @@ describe("Tier FF — Files infrastructure failure", () => {
       expect(leaked(outcome)).toBe(false);
     }
 
+    // A revoked Proxy is the shape that escapes everything else: recognizing it
+    // as an array is itself an operation on provider-controlled data, and
+    // `Array.isArray` throws on one. It is built valid, wrapped in `Ok` without
+    // being inspected, and revoked before the provider returns — so the first
+    // thing to touch it is the boundary, and the brand check is what it touches
+    // it with.
+    const revoked = yield* run(
+      dir,
+      '<Glob include={["**/*"]} as="found" />\n\nAFTER',
+      function* () {
+        yield* useHostFiles();
+        yield* Files.around({
+          // deno-lint-ignore require-yield
+          *globFiles() {
+            const { proxy, revoke } = Proxy.revocable(["notes.md"], {});
+            const result = Ok(proxy);
+            revoke();
+            return result;
+          },
+        });
+      },
+    );
+
+    expect(revoked.ok).toBe(false);
+    expect(invariantCategory(revoked.error)).toBe("protocol");
+    expect(revoked.output).not.toContain("AFTER");
+    // The platform's own failure is replaced, not carried.
+    const selected = fatalCause(revoked.error);
+    expect(selected).not.toBeInstanceOf(TypeError);
+    expect(selected instanceof Error ? selected.cause : "unset").toBeUndefined();
+    const shown = [revoked.output, String(selected), String(revoked.error)].join(" ");
+    expect(shown).not.toContain("IsArray");
+    expect(shown).not.toContain("revoked");
+
     // The iterator is never consulted, because the walk is by index. A search
     // whose only hostile trap is `Symbol.iterator` therefore copies cleanly —
     // which is the derivation this kills: a `for…of` walk would have run it.

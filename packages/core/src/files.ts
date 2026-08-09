@@ -118,6 +118,22 @@ function read(target: unknown, name: string): { readonly value: unknown } | unde
 }
 
 /**
+ * Whether this really is an array, or `undefined` when asking threw.
+ *
+ * Recognizing the brand is itself an operation on provider-controlled data:
+ * `Array.isArray` throws on a revoked Proxy. A value whose array identity
+ * cannot be inspected has not described itself, which is the same answer as
+ * not being one.
+ */
+function isArray(value: unknown): boolean | undefined {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * How a `Result` settled, or `undefined` when it will not say.
  *
  * A value that does not describe its own outcome cannot be reported as either
@@ -175,6 +191,14 @@ function* outcome<T>(
   contract: {
     operation: FilesOperation;
     phase: FilesPhase;
+    /**
+     * Recognize this operation's payload, or answer `undefined`.
+     *
+     * Every contract here is **total**: it inspects provider-controlled data,
+     * so it answers rather than throws. Guarding the call site instead would
+     * make the guards inside each contract untestable, and an untestable guard
+     * is one nobody notices going missing.
+     */
     payload: (value: unknown) => { readonly value: T } | undefined;
   },
 ): Operation<Result<T>> {
@@ -204,18 +228,18 @@ function text(value: unknown): { readonly value: string } | undefined {
 /**
  * A search result, copied out of whatever the provider handed back.
  *
- * Every step of the copy is provider-controlled: iterator lookup, `length`, and
- * each element are all trappable, so the walk is by index through the same
- * total reader rather than by `for…of`. `undefined` from any of them is a
- * refusal to describe the result, which the caller turns into one fixed
- * invariant.
+ * Every step is provider-controlled — recognizing the array brand, reading
+ * `length`, and reading each element — so each goes through a total reader and
+ * the walk is by index rather than by `for…of`. Even `Array.isArray` can throw:
+ * a revoked Proxy refuses it. `undefined` from any step is a refusal to describe
+ * the result, which the caller turns into one fixed invariant.
  *
  * The array itself is rebuilt rather than passed along. A provider could return
  * something array-shaped whose elements are accessors, or one it goes on
  * mutating afterwards — and a document binds this value.
  */
 function paths(value: unknown): { readonly value: string[] } | undefined {
-  if (!Array.isArray(value)) {
+  if (isArray(value) !== true) {
     return undefined;
   }
   const length = read(value, "length");

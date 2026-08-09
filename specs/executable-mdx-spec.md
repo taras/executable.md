@@ -4970,11 +4970,31 @@ operation-failed
 ```
 
 A failure carries that reason and the phase it came from, as a plain frozen
-object under a stable tag, and the component **parses** it before reading a
-field. Data that does not validate is treated as absent rather than trusted:
-for a read or a search that means the generic phrase, and for a write it is a
-provider-contract failure (below), because every sentence a write could print
-makes a claim about whether the file was replaced.
+object under a stable tag, and it is **parsed** before any field is read. Data
+that does not validate is treated as absent rather than trusted: for a read or a
+search that means the generic phrase, and for a write it is a provider-contract
+failure (below), because every sentence a write could print makes a claim about
+whether the file was replaced.
+
+The outcome a provider returns is checked the same way, and the distinction
+matters more than it looks. An outcome that **will not say** what it is — one
+that does not report whether it succeeded, or whose success value or failure
+cannot be read at all — has described nothing, and is a provider-contract
+failure. An outcome that reads perfectly well but carries a failure the
+vocabulary does not recognize *has* described something, just not in terms this
+version knows: for a read or a search that is the generic sentence and the
+document carries on.
+
+One operation qualifies that. Admitting a path succeeds with no value at all, so
+an outcome that carries none is its ordinary success; what is refused there is a
+value that cannot be read, and one that is present but is something other than
+nothing. Every other operation's success carries a value and requires it to be
+readable.
+
+Nothing a provider returned is passed onward. What reaches the component is
+rebuilt from the fields that validated — including a search's list of paths,
+which is copied, so what a document binds is not something the provider can
+still change.
 
 The error's class carries no authority either. A `FileAccessError` arriving
 from a provider call is replaced like any other, because a class says nothing
@@ -6747,6 +6767,7 @@ platform's.
 | HF10, HF10b | Where the guarantee stops | A parent replaced synchronously between resolution and use is written through, and a target replaced between resolution and access is read through — the documented weakness, with atomicity still holding |
 | HF11 | The commit is one event | A fault before and after `next()` report the same unknown outcome, and one of the two runs really did commit |
 | HF12 | Cancellation | No Result is produced and no temporary is left |
+| HF12b | Cleanup failing as cancellation unwinds | There is no outcome to report it beside, so a fixed teardown invariant leaves the scope instead of a manufactured Result, carrying neither the platform's error nor the generated temporary's name |
 | HF13 | Temporary directories | Live and die with the acquiring scope; a halt before acquisition leaves nothing |
 | HF14 | Absence | Every operation throws provider-unavailable with the fixed diagnostic and no cause, and no low-level call is made |
 | HF15 | Installation | `useHostFiles()` installs beneath ordinary middleware, which can still wrap it |
@@ -6767,6 +6788,13 @@ platform's.
 | FF8 | Identity is preserved | A nested durability failure and a nested Files failure are each rethrown as the same object |
 | FF9 | Precedence at the wrapper | A durability failure beneath a Files invariant is the one preserved |
 | FF10 | Ordinary failures | A missing file is still a printed error and the sibling still runs |
+| FF11 | Hostile shapes are recognized, never fatal in themselves | A throwing `data` accessor, fields and key enumeration that refuse, an unreadable prototype, a throwing `cause`, unreadable or non-list aggregate members, and unreadable teardown causes are each unrecognized rather than thrown, and a real failure beneath one is still found |
+| FF12 | An unsafe tagged candidate is replaced, not preserved | The right tag plus a raw message, a cause chain, mutable data, an extra data field, a path-bearing `name`, an extra Error-level property, an enumerable symbol payload, or hostile enumeration each fail the identity contract; the planted value survives neither stringification nor enumeration, and the real constructors stay recognizable |
+| FF13 | Cancellation cleanup is discovered as fatal | A host cleanup that fails while cancellation unwinds is selected by the engine's own fatal discovery, by identity, with nothing of the platform's failure in it |
+| FF14 | A hostile Result never reaches a component | An `ok`, `value` or `error` that throws, is absent, or is the wrong type is a fatal protocol violation for read, write, path admission, search and temporary-directory alike; no child expands, no later sibling runs, and nothing planted escapes |
+| FF14b | Search results are recognized and copied totally | A refusing array brand, `length` or element is a fatal protocol violation; the walk never consults the iterator; and the array a document binds is its own copy |
+| FF14c | A payload-free success is accepted however it is spelled | Effection's `Unit` carries no `value` member, so an absent one is the ordinary path-admission success — while a present but unreadable one, and a present one that is not `undefined`, are fatal |
+| FF15 | Readable malformed failure data stays printable | A non-write failure whose data does not validate renders the generic sentence and the document carries on, with nothing the provider put there reaching it |
 
 ### Tier OM — The `output` error mode
 
