@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/workflow",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Workflow runs for executable.md: one pinned definition per run, retained durably so another process can find it.",
   "type": "module",
   "exports": {
