@@ -3055,6 +3055,78 @@ and never returns the retained terminal result. A journal with no retained
 terminal result is unaffected: it replays what it has and continues live, so a
 root import it does not contain is one this run performs.
 
+##### The command line addresses a document
+
+Two commands read the document-reference grammar, and both consume the model
+above rather than restating it. Neither scans headings, matches a selector,
+projects a body, or defines an error of its own.
+
+`xmd targets <document-reference>` prints the catalog:
+
+```text
+$ xmd targets README.md
+README.md#Test
+README.md#Test/Node
+README.md#Test/Bun
+```
+
+It takes exactly one file reference and nothing else — no target selector of its
+own, including the empty one after a bare `#`; no inline document, document
+property, agent flag, service option, run or test option; and no second
+argument. Each entry is `formatDocumentReference(path, target)` followed by a
+newline, in source order, duplicates retained, so a duplicate canonical path
+prints twice. A document that addresses nothing writes no bytes at all and exits
+zero. An unreadable reference, a missing or unreadable file, a parse or schema
+failure, and an unsupported invocation each exit nonzero.
+
+`xmd run` takes the same grammar in both of its forms:
+
+```text
+xmd run README.md#Release/Publish
+xmd README.md#Release/*
+```
+
+Only a file-backed run argument is read as a reference. An inline `-e` document
+is untargeted, and `xmd test` keeps its own path grammar: a test path containing
+a literal `#` or `%` still names that file.
+
+**The selector is replaced by its answer before anything executes.** The command
+inspects the document to discover its properties, and the run then reads the
+file again. What execution is asked for is the exact canonical target that
+inspection resolved, never the selector that resolved it. So if a wildcard names
+`Alpha` during inspection and the file is replaced such that the same wildcard
+would name `Beta`, the run fails on the absent `Alpha`; it never silently runs
+`Beta`. That refusal is reported before the host installs a service and before
+`execute()`.
+
+Diagnostics keep the core's own first line and render every target as a full
+document reference, because a reference is what a caller can act on:
+
+```text
+"Release/*" matches more than one document target.
+Matched targets:
+  README.md#Release/Publish
+  README.md#Release/Announce
+```
+
+`multiple-matches` lists the matches; an invalid selector and a no-match list
+the whole catalog under `Available targets:`, or say `The document has no
+targets.` when the catalog is empty. Every other failure keeps the printed-error
+behavior it already had.
+
+A filename containing `#` is written `%23` and one containing a literal `%HH`
+sequence is written `%25HH`. This is a deliberate change to `xmd run` path
+grammar for those two filenames, and the reason target selection can be written
+at all.
+
+Tier CT — CLI document targets covers the catalog, its ordering and duplicates,
+the empty catalog's byte-empty output, discovery running nothing, every rejected
+invocation, encoded filenames, both run forms, wildcards, the failure
+diagnostics, the exact-before-execute replacement, exotic headings, and target
+failure outranking a schema failure. Tier CH covers the help surfaces, Tier PC
+targeted properties, Tier VR targeted value and `<Output>` roots, Tier IE inline
+exclusivity, and Tier DT the unchanged `xmd test` path grammar.
+
 ### 5.5 The Component Api
 
 Expansion's context-dependent operations are exposed through one public
@@ -6372,9 +6444,12 @@ yield* runXmd(args, useDenoService);
 
 The installer is invoked only for `xmd run` and `xmd test`, immediately before
 `execute()`. Help, inspection and agent-worker paths never install or attach a
-service. Each adapter supplies host randomness, inherited environment and
-stdout/stderr writers to the shared service host; production adapters reject a
-non-loopback requested host before spawning.
+service. `xmd targets` is one of those inspection paths: it never invokes the
+installer, and neither does a run that refuses its target — the exact-target
+check happens before the installer is reached, so a document the run will not
+execute never gains service authority. Each adapter supplies host randomness,
+inherited environment and stdout/stderr writers to the shared service host;
+production adapters reject a non-loopback requested host before spawning.
 
 Each entrypoint owns its own argument order; there is no shared builder for
 them to forward to. `cli.ts` still reaches the host directly for terminal and

@@ -49,4 +49,33 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     // is the CLI's own and names both ways to supply a root document.
     expect(stderr).toContain("requires a document path or an inline document");
   });
+
+  it("CH6: program help lists targets beside the other commands", function* () {
+    const { stdout } = yield* runCli(["--help"]).expect();
+    expect(stdout).toContain("targets");
+  });
+
+  it("CH7: xmd targets --help describes the command rather than failing", function* () {
+    const { stdout, stderr } = yield* runCli(["targets", "--help"]).expect();
+    expect(stdout).toContain("Usage: xmd targets [OPTIONS] [path]");
+    expect(stdout).toContain("markdown document whose targets to list");
+    expect(stdout).toContain("one full document reference per");
+    expect(stdout).toContain("write `#` as `%23` and a literal `%` as `%25`");
+    expect(stderr).not.toContain("requires a document reference");
+  });
+
+  it("CH8: run help teaches the document-reference grammar", function* () {
+    const { stdout } = yield* runCli(["run", "--help"]).expect();
+    expect(stdout).toContain("xmd run README.md#Release/Publish");
+    expect(stdout).toContain("xmd README.md#Release/*");
+    expect(stdout).toContain("`xmd targets <document.md>` lists");
+    expect(stdout).toContain("write `#` as `%23` and a literal `%` as `%25`");
+  });
+
+  it("CH9: test help is unchanged by the reference grammar", function* () {
+    const { stdout } = yield* runCli(["test", "--help"]).expect();
+    expect(stdout).toContain("Usage: xmd test [OPTIONS] [path]");
+    expect(stdout).not.toContain("%23");
+    expect(stdout).not.toContain("document reference");
+  });
 });

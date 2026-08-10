@@ -190,6 +190,22 @@ jobs:
           test "$(./dist/xmd run smoke-test/value-root.md)" = \
             '{"passed":true,"summary":"no findings"}'
 
+      # Reading a document's own outline and projecting it happen inside the
+      # engine, so only the compiled binary proves the catalog and the
+      # projection survived `deno compile`.
+      - name: Smoke test document targets
+        run: |
+          set -eu
+          printf '%s\n%s\n' \
+            'smoke-test/document-targets.md#Alpha' \
+            'smoke-test/document-targets.md#Beta' > /tmp/targets.expected
+          ./dist/xmd targets smoke-test/document-targets.md > /tmp/targets.out
+          diff /tmp/targets.expected /tmp/targets.out
+
+          ./dist/xmd run 'smoke-test/document-targets.md#Alpha' --raw > /tmp/targeted.out
+          grep -q 'ALPHA_RAN' /tmp/targeted.out
+          ! grep -q 'BETA_RAN' /tmp/targeted.out
+
       # `<WebForm>` is registered by the CLI, so the compiled binary must know it.
       # The document fails in preflight, before a listener or a browser, which is
       # what makes this runnable on a headless runner: a binary missing the
