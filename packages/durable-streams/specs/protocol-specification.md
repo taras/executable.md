@@ -324,12 +324,23 @@ consumer, and replayed values are legitimately mutable. A read that threw is
 remembered and re-raised rather than retried, so a source cannot refuse the
 guard and then answer replay.
 
-A retained Yield's **identity** — its event type, its coroutine, and its
-complete effect description — is read together and once, and kept. Reading those
-members separately would let a source present an unrelated event to one phase
-and a significant one to the next, which is the same substitution as answering
-differently about a result, one level up. Identity and settlement are separate
-cells; both keep both outcomes.
+**Every** event that participates in admission, indexing, or terminal reuse is
+retained — Close as well as Yield. A Close decides whether a coroutine has a
+terminal result to reuse, so leaving it as the backend's own object lets it
+belong to a child coroutine while one phase asks and to the root while the next
+does: the phase that admits the history sees no terminal result, and the phase
+that reuses one sees it.
+
+The discriminator is settled by the classification that chooses an event's
+retained kind, and never read from the source again. Identity — the coroutine an
+event belongs to, and a Yield's complete effect description — is settled once
+too, so no phase can be shown a different event than the phase before it. An
+event that refuses to say what it is is refused from every member.
+
+A Yield's settlement stays lazy, so a guard's check remains the first ordinary
+consumer of a recorded result. A Close keeps its own cell, memoized the same
+way. Every cell keeps both outcomes: a refusal is remembered and re-raised
+rather than retried.
 
 The detached result is ordinary mutable JSON. Detaching is the claim against the
 stream; making the copy immutable would be a claim against the consumer, and
@@ -361,11 +372,13 @@ class ReplayIndex {
   private closes = new Map<CoroutineId, Close>();
 
   constructor(events: DurableEvent[]) {
-    for (const event of events) {
+    // Retained first, idempotently: a caller that already produced the stable
+    // history hands the same objects on rather than a second wrapping of them.
+    for (const event of retainEvents(events)) {
       if (event.type === "yield") {
         const list = this.yields.get(event.coroutineId) ?? [];
         // Identity now; the result when a consumer asks. See below.
-        list.push(new RetainedYield(event));
+        list.push(event);
         this.yields.set(event.coroutineId, list);
       }
       if (event.type === "close") {

@@ -2770,9 +2770,12 @@ composable policy is for. The check therefore lives inside the journal the
 execution hands to `durableRun`: it reads the retained history once, owns the
 retained snapshot every later phase observes, validates the recorded selection
 and the required root-import structure against it, and passes that same snapshot
-on. It runs ahead of public guard policy, of any retained Yield reaching
-execution, of a retained terminal result being reused, of authored work, and of
-any append. Public `ReplayGuard` policy remains composable and may short-circuit
+on. It runs ahead of public guard policy, of any retained event reaching execution,
+of a retained terminal result being reused, of authored work, and of any append.
+The snapshot it owns covers **every** event that participates in admission,
+indexing, or terminal reuse — a recorded completion as much as a recorded effect
+— so a completion cannot belong to one coroutine while admission asks and to
+another while the run reuses it. Public `ReplayGuard` policy remains composable and may short-circuit
 other public guards; it cannot suppress this.
 
 Reusing a recorded terminal result additionally requires exactly one

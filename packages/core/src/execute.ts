@@ -628,12 +628,27 @@ function admitRootHistory(
   const imports: Yield[] = [];
   let terminal = false;
   for (const event of retained) {
+    // The retained history has already settled every discriminator, so one that
+    // still refuses is a history this run cannot describe — not an event to
+    // skip past on the way to reusing a terminal result.
     const kind = attempt(() => event.type);
+    if (kind === undefined) {
+      throw new Error(UNREADABLE_ROOT_RECORD);
+    }
     if (kind === "close") {
-      terminal ||= attempt(() => event.coroutineId) === coroutineId;
+      // Any recorded completion at all, not only this coroutine's. A Close
+      // means some coroutine of this document execution finished, and every
+      // coroutine it has exists because the root document was imported — so a
+      // history holding one while the import that authorized it is absent
+      // describes a run that never happened, whichever coroutine the Close
+      // claims to belong to.
+      if (attempt(() => event.coroutineId) === undefined) {
+        throw new Error(UNREADABLE_ROOT_RECORD);
+      }
+      terminal = true;
       continue;
     }
-    if (kind !== "yield" || event.type !== "yield") {
+    if (event.type !== "yield") {
       continue;
     }
     if (isRootImport(event)) {
@@ -641,11 +656,12 @@ function admitRootHistory(
     }
   }
 
-  // A journal with no retained terminal result replays what it has and then
+  // A journal that recorded no completion replays what it has and then
   // continues live, so a root import it does not contain is one this run
-  // performs. A journal that carries one is standing behind a selection: a
-  // history that recorded none, recorded two, or recorded one belonging to some
-  // other coroutine establishes nothing for this coroutine to stand behind.
+  // performs. A journal that recorded one is standing behind a selection: a
+  // history that recorded no import, recorded two, or recorded one belonging to
+  // some other coroutine establishes nothing for this coroutine to stand
+  // behind.
   if (terminal) {
     const owned = imports.filter((event) => attempt(() => event.coroutineId) === coroutineId);
     if (imports.length !== 1 || owned.length !== 1) {

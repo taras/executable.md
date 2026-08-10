@@ -652,7 +652,9 @@ policy — a handler installed further out may decline to delegate — so identi
 which must not be negotiable, is not decided there. The execution owns the
 journal it replays through and validates the recorded selection inside the read
 itself, ahead of public guard policy, of a retained terminal result being
-reused, of authored work, and of any append. Reusing a terminal result also
+reused, of authored work, and of any append. The retained history it owns covers
+every event that takes part in that decision, a recorded completion included, so
+no event can present one identity to the validation and another to the run. Reusing a terminal result also
 requires exactly one recognizable root import belonging to the coroutine whose
 result is being reused.
 

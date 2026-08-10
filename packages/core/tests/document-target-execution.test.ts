@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
-import { detachJson, ReplayGuard } from "@executablemd/durable-streams";
+import { ReplayGuard } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Yield } from "@executablemd/durable-streams";
 import { createApi } from "@effectionx/context-api";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -1501,49 +1501,51 @@ describe("Tier TX — detached values stay mutable", () => {
     "",
   ].join("\n");
 
-  function* runMutating(stream: InMemoryStream): Operation<string> {
+  function* runMutating(stream: DurableStream): Operation<string> {
     return yield* scoped(function* () {
-      // The portable compiler: a data: module is not importable under every runtime.
+      // The portable compiler: a data: module is not importable under every
+      // runtime.
       yield* useTempFileCompiler();
       return asText(yield* collect(yield* execute({ ...inlineSource(MUTATES), stream })));
     });
   }
 
-  it("TX61: a replayed run updates a restored object exactly as a live one does", function* () {
-    const live = new InMemoryStream();
-    const golden = yield* runMutating(live);
+  /**
+   * A genuine partial replay: the binding is restored from the journal and then
+   * written to by an iteration that runs live.
+   *
+   * The first eval block is retained, so `state` comes back detached from the
+   * journal. The second is dropped along with the terminal result, so the
+   * update runs for real. A detached member that is not writable fails here.
+   */
+  it("TX61: a restored binding is mutated by the live continuation", function* () {
+    const complete = new InMemoryStream();
+    const golden = yield* runMutating(complete);
     expect(golden).toContain("1:a,b");
 
-    // Same journal, replayed: the restored binding is written to again.
-    expect(yield* runMutating(live)).toBe(golden);
-  });
+    const evals = complete
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.type === "eval");
+    expect(evals.length).toBeGreaterThan(1);
 
-  it("TX62: `__proto__` is retained as an own data member", function* () {
-    const source: Record<string, unknown> = {};
-    Object.defineProperty(source, "__proto__", {
-      value: { polluted: true },
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-    const detached = detachJson(source as Json);
-    expect(Object.getPrototypeOf(detached)).toBe(Object.prototype);
-    expect(Object.getOwnPropertyNames(detached)).toEqual(["__proto__"]);
-    expect(({} as Record<string, unknown>)["polluted"]).toBe(undefined);
-  });
+    const partial = new InMemoryStream();
+    let kept = 0;
+    for (const event of complete.snapshot()) {
+      if (event.type === "close") {
+        continue;
+      }
+      if (event.type === "yield" && event.description.type === "eval") {
+        kept += 1;
+        if (kept > 1) {
+          continue;
+        }
+      }
+      yield* partial.append(event);
+    }
 
-  it("TX63: nested objects and arrays detach from the journal's own", function* () {
-    const list = ["a"];
-    const nested = { list };
-    const source = { nested };
-    const detached = detachJson(source as unknown as Json);
-    const heldNested = (detached as Record<string, Json>)["nested"];
-    expect(heldNested).not.toBe(nested);
-    expect((heldNested as Record<string, Json>)["list"]).not.toBe(list);
-
-    list.push("injected");
-    nested.list = ["replaced"];
-    expect((heldNested as Record<string, Json>)["list"]).toEqual(["a"]);
+    // The first block replays and restores `state`; the second runs live and
+    // writes to it.
+    expect(yield* runMutating(partial)).toBe(golden);
   });
 });
 
@@ -1606,8 +1608,9 @@ describe("Tier TX — target resolution precedes schema compilation", () => {
   });
 
   it("TX65: a resolvable target lets the invalid schema be reported", function* () {
-    const [inspected, live] = yield* onEveryPath(BROKEN_SCHEMA, "Kept");
-    for (const failed of [inspected, live]) {
+    // All three paths, replay included: the recorded terminal error is the
+    // schema failure, and nothing replaces it with a target failure.
+    for (const failed of yield* onEveryPath(BROKEN_SCHEMA, "Kept")) {
       expect(isDocumentTargetError(failed)).toBe(false);
       expect((failed as Error).name).toBe("PropsSchemaError");
     }
@@ -1631,5 +1634,81 @@ describe("Tier TX — target resolution precedes schema compilation", () => {
       ),
     );
     expect(text).toContain("kept body");
+  });
+});
+
+/**
+ * Tier TX — a Close cannot change coroutines between phases.
+ *
+ * The admission gate decides whether a terminal result exists; the index
+ * decides whose it is. Read separately, a Close can belong to a child while the
+ * gate asks and to the root while the index does — the gate admits a history it
+ * believes has no terminal result, and the run then returns one, for a section
+ * nobody requested.
+ *
+ * Recorded before the fix, resuming as Beta against an Alpha journal whose root
+ * import was removed:
+ *
+ * ```json
+ * {"requested":"Beta","ok":true,"value":"# Title\n\n## Alpha\n\nalpha content\n\n"}
+ * ```
+ */
+describe("Tier TX — a shifting terminal coroutine", () => {
+  it("TX68: a Close that moves from a child to the root returns nothing", function* () {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), complete, { names: [], ids: [] });
+
+    let reads = 0;
+    const events: DurableEvent[] = [];
+    for (const event of complete.snapshot()) {
+      if (event.type === "yield" && event.description.name === "__root__") {
+        continue;
+      }
+      if (event.type === "close") {
+        const close: Record<string, unknown> = { type: "close", result: event.result };
+        Object.defineProperty(close, "coroutineId", {
+          enumerable: true,
+          get() {
+            reads += 1;
+            return reads === 1 ? "root.7" : "root";
+          },
+        });
+        events.push(close as unknown as DurableEvent);
+        continue;
+      }
+      events.push(event);
+    }
+
+    const appended: DurableEvent[] = [];
+    const stream: DurableStream = {
+      // deno-lint-ignore require-yield
+      *readAll(): Operation<DurableEvent[]> {
+        return events;
+      },
+      // deno-lint-ignore require-yield
+      *append(event: DurableEvent): Operation<void> {
+        appended.push(event);
+      },
+    };
+
+    const seen: Probes = { names: [], ids: [] };
+    const error = yield* scoped(function* () {
+      yield* useProbes(seen);
+      try {
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Beta" }), stream }));
+      } catch (caught) {
+        return caught;
+      }
+      throw new Error("the run completed instead of failing");
+    });
+
+    // Never Alpha's retained output, and never a partial answer either.
+    expect((error as Error).message).toBe(UNREADABLE_RECORD);
+    expect((error as Error).cause).toBe(undefined);
+    expect((error as Error).message).not.toContain("alpha content");
+    expect(seen.names).toEqual([]);
+    expect(appended).toEqual([]);
+    // The coroutine was asked once, so there was never a second answer.
+    expect(reads).toBe(1);
   });
 });

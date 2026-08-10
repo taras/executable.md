@@ -25,7 +25,10 @@ export type {
 
 // ReplayIndex
 export { ReplayIndex } from "./replay-index.ts";
-export { detachJson, retainEvents, RetainedYield } from "./retained.ts";
+// `retainEvents` is public because `@executablemd/core` owns its own journal
+// gate and must produce the stable history across the package boundary. The
+// retained classes and the detach helpers stay internal.
+export { retainEvents } from "./retained.ts";
 export type { YieldEntry } from "./replay-index.ts";
 
 // Stream interface

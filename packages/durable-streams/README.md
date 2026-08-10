@@ -401,7 +401,13 @@ Use guards for staleness policy. Do not use them to enforce an invariant that mu
 
 Every phase of a replay reads the same events, and a journal is data a backend supplies. Events are therefore **retained**: read once and detached from whatever the backend still owns.
 
-A retained `Yield`'s **identity** — its event type, its coroutine, and its complete effect description — is read together and kept, so no phase can be shown a different event than the phase before it. What the event **settled to** stays lazy and separate, because the index is built before guards run and a guard that would refuse an event must get that chance before the stream is asked to produce a result. Both reads keep both outcomes: a refusal is remembered and re-raised rather than retried.
+**Every** event that participates in admission, indexing, or terminal reuse is retained — `Close` as well as `Yield`. A `Close` decides whether a coroutine has a terminal result to reuse, so leaving it as the backend's own object lets it belong to a child coroutine while one phase asks and to the root while the next does.
+
+The **discriminator** is settled by the classification that chooses an event's retained kind, and never read from the source again. **Identity** — the coroutine an event belongs to, and a `Yield`'s complete effect description — is settled once too, so no phase can be shown a different event than the phase before it. An event that refuses to say what it is is refused from every member.
+
+A `Yield`'s **settlement** stays lazy and separate, because the index is built before guards run and a guard that would refuse an event must get that chance before the stream is asked to produce a result. A `Close` keeps its own cell, memoized the same way, so every later read receives the same detached answer. Every cell keeps both outcomes: a refusal is remembered and re-raised rather than retried.
+
+A retained event presents its members as ordinary own properties, so it spreads, serializes, and compares like the plain event a backend would have supplied.
 
 A detached result shares no object or array with the journal, and remains ordinary mutable JSON — detaching is a claim against the *stream*, not against the consumer, and replayed values are legitimately written to.
 

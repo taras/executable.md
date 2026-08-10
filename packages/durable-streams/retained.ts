@@ -8,15 +8,26 @@
  * one thing for validation and another for execution, and nothing downstream
  * can detect the substitution.
  *
- * A retained event is therefore read once and detached. Identity — the event
- * type, the coroutine it belongs to, and its complete effect description — is
- * read together and kept, so no phase can be shown a different event than the
- * phase before it. What the event *settled to* stays lazy and separate: the
- * index is built before guards run, and a guard that would refuse an event has
- * to get that chance before the stream is asked to produce its result.
+ * A retained event is therefore read once and detached. **Every** event that
+ * participates in admission, indexing, or terminal reuse is retained, Close as
+ * well as Yield: a Close decides whether a coroutine has a terminal result to
+ * reuse, so leaving it as the backend's own object lets it belong to a child
+ * coroutine while one phase asks and to the root while the next does.
+ *
+ * The discriminator is settled once, by the classification that chooses a
+ * retained event's kind, and never read from the source again. Identity — the
+ * coroutine an event belongs to, and a Yield's complete effect description — is
+ * settled once too, so no phase can be shown a different event than the phase
+ * before it.
+ *
+ * A Yield's *settlement* stays lazy and separate: the index is built before
+ * guards run, and a guard that would refuse an event has to get that chance
+ * before the stream is asked to produce its result. A Close keeps its own cell,
+ * memoized the same way, so every later read receives the same detached answer.
  */
 
 import type {
+  Close,
   CoroutineId,
   DurableEvent,
   EffectDescription,
@@ -177,21 +188,23 @@ function detachDescription(description: EffectDescription): EffectDescription {
 
 /** Everything about a retained Yield except what it settled to. */
 interface RetainedIdentity {
-  readonly type: "yield";
   readonly coroutineId: CoroutineId;
   readonly description: EffectDescription;
 }
 
-function readIdentity(source: Yield): RetainedIdentity {
-  const type = source.type;
-  if (type !== "yield") {
-    throw new TypeError("a retained Yield reports its own type");
-  }
+function readCoroutineId(source: { coroutineId: CoroutineId }): CoroutineId {
   const coroutineId = source.coroutineId;
   if (typeof coroutineId !== "string") {
-    throw new TypeError("a retained Yield belongs to a coroutine");
+    throw new TypeError("a retained event belongs to a coroutine");
   }
-  return { type, coroutineId, description: detachDescription(source.description) };
+  return coroutineId;
+}
+
+function readIdentity(source: Yield): RetainedIdentity {
+  return {
+    coroutineId: readCoroutineId(source),
+    description: detachDescription(source.description),
+  };
 }
 
 /**
@@ -208,35 +221,102 @@ function readIdentity(source: Yield): RetainedIdentity {
  * refusal is remembered and re-raised rather than retried, so a source cannot
  * refuse one phase and then answer the next.
  */
-export class RetainedYield implements Yield {
-  private source: Yield;
-  private identity: Settled<RetainedIdentity> | undefined;
-  private settled: Settled<Result> | undefined;
+/**
+ * Present a retained member the way the event it stands for presents it.
+ *
+ * Own and enumerable, so a retained event spreads, serializes, and compares
+ * like the plain event a backend would have supplied. The settled cells stay
+ * genuinely private, which is what keeps them out of all of that.
+ */
+function present<T>(target: object, name: string, read: () => T): void {
+  Object.defineProperty(target, name, { enumerable: true, get: read });
+}
+
+class RetainedYield implements Yield {
+  /**
+   * Settled by the classification that chose this wrapper, never re-read. A
+   * second read of the source's own discriminator is a second chance for it to
+   * answer differently, and an event that classifies as a Yield here and a
+   * Close there is the same substitution one level further out.
+   */
+  declare readonly type: "yield";
+  declare readonly coroutineId: CoroutineId;
+  declare readonly description: EffectDescription;
+  declare readonly result: Result;
+  #source: Yield;
+  #identity: Settled<RetainedIdentity> | undefined;
+  #settled: Settled<Result> | undefined;
 
   constructor(source: Yield) {
-    this.source = source;
+    this.#source = source;
+    present(this, "type", () => "yield" as const);
+    present(this, "coroutineId", () => this.#stable().coroutineId);
+    present(this, "description", () => this.#stable().description);
+    present(this, "result", () => {
+      this.#settled ??= settle(() => detachResult(this.#source.result));
+      return resolve(this.#settled);
+    });
   }
 
-  private stable(): RetainedIdentity {
-    this.identity ??= settle(() => readIdentity(this.source));
-    return resolve(this.identity);
+  #stable(): RetainedIdentity {
+    this.#identity ??= settle(() => readIdentity(this.#source));
+    return resolve(this.#identity);
   }
+}
 
-  get type(): "yield" {
-    return this.stable().type;
+/**
+ * One retained Close: settled identity, and one cell for its terminal result.
+ *
+ * A Close decides whether a coroutine has a terminal result to reuse, so it
+ * participates in admission exactly as a Yield does. Left as the backend's own
+ * object it could belong to a child coroutine while one phase asks and to the
+ * root while the next does — a history nobody could admit, reused as a result
+ * nobody asked for.
+ */
+class RetainedClose implements Close {
+  declare readonly type: "close";
+  declare readonly coroutineId: CoroutineId;
+  declare readonly result: Result;
+  #source: Close;
+  #identity: Settled<CoroutineId> | undefined;
+  #settled: Settled<Result> | undefined;
+
+  constructor(source: Close) {
+    this.#source = source;
+    present(this, "type", () => "close" as const);
+    present(this, "coroutineId", () => {
+      this.#identity ??= settle(() => readCoroutineId(this.#source));
+      return resolve(this.#identity);
+    });
+    present(this, "result", () => {
+      this.#settled ??= settle(() => detachResult(this.#source.result));
+      return resolve(this.#settled);
+    });
   }
+}
 
-  get coroutineId(): CoroutineId {
-    return this.stable().coroutineId;
-  }
+/**
+ * An event that would not say what it is.
+ *
+ * Classification is the one thing every later phase depends on, so an event
+ * that refuses it is not an event this history can describe. The refusal is
+ * remembered and re-raised from every member, rather than retried — a source
+ * that refuses one phase must not answer the next.
+ */
+class RetainedRefusal implements Yield {
+  declare readonly type: "yield";
+  declare readonly coroutineId: CoroutineId;
+  declare readonly description: EffectDescription;
+  declare readonly result: Result;
+  #refusal: unknown;
 
-  get description(): EffectDescription {
-    return this.stable().description;
-  }
-
-  get result(): Result {
-    this.settled ??= settle(() => detachResult(this.source.result));
-    return resolve(this.settled);
+  constructor(refusal: unknown) {
+    this.#refusal = refusal;
+    for (const name of ["type", "coroutineId", "description", "result"]) {
+      present(this, name, (): never => {
+        throw this.#refusal;
+      });
+    }
   }
 }
 
@@ -252,9 +332,29 @@ export class RetainedYield implements Yield {
  */
 export function retainEvents(events: readonly DurableEvent[]): DurableEvent[] {
   return events.map((event) => {
-    if (event instanceof RetainedYield) {
+    if (isRetained(event)) {
       return event;
     }
-    return event.type === "yield" ? new RetainedYield(event) : event;
+    // The one read of the source's discriminator. Whatever it says here is what
+    // the retained event reports from now on, to every phase.
+    const classified = settle(() => event.type);
+    if (classified.kind === "refusal") {
+      return new RetainedRefusal(classified.refusal);
+    }
+    if (classified.value === "yield") {
+      return new RetainedYield(event as Yield);
+    }
+    if (classified.value === "close") {
+      return new RetainedClose(event as Close);
+    }
+    return new RetainedRefusal(new TypeError("a retained event is a yield or a close"));
   });
+}
+
+function isRetained(event: DurableEvent): boolean {
+  return (
+    event instanceof RetainedYield ||
+    event instanceof RetainedClose ||
+    event instanceof RetainedRefusal
+  );
 }
