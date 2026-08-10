@@ -3,9 +3,9 @@ import {
   createDurableOperation,
   type ActivateDurabilityFailure,
   type DurableEffect,
-  type DurablePublicationIdentity,
   type EffectDescription,
   type Json,
+  type JournalProvenance,
   type LiveDurableOperationCoordinator,
   type Result,
 } from "@executablemd/durable-streams";
@@ -14,7 +14,7 @@ import { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./api
 
 export interface WorkspaceCoordinationAuthority {
   readonly executionIdentity: object;
-  readonly publicationIdentity: DurablePublicationIdentity | undefined;
+  readonly journalProvenance: JournalProvenance | undefined;
   execute(): Operation<Json>;
   publish(result: Result): Operation<void>;
   activateFailure(failure: unknown): Operation<Error>;
@@ -32,7 +32,7 @@ interface StartRequest {
 
 interface WorkspaceInvocationDetails {
   readonly executionIdentity: object;
-  readonly publicationIdentity: DurablePublicationIdentity | undefined;
+  readonly journalProvenance: JournalProvenance | undefined;
 }
 
 interface WorkspaceInvocationCapability {
@@ -118,7 +118,7 @@ export function withWorkspaceCoordinationProvider<T>(
           let authorityOpen = true;
           const authority: WorkspaceCoordinationAuthority = Object.freeze({
             executionIdentity: details.executionIdentity,
-            publicationIdentity: details.publicationIdentity,
+            journalProvenance: details.journalProvenance,
             *execute(): Operation<Json> {
               if (!authorityOpen) {
                 throw unavailable(
@@ -165,7 +165,7 @@ function invocationCapability(
   execute: () => Operation<Json>,
   publish: (result: Result) => Operation<void>,
   activateFailure: ActivateDurabilityFailure,
-  publicationIdentity: DurablePublicationIdentity | undefined,
+  journalProvenance: JournalProvenance | undefined,
 ): {
   capability: WorkspaceInvocationCapability;
   authoritativeResult: () => Result | undefined;
@@ -198,7 +198,7 @@ function invocationCapability(
           );
         }
         state = "active";
-        return { executionIdentity, publicationIdentity };
+        return { executionIdentity, journalProvenance };
       },
       *execute(candidate: object): Operation<Json> {
         requireCredential(candidate);
@@ -248,7 +248,7 @@ function workspaceCoordinator(executionIdentity: object): LiveDurableOperationCo
       execute: () => Operation<T>,
       publish: (result: Result) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
-      publicationIdentity: DurablePublicationIdentity | undefined,
+      journalProvenance: JournalProvenance | undefined,
     ): Operation<Result> {
       let invocation: ReturnType<typeof invocationCapability> | undefined;
 
@@ -260,7 +260,7 @@ function workspaceCoordinator(executionIdentity: object): LiveDurableOperationCo
           execute,
           publish,
           activateFailure,
-          publicationIdentity,
+          journalProvenance,
         );
         yield* WorkspaceInvocation.operations.coordinate({
           type: "start",

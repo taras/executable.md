@@ -29,7 +29,7 @@ import {
   rememberDurabilityFailure,
 } from "./durability.ts";
 import { StaleInputError } from "./errors.ts";
-import { durablePublicationIdentity } from "./guard.ts";
+import { getJournalProvenance } from "./guard.ts";
 import {
   type ActivateDurabilityFailure,
   defaultLiveDurableOperationCoordinator,
@@ -373,7 +373,7 @@ export function createDurableOperation<T extends Json>(
               yield* appendDurableEvent(ctx, event);
             },
             activateFailure,
-            durablePublicationIdentity(ctx.stream),
+            getJournalProvenance(ctx.stream),
           );
           resolve(protocolToEffection<T>(result));
         } catch (err) {

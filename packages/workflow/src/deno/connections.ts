@@ -2,10 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
-  claimDurablePublicationIdentity,
+  establishJournalProvenance,
   type DurableEvent,
-  type DurablePublicationIdentity,
   type DurableStream,
+  type JournalProvenance,
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { WorkflowTransactionError } from "../storage/errors.ts";
@@ -43,7 +43,7 @@ export interface RunConnectionLease {
   readonly generation: ConnectionGeneration;
   readonly path: string;
   readonly database: WorkflowRunDatabase;
-  journalIdentity: DurablePublicationIdentity | undefined;
+  journalProvenance: JournalProvenance | undefined;
   open: boolean;
 }
 
@@ -81,9 +81,9 @@ export interface WorkflowRunConnections {
   registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   closeLease(lease: RunConnectionLease): void;
   validateLease(database: WorkflowRunDatabase): RunConnectionLease;
-  validateJournal(
+  validateJournalProvenance(
     database: WorkflowRunDatabase,
-    identity: DurablePublicationIdentity | undefined,
+    provenance: JournalProvenance | undefined,
   ): void;
   afterRoutedJournalAppend(database: WorkflowRunDatabase, event: DurableEvent): Operation<void>;
   beforeCommit(database: WorkflowRunDatabase): Operation<void>;
@@ -363,7 +363,7 @@ export function createWorkflowRunConnections(
         generation: connection.generation,
         path: connection.path,
         database,
-        journalIdentity: undefined,
+        journalProvenance: undefined,
         open: true,
       };
       leases.set(database, lease);
@@ -372,12 +372,12 @@ export function createWorkflowRunConnections(
 
     registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void {
       const lease = validateLease(database);
-      if (lease.journalIdentity !== undefined) {
+      if (lease.journalProvenance !== undefined) {
         throw new WorkflowTransactionError(
-          "the WorkflowRun database journal identity is already installed.",
+          "the WorkflowRun database journal provenance is already installed.",
         );
       }
-      lease.journalIdentity = claimDurablePublicationIdentity(journal);
+      lease.journalProvenance = establishJournalProvenance(journal);
     },
 
     closeLease(lease: RunConnectionLease): void {
@@ -386,14 +386,14 @@ export function createWorkflowRunConnections(
 
     validateLease,
 
-    validateJournal(
+    validateJournalProvenance(
       database: WorkflowRunDatabase,
-      identity: DurablePublicationIdentity | undefined,
+      provenance: JournalProvenance | undefined,
     ): void {
-      const selected = validateLease(database).journalIdentity;
-      if (selected === undefined || selected !== identity) {
+      const selected = validateLease(database).journalProvenance;
+      if (selected === undefined || selected !== provenance) {
         throw new WorkflowTransactionError(
-          "the live Workspace journal is foreign to the selected WorkflowRun database.",
+          "the live Workspace journal does not have the provenance of the selected WorkflowRun.",
         );
       }
     },

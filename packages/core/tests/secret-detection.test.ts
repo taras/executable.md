@@ -27,8 +27,21 @@ import { all, createContext, Err, Ok, scoped, sleep, spawn, withResolvers } from
 import type { Operation, Result } from "effection";
 import type { Json } from "../src/types.ts";
 import { forEach } from "@effectionx/stream-helpers";
-import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
-import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  durableRun,
+  establishJournalProvenance,
+  InMemoryStream,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
+import type {
+  DurableEvent,
+  DurableStream,
+  JournalProvenance,
+  LiveDurableOperationCoordinator,
+  Result as DurableResult,
+  Workflow,
+} from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { execute, Execution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
@@ -36,7 +49,12 @@ import { registerComponents } from "../src/components/registration.ts";
 import { createScannerWith, createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
-import { scanSecrets, secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
+import {
+  scanSecrets,
+  secretPolicy,
+  useSecretDetection,
+  useSecretScannerFactory,
+} from "../src/secrets/policy.ts";
 import { secretLintProfiler } from "@secretlint/profiler";
 import type { SecretPolicy } from "../src/secrets/policy.ts";
 
@@ -214,6 +232,56 @@ function rejectedInPlace(result: Result<Json>): boolean {
   );
 }
 
+/** A scanner that clears everything, for tests about wrapping rather than detection. */
+function useCheapScanner(): Operation<void> {
+  return useSecretScannerFactory(() => ({
+    // deno-lint-ignore require-yield
+    *scan(): Operation<SecretFinding[]> {
+      return [];
+    },
+  }));
+}
+
+/**
+ * The journal provenance a live coordinator receives for `stream`.
+ *
+ * Provenance is readable only inside the canonical durable-streams module, so
+ * this asks the seam the Workspace provider actually reads: the witness handed
+ * to the coordinator of a live durable operation on that stream.
+ */
+function* observedProvenance(stream: DurableStream): Operation<JournalProvenance | undefined> {
+  let observed: JournalProvenance | undefined;
+  let coordinated = 0;
+  const coordinator: LiveDurableOperationCoordinator = {
+    *run(execute, publish, _activateFailure, journalProvenance) {
+      coordinated += 1;
+      observed = journalProvenance;
+      const result: DurableResult = { status: "ok", value: yield* execute() };
+      yield* publish(result);
+      return result;
+    },
+  };
+
+  yield* durableRun(
+    function* (): Workflow<void> {
+      yield createDurableOperation(
+        { type: "call", name: "provenance" },
+        // deno-lint-ignore require-yield
+        function* (): Operation<string> {
+          return "coordinated";
+        },
+        { coordinator },
+      );
+    },
+    { stream },
+  );
+
+  if (coordinated !== 1) {
+    throw new Error("the durable run did not coordinate exactly one live operation");
+  }
+  return observed;
+}
+
 describe("default-on secret detection", () => {
   describe("the persistence boundary", () => {
     it("rejects a canary in the root import event", function* () {
@@ -308,6 +376,53 @@ describe("default-on secret detection", () => {
       // One append per event, and the same sequence detection-off produces.
       expect(guarded).toEqual(guardedBackend.snapshot().map(label));
       expect(guarded).toEqual(plain);
+    });
+  });
+
+  describe("journal provenance", () => {
+    it("preserves the exact witness of the stream it filters", function* () {
+      const backend = new InMemoryStream();
+      const provenance = establishJournalProvenance(backend);
+      yield* useCheapScanner();
+
+      const guarded = yield* useSecretDetection(undefined, backend);
+
+      expect(guarded).not.toBe(backend);
+      expect(yield* observedProvenance(guarded)).toBe(provenance);
+    });
+
+    it("keeps the same witness through nested official wrapping", function* () {
+      const backend = new InMemoryStream();
+      const provenance = establishJournalProvenance(backend);
+      yield* useCheapScanner();
+
+      const guarded = yield* useSecretDetection(undefined, backend);
+      const nested = yield* useSecretDetection(undefined, guarded);
+
+      expect(nested).not.toBe(guarded);
+      expect(yield* observedProvenance(nested)).toBe(provenance);
+    });
+
+    it("hands back the original stream when the host disables detection", function* () {
+      const backend = new InMemoryStream();
+      const provenance = establishJournalProvenance(backend);
+      yield* useCheapScanner();
+
+      expect(yield* useSecretDetection(false, backend)).toBe(backend);
+      expect(yield* observedProvenance(backend)).toBe(provenance);
+    });
+
+    it("proves nothing about a stream the policy did not wrap", function* () {
+      const backend = new InMemoryStream();
+      establishJournalProvenance(backend);
+      yield* useCheapScanner();
+
+      const unrelated: DurableStream = {
+        readAll: () => backend.readAll(),
+        append: (event) => backend.append(event),
+      };
+
+      expect(yield* observedProvenance(unrelated)).toBe(undefined);
     });
   });
 

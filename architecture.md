@@ -54,6 +54,7 @@ Existing documents and code get aligned to this section retroactively.
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
+| journal provenance | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
 ## Three axes
 
@@ -400,8 +401,8 @@ publication. Callback-based durable effects keep their existing path.
 
 The shared Workspace durable-operation wrapper reads a contextual provider
 selection explicitly. That replaceable API carries only a non-operational
-selection identity: execution, publication, failure activation and durable
-publication identity never pass through that middleware. Provider selection
+selection identity: execution, publication, failure activation and journal
+provenance never pass through that middleware. Provider selection
 creates a one-use route and a separate opaque credential. The live call keeps
 that credential out of its contextual invocation request and places the exact
 executor, publisher and failure activator behind an execution-owned capability
@@ -424,13 +425,16 @@ completed or stale calls fail before transaction work. Installing no provider
 cannot leak execution or publication, and selecting Workspace coordination for
 one operation does not enlist unrelated durable operations in the same scope.
 
-The Deno adapter retains the canonical module's non-operational identity for
-each WorkflowRun journal. The existing secret guard privately associates only
-its own wrapper, including nested official wrappers, with that same identity.
-Before it opens a transaction, the adapter requires both the exact proof
-executor and the publication identity from the consumed invocation to belong to
-the selected WorkflowRun. An in-memory stream, another run's journal, a copied
-property, or an unproven wrapper is refused before mutation or publication.
+The Deno adapter establishes the canonical module's journal provenance for each
+WorkflowRun journal and retains that exact witness. The generic pre-persistence
+guard is policy-neutral and returns an unproven wrapper; the trusted
+secret-filter wrapping site preserves provenance explicitly, so a filtered
+journal — including one wrapped more than once — still carries the witness its
+source carried. Before it opens a transaction, the adapter requires both the
+exact proof executor and the journal provenance from the consumed invocation to
+belong to the selected WorkflowRun. An in-memory stream, another run's journal,
+a copied property, an ordinary guard, a custom look-alike, or a wrapper another
+loaded copy tried to prove is refused before mutation or publication.
 Inside the transaction, the provider's publication operation calls the
 execution-owned publisher directly and returns only after that publisher records
 the exact Result. The transaction body cannot return or commit on a contextual
@@ -914,6 +918,37 @@ provided via context. No module-scoped registries — not as collections, not
 hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
+
+### The weak journal-provenance association
+
+Journal provenance is the one further exception, and it is deliberately narrow.
+The canonical durable-streams module keeps the association between a stream and
+its witness in a module-local `WeakMap` keyed by exact stream object identity.
+It qualifies only while every one of these holds:
+
+- the association carries a non-operational, equality-only witness and grants
+  no append, read, execution, publication or reconciliation capability;
+- keys are exact objects held weakly, the association cannot enumerate them,
+  and it cannot keep a stream alive or outlive that stream;
+- the association is unreachable through structural properties or stable
+  contexts, and a separately loaded package copy can neither read nor transfer
+  it;
+- establishment and transfer occur only through the canonical module's
+  `establishJournalProvenance()` and `preserveJournalProvenance()`, one fresh
+  witness per stream, with duplicate establishment refused; and
+- it retains no execution, lifecycle, journal content or provider state.
+
+The exception exists because the exact-object, anti-forgery and loaded-copy
+boundary *is* the provenance contract: public structural metadata would be
+forgeable and copyable, and weak keys make the association's lifetime
+subordinate to the streams that own it. A scope-owned alternative would thread
+new authority through core, durable execution, secret wrapping and Workspace
+coordination; a wrapper-private one could not refuse duplicate establishment on
+an arbitrary stream. Neither adds a security property this lacks, and both
+enlarge the trusted surface.
+
+This is not permission for module-scoped caches or registries generally. Any
+other candidate is refused unless it satisfies every constraint above.
 
 ## State across loaded copies
 

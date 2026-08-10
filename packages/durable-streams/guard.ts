@@ -18,51 +18,72 @@ import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
-class PublicationIdentity {
+class JournalProvenance {
   #opaque = undefined;
 }
 
-/** Non-operational identity for one durable publication backend. */
-export type DurablePublicationIdentity = PublicationIdentity;
+/**
+ * A non-operational, equality-only witness that a stream descends from the
+ * exact journal backend a provider selected.
+ *
+ * It grants no append, read, execution, publication or reconciliation
+ * capability. It is meaningful only because the provider retains the witness
+ * it established and later requires exact equality.
+ */
+export type { JournalProvenance };
 
-const publicationIdentities = (() => {
-  // This security identity is deliberately canonical-module-local. A loaded
-  // copy cannot enroll its wrappers into this copy's authority.
-  const identities = new WeakMap<DurableStream, DurablePublicationIdentity>();
+const journalProvenances = (() => {
+  // This security witness is deliberately canonical-module-local. A loaded
+  // copy cannot read this copy's association or enroll a stream into it.
+  const provenances = new WeakMap<DurableStream, JournalProvenance>();
 
   return {
-    claim(stream: DurableStream): DurablePublicationIdentity {
-      if (identities.has(stream)) {
-        throw new Error("this durable stream already has a publication identity");
+    establish(stream: DurableStream): JournalProvenance {
+      if (provenances.has(stream)) {
+        throw new Error("this durable stream already has journal provenance");
       }
-      const identity = new PublicationIdentity();
-      identities.set(stream, identity);
-      return identity;
+      const provenance = new JournalProvenance();
+      provenances.set(stream, provenance);
+      return provenance;
     },
 
-    inherit(source: DurableStream, target: DurableStream): void {
-      const identity = identities.get(source);
-      if (identity !== undefined) {
-        identities.set(target, identity);
+    preserve(source: DurableStream, target: DurableStream): void {
+      const provenance = provenances.get(source);
+      if (provenance !== undefined) {
+        provenances.set(target, provenance);
       }
     },
 
-    get(stream: DurableStream): DurablePublicationIdentity | undefined {
-      return identities.get(stream);
+    get(stream: DurableStream): JournalProvenance | undefined {
+      return provenances.get(stream);
     },
   };
 })();
 
-/** Claim the exact backend identity retained by a provider. */
-export function claimDurablePublicationIdentity(stream: DurableStream): DurablePublicationIdentity {
-  return publicationIdentities.claim(stream);
+/** Establish the provenance a provider retains for one exact journal backend. */
+export function establishJournalProvenance(stream: DurableStream): JournalProvenance {
+  return journalProvenances.establish(stream);
 }
 
-/** @internal The live durable path reads identity without receiving stream authority. */
-export function durablePublicationIdentity(
-  stream: DurableStream,
-): DurablePublicationIdentity | undefined {
-  return publicationIdentities.get(stream);
+/**
+ * Carry an exact source stream's provenance onto a trusted wrapper of it.
+ *
+ * Preservation is visible composition rather than new authority: it transfers
+ * only the witness already associated with that exact source, so an unproven
+ * source leaves the target unproven. The target is returned so the wrapping
+ * site reads as one expression.
+ */
+export function preserveJournalProvenance(
+  source: DurableStream,
+  target: DurableStream,
+): DurableStream {
+  journalProvenances.preserve(source, target);
+  return target;
+}
+
+/** @internal The live durable path reads provenance without receiving stream authority. */
+export function getJournalProvenance(stream: DurableStream): JournalProvenance | undefined {
+  return journalProvenances.get(stream);
 }
 
 export interface DurableEventRejectionOccurrence {
@@ -105,9 +126,13 @@ export type DurableEventGate = (event: DurableEvent) => Operation<void>;
  * Rejection is per event. The rejected event never reaches the backend, but
  * the resulting failure may lead the workflow to append a later `Close`
  * event with an `err` result, and that close crosses the gate on its own.
+ *
+ * The guard is policy-neutral, so the wrapper it returns is unproven. An
+ * authorized wrapping site preserves journal provenance explicitly through
+ * {@link preserveJournalProvenance}.
  */
 export function guardDurableStream(stream: DurableStream, gate: DurableEventGate): DurableStream {
-  const guarded: DurableStream = {
+  return {
     readAll: () => stream.readAll(),
 
     *append(event: DurableEvent): Operation<void> {
@@ -127,6 +152,4 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       yield* stream.append(event);
     },
   };
-  publicationIdentities.inherit(stream, guarded);
-  return guarded;
 }

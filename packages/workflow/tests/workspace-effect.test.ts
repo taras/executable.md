@@ -8,7 +8,7 @@ import { glob } from "@executablemd/runtime";
 import ts from "typescript";
 import { type Operation, scoped } from "effection";
 import {
-  claimDurablePublicationIdentity,
+  establishJournalProvenance,
   durableCall,
   durableRun,
   InMemoryStream,
@@ -413,14 +413,14 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC11: explicit Workspace selection leaves unrelated durable operations ordinary", function* () {
     const stream = new InMemoryStream();
-    const publicationIdentity = claimDurablePublicationIdentity(stream);
+    const journalProvenance = establishJournalProvenance(stream);
     const coordinated: string[] = [];
     const ordinary: string[] = [];
     const provider: WorkspaceCoordinationProvider = {
       *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
-        expect(authority.publicationIdentity).toBe(publicationIdentity);
-        expect(Reflect.get(authority.publicationIdentity ?? {}, "append")).toBe(undefined);
-        expect(Reflect.get(authority.publicationIdentity ?? {}, "readAll")).toBe(undefined);
+        expect(authority.journalProvenance).toBe(journalProvenance);
+        expect(Reflect.get(authority.journalProvenance ?? {}, "append")).toBe(undefined);
+        expect(Reflect.get(authority.journalProvenance ?? {}, "readAll")).toBe(undefined);
         coordinated.push("workspace");
         const result: Result = { status: "ok", value: yield* authority.execute() };
         yield* authority.publish(result);
@@ -695,7 +695,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC15: live Workspace invocation authority is one-shot", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     let capturedAuthority: WorkspaceCoordinationAuthority | undefined;
     let executions = 0;
     const provider: WorkspaceCoordinationProvider = {
@@ -733,7 +733,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC17: a forged contextual result cannot complete or resume a live invocation", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     const { provider, counts } = successfulProvider();
     let laterExecutions = 0;
     function* workflow(): Workflow<void> {
@@ -770,7 +770,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC18: invocation phases are unreachable without a selected provider", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     let collisionCalls = 0;
     let executions = 0;
     function* workflow(): Workflow<void> {
@@ -798,7 +798,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC19: contextual middleware cannot replace the authoritative published Result", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     const { provider, counts } = successfulProvider();
     function* workflow(): Workflow<string> {
       const result = yield createDurableWorkspaceOperation(
@@ -833,7 +833,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
   it("DLC20: post-completion middleware cannot suppress, throw, or duplicate work", function* () {
     for (const behavior of ["suppress", "throw", "duplicate"]) {
       const stream = new InMemoryStream();
-      claimDurablePublicationIdentity(stream);
+      establishJournalProvenance(stream);
       const { provider, counts } = successfulProvider();
       function* workflow(): Workflow<string> {
         const result = yield createDurableWorkspaceOperation(
@@ -872,7 +872,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC21: retained contextual continuation cannot reuse a completed invocation", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     const { provider, counts } = successfulProvider();
     let retained: ((request: unknown) => Operation<unknown>) | undefined;
     let retainedRequest: unknown;
@@ -905,7 +905,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC22: minimum-priority collision middleware receives no invocation capability", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     const { provider, counts } = successfulProvider();
     const observed: unknown[] = [];
     function* workflow(): Workflow<void> {
@@ -935,7 +935,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
 
   it("DLC23: minimum-priority middleware cannot replace first-failure activation", function* () {
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     const first = new Error("authoritative infrastructure failure");
     let activated: Error | undefined;
     let collisions = 0;

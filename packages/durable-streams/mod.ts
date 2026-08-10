@@ -33,8 +33,9 @@ export { InMemoryStream } from "./stream.ts";
 
 // Pre-persistence gate — runs before an event reaches its backend
 export { guardDurableStream } from "./guard.ts";
-export { claimDurablePublicationIdentity } from "./guard.ts";
-export type { DurableEventGate, DurablePublicationIdentity } from "./guard.ts";
+// Journal provenance — proves which backend a publication stream descends from
+export { establishJournalProvenance, preserveJournalProvenance } from "./guard.ts";
+export type { DurableEventGate, JournalProvenance } from "./guard.ts";
 
 // HTTP-backed stream adapter
 export { useHttpDurableStream } from "./http-stream.ts";
