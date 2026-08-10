@@ -296,13 +296,10 @@ same result after publication completes. Replay bypasses the coordinator,
 executor, continuation, and live append; a partially replayed run coordinates
 only its live suffix.
 
-The coordinator receives a non-operational publication identity and an
-infrastructure-failure activator. The canonical durable-stream module keeps the
-association between a claimed backend and that identity in private weak state.
-`guardDurableStream` associates only the wrapper it constructs with its source's
-identity, including through nested guards. Streams expose no identity property
-or inheritance callback; copied properties, custom wrappers and wrappers from
-another loaded copy acquire no authority.
+The coordinator receives non-operational journal provenance and an
+infrastructure-failure activator. See
+[Journal provenance](#journal-provenance) for what that witness proves and how
+it travels.
 
 A provider
 whose execution and publication share a larger durability boundary calls it
@@ -667,6 +664,47 @@ and may be admitted.
 
 A rejected append therefore does not imply an empty backend. Assert the absence
 of the offending event, not that nothing was written.
+
+### Journal provenance
+
+A provider that owns a journal needs to know that the stream a run is
+publishing into is still *its* journal, and not an in-memory stream, another
+run's journal, or a look-alike wrapper. `establishJournalProvenance` answers
+that question:
+
+```typescript
+import {
+  establishJournalProvenance,
+  guardDurableStream,
+  preserveJournalProvenance,
+} from "@executablemd/durable-streams";
+
+const provenance = establishJournalProvenance(journal); // retained by the provider
+```
+
+The value is a `JournalProvenance` — a non-operational, equality-only witness.
+It carries no append or read capability, and it means something only because
+the provider retains it and later compares it by exact equality with the
+witness a live coordinator reports for the stream in use.
+
+Establishment mints one fresh witness for one exact stream, and refuses to
+replace an existing one. The association lives in this module's private weak
+state, so a copied property, a stream that merely delegates, and a separately
+loaded copy of this package can neither read nor forge it.
+
+`guardDurableStream` is policy-neutral, and the wrapper it returns is unproven.
+A wrapping site the provider trusts — XMD's secret filter is the one in this
+repository — preserves provenance explicitly:
+
+```typescript
+const guarded = guardDurableStream(journal, gate);
+return preserveJournalProvenance(journal, guarded);
+```
+
+`preserveJournalProvenance` returns the exact target it was handed, and
+transfers only the witness already associated with the exact source: an
+unproven source leaves the target unproven, and nesting trusted wrappers
+carries the same witness through each one.
 
 ---
 

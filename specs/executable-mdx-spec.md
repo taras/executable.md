@@ -7013,7 +7013,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC5 | Complete replay | Coordinator, execution, publication continuation and live append are all bypassed |
 | DLC6 | Partial replay | Only the live suffix enters coordination |
 | DLC7 | Cancellation | Cancellation during execution or publication produces no late or duplicate Yield |
-| DLC8 | Explicit selection | A selected coordinator affects only the operation that names it and receives a non-operational publication identity rather than stream capabilities |
+| DLC8 | Explicit selection | A selected coordinator affects only the operation that names it and receives non-operational journal provenance rather than stream capabilities |
 | DLC9 | Callback compatibility | Callback-based durable effects retain their existing behavior |
 | DLC10 | Fail-closed Workspace | A missing Workspace provider activates fail-stop before execution or publication and persists no Yield or Close |
 | DLC11 | Workspace isolation | Replaceable context carries only provider routing; the selected provider directly invokes the credentialed execution-owned capability, while unrelated durable operations stay on the default coordinator |
@@ -7047,7 +7047,7 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC8 | Concurrency isolation | A second same-run handle waits cooperatively without enlisting while a different run remains usable inside the outer transaction scope |
 | WAC9 | Replay | A retained Workspace Yield bypasses the Deno coordinator and mutation completely |
 | WAC10 | Effect authority | Exact proof executors work; missing, symbol-forged, foreign, closed and stale authority is refused before savepoint SQL or mutation |
-| WAC11 | Publication identity | The selected journal and nested canonical guards work; an in-memory stream, another run's journal, copied properties, the former symbol name and custom wrappers are refused before mutation or publication |
+| WAC11 | Journal provenance | The selected raw journal and explicitly preserved trusted wrappers of it, nested, publish and commit; an in-memory stream, another run's journal, copied properties, the former symbol name, a custom look-alike, an ordinary guard and a wrapper another loaded copy tried to prove are refused before savepoint, mutation or publication |
 | WAC12 | Post-publication rollback | A transaction-owner failure after the routed append rolls mutation, retained root, pointer and event back and fences later work |
 | WAC13 | Pre-commit cancellation | Cancellation after routed publication but before commit retains no mutation, root, pointer, Yield or Close |
 | WAC14 | DOFS continuation lifetime | The proof adapter uses only pinned synchronous byte operations; cancellation before a call performs no mutation, cancellation after it rolls back, mutation teardown precedes savepoint rollback, and the connection remains usable |

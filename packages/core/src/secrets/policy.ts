@@ -33,7 +33,11 @@
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
-import { guardDurableStream, serializeDurableEvent } from "@executablemd/durable-streams";
+import {
+  guardDurableStream,
+  preserveJournalProvenance,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { SecretDetectedError } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
@@ -243,9 +247,13 @@ export function* useSecretDetection(
  * append — and this supplies the policy. The gate closes over the scanner
  * directly rather than reading it back from context, which is what makes the
  * journal independent of anything a document does to contextual state.
+ *
+ * This is the one trusted composition that preserves journal provenance, so a
+ * filtered run still publishes into the journal its provider selected. An
+ * ordinary guard elsewhere produces an unproven wrapper.
  */
 function guardWithSecretDetection(stream: DurableStream, scanner: SecretScanner): DurableStream {
-  return guardDurableStream(stream, function* (event) {
+  const guarded = guardDurableStream(stream, function* (event) {
     const serialized = serializeDurableEvent(event);
     const findings = yield* scanner.scan(serialized);
 
@@ -253,4 +261,5 @@ function guardWithSecretDetection(stream: DurableStream, scanner: SecretScanner)
       throw new SecretDetectedError(findings);
     }
   });
+  return preserveJournalProvenance(stream, guarded);
 }

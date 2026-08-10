@@ -173,7 +173,7 @@ function coordinator(
             "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
           );
         }
-        connections.validateJournal(database, authority.publicationIdentity);
+        connections.validateJournalProvenance(database, authority.journalProvenance);
         transacted = yield* database.transact(function* (transaction) {
           return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
             coordinateTransaction(

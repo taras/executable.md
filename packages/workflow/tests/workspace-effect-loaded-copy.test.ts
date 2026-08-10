@@ -4,7 +4,7 @@ import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, type Operation, scoped, until } from "effection";
 import { pathToFileURL } from "node:url";
 import {
-  claimDurablePublicationIdentity,
+  establishJournalProvenance,
   durableRun,
   InMemoryStream,
   type Json,
@@ -64,7 +64,7 @@ describe("Tier DLC — physical Workspace package composition", () => {
   it("DLC16: provider selection composes without sharing invocation authority", function* () {
     const copy = yield* physicalWorkspaceCopy();
     const stream = new InMemoryStream();
-    claimDurablePublicationIdentity(stream);
+    establishJournalProvenance(stream);
     let providers = 0;
     let transactions = 0;
     let executions = 0;
@@ -114,7 +114,7 @@ describe("Tier DLC — physical Workspace package composition", () => {
     );
 
     const refusedStream = new InMemoryStream();
-    claimDurablePublicationIdentity(refusedStream);
+    establishJournalProvenance(refusedStream);
     let refusedExecutions = 0;
     function* refusedWorkflow(): Workflow<void> {
       yield copy.createDurableWorkspaceOperation(

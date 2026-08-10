@@ -16,15 +16,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  claimDurablePublicationIdentity,
   durableAll,
   durableCall,
   durableRun,
+  establishJournalProvenance,
   guardDurableStream,
   InMemoryStream,
+  preserveJournalProvenance,
   serializeDurableEvent,
 } from "../mod.ts";
-import { durablePublicationIdentity } from "../guard.ts";
+import { getJournalProvenance } from "../guard.ts";
 import type { DurableEvent, DurableStream, Workflow } from "../mod.ts";
 
 /** A short, readable identity for an event in a timeline assertion. */
@@ -97,38 +98,142 @@ const EVENT: DurableEvent = {
   result: { status: "ok", value: "alpha" },
 };
 
-describe("guardDurableStream", () => {
-  it("retains publication identity only through canonical guarded wrappers", function* () {
-    const backend = new InMemoryStream();
-    const identity = claimDurablePublicationIdentity(backend);
-    const guarded = guardDurableStream(backend, function* () {});
-    const nested = guardDurableStream(guarded, function* () {});
-    const loadedCopySpecifier = "../guard.ts" + "?loaded-copy=publication-identity";
-    const loadGuardCopy: () => Promise<typeof import("../guard.ts")> = () =>
-      import(loadedCopySpecifier);
-    const loadedCopy = yield* until(loadGuardCopy());
-    const unverifiable = loadedCopy.guardDurableStream(backend, function* () {});
-    const other = new InMemoryStream();
-    const otherIdentity = claimDurablePublicationIdentity(other);
-    const unknown: DurableStream = {
-      readAll: () => nested.readAll(),
-      append: (event) => nested.append(event),
-    };
-    const oldInheritance = Symbol.for("executablemd.durable-stream.inherit-provenance");
-    Object.defineProperty(unknown, oldInheritance, {
-      value: () => undefined,
-    });
+/** A plain wrapper that delegates, the way an unauthorized look-alike would. */
+function forwarding(stream: DurableStream): DurableStream {
+  return {
+    readAll: () => stream.readAll(),
+    append: (event) => stream.append(event),
+  };
+}
 
-    expect(durablePublicationIdentity(backend)).toBe(identity);
-    expect(durablePublicationIdentity(guarded)).toBe(identity);
-    expect(durablePublicationIdentity(nested)).toBe(identity);
-    expect(durablePublicationIdentity(other)).toBe(otherIdentity);
-    expect(otherIdentity).not.toBe(identity);
-    expect(durablePublicationIdentity(unknown)).toBe(undefined);
-    expect(durablePublicationIdentity(unverifiable)).toBe(undefined);
-    expect(Reflect.ownKeys(nested).includes(oldInheritance)).toBe(false);
+/** A second evaluation of the canonical module, as a foreign loaded copy. */
+function* guardCopy(tag: string): Operation<typeof import("../guard.ts")> {
+  const specifier = "../guard.ts" + `?loaded-copy=${tag}`;
+  const load: () => Promise<typeof import("../guard.ts")> = () => import(specifier);
+  return yield* until(load());
+}
+
+describe("journal provenance", () => {
+  it("establishes one fresh witness per stream and refuses to replace it", function* () {
+    const backend = new InMemoryStream();
+    const other = new InMemoryStream();
+
+    const provenance = establishJournalProvenance(backend);
+    const otherProvenance = establishJournalProvenance(other);
+
+    expect(getJournalProvenance(backend)).toBe(provenance);
+    expect(getJournalProvenance(other)).toBe(otherProvenance);
+    expect(otherProvenance).not.toBe(provenance);
+
+    // Non-operational: the witness carries no way to reach either stream.
+    expect(Reflect.get(provenance, "append")).toBe(undefined);
+    expect(Reflect.get(provenance, "readAll")).toBe(undefined);
+    expect(Reflect.ownKeys(provenance)).toEqual([]);
+
+    let duplicate: unknown;
+    try {
+      establishJournalProvenance(backend);
+    } catch (error) {
+      duplicate = error;
+    }
+    expect(duplicate).toBeInstanceOf(Error);
+    // A refused duplicate leaves the original witness in place rather than
+    // minting a second one the provider never retained.
+    expect(getJournalProvenance(backend)).toBe(provenance);
   });
 
+  it("preserves the exact witness onto a trusted wrapper, including nested ones", function* () {
+    const backend = new InMemoryStream();
+    const provenance = establishJournalProvenance(backend);
+
+    const guarded = preserveJournalProvenance(
+      backend,
+      guardDurableStream(backend, function* () {}),
+    );
+    const nested = preserveJournalProvenance(
+      guarded,
+      guardDurableStream(guarded, function* () {}),
+    );
+
+    expect(getJournalProvenance(guarded)).toBe(provenance);
+    expect(getJournalProvenance(nested)).toBe(provenance);
+  });
+
+  it("returns the exact target it was handed", function* () {
+    const backend = new InMemoryStream();
+    establishJournalProvenance(backend);
+    const target = forwarding(backend);
+
+    expect(preserveJournalProvenance(backend, target)).toBe(target);
+  });
+
+  it("cannot prove a target from an unproven source", function* () {
+    const unproven = new InMemoryStream();
+    const target = forwarding(unproven);
+
+    expect(preserveJournalProvenance(unproven, target)).toBe(target);
+    expect(getJournalProvenance(target)).toBe(undefined);
+
+    // Establishing on the source afterwards does not reach back to the target
+    // preservation already answered for.
+    establishJournalProvenance(unproven);
+    expect(getJournalProvenance(target)).toBe(undefined);
+  });
+
+  it("is not preserved by the generic guard, a copy, or a custom wrapper", function* () {
+    const backend = new InMemoryStream();
+    establishJournalProvenance(backend);
+
+    const guarded = guardDurableStream(backend, function* () {});
+    const nested = guardDurableStream(guarded, function* () {});
+    const custom = forwarding(backend);
+    const copied: DurableStream = forwarding(backend);
+    for (const key of Reflect.ownKeys(backend)) {
+      const descriptor = Object.getOwnPropertyDescriptor(backend, key);
+      if (descriptor !== undefined) {
+        Object.defineProperty(copied, key, descriptor);
+      }
+    }
+    const oldInheritance = Symbol.for("executablemd.durable-stream.inherit-provenance");
+    Object.defineProperty(custom, oldInheritance, { value: () => undefined });
+
+    expect(getJournalProvenance(guarded)).toBe(undefined);
+    expect(getJournalProvenance(nested)).toBe(undefined);
+    expect(getJournalProvenance(custom)).toBe(undefined);
+    expect(getJournalProvenance(copied)).toBe(undefined);
+    expect(Reflect.ownKeys(guarded).includes(oldInheritance)).toBe(false);
+  });
+
+  it("cannot be read or transferred by a separately loaded copy", function* () {
+    const loadedCopy = yield* guardCopy("journal-provenance");
+    expect(loadedCopy.establishJournalProvenance).not.toBe(establishJournalProvenance);
+
+    const backend = new InMemoryStream();
+    const provenance = establishJournalProvenance(backend);
+
+    // The foreign copy sees nothing about this copy's association…
+    expect(loadedCopy.getJournalProvenance(backend)).toBe(undefined);
+
+    // …so its preservation carries nothing into this copy's authority, whether
+    // it wraps the stream itself or is handed a canonical wrapper.
+    const foreignGuard = loadedCopy.guardDurableStream(backend, function* () {});
+    loadedCopy.preserveJournalProvenance(backend, foreignGuard);
+    const canonicalGuard = guardDurableStream(backend, function* () {});
+    loadedCopy.preserveJournalProvenance(backend, canonicalGuard);
+
+    expect(getJournalProvenance(foreignGuard)).toBe(undefined);
+    expect(getJournalProvenance(canonicalGuard)).toBe(undefined);
+
+    // Its own establishment is likewise invisible here, so a foreign copy
+    // cannot mint a witness this copy will accept.
+    const foreign = new InMemoryStream();
+    loadedCopy.establishJournalProvenance(foreign);
+    expect(getJournalProvenance(foreign)).toBe(undefined);
+    expect(getJournalProvenance(backend)).toBe(provenance);
+  });
+});
+
+describe("guardDurableStream", () => {
   it("delegates readAll without invoking the gate", function* () {
     const timeline: string[] = [];
     const guarded = guardDurableStream(recordingStream(timeline, [EVENT]), function* () {

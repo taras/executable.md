@@ -1,5 +1,5 @@
 import type { Operation } from "effection";
-import type { DurablePublicationIdentity } from "./guard.ts";
+import type { JournalProvenance } from "./guard.ts";
 import { serializeError } from "./serialize.ts";
 import type { Json, Result } from "./types.ts";
 
@@ -12,7 +12,7 @@ export interface LiveDurableOperationCoordinator {
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
     activateFailure: ActivateDurabilityFailure,
-    publicationIdentity: DurablePublicationIdentity | undefined,
+    journalProvenance: JournalProvenance | undefined,
   ): Operation<Result>;
 }
 
@@ -22,7 +22,7 @@ export const defaultLiveDurableOperationCoordinator: LiveDurableOperationCoordin
     execute: () => Operation<T>,
     publish: (result: Result) => Operation<void>,
     _activateFailure: ActivateDurabilityFailure,
-    _publicationIdentity: DurablePublicationIdentity | undefined,
+    _journalProvenance: JournalProvenance | undefined,
   ): Operation<Result> {
     let result: Result;
     try {

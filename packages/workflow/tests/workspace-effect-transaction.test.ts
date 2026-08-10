@@ -10,16 +10,18 @@ import {
   durableRun,
   guardDurableStream,
   InMemoryStream,
+  preserveJournalProvenance,
   type DurableEvent,
-  type DurablePublicationIdentity,
+  type DurableEventGate,
   type DurableStream,
   DurablePersistenceError,
   type Json,
+  type JournalProvenance,
   type Result,
   type Workflow,
   type Yield,
 } from "@executablemd/durable-streams";
-import { ensure, type Operation, scoped, spawn, suspend, withResolvers } from "effection";
+import { ensure, type Operation, scoped, spawn, suspend, until, withResolvers } from "effection";
 import {
   createDurableWorkspaceOperation,
   WorkspaceCoordination,
@@ -85,6 +87,10 @@ const WorkspaceInvocationCollision = createApi<InvocationCollisionApi>(
   },
 );
 
+/** The diagnostic a provenance refusal must carry, and no other. */
+const PROVENANCE_REFUSAL =
+  "the live Workspace journal does not have the provenance of the selected WorkflowRun.";
+
 function* raised(operation: Operation<unknown>): Operation<unknown> {
   try {
     yield* operation;
@@ -92,6 +98,26 @@ function* raised(operation: Operation<unknown>): Operation<unknown> {
   } catch (error) {
     return error;
   }
+}
+
+/**
+ * The trusted secret-filter composition, as `packages/core` performs it.
+ *
+ * A guard alone is policy-neutral and leaves an unproven wrapper. Preserving
+ * provenance at the wrapping site is what an authorized filter does, so a test
+ * that means to exercise an accepted filtered journal says so here.
+ */
+function trustedFilter(stream: DurableStream, gate: DurableEventGate): DurableStream {
+  return preserveJournalProvenance(stream, guardDurableStream(stream, gate));
+}
+
+/** A second evaluation of the canonical provenance module, as a loaded copy. */
+function* foreignDurableStreamsGuard(): Operation<typeof import("../../durable-streams/guard.ts")> {
+  const specifier =
+    new URL("../../durable-streams/guard.ts", import.meta.url).href + "?loaded-copy=wac11";
+  const load: () => Promise<typeof import("../../durable-streams/guard.ts")> = () =>
+    import(specifier);
+  return yield* until(load());
 }
 
 function workspaceYields(events: DurableEvent[]): Yield[] {
@@ -245,12 +271,12 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         const baseline = yield* inspectWorkspace(database, "/kept.txt");
         baselineRoot = baseline.root;
         let gateCalls = 0;
-        const guardedOnce = guardDurableStream(database.journal, function* (event) {
+        const guardedOnce = trustedFilter(database.journal, function* (event) {
           if (event.type === "yield") {
             gateCalls += 1;
           }
         });
-        const guarded = guardDurableStream(guardedOnce, function* () {});
+        const guarded = trustedFilter(guardedOnce, function* () {});
 
         function* workflow(): Workflow<string> {
           yield* workspaceStep(database, "write", function* (filesystem) {
@@ -450,7 +476,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId: "atomic-secret" });
       const baseline = yield* inspectWorkspace(database, "/secret.txt");
       let gateCalls = 0;
-      const guarded = guardDurableStream(database.journal, function* (event) {
+      const guarded = trustedFilter(database.journal, function* (event) {
         if (event.type === "yield") {
           gateCalls += 1;
           throw gateFailure;
@@ -751,13 +777,61 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
   });
 
-  it("WAC11: foreign publication destinations are refused before mutation", function* () {
+  it("WAC11: journal provenance decides the publication destination", function* () {
     const root = yield* useStorageRoot();
+    const savepoints: string[] = [];
+    yield* SavepointObservation.set((event) => {
+      if (event.kind === "create") {
+        savepoints.push(event.name);
+      }
+    });
+    const foreignCopy = yield* foreignDurableStreamsGuard();
 
     yield* withStorage(root, function* () {
+      // The selected raw journal and explicitly preserved trusted wrappers of
+      // it all carry the same witness, so each reaches mutation and commit.
+      // Each gets its own run: a journal that already holds a Close has
+      // nothing left to execute.
+      const accepted: [string, (journal: DurableStream) => DurableStream][] = [
+        ["raw", (journal) => journal],
+        ["filtered", (journal) => trustedFilter(journal, function* () {})],
+        [
+          "nested",
+          (journal) =>
+            trustedFilter(
+              trustedFilter(journal, function* () {}),
+              function* () {},
+            ),
+        ],
+      ];
+      for (const [name, wrap] of accepted) {
+        const database = yield* createRun({ runId: `atomic-destination-${name}` });
+        const path = `/accepted-${name}.txt`;
+        let mutations = 0;
+        function* workflow(): Workflow<void> {
+          yield* workspaceStep(database, `accepted-${name}`, function* (filesystem) {
+            mutations += 1;
+            yield* filesystem.writeFile(path, name);
+            return null;
+          });
+        }
+
+        yield* withWorkspaceEffects(
+          database,
+          durableRun(workflow, { stream: wrap(database.journal) }),
+        );
+
+        expect(mutations).toBe(1);
+        expect((yield* inspectWorkspace(database, path)).content).toBe(name);
+        expect(workspaceYields(yield* database.journal.readAll())).toHaveLength(1);
+      }
+
       const selected = yield* createRun({ runId: "atomic-destination-selected" });
       const other = yield* createRun({ runId: "atomic-destination-other" });
+      const selectedPath = runPath(root, "atomic-destination-selected");
       const baseline = yield* inspectWorkspace(selected, "/wrong-destination.txt");
+      const roots = retainedRootCount(selectedPath);
+
       const copied: DurableStream = {
         readAll: () => selected.journal.readAll(),
         append: (event) => selected.journal.append(event),
@@ -772,13 +846,38 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         value: () => undefined,
       });
 
-      for (const stream of [new InMemoryStream(), other.journal, copied]) {
+      const lookAlike: DurableStream = {
+        readAll: () => selected.journal.readAll(),
+        append: (event) => selected.journal.append(event),
+      };
+
+      const refused: [string, DurableStream][] = [
+        ["in-memory", new InMemoryStream()],
+        ["another-run", other.journal],
+        ["copied", copied],
+        ["look-alike", lookAlike],
+        // A guard is policy-neutral, so wrapping the right journal proves
+        // nothing on its own.
+        ["ordinary-guard", guardDurableStream(selected.journal, function* () {})],
+        // Another loaded copy holds no association for this journal, so its
+        // preservation carries nothing into this copy's authority.
+        [
+          "foreign-copy",
+          foreignCopy.preserveJournalProvenance(
+            selected.journal,
+            guardDurableStream(selected.journal, function* () {}),
+          ),
+        ],
+      ];
+
+      for (const [name, stream] of refused) {
+        savepoints.length = 0;
         let mutations = 0;
         let caught: unknown;
         let laterExecutions = 0;
         function* workflow(): Workflow<void> {
           try {
-            yield* workspaceStep(selected, "wrong-destination", function* (filesystem) {
+            yield* workspaceStep(selected, `wrong-destination-${name}`, function* (filesystem) {
               mutations += 1;
               yield* filesystem.writeFile("/wrong-destination.txt", "must not run");
               return null;
@@ -786,7 +885,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           } catch (error) {
             caught = error;
           }
-          yield* durableCall("fenced-after-wrong-destination", function* () {
+          yield* durableCall(`fenced-after-${name}`, function* () {
             laterExecutions += 1;
             return null;
           });
@@ -797,8 +896,18 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         );
         expect(failure).toBe(caught);
         expect(failure).toBeInstanceOf(Error);
+        // The refusal names the fact that failed. A generic, stale-identity or
+        // unrelated pre-transaction error would satisfy every other assertion
+        // here while reporting the wrong thing to whoever reads the run.
+        expect(Reflect.get(failure ?? {}, "message")).toBe(PROVENANCE_REFUSAL);
         expect(mutations).toBe(0);
         expect(laterExecutions).toBe(0);
+        // Refused before the transaction does any work: no savepoint opened,
+        // no root retained, no journal row committed, and the frontier is
+        // where it was.
+        expect(savepoints).toEqual([]);
+        expect(retainedRootCount(selectedPath)).toBe(roots);
+        expect(committedEventCount(selectedPath)).toBe(0);
         expect(yield* inspectWorkspace(selected, "/wrong-destination.txt")).toEqual(baseline);
         expect(yield* selected.journal.readAll()).toEqual([]);
         expect(yield* other.journal.readAll()).toEqual([]);
@@ -828,7 +937,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         let gateCalls = 0;
         let caught: unknown;
         let laterExecutions = 0;
-        const guarded = guardDurableStream(database.journal, function* (event) {
+        const guarded = trustedFilter(database.journal, function* (event) {
           if (event.type === "yield") {
             gateCalls += 1;
           }
@@ -888,7 +997,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         const baseline = yield* inspectWorkspace(database, "/cancel-before-commit.txt");
         const roots = retainedRootCount(path);
         let gateCalls = 0;
-        const guarded = guardDurableStream(database.journal, function* (event) {
+        const guarded = trustedFilter(database.journal, function* (event) {
           if (event.type === "yield") {
             gateCalls += 1;
           }
@@ -1218,13 +1327,13 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
             () => Operation<T>,
             (result: Result) => Operation<void>,
             ActivateDurabilityFailure,
-            DurablePublicationIdentity | undefined,
+            JournalProvenance | undefined,
           ],
           next: (
             execute: () => Operation<T>,
             publish: (result: Result) => Operation<void>,
             activateFailure: ActivateDurabilityFailure,
-            identity: DurablePublicationIdentity | undefined,
+            identity: JournalProvenance | undefined,
           ) => Operation<Result>,
         ): Operation<Result> {
           replacementRuns += 1;
@@ -1279,13 +1388,13 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
             () => Operation<T>,
             (result: Result) => Operation<void>,
             ActivateDurabilityFailure,
-            DurablePublicationIdentity | undefined,
+            JournalProvenance | undefined,
           ],
           next: (
             execute: () => Operation<T>,
             publish: (result: Result) => Operation<void>,
             activateFailure: ActivateDurabilityFailure,
-            identity: DurablePublicationIdentity | undefined,
+            identity: JournalProvenance | undefined,
           ) => Operation<Result>,
         ): Operation<Result> {
           replacementRuns += 1;

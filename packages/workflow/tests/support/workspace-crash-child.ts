@@ -28,7 +28,12 @@
  */
 
 import process from "node:process";
-import { durableRun, guardDurableStream, type Workflow } from "@executablemd/durable-streams";
+import {
+  durableRun,
+  guardDurableStream,
+  preserveJournalProvenance,
+  type Workflow,
+} from "@executablemd/durable-streams";
 import { ensure, main, type Operation, suspend } from "effection";
 import { WorkflowRunStorage } from "../../mod.ts";
 import { useWorkflowRunStorage, workflowRunPath } from "../../deno.ts";
@@ -125,11 +130,17 @@ function* crash(root: string, runId: string): Operation<void> {
   const database = yield* openWorkflowRunDatabase({ connection, connections, record });
   yield* setPrivateWorkspaceClock(database, () => CLOCK);
 
-  const guarded = guardDurableStream(database.journal, function* (event) {
-    if (event.type === "yield") {
-      gateCalls += 1;
-    }
-  });
+  // The secret filter the CLI installs, as the core policy composes it: the
+  // guard is policy-neutral, and preservation at the wrapping site is what
+  // lets the filtered journal still publish into this run.
+  const guarded = preserveJournalProvenance(
+    database.journal,
+    guardDurableStream(database.journal, function* (event) {
+      if (event.type === "yield") {
+        gateCalls += 1;
+      }
+    }),
+  );
 
   function* workflow(): Workflow<void> {
     // The run this process resumes already holds this effect's result, so it
