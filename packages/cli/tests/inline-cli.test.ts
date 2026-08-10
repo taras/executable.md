@@ -268,5 +268,25 @@ describe(
       expect(code).toBe(1);
       expect(stderr).toContain("exclusive to xmd run");
     });
+
+    it("IE22: xmd targets takes no inline document either", function* () {
+      const { code, stderr } = yield* runCli(["targets", "-e", "# Hello"]).join();
+      expect(code).toBe(1);
+      expect(stderr).toContain("exclusive to xmd run");
+    });
+
+    it("IE23: an inline document addresses no target, so a `#` in it is text", function* () {
+      // Document references are file paths; the inline text is never split at
+      // a `#`, and a heading it happens to contain stays a heading.
+      const { code, stdout } = yield* runCli([
+        "-e",
+        "# Title\n\n## Alpha\n\nALPHA_MARKER\n\n## Beta\n\nBETA_MARKER\n",
+        "--raw",
+      ]).join();
+
+      expect(code).toBe(0);
+      expect(stdout).toContain("ALPHA_MARKER");
+      expect(stdout).toContain("BETA_MARKER");
+    });
   },
 );

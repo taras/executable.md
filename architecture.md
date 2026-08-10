@@ -641,6 +641,11 @@ re-resolved against a newer checkout to decide what a resumed run means. A glob
 is retained in exactly one place, a failed selection's structural record, and
 only so that an ordinary failed execution can be reproduced.
 
+The command line is the first consumer of that split. `xmd run` resolves a
+selector while inspecting the document, then asks execution for the exact target
+that resolved — so a file replaced between the two reads fails on the target the
+run chose, rather than silently running whatever the glob would name now.
+
 A resumed run re-resolves the current selector against the *recorded* content
 and refuses to continue unless the outcome is the one recorded. A failed
 selection is an outcome too, and is recorded and compared as one — otherwise a
@@ -1081,7 +1086,9 @@ Status is measured against main.
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
-| document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack; `xmd targets`, targeted `xmd run`, and the targeted workflow definition are unbuilt |
+| document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack |
+| `xmd targets` | prints one document's catalog as full document references, by inspection alone | built on the #412 stack |
+| targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack; the targeted workflow definition is unbuilt |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |

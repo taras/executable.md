@@ -8,7 +8,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
-import { rm } from "@effectionx/fs";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -304,5 +304,31 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
       "nested/deep.test.md",
       "passing.test.md",
     ]);
+  });
+
+  it("DT30: a test path keeps its literal # and %, and no fragment is read", function* () {
+    // `xmd run` reads a path as a document reference; `xmd test` does not, so
+    // these two filenames still mean themselves.
+    const root = path.join(os.tmpdir(), `xmd-dt-${randomUUID()}`);
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    yield* ensureDir(root);
+    const body = '<Test name="literal">\n\nLITERAL_MARKER\n\n</Test>\n';
+    yield* writeTextFile(path.join(root, "we#ird.test.md"), body);
+    yield* writeTextFile(path.join(root, "pct%zz.test.md"), body);
+
+    const hashed = yield* runCli(["test", path.join(root, "we#ird.test.md")]).join();
+    expect(hashed.code).toBe(0);
+    expect(hashed.stdout).toContain("LITERAL_MARKER");
+
+    // `%zz` is not a valid escape, so `xmd run` would refuse this reference
+    // outright. `xmd test` reads it as the filename it is.
+    const percent = yield* runCli(["test", path.join(root, "pct%zz.test.md")]).join();
+    expect(percent.code).toBe(0);
+    expect(percent.stdout).toContain("LITERAL_MARKER");
+
+    // The percent-encoded spelling names no file, so it is a missing path
+    // rather than another way to write the same one.
+    const encoded = yield* runCli(["test", path.join(root, "we%23ird.test.md")]).join();
+    expect(encoded.code).toBe(1);
   });
 });

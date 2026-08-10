@@ -77,6 +77,46 @@ const FAILS_AFTER_RETURN_ROOT = [
 
 const TEXT_ROOT = "TEXT_MARKER\n";
 
+/** One `<Return>`, in one section — so the other section declares none. */
+const SECTIONED_VALUE_ROOT = [
+  "---",
+  "returns:",
+  "  passed: { type: boolean }",
+  "---",
+  "",
+  "# Sectioned",
+  "",
+  "## Ready",
+  "",
+  "READY_MARKER",
+  "",
+  "<Return value={{ passed: true }} />",
+  "",
+  "## Other",
+  "",
+  "OTHER_MARKER",
+  "",
+].join("\n");
+
+const SECTIONED_OUTPUT_ROOT = [
+  "# Sectioned",
+  "",
+  "## Selected",
+  "",
+  "DOCUMENTATION_MARKER",
+  "",
+  "<Output>",
+  "",
+  "SELECTED_MARKER",
+  "",
+  "</Output>",
+  "",
+  "## Sibling",
+  "",
+  "SIBLING_MARKER",
+  "",
+].join("\n");
+
 describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("VR1: stdout carries only the JSON result", function* () {
     const result = yield* useFixture({ "doc.md": OBJECT_ROOT }, function* (dir) {
@@ -128,5 +168,35 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("TEXT_MARKER");
+  });
+
+  it("VR7: a targeted value root reserves stdout for its result", function* () {
+    const result = yield* useFixture({ "doc.md": SECTIONED_VALUE_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md#Ready", "--verbose"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('{"passed":true}\n');
+    // The projection's own body is observability, and the sibling never ran.
+    expect(result.stderr).toContain("READY_MARKER");
+    expect(result.stderr).not.toContain("OTHER_MARKER");
+  });
+
+  it("VR8: a projection without <Return> is the same structural failure", function* () {
+    const result = yield* useFixture({ "doc.md": SECTIONED_VALUE_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md#Other"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no direct top-level <Return>");
+  });
+
+  it("VR9: <Output> in a projected text root still selects what is emitted", function* () {
+    const result = yield* useFixture({ "doc.md": SECTIONED_OUTPUT_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md#Selected", "--raw"], { cwd: dir }).expect();
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("SELECTED_MARKER");
+    expect(result.stdout).not.toContain("DOCUMENTATION_MARKER");
+    expect(result.stdout).not.toContain("SIBLING_MARKER");
   });
 });

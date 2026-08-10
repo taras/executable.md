@@ -2,13 +2,19 @@
  * CLI — run an executable markdown document.
  *
  * Usage:
- *   xmd run <document.md> [options]
- *   xmd <document.md> [options]        (run is the default command)
+ *   xmd run <document-reference> [options]
+ *   xmd <document-reference> [options]   (run is the default command)
+ *   xmd targets <document.md>
+ *
+ * A document reference is a path, optionally followed by `#` and one target
+ * selector naming a section of the document (spec §5.4).
  *
  * Examples:
  *   xmd run packages/core/examples/hello-world.md
  *   xmd packages/core/examples/hello-world.md --verbose
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
+ *   xmd targets README.md
+ *   xmd run README.md#Release/Publish
  */
 
 import {
@@ -40,7 +46,10 @@ import { z } from "zod";
 import {
   AgentProviders,
   Config,
+  asDocumentTargetError,
   execute,
+  fileSource,
+  formatDocumentReference,
   inlineSource,
   inspectDocument,
   installAgentComponents,
@@ -50,7 +59,7 @@ import {
   useNormalizedOutput,
   useTerminalOutput,
 } from "@executablemd/core";
-import type { RootDocumentSource } from "@executablemd/core";
+import type { DocumentInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
@@ -103,7 +112,7 @@ const SECRET_DETECTION_FIELD = {
 
 const runConfig = object({
   path: {
-    description: "markdown document to execute",
+    description: "markdown document to execute, optionally `#` and one target selector",
     ...field(z.string().optional(), cli.argument()),
   },
   // Declared so `xmd run --help` lists it with every other option. The value is
@@ -189,6 +198,20 @@ const testConfig = object({
   secretDetection: SECRET_DETECTION_FIELD,
 });
 
+/**
+ * `xmd targets` takes one document and nothing else.
+ *
+ * The argument is optional so `xmd targets --help` renders the command rather
+ * than failing the parse; a missing reference is reported by the command with
+ * its own diagnostic.
+ */
+const targetsConfig = object({
+  path: {
+    description: "markdown document whose targets to list",
+    ...field(z.string().optional(), cli.argument()),
+  },
+});
+
 const testAgentConfig = object({
   connect: {
     description: "opaque controller route (controller-launched workers only)",
@@ -200,7 +223,12 @@ const xmd = program({
   name: "xmd",
   version: denoJson.version,
   config: commands(
-    { run: runConfig, test: testConfig, "test-agent": testAgentConfig },
+    {
+      run: runConfig,
+      test: testConfig,
+      targets: targetsConfig,
+      "test-agent": testAgentConfig,
+    },
     { default: "run" },
   ),
 });
@@ -505,6 +533,10 @@ function* runDocument(
 
   // Native service authority belongs only to document execution. Help,
   // document inspection, and the agent worker never enter this scope.
+  //
+  // This wires a provider into scope; it starts nothing. A run refused by the
+  // reread inside `execute()` below has passed this line and still never asks
+  // the provider for a service.
   yield* installService();
 
   const execution = yield* execute({
@@ -577,6 +609,35 @@ function* runScopedDocument(
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
+}
+
+/**
+ * A document-target failure as the command line reports it, or `undefined`
+ * when this failure is not one.
+ *
+ * The core states the outcome and lists canonical target fragments; a caller
+ * holds a command line, so every fragment is rendered as the full document
+ * reference that selects it. The core's own first line is kept exactly as it
+ * derived it, so the wording lives in one place.
+ *
+ * `formatDocumentReference` cannot refuse this path: it round-trips what
+ * `fileSource` decoded, and a reference that does not decode never reaches a
+ * selection at all.
+ */
+function targetFailureReport(root: RootDocumentSource, error: unknown): string | undefined {
+  const failure = asDocumentTargetError(error);
+  if (failure === undefined) {
+    return undefined;
+  }
+  const [outcome = failure.message] = failure.message.split("\n");
+  const ambiguous = failure.data.kind === "multiple-matches";
+  const listed = ambiguous ? failure.data.matches : failure.data.available;
+  if (listed.length === 0) {
+    return `${outcome}\nThe document has no targets.`;
+  }
+  const heading = ambiguous ? "Matched targets:" : "Available targets:";
+  const references = listed.map((target) => `  ${formatDocumentReference(root.path, target)}`);
+  return [outcome, heading, ...references].join("\n");
 }
 
 /** Print a completed document's failure the way `xmd` has always printed it. */
@@ -696,15 +757,119 @@ function* test(
   }
 }
 
+/** A file document reference read as one, or why it cannot be read. */
+function readReference(reference: string): Result<FileRootDocument> {
+  try {
+    return Ok(fileSource(reference));
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+const TARGETS_MISSING_REFERENCE =
+  "xmd targets requires a document reference — `xmd targets <document.md>`";
+
+const TARGETS_FRAGMENT = "xmd targets accepts a document reference without a target selector";
+
+/**
+ * Refuse anything `xmd targets` does not take.
+ *
+ * The argument parser ignores options it does not define rather than rejecting
+ * them, so a run, test, journal, or service option written here would otherwise
+ * be read as silence. Listing a catalog takes one reference and nothing else,
+ * which makes the rule the simple one: no option, and no second argument.
+ */
+function targetsGrammarError(args: string[]): string | undefined {
+  let seen = 0;
+  for (const arg of args) {
+    if (arg === "targets" && seen === 0) {
+      seen = 1;
+      continue;
+    }
+    if (arg === "--" || arg.startsWith("-")) {
+      return `unrecognized option for xmd targets: ${arg} — xmd targets takes a document reference and nothing else`;
+    }
+    seen += 1;
+    if (seen > 2) {
+      return `xmd targets accepts one document reference — remove ${arg}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `xmd targets` — print every document reference this document addresses.
+ *
+ * Inspection only. Nothing here installs a service, creates a journal, imports
+ * a component, expands the document, or performs an authored effect, so
+ * discovering what a document offers is always free of what it does.
+ *
+ * Written with `process.stdout.write` so a document that addresses nothing
+ * writes no bytes at all rather than a bare newline.
+ */
+function* listTargets(reference: string | undefined): Operation<void> {
+  if (reference === undefined) {
+    console.error(TARGETS_MISSING_REFERENCE);
+    yield* exit(1);
+    return;
+  }
+  const parsed = readReference(reference);
+  if (!parsed.ok) {
+    console.error(describeError(parsed.error));
+    yield* exit(1);
+    return;
+  }
+  if (parsed.value.target !== undefined) {
+    console.error(TARGETS_FRAGMENT);
+    yield* exit(1);
+    return;
+  }
+
+  const inspected = yield* inspectCatalog(parsed.value);
+  if (!inspected.ok) {
+    console.error(describeError(inspected.error));
+    yield* exit(1);
+    return;
+  }
+
+  for (const target of inspected.value.targets) {
+    process.stdout.write(`${formatDocumentReference(inspected.value.path, target)}\n`);
+  }
+}
+
+/** Inspect a document for its catalog, reporting a failure rather than raising. */
+function* inspectCatalog(root: FileRootDocument): Operation<Result<DocumentInfo>> {
+  try {
+    return Ok(yield* inspectDocument(root));
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
 /**
  * A document that cannot be inspected — missing, malformed, or unreadable —
  * reports text, so execution produces the printed error rather than inspection.
+ *
+ * A target failure is the exception, and it is raised rather than deferred. By
+ * the time a run reaches here the requested selector has already been replaced
+ * by the exact target it resolved to, so a failure means the document no longer
+ * offers the section this run decided on.
+ *
+ * Raising it here refuses the run at the earliest read that can see it, which is
+ * before the host's provider installer. A document replaced later still cannot
+ * be caught here — `execute()` reads it once more and raises the same failure
+ * after the installer has run — so this is the earlier of two refusals, not the
+ * only one. Neither starts a service or expands anything.
  */
 function* readsValue(root: RootDocumentSource): Operation<boolean> {
   try {
     const description = yield* inspectDocument(root);
     return description.returnMode === "value";
-  } catch {
+  } catch (error) {
+    const failure = asDocumentTargetError(error);
+    if (failure !== undefined) {
+      throw failure;
+    }
     return false;
   }
 }
@@ -833,12 +998,18 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
     };
   }
 
-  const root: RootDocumentSource | undefined =
-    supplied !== undefined
-      ? inlineSource(supplied)
-      : typeof documentPath === "string"
-        ? { path: documentPath }
-        : undefined;
+  // A file path is a document reference: the first raw `#` starts a target
+  // selector. An inline document addresses nothing, so it is read as it is.
+  let root: RootDocumentSource | undefined;
+  if (supplied !== undefined) {
+    root = inlineSource(supplied);
+  } else if (typeof documentPath === "string") {
+    const reference = readReference(documentPath);
+    if (!reference.ok) {
+      return { args, bindings: [], error: describeError(reference.error) };
+    }
+    root = reference.value;
+  }
 
   if (!root) {
     const stray = findPropsFlag(args);
@@ -865,25 +1036,49 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
     const extraction = extractPropsArgs(args, bindings);
     return {
       args: extraction.rest,
-      root,
+      root: exactRoot(root, document.target),
       bindings,
       extraction,
       propsSchema: document.props,
       declared: declaredProperties(document.props),
     };
   } catch (error) {
-    return { args, bindings: [], root, error: describeError(error) };
+    return {
+      args,
+      bindings: [],
+      root,
+      error: targetFailureReport(root, error) ?? describeError(error),
+    };
   }
 }
 
-const COMMAND_NAMES = ["run", "test", "test-agent"];
+/**
+ * The root execution runs, with the requested selector replaced by the one
+ * exact target it resolved to.
+ *
+ * Load-bearing, because the CLI inspects a file and executes from a later read
+ * of it. A wildcard that resolved to `Alpha` here asks execution for exactly
+ * `Alpha`: if the file is replaced so the same wildcard would now name `Beta`,
+ * the run fails on the missing `Alpha` rather than quietly running `Beta`.
+ */
+function exactRoot(root: RootDocumentSource, target: string | undefined): RootDocumentSource {
+  if (target === undefined) {
+    return root;
+  }
+  return root.source === undefined ? { path: root.path, target } : { ...root, target };
+}
+
+const COMMAND_NAMES = ["run", "test", "targets", "test-agent"];
 
 /**
- * Help for whichever command the arguments name. A command renders its
- * own help when `--help` is its first argument, so the flag removed
- * during the props phase is reinstated there rather than falling back to
- * program help.
+ * What a caller has to know to write a filename that contains reference
+ * syntax. Both commands teach it, because both read one grammar.
  */
+const REFERENCE_GRAMMAR_HELP = [
+  "A selector must name exactly one section; `xmd targets <document.md>` lists",
+  "them. In a filename, write `#` as `%23` and a literal `%` as `%25`.",
+].join("\n");
+
 /**
  * Where the root document comes from, and how to write it. Neither fits an
  * option description, and the help renderer has no epilogue, so it is composed
@@ -893,8 +1088,28 @@ const RUN_SOURCE_HELP = [
   `Exactly one root document is required: a path, or one ${EVAL_OPTION} value.`,
   "Quote the document so the shell passes it as a single argument:",
   `  xmd ${EVAL_ALIAS} '# Hello'`,
+  "",
+  "A path is a document reference, and everything after its first `#` selects",
+  "one section of the document to run:",
+  "  xmd run README.md#Release/Publish",
+  "  xmd README.md#Release/*",
+  "",
+  REFERENCE_GRAMMAR_HELP,
 ].join("\n");
 
+const TARGETS_HELP = [
+  "Lists every section the document addresses, one full document reference per",
+  "line, in document order. The reference takes no target selector of its own.",
+  "",
+  REFERENCE_GRAMMAR_HELP,
+].join("\n");
+
+/**
+ * Help for whichever command the arguments name. A command renders its
+ * own help when `--help` is its first argument, so the flag removed
+ * during the props phase is reinstated there rather than falling back to
+ * program help.
+ */
 function renderHelp(phase: PropsPhase): string {
   const [first] = phase.args;
   const command = COMMAND_NAMES.includes(first) ? first : phase.root ? "run" : undefined;
@@ -905,7 +1120,8 @@ function renderHelp(phase: PropsPhase): string {
 
   const help = xmd.parse({ args: [command, "--help"] });
   const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
-  const withSource = command === "run" ? `${base}\n\n${RUN_SOURCE_HELP}` : base;
+  const epilogue = command === "run" ? RUN_SOURCE_HELP : command === "targets" ? TARGETS_HELP : "";
+  const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   // A document declaring only structured properties generates no
   // individual binding, but it still accepts the aggregate ones.
@@ -1051,9 +1267,34 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
         installService,
       );
       if (!result.ok) {
-        reportFailure(result.error);
+        // The document is reread between preparation and execution, so the
+        // exact target this run decided on can be gone by the time it runs.
+        const report = targetFailureReport(propsPhase.root, result.error);
+        if (report === undefined) {
+          reportFailure(result.error);
+        } else {
+          console.error(report);
+        }
         yield* exit(1);
       }
+      break;
+    }
+    case "targets": {
+      const agentFlag = findAgentOnlyFlag(evalFlags.rest);
+      if (agentFlag) {
+        console.error(
+          `unrecognized option for xmd targets: ${agentFlag} — agent options are exclusive to xmd run`,
+        );
+        yield* exit(1);
+        break;
+      }
+      const syntaxError = targetsGrammarError(propsPhase.args);
+      if (syntaxError) {
+        console.error(syntaxError);
+        yield* exit(1);
+        break;
+      }
+      yield* listTargets(command.config.path);
       break;
     }
     case "test": {

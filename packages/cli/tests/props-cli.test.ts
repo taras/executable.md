@@ -39,6 +39,29 @@ const HELLO = [
   "",
 ].join("\n");
 
+/** One document, two sections, and props the whole document declares. */
+const SECTIONED = [
+  "---",
+  "props:",
+  "  type: object",
+  "  properties:",
+  "    name: { type: string }",
+  "  required: [name]",
+  "  additionalProperties: false",
+  "---",
+  "",
+  "# Sectioned",
+  "",
+  "## Greeting",
+  "",
+  "Hello, {props.name}!",
+  "",
+  "## Farewell",
+  "",
+  "FAREWELL_MARKER",
+  "",
+].join("\n");
+
 const NESTED = [
   "---",
   "props:",
@@ -442,6 +465,42 @@ describe(
         }).expect();
       });
       expect(stdout).toContain("Hello, Ada!");
+    });
+
+    it("PC21: a projected root keeps the properties the whole document declares", function* () {
+      const { stdout } = yield* useFixture({ "sectioned.md": SECTIONED }, function* (fixture) {
+        return yield* runCli(["run", "sectioned.md#Greeting", "--raw", "--props-name", "Ada"], {
+          cwd: fixture.dir,
+        }).expect();
+      });
+      expect(stdout).toContain("Hello, Ada!");
+      // Frontmatter belongs to the document, so its props reach the projection
+      // while the sibling section stays out of the run.
+      expect(stdout).not.toContain("FAREWELL_MARKER");
+    });
+
+    it("PC22: property help describes a targeted document by its reference", function* () {
+      const { stdout } = yield* useFixture({ "sectioned.md": SECTIONED }, function* (fixture) {
+        return yield* runCli(["run", "sectioned.md#Greeting", "--help"], {
+          cwd: fixture.dir,
+        }).expect();
+      });
+      expect(stdout).toContain("Properties declared by sectioned.md");
+      expect(stdout).toContain("--props-name <string>");
+      expect(stdout).toContain("Environment: XMD_PROPS_NAME");
+    });
+
+    it("PC23: a required property is still required in a projected root", function* () {
+      const { code, stderr } = yield* useFixture(
+        { "sectioned.md": SECTIONED },
+        function* (fixture) {
+          return yield* runCli(["run", "sectioned.md#Greeting", "--raw"], {
+            cwd: fixture.dir,
+          }).join();
+        },
+      );
+      expect(code).toBe(1);
+      expect(stderr).toContain("name");
     });
   },
 );

@@ -328,6 +328,28 @@ Root document props belong to `xmd run`, and so does the inline root document.
 `xmd test` accepts neither `--props`, `--props-*`, `XMD_PROPS`, `XMD_PROPS_*`,
 nor `--eval`/`-e`.
 
+## Targeted roots
+
+A file path given to `xmd run` is a document reference (§5.4): everything after
+its first raw `#` selects one section of the document to run. A filename that
+really contains `#` is written `%23`, and every literal `%` is written `%25` —
+a raw `%` begins escape syntax wherever it appears, so `pct%zz.md` is refused as
+a malformed reference and written `pct%25zz.md` instead.
+
+Props are unaffected by the selection, because they are the document's. The
+frontmatter that declares them is retained by every projection, so the same
+options, environment variables, defaults, requirements, and `--help` section
+apply — the declaring document is named by its path, and interpolation resolves
+against the projected body. A required property is still required when only one
+section runs.
+
+Selection happens before props are extracted, so a selector that names no single
+section is reported instead of a property complaint about a section that does
+not exist.
+
+`xmd test` does not adopt this grammar. A test path containing a literal `#` or
+`%` continues to name that file, and `xmd test` gains no target selection.
+
 ## Essential Acceptance Tests
 
 Core acceptance tests prove that inspection has no body effects, programmatic
@@ -337,4 +359,5 @@ interpolation and eval bindings, and invalid props prevent body effects.
 CLI acceptance tests prove the individual and aggregate sources, precedence,
 boolean and array forms, invalid-source failure, document-specific help without
 execution, the document-first ordering rule, and unchanged behavior for a
-document without props.
+document without props. They also prove that a projected root keeps the whole
+document's declared properties, its property help, and its requirements.

@@ -2868,8 +2868,10 @@ from a level separator. An empty path, a malformed escape, a byte sequence that
 is not UTF-8, and NUL each fail with a cause-free `TypeError` whose message is
 exactly `Invalid document reference`; the input is a command-line argument, and
 echoing it back would put arbitrary bytes into a diagnostic. A filename
-containing `#` is written `%23`, and one containing a literal `%HH` sequence is
-written `%25HH`.
+containing `#` is written `%23`, and **every** literal `%` is written `%25`.
+Escape syntax begins at a `%` wherever one appears, so a filename holding a `%`
+that is not a valid escape — `pct%zz.md` — is refused as a malformed reference
+rather than read as that literal name; `pct%25zz.md` is how it is written.
 
 `formatDocumentReference()` takes a decoded path and, optionally, an
 already-canonical exact target. It encodes the path, validates the target rather
@@ -3054,6 +3056,93 @@ same fixed cause-free diagnostic, executes no authored work, appends nothing,
 and never returns the retained terminal result. A journal with no retained
 terminal result is unaffected: it replays what it has and continues live, so a
 root import it does not contain is one this run performs.
+
+##### The command line addresses a document
+
+Two commands read the document-reference grammar, and both consume the model
+above rather than restating it. Neither scans headings, matches a selector,
+projects a body, or defines an error of its own.
+
+`xmd targets <document-reference>` prints the catalog:
+
+```text
+$ xmd targets README.md
+README.md#Test
+README.md#Test/Node
+README.md#Test/Bun
+```
+
+It takes exactly one file reference and nothing else — no target selector of its
+own, including the empty one after a bare `#`; no inline document, document
+property, agent flag, service option, run or test option; and no second
+argument. Each entry is `formatDocumentReference(path, target)` followed by a
+newline, in source order, duplicates retained, so a duplicate canonical path
+prints twice. A document that addresses nothing writes no bytes at all and exits
+zero. An unreadable reference, a missing or unreadable file, a parse or schema
+failure, and an unsupported invocation each exit nonzero.
+
+`xmd run` takes the same grammar in both of its forms:
+
+```text
+xmd run README.md#Release/Publish
+xmd README.md#Release/*
+```
+
+Only a file-backed run argument is read as a reference. An inline `-e` document
+is untargeted, and `xmd test` keeps its own path grammar: a test path containing
+a literal `#` or `%` still names that file.
+
+**The selector is replaced by its answer before anything executes.** The command
+inspects the document to discover its properties, and the run then reads the
+file again. What execution is asked for is the exact canonical target that
+inspection resolved, never the selector that resolved it. So if a wildcard names
+`Alpha` during inspection and the file is replaced such that the same wildcard
+would name `Beta`, the run fails on the absent `Alpha`; it never silently runs
+`Beta`.
+
+Where that refusal lands depends on which read discovered it, and **installing a
+provider is not using one**:
+
+- `xmd targets` never invokes the host's service installer at all.
+- A failure the preparation inspection or the value-mode inspection discovers
+  stops the run before the installer is invoked.
+- A failure only the last read discovers — the document changed after both
+  inspections — is raised by `execute()`, which runs after the installer. The
+  provider is installed by then; nothing has asked it for anything.
+
+Every one of those refusals precedes authored work. A run that cannot decide
+what to execute expands no component, starts or attaches no service, and
+performs no authored effect, whichever read discovered the failure.
+
+Diagnostics keep the core's own first line and render every target as a full
+document reference, because a reference is what a caller can act on:
+
+```text
+"Release/*" matches more than one document target.
+Matched targets:
+  README.md#Release/Publish
+  README.md#Release/Announce
+```
+
+`multiple-matches` lists the matches; an invalid selector and a no-match list
+the whole catalog under `Available targets:`, or say `The document has no
+targets.` when the catalog is empty. Every other failure keeps the printed-error
+behavior it already had.
+
+A filename containing `#` is written `%23`, and every literal `%` is written
+`%25` — including one that is not part of a valid escape, because a raw `%`
+starts escape syntax wherever it appears. This is a deliberate change to
+`xmd run` path grammar for any filename holding either character, and the reason
+target selection can be written at all. `xmd test` is exempt and still reads its
+path literally.
+
+Tier CT — CLI document targets covers the catalog, its ordering and duplicates,
+the empty catalog's byte-empty output, discovery running nothing, every rejected
+invocation, encoded filenames, both run forms, wildcards, the failure
+diagnostics, the exact-before-execute replacement, exotic headings, and target
+failure outranking a schema failure. Tier CH covers the help surfaces, Tier PC
+targeted properties, Tier VR targeted value and `<Output>` roots, Tier IE inline
+exclusivity, and Tier DT the unchanged `xmd test` path grammar.
 
 ### 5.5 The Component Api
 
@@ -6372,9 +6461,19 @@ yield* runXmd(args, useDenoService);
 
 The installer is invoked only for `xmd run` and `xmd test`, immediately before
 `execute()`. Help, inspection and agent-worker paths never install or attach a
-service. Each adapter supplies host randomness, inherited environment and
-stdout/stderr writers to the shared service host; production adapters reject a
-non-loopback requested host before spawning.
+service. `xmd targets` is one of those inspection paths and never invokes the
+installer.
+
+A `xmd run` that refuses its document target (§5.4) may or may not have reached
+the installer: the refusal comes before it when an inspection discovered the
+failure, and after it when only execution's own read did. Either way the run
+starts no service, because **installing a provider is not using one** — the
+installer wires a provider into scope, and starting a service is a separate
+operation a refused run never performs.
+
+Each adapter supplies host randomness, inherited environment and stdout/stderr
+writers to the shared service host; production adapters reject a non-loopback
+requested host before spawning.
 
 Each entrypoint owns its own argument order; there is no shared builder for
 them to forward to. `cli.ts` still reaches the host directly for terminal and
