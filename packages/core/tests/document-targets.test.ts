@@ -854,26 +854,61 @@ describe("Tier DT — structural recognition", () => {
     expect(isDocumentTargetError(shell(symbolic))).toBe(false);
   });
 
-  it("DT58: a list entry that is not a canonical target is refused", function* () {
+  /**
+   * Tested through the data parser, not through an Error shell.
+   *
+   * A shell carries a message derived from its data, so changing the data
+   * without rebuilding the message makes recognition fail on the message —
+   * which would make every case here green whether or not list validation
+   * exists. Going straight at `parseDocumentTargetFailure` keeps each case
+   * load-bearing.
+   */
+  it("DT58: a list entry that is not an encoded canonical target is refused", function* () {
     const rejected: unknown[][] = [
-      ["../../etc/passwd"],
-      ["Alpha/../Beta"],
+      // A raw space, tab or no-break space is not how a label is encoded.
       ["Alpha Beta"],
       ["Alpha\u0009Beta"],
-      ["Alpha Beta"],
+      ["Alpha\u00A0Beta"],
+      // Edge whitespace survives no round trip.
+      ["Alpha "],
+      // A lowercase escape is not what the encoder writes.
       ["a%2fb"],
-      ["Alpha", "Alpha "],
+      // NUL never decodes.
+      ["%00"],
+      // Not strings at all.
       [1],
       [null],
       // A sparse list is not a dense one.
       Object.assign(Array.from({ length: 2 }) as unknown[], { 0: "Alpha" }),
     ];
     for (const available of rejected) {
-      expect(isDocumentTargetError(shell(Object.freeze(data({ available }))))).toBe(false);
+      expect(parseDocumentTargetFailure(Object.freeze(data({ available })))).toBe(undefined);
     }
+    // The control: the same shape with a valid catalog parses.
+    expect(parseDocumentTargetFailure(Object.freeze(data()))).toBeDefined();
   });
 
-  it("DT59: fields no selection could have produced are refused", function* () {
+  /**
+   * `.` and `..` are ordinary heading labels — a document may really have a
+   * section called `..` — so `../../etc/passwd` is a well-formed four-level
+   * canonical *heading path*, never filesystem authority, and nothing here
+   * resolves it against a filesystem.
+   *
+   * Structural parsing therefore accepts it when the rest of the failure is
+   * consistent. What refuses it is the journal protocol, which compares the
+   * record against the catalog the recorded document derives — see TX31.
+   */
+  it("DT59: a dotted heading path is canonical, and parses when consistent", function* () {
+    for (const path of ["../../etc/passwd", "Alpha/../Beta", "..", "."]) {
+      expect(isCanonicalTarget(path)).toBe(true);
+    }
+    const parsed = parseDocumentTargetFailure(
+      Object.freeze(data({ available: ["../../etc/passwd", "Alpha/../Beta"] })),
+    );
+    expect(parsed?.available).toEqual(["../../etc/passwd", "Alpha/../Beta"]);
+  });
+
+  it("DT60: fields no selection could have produced are refused", function* () {
     const inconsistent: Record<string, unknown>[] = [
       // `no-match` whose selector really does match the catalog.
       data({ kind: "no-match", selector: "Alpha", matches: [] }),
@@ -898,11 +933,11 @@ describe("Tier DT — structural recognition", () => {
       data({ selector: 7 }),
     ];
     for (const candidate of inconsistent) {
-      expect(isDocumentTargetError(shell(Object.freeze(candidate)))).toBe(false);
+      expect(parseDocumentTargetFailure(Object.freeze(candidate))).toBe(undefined);
     }
   });
 
-  it("DT60: the Error shell is closed too", function* () {
+  it("DT61: the Error shell is closed too", function* () {
     const withCause = shell(Object.freeze(data()));
     Object.assign(withCause, { cause: new Error("foreign") });
     expect(isDocumentTargetError(withCause)).toBe(false);
@@ -925,7 +960,7 @@ describe("Tier DT — structural recognition", () => {
    * boundary, is any of it still reachable by the ordinary means of passing an
    * error on?
    */
-  it("DT61: no planted payload survives the boundary", function* () {
+  it("DT62: no planted payload survives the boundary", function* () {
     const planted = Object.freeze(
       Object.defineProperty(data(), Symbol.for("secret"), {
         value: "s3cret",

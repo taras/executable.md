@@ -2837,7 +2837,7 @@ class DocumentTargetError extends Error {
   readonly data: DocumentTargetFailure;
 }
 
-function isDocumentTargetError(error: unknown): error is DocumentTargetError;
+function isDocumentTargetError(error: unknown): boolean;
 function asDocumentTargetError(error: unknown): DocumentTargetError | undefined;
 function parseDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined;
 ```
@@ -2860,6 +2860,12 @@ list reached through a revocable Proxy stays readable after the Proxy is
 revoked. This is an ordinary invocation failure with no fail-stop reason to
 preserve object identity, so rebuilding costs one allocation and removes every
 way payload could travel.
+
+`isDocumentTargetError()` answers `boolean` and deliberately does not narrow.
+A type predicate would say the candidate *is* the safe value, which is the one
+thing it is not: the safe value is what `asDocumentTargetError()` builds. A
+caller asking only "was this a target failure?" uses the predicate; a caller
+that needs the typed error uses `asDocumentTargetError()` and reads its `data`.
 
 A candidate is read only when all of this holds:
 
@@ -2919,9 +2925,18 @@ exactly the failure the recorded selector produces against that content. A
 catalog, a match list, or a kind that the recorded document contradicts is
 therefore malformed too.
 
+Reading a record is **total**. Every way a recognized successful record can fail
+to be read is the same answer: an unreadable property, a key list a Proxy
+refuses to produce, recorded markdown whose frontmatter no parser accepts, and
+any other exception raised while reading or verifying it are all malformed. The
+boundary is synchronous throughout, so it can swallow no cancellation and no
+durability failure — neither arises inside a synchronous parse.
+
 A malformed record fails before the recorded terminal result can be reused, with
-one fixed, cause-free diagnostic. It never delegates, never replays the recorded
-terminal error, never executes authored work, and never appends new history.
+one fixed, cause-free diagnostic and nothing else: no journal text, parser
+message, path, selector, YAML fragment, or accessor message reaches it. It never
+delegates, never replays the recorded terminal error, never executes authored
+work, and never appends new history.
 
 A root import whose recorded result is not `ok` is left alone: a root can fail
 for reasons that are not about selection, and those failures are not this
@@ -7460,8 +7475,11 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT44–DT47 | Inspection | The catalog is reported without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
 | DT52/DT53 | Recognition | A failure from a separately loaded copy, and one built here, are read on the same terms |
 | DT54–DT56 | Reconstruction | The result is a fresh local error, never the candidate; a mutable nested list is copied and later mutation changes nothing; a revoked Proxy cannot reach through a result already built |
-| DT57–DT59 | Closed data | Enumerable, non-enumerable and symbol-keyed extras, entries that are not canonical targets, sparse lists, and fields no selection could have produced are all refused |
-| DT60/DT61 | Closed shell | A cause, an enumerable payload, and a message that does not derive from its data are refused; no planted payload survives stringification, spreading, symbol enumeration, or a journal round trip |
+| DT57 | Closed data | Enumerable, non-enumerable and symbol-keyed extras are refused |
+| DT58 | Canonical lists | Raw spaces, tabs, no-break spaces, edge whitespace, lowercase escapes, NUL, non-string entries and sparse lists are refused — asserted against the data parser, so the derived message cannot mask the check |
+| DT59 | Dotted heading paths | `.` and `..` are legal heading labels, so `../../etc/passwd` and `Alpha/../Beta` are canonical heading paths, never filesystem authority; structural parsing accepts them when the rest of the failure is consistent |
+| DT60 | Semantic outcome | Fields no selection could have produced — a `no-match` whose selector matches, a single-match ambiguity, a match outside the catalog, an `invalid-selector` that parses — are refused |
+| DT61/DT62 | Closed shell | A cause, an enumerable payload, and a message that does not derive from its data are refused; no planted payload survives stringification, spreading, symbol enumeration, or a journal round trip |
 
 ### Tier TX — Targeted execution and replay
 
@@ -7479,8 +7497,9 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX22/TX23 | Recorded content | An untargeted journal replays untargeted; replay projects the recorded content, not the file on disk |
 | TX24 | Failed selection | A journal from a selector that matched nothing never answers a later valid one |
 | TX25–TX27 | Failed replay | The same failing selector replays its own recorded failure with no authored effect; a different failure kind or a different selector is stale; live and replayed failures are the same structural error |
-| TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a noncanonical or unresolvable target, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
+| TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a catalog or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
+| TX34–TX37 | Totality | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
 
 ### Tier SL — Own-scope context updates
 

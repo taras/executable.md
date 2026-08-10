@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
@@ -37,6 +38,7 @@ import {
 import { isJsonObject, parseJson } from "../src/json.ts";
 import { fileSource, formatDocumentReference, inlineSource } from "../src/root-source.ts";
 import type { RootDocumentSource } from "../src/root-source.ts";
+import type { Json } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
 /** What every `<Probe>` in a run reported, in the order it expanded. */
@@ -593,8 +595,11 @@ describe("Tier TX — targeted replay", () => {
  * refused with the fixed diagnostic, and neither may expand anything or append
  * history.
  */
+/** The one thing an unreadable recorded root import says. */
+const UNREADABLE_RECORD = "The recorded root document import cannot be read by this version.";
+
 describe("Tier TX — malformed recorded selections", () => {
-  const UNREADABLE = "The recorded root document import cannot be read by this version.";
+  const UNREADABLE = UNREADABLE_RECORD;
 
   /** A completed journal whose root import recorded a failed selection. */
   function* failedJournal(): Operation<InMemoryStream> {
@@ -675,14 +680,23 @@ describe("Tier TX — malformed recorded selections", () => {
     }));
   });
 
-  it("TX31: a noncanonical target entry is refused", function* () {
+  /**
+   * Two different facts, and only the second belongs to this protocol.
+   *
+   * `Beta ` and `a%2fb` are not canonical encodings, so the data parser refuses
+   * them (DT58). `../../etc/passwd` *is* a canonical four-level heading path
+   * (DT59) — what refuses it here is that the recorded document's derived
+   * catalog does not contain it. Shape checking alone would accept it.
+   */
+  it("TX31: a catalog the recorded document does not derive is refused", function* () {
     for (const available of [["../../etc/passwd"], ["Beta "], ["a%2fb"]]) {
       yield* refuses((record) => ({
         ...record,
         failure: { ...asRecord(record["failure"]), available },
       }));
     }
-    // The same rule on a successful repository selection's own target.
+    // The same rule on a successful repository selection's own target: `beta`
+    // is a perfectly canonical target that this document simply does not have.
     const healthy = new InMemoryStream();
     yield* run(inlineSource(SECTIONS, { target: "Beta" }), healthy, { names: [], ids: [] });
     const stream = yield* corrupt(healthy, (record) => ({ ...record, target: "beta" }));
@@ -731,3 +745,140 @@ function omit(value: unknown, key: string): Record<string, unknown> {
   delete record[key];
   return record;
 }
+
+/**
+ * Tier TX — reading a recorded root selection is total.
+ *
+ * The record is journal data, and journal data has ways of refusing to be read
+ * that are not defects of this run: a property may be an accessor that throws,
+ * a key list may come from a Proxy that refuses, and recorded markdown may have
+ * frontmatter no parser accepts. Each must become the one fixed answer, not an
+ * error of its own — an exception escaping here would carry a parser message, a
+ * path, or whatever a hostile record planted, and would do it from a boundary
+ * whose whole job is to refuse.
+ *
+ * The seam is the stream, not the record. `InMemoryStream` structured-clones on
+ * append, so nothing hostile can be *stored* in one; what a run actually
+ * consumes is whatever `readAll()` hands back. `PlantedStream` is therefore a
+ * stream that answers reads with a substituted root-import result, which is the
+ * shape a damaged or hostile backend really has.
+ *
+ * Each row plants a distinctive value and asserts it reaches nothing.
+ */
+const PLANTED = "pl4nted-s3cret";
+
+/** A stream that answers reads with a substituted recorded root import. */
+class PlantedStream implements DurableStream {
+  readonly appended: DurableEvent[] = [];
+
+  constructor(
+    private readonly events: readonly DurableEvent[],
+    private readonly planted: unknown,
+  ) {}
+
+  // deno-lint-ignore require-yield
+  *readAll(): Operation<DurableEvent[]> {
+    return this.events.map((event) =>
+      event.type === "yield" && event.description.name === "__root__"
+        ? // The one cast in this file. `Result.value` is typed `Json`, and the
+          // point of these rows is to put something there that is not — which
+          // is what a damaged backend does and what the boundary must survive.
+          { ...event, result: { status: "ok", value: this.planted as Json } }
+        : event,
+    );
+  }
+
+  // deno-lint-ignore require-yield
+  *append(event: DurableEvent): Operation<void> {
+    this.appended.push(event);
+  }
+}
+
+describe("Tier TX — unreadable recorded selections", () => {
+  /** A completed journal, then a stream that answers reads with `planted`. */
+  function* plantedStream(planted: unknown): Operation<PlantedStream> {
+    const healthy = new InMemoryStream();
+    yield* failure(inlineSource(SECTIONS, { target: "Missing" }), healthy);
+    return new PlantedStream(healthy.snapshot(), planted);
+  }
+
+  /** Resume a planted journal both ways and hold every refusal to the contract. */
+  function* refusesTotally(planted: unknown): Operation<void> {
+    for (const target of ["Missing", "Beta"]) {
+      const stream = yield* plantedStream(planted);
+      const seen: Probes = { names: [], ids: [] };
+      const error = yield* scoped(function* () {
+        yield* useProbes(seen);
+        try {
+          yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target }), stream }));
+        } catch (caught) {
+          return caught;
+        }
+        throw new Error("the run completed instead of failing");
+      });
+
+      expect((error as Error).message).toBe(UNREADABLE_RECORD);
+      expect((error as Error).cause).toBe(undefined);
+      expect(isDocumentTargetError(error)).toBe(false);
+      // Nothing the record planted escapes, by any route a consumer would use.
+      const rendered = `${String(error)} ${(error as Error).stack ?? ""} ${JSON.stringify({
+        ...(error as object),
+      })}`;
+      expect(rendered).not.toContain(PLANTED);
+      expect(rendered).not.toContain("Missing");
+      // Nothing expanded, and nothing was appended on top of the record.
+      expect(seen.names).toEqual([]);
+      expect(stream.appended).toEqual([]);
+    }
+  }
+
+  it("TX34: recorded content whose frontmatter no parser accepts is malformed", function* () {
+    // Valid JSON, valid string, unparseable document: without a total boundary
+    // the YAML parser's own failure escapes, carrying the planted text with it.
+    yield* refusesTotally({
+      kind: "target-failure",
+      path: `${PLANTED}.md`,
+      content: `---\n: [unbalanced\n  ${PLANTED}\n---\n\n# T\n`,
+      failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
+    });
+  });
+
+  it("TX35: an unreadable member is malformed, and says nothing about itself", function* () {
+    const record: Record<string, unknown> = {
+      kind: "target-failure",
+      path: "doc.md",
+      failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
+    };
+    Object.defineProperty(record, "content", {
+      enumerable: true,
+      get() {
+        throw new Error(`accessor refused: ${PLANTED}`);
+      },
+    });
+    yield* refusesTotally(record);
+  });
+
+  it("TX36: a record that refuses key enumeration is malformed", function* () {
+    yield* refusesTotally(
+      new Proxy(
+        {
+          kind: "target-failure",
+          path: "doc.md",
+          content: "# T\n\n## Beta\n",
+          failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
+        },
+        {
+          ownKeys() {
+            throw new Error(`enumeration refused: ${PLANTED}`);
+          },
+        },
+      ),
+    );
+  });
+
+  it("TX37: a value that is not a record at all is malformed", function* () {
+    for (const planted of [`a string ${PLANTED}`, 7, null, [PLANTED]]) {
+      yield* refusesTotally(planted);
+    }
+  });
+});

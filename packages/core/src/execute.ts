@@ -47,6 +47,7 @@ import {
 } from "./validate.ts";
 import { useParseCompiler } from "./components/parse-schema.ts";
 import {
+  documentOutline,
   isFunctionComponentPath,
   parseMarkdownDefinition,
   parseRootMarkdownDefinition,
@@ -56,11 +57,12 @@ import {
   asDocumentTargetError,
   documentTargetError,
   documentTargetFailure,
+  findTarget,
   isCanonicalTarget,
   recordedDocumentTargetFailure,
   sameDocumentTargetFailure,
 } from "./document-targets.ts";
-import type { DocumentTargetFailure } from "./document-targets.ts";
+import type { DocumentOutline, DocumentTargetFailure } from "./document-targets.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
   expandSegments,
@@ -365,10 +367,31 @@ const UNREADABLE_ROOT_RECORD = "The recorded root document import cannot be read
 type RootImportRecord =
   | { kind: "unrelated" }
   | { kind: "malformed" }
-  | { kind: "read"; content: string; selection: SelectionOutcome };
+  | { kind: "read"; outline: DocumentOutline; selection: SelectionOutcome };
 
 const UNRELATED: RootImportRecord = { kind: "unrelated" };
 const MALFORMED: RootImportRecord = { kind: "malformed" };
+
+/**
+ * Read a value that may refuse to be read.
+ *
+ * Every value this boundary touches comes from the journal, and a journal is
+ * data: a property may be an accessor that throws, a key list may come from a
+ * Proxy that refuses, and content may be markdown whose frontmatter no parser
+ * accepts. None of those is a failure of this run — they are ways of saying the
+ * record cannot be read — so none of them may travel as an error of its own.
+ *
+ * Synchronous throughout, so nothing an Effection scope owns passes through
+ * here: this cannot swallow a cancellation or a durability failure, because
+ * neither can arise inside a synchronous parse.
+ */
+function attempt<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Parse a recorded root import as a closed protocol.
@@ -384,13 +407,27 @@ const MALFORMED: RootImportRecord = { kind: "malformed" };
  * recorded failures are not this protocol's to interpret.
  */
 function recordedRootImport(event: Yield): RootImportRecord {
-  if (event.description.type !== "import_component" || event.description.name !== "__root__") {
+  const recorded = attempt(() => {
+    if (event.description.type !== "import_component" || event.description.name !== "__root__") {
+      return undefined;
+    }
+    return event.result.status === "ok" ? { value: event.result.value } : undefined;
+  });
+  if (recorded === undefined) {
     return UNRELATED;
   }
-  if (event.result.status !== "ok") {
-    return UNRELATED;
-  }
-  const record = event.result.value;
+  // Recognized and successful, so from here every way of failing to read it is
+  // the same answer. `attempt` covers the throwing ways; `readRootSelection`
+  // returns MALFORMED for the rest.
+  return attempt(() => readRootSelection(recorded.value)) ?? MALFORMED;
+}
+
+function readRootSelection(value: unknown): RootImportRecord {
+  // Parsed rather than read in place. `parseJson` walks every property once and
+  // rebuilds the record, so a trap that throws or a value that is not JSON is
+  // discovered here — and every read below is of this run's own copy rather
+  // than of an object the journal still controls.
+  const record = parseJson(value);
   if (!isJsonObject(record)) {
     return MALFORMED;
   }
@@ -401,11 +438,16 @@ function recordedRootImport(event: Yield): RootImportRecord {
   }
   const kind = record["kind"];
   const members = Object.keys(record).length;
+  // Parsing the recorded content is part of reading the record, for every
+  // shape. It is what the verification below compares against, and doing it
+  // here means a later read of the same content cannot be the first to
+  // discover that it does not parse.
+  const outline = documentOutline(path, content);
 
   if (kind === "repository") {
     const target = record["target"];
     if (target === undefined) {
-      return members === 3 ? { kind: "read", content, selection: { kind: "whole" } } : MALFORMED;
+      return members === 3 ? { kind: "read", outline, selection: { kind: "whole" } } : MALFORMED;
     }
     if (members !== 4 || typeof target !== "string" || !isCanonicalTarget(target)) {
       return MALFORMED;
@@ -413,11 +455,11 @@ function recordedRootImport(event: Yield): RootImportRecord {
     // The recorded content is here, so the target is verified against it rather
     // than merely parsed: a well-formed target the recorded document does not
     // offer describes a selection that never happened.
-    const resolved = resolveDocumentTarget(path, content, target);
-    if (!resolved.ok || resolved.value !== target) {
+    const resolved = findTarget(outline, target);
+    if (!resolved.ok || resolved.value.target !== target) {
       return MALFORMED;
     }
-    return { kind: "read", content, selection: { kind: "exact", target } };
+    return { kind: "read", outline, selection: { kind: "exact", target } };
   }
 
   if (kind === "target-failure") {
@@ -428,7 +470,7 @@ function recordedRootImport(event: Yield): RootImportRecord {
     // Same standard for a failure: the recorded selector must fail against the
     // recorded content in exactly the way the record claims. That verifies the
     // catalog and the matches too, which no amount of shape checking could.
-    const rederived = resolveDocumentTarget(path, content, failure.selector);
+    const rederived = findTarget(outline, failure.selector);
     if (rederived.ok) {
       return MALFORMED;
     }
@@ -436,22 +478,29 @@ function recordedRootImport(event: Yield): RootImportRecord {
     if (actual === undefined || !sameDocumentTargetFailure(actual.data, failure)) {
       return MALFORMED;
     }
-    return { kind: "read", content, selection: { kind: "failed", failure } };
+    return { kind: "read", outline, selection: { kind: "failed", failure } };
   }
 
   return MALFORMED;
 }
 
-/** What this run's selector decides against the content the journal recorded. */
-function requestedSelection(root: RootDocumentSource, content: string): SelectionOutcome {
+/**
+ * What this run's selector decides against the outline the journal recorded.
+ *
+ * Takes the outline the record already produced rather than the content, so
+ * this cannot be the call that discovers unparseable recorded markdown — that
+ * discovery belongs to reading the record, where it is malformed rather than an
+ * error of this run's own.
+ */
+function requestedSelection(root: RootDocumentSource, outline: DocumentOutline): SelectionOutcome {
   if (root.target === undefined) {
     return { kind: "whole" };
   }
-  const resolved = resolveDocumentTarget(rootSourcePath(root), content, root.target);
-  if (resolved.ok) {
-    return { kind: "exact", target: resolved.value };
+  const found = findTarget(outline, root.target);
+  if (found.ok) {
+    return { kind: "exact", target: found.value.target };
   }
-  const failure = asDocumentTargetError(resolved.error);
+  const failure = asDocumentTargetError(found.error);
   // A failure this module did not build is not a selection outcome that can be
   // compared, so it cannot be shown compatible with anything.
   return failure === undefined
@@ -522,7 +571,7 @@ function holdRootSelection(root: RootDocumentSource): Operation<void> {
       if (recorded.kind === "malformed") {
         throw new Error(UNREADABLE_ROOT_RECORD);
       }
-      const requested = requestedSelection(root, recorded.content);
+      const requested = requestedSelection(root, recorded.outline);
       if (!sameSelection(recorded.selection, requested)) {
         throw new StaleInputError(
           `the recorded root document import ran ${describeSelection(recorded.selection)}, and ` +

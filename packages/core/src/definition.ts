@@ -51,7 +51,7 @@ function parseSource(path: string, content: string): ParsedSource {
 }
 
 /** The static heading structure a document's body offers as targets. */
-function documentOutline(path: string, content: string): DocumentOutline {
+export function documentOutline(path: string, content: string): DocumentOutline {
   const body = parseSource(path, content).content;
   return outlineDocument(body, scanComponentSpans(body));
 }

@@ -647,7 +647,9 @@ is refused rather than delegated. "This event is not the root import" and "the
 root import, malformed" are different answers: one continues, the other fails
 before the recorded terminal result can be reused, without executing authored
 work or appending history. The record carries the content it was taken from, so
-the selection is verified against that content rather than merely parsed.
+the selection is verified against that content rather than merely parsed, and
+reading it is total — every way journal-controlled data can refuse to be read is
+the same refusal, carrying nothing the record supplied.
 
 ## Expansion identity
 
