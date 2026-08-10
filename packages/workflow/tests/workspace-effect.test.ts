@@ -5,6 +5,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { createApi } from "@effectionx/context-api";
 import { readTextFile } from "@effectionx/fs";
 import { glob } from "@executablemd/runtime";
+import ts from "typescript";
 import { type Operation, scoped } from "effection";
 import {
   claimDurablePublicationIdentity,
@@ -169,27 +170,79 @@ function code(source: string): string {
   return output;
 }
 
-/** Every module this source imports, however the import is written. */
-function specifiers(source: string): string[] {
+/**
+ * What a module this file loads cannot be shown to be.
+ *
+ * A specifier the file computes names whatever it is handed, so no inspection
+ * of this surface can say it is not a host module. It is refused rather than
+ * skipped: a boundary that admits what it cannot read is not a boundary.
+ */
+const COMPUTED = "a computed module specifier";
+
+/**
+ * Every module this source loads, read from the syntax rather than the text.
+ *
+ * Parsed, because module loading is not a pattern: a specifier can be a
+ * template literal, can escape its own characters, can be an expression, and
+ * the same characters can appear in a string that loads nothing. Each of those
+ * is a different answer, and only a parse tells them apart.
+ */
+function moduleSpecifiers(source: string): string[] {
+  const parsed = ts.createSourceFile(
+    "scanned.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
   const found: string[] = [];
-  for (const pattern of [
-    /\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']/g,
-    /\bimport\s*["']([^"']+)["']/g,
-    /\brequire\s*\(\s*["']([^"']+)["']/g,
-  ]) {
-    for (const match of source.matchAll(pattern)) {
-      found.push(match[1]);
+
+  function record(node: ts.Node | undefined): void {
+    if (
+      node !== undefined &&
+      (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ) {
+      // The parser has already decoded escapes, so `node:crypto` and
+      // `node:crypto` arrive here as the same specifier.
+      found.push(node.text);
+      return;
     }
+    found.push(COMPUTED);
   }
+
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier !== undefined) {
+        record(node.moduleSpecifier);
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      if (ts.isExternalModuleReference(node.moduleReference)) {
+        record(node.moduleReference.expression);
+      }
+    } else if (ts.isImportTypeNode(node)) {
+      record(ts.isLiteralTypeNode(node.argument) ? node.argument.literal : node.argument);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require")
+      ) {
+        record(node.arguments[0]);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(parsed);
   return found;
 }
 
 function forbiddenNames(source: string): string[] {
   const scanned = code(source);
   const crossings = FORBIDDEN.filter((name) => scanned.includes(name));
-  for (const specifier of specifiers(scanned)) {
-    if (hostModule(specifier) && !crossings.includes(specifier)) {
+  for (const specifier of moduleSpecifiers(source)) {
+    const refused = specifier === COMPUTED || hostModule(specifier);
+    if (refused && !crossings.includes(specifier)) {
       crossings.push(specifier);
     }
   }
@@ -292,13 +345,32 @@ describe("Tier DLC — Workspace coordination selection", () => {
     // boundary.
     expect(forbiddenNames(`import { randomUUID } from "node:crypto";`)).toEqual(["node:crypto"]);
     expect(forbiddenNames(`export { x } from "node:os";`)).toEqual(["node:os"]);
+    expect(forbiddenNames(`import "../deno.ts";`)).toEqual(["../deno.ts"]);
+    expect(forbiddenNames(`import type { X } from "node:fs";`)).toEqual(["node:fs"]);
+    expect(forbiddenNames(`type X = import("node:fs").Stats;`)).toEqual(["node:fs"]);
+    expect(forbiddenNames(`import fs = require("node:fs");`)).toEqual(["node:fs"]);
     expect(forbiddenNames(`const m = await import("bun:sqlite");`)).toEqual([
       "sqlite",
       "bun:sqlite",
     ]);
-    expect(forbiddenNames(`import "../deno.ts";`)).toEqual(["../deno.ts"]);
+
+    // How the specifier is spelled is not how it is found: a template literal
+    // and an escaped character load the same module as the plain string.
+    expect(forbiddenNames("const m = await import(`node:crypto`);")).toEqual(["node:crypto"]);
+    expect(forbiddenNames(`const m = await import("node\\u003acrypto");`)).toEqual(["node:crypto"]);
+
+    // A destination this surface computes cannot be shown not to be a host
+    // module, so it is refused rather than skipped.
+    expect(forbiddenNames(`const target = "node:crypto";\nawait import(target);`)).toEqual([
+      COMPUTED,
+    ]);
+    expect(forbiddenNames("await import(`${scheme}:crypto`);")).toEqual([COMPUTED]);
+
+    // And text that only looks like module loading loads nothing.
     expect(forbiddenNames("// run ids used to come from node:crypto")).toEqual([]);
     expect(forbiddenNames(`const note = "node:crypto";`)).toEqual([]);
+    expect(forbiddenNames('const note = `import "node:crypto"`;')).toEqual([]);
+    expect(forbiddenNames(`const note = 'export { x } from "node:os"';`)).toEqual([]);
 
     const found = (yield* glob({
       root: REPOSITORY,
@@ -334,12 +406,21 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(found.some((path) => path.includes("/src/deno/"))).toBe(false);
 
     const crossings: Record<string, string[]> = {};
+    const unread: string[] = [];
     for (const path of found) {
-      const names = forbiddenNames(yield* readTextFile(join(REPOSITORY, path)));
+      const source = yield* readTextFile(join(REPOSITORY, path));
+      // A parse that failed would report every file as clean. A module whose
+      // text imports something must yield a specifier, or this scan is reading
+      // nothing and saying so approvingly.
+      if (/^import\s/m.test(source) && moduleSpecifiers(source).length === 0) {
+        unread.push(path);
+      }
+      const names = forbiddenNames(source);
       if (names.length > 0) {
         crossings[path] = names;
       }
     }
+    expect(unread).toEqual([]);
     expect(crossings).toEqual({});
   });
 

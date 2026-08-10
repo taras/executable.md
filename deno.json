@@ -42,6 +42,7 @@
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
     "oxlint": "npm:oxlint@1.74.0",
     "oxlint-tsgolint": "npm:oxlint-tsgolint@0.25.0",
+    "typescript": "npm:typescript@^5.0.0",
     "unist-util-select": "npm:unist-util-select@^5",
     "zod": "npm:zod@^4.3.6",
     "mdast-util-to-string": "npm:mdast-util-to-string@^4"
