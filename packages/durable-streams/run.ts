@@ -36,13 +36,17 @@ function unalignedReplay(replayIndex: ReplayIndex, coroutineId: string) {
  * phase to gather observations (hash files, check timestamps) and cache
  * results for the decide phase.
  *
+ * The events come from the index rather than from the stream, so a guard reads
+ * the same retained result the replay path will use. Handing over the stream's
+ * own events instead would make validation and consumption two separate reads,
+ * and a source that answered differently between them could have a guard
+ * approve one result while execution used another.
+ *
  * See replay-guard-spec.md §5.5.
  */
-function* runCheckPhase(events: DurableEvent[], scope: Scope): Operation<void> {
-  for (const event of events) {
-    if (event.type === "yield") {
-      yield* ReplayGuard.invoke(scope, "check", [event]);
-    }
+function* runCheckPhase(replayIndex: ReplayIndex, scope: Scope): Operation<void> {
+  for (const event of replayIndex.retainedYields()) {
+    yield* ReplayGuard.invoke(scope, "check", [event]);
   }
 }
 
@@ -104,7 +108,7 @@ export function* durableRun<T extends WorkflowValue>(
   // files, make network requests) to gather observations for the decide
   // phase. The check loop iterates all Yield events in journal order.
   // See replay-guard-spec.md §5.5.
-  yield* runCheckPhase(events, scope);
+  yield* runCheckPhase(replayIndex, scope);
 
   // If the root coroutine already has a Close event in the journal,
   // the workflow completed in a previous run. Return the stored result

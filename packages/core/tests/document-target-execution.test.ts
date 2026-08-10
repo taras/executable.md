@@ -993,3 +993,93 @@ describe("Tier TX — unreadable recorded selections", () => {
     expect((error as Error).message).toContain("matches no document target");
   });
 });
+
+/**
+ * Tier TX — the guard and replay read one settled value, not two.
+ *
+ * A recorded result is validated in the check phase and consumed during replay.
+ * If those are two reads of the stream's own event, a source that answers
+ * differently between them decides one thing for the guard and another for
+ * execution — the guard approves the section it was shown, and the run executes
+ * the section it was handed. Exact-target identity says the section that ran is
+ * the section the record names, and two reads make that unenforceable.
+ *
+ * Both answers here are *valid*: two real recorded selections from two real
+ * runs. Nothing is malformed, nothing is refused, and the only thing separating
+ * a correct run from a wrong one is that the value is read once.
+ */
+describe("Tier TX — one read across check and replay", () => {
+  /** The recorded root-import value of a real run against `target`. */
+  function* recordedSelection(target: string): Operation<Json> {
+    const stream = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target }), stream, { names: [], ids: [] });
+    const recorded = stream
+      .snapshot()
+      .find((event) => event.type === "yield" && event.description.name === "__root__");
+    if (recorded === undefined || recorded.result.status !== "ok") {
+      throw new Error("no recorded root import");
+    }
+    const value = recorded.result.value;
+    if (value === undefined) {
+      throw new Error("recorded root import carried no value");
+    }
+    return value;
+  }
+
+  /**
+   * A partial journal: the recorded root import and nothing after it.
+   *
+   * Without a Close there is no completed-run shortcut, so the run replays the
+   * import and then continues live — which is the shape that lets the guard and
+   * the replay consumer both reach the same retained event.
+   */
+  function* partialJournal(target: string): Operation<DurableEvent[]> {
+    const stream = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target }), stream, { names: [], ids: [] });
+    return stream
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.name === "__root__");
+  }
+
+  it("TX43: a source that answers twice decides nothing twice", function* () {
+    const alpha = yield* recordedSelection("Alpha");
+    const beta = yield* recordedSelection("Beta");
+    const events = yield* partialJournal("Alpha");
+    const answers: Json[] = [alpha, beta];
+    const reads = { count: 0 };
+
+    const stream = new PlantedStream(events, (event) => {
+      const result: Record<string, unknown> = { status: "ok" };
+      Object.defineProperty(result, "value", {
+        enumerable: true,
+        get() {
+          const answer = answers[Math.min(reads.count, answers.length - 1)]!;
+          reads.count++;
+          return answer;
+        },
+      });
+      return { ...event, result: result as unknown as DurableEvent["result"] };
+    });
+
+    const seen: Probes = { names: [], ids: [] };
+    const text = yield* scoped(function* () {
+      yield* useProbes(seen);
+      return asText(
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Alpha" }), stream })),
+      );
+    });
+
+    // The guard approved Alpha, so Alpha is what ran.
+    expect(seen.names).toEqual(["pre", "title", "alpha", "inner"]);
+    expect(text).toContain("### Inner");
+    expect(text).not.toContain("## Beta");
+    // And the record was consulted once, so there was never a second answer to
+    // disagree with the first.
+    expect(reads.count).toBe(1);
+    // What the run published describes the section the guard approved.
+    const close = stream.appended.find((event) => event.type === "close");
+    expect(close).toBeDefined();
+    expect(JSON.stringify(close)).toContain("alpha content");
+    expect(JSON.stringify(close)).not.toContain("beta content");
+  });
+});

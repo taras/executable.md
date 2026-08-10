@@ -2950,8 +2950,16 @@ It covers the whole envelope, including a `result` that cannot be read at all.
 That requires replay indexing to read a Yield's *identity* without reading what
 it settled to: a guard's check phase runs after the index is built, so a guard
 that would refuse an event has to get its chance before the stream is asked to
-produce that event's result. `ReplayIndex` therefore defers the read until a
-consumer asks, and reads it once.
+produce that event's result.
+
+"Read once" spans the phases, not one accessor. The guard validates a recorded
+selection and the replay path then projects it, and those observe one settled
+value: the check phase is handed the retained Yields rather than the stream's
+own events, and the stream is consulted at most once. Otherwise a source that
+answered differently between validation and consumption would have the guard
+approve one recorded target while the run executed another — exact-target
+identity would say the section that ran is the one the record names, and nothing
+would make that true.
 
 A malformed record fails before the recorded terminal result can be reused, with
 one fixed, cause-free diagnostic and nothing else: no journal text, parser
@@ -7521,6 +7529,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a catalog or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
 | TX34–TX37 | Totality, inside the value | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
+| TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
 

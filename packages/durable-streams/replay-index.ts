@@ -19,8 +19,13 @@ export interface YieldEntry {
   result: Result;
 }
 
+/** What one retained Yield's single read of the stream produced. */
+type Settled =
+  | { readonly kind: "result"; readonly result: Result }
+  | { readonly kind: "refusal"; readonly refusal: unknown };
+
 /**
- * One retained Yield whose result has not been read yet.
+ * One retained Yield, and the one cell that owns what it settled to.
  *
  * Indexing reads a Yield's identity, because that is what indexing is for. It
  * deliberately does not read the *result*: a replay guard's check phase runs
@@ -30,22 +35,43 @@ export interface YieldEntry {
  * — a backend that could not produce a result failed during construction,
  * carrying its own error out past every guard.
  *
- * The read happens once and is kept, so a source that answers differently on a
- * second read cannot change what replay already used.
+ * The cell spans the whole replay lifecycle, not one accessor. A guard
+ * validates a retained result and a replay consumer then uses it, and those
+ * must be the same value: a source answering differently between the two would
+ * have the guard approve one thing and execution perform another, which no
+ * amount of validation downstream can detect. This is therefore the object the
+ * check phase is handed as well as the one replay reads from, and the stream's
+ * event is consulted at most once for either.
+ *
+ * The snapshot is a frozen copy of the result's own members, so the members a
+ * consumer reads — a settled `value` above all — are read from the stream
+ * exactly once rather than re-read per access. Both outcomes are kept: a
+ * refusal is remembered and re-raised rather than retried, so a source cannot
+ * refuse the guard and then answer replay.
  */
 class RetainedYield implements YieldEntry {
+  readonly type = "yield" as const;
+  readonly coroutineId: CoroutineId;
   readonly description: EffectDescription;
   private event: Yield;
-  private settled: { result: Result } | undefined;
+  private settled: Settled | undefined;
 
   constructor(event: Yield) {
     this.event = event;
+    this.coroutineId = event.coroutineId;
     this.description = event.description;
   }
 
   get result(): Result {
     if (this.settled === undefined) {
-      this.settled = { result: this.event.result };
+      try {
+        this.settled = { kind: "result", result: Object.freeze({ ...this.event.result }) };
+      } catch (refusal) {
+        this.settled = { kind: "refusal", refusal };
+      }
+    }
+    if (this.settled.kind === "refusal") {
+      throw this.settled.refusal;
     }
     return this.settled.result;
   }
@@ -53,6 +79,8 @@ class RetainedYield implements YieldEntry {
 
 export class ReplayIndex {
   private yields = new Map<CoroutineId, YieldEntry[]>();
+  /** Every retained Yield in stream order, each owning its own result cell. */
+  private retained: RetainedYield[] = [];
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
   /** Coroutines where replay has been disabled (run-live mode). */
@@ -68,12 +96,24 @@ export class ReplayIndex {
           list = [];
           this.yields.set(event.coroutineId, list);
         }
-        list.push(new RetainedYield(event));
+        const entry = new RetainedYield(event);
+        this.retained.push(entry);
+        list.push(entry);
       }
       if (event.type === "close") {
         this.closes.set(event.coroutineId, event);
       }
     }
+  }
+
+  /**
+   * Every retained Yield in stream order, as the events a check phase sees.
+   *
+   * The same objects the replay path consumes, so a guard and a later consumer
+   * observe one settled result rather than two reads of the stream.
+   */
+  retainedYields(): Yield[] {
+    return [...this.retained];
   }
 
   /**

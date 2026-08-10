@@ -304,9 +304,21 @@ check phase runs after the index is built and before anything is replayed, so a
 guard that would refuse an event has to get that chance before the stream is
 asked to produce what the event settled to — an eager read hands a backend that
 cannot produce a result the ability to fail past every guard, carrying its own
-error. The result is read when a consumer asks for it, and read once, so a
-source that answers differently on a second read cannot change what replay
-already used.
+error.
+
+Each retained Yield owns one cell for what it settled to, and **that cell spans
+the whole replay lifecycle**: the check phase is handed the retained Yields
+rather than the stream's own events, so a guard that validates a result and the
+replay path that later consumes it observe the same value. The stream's event is
+consulted at most once. Reading once across phases is the property that makes
+validation meaningful — with two reads, a source answering differently between
+them has a guard approve one result while execution uses another, and nothing
+downstream can detect the substitution.
+
+Both outcomes of that read are kept. A result is snapshotted as a frozen copy of
+its own members, so a settled `value` is read from the stream exactly once
+rather than re-read per access; a read that threw is remembered and re-raised
+rather than retried, so a source cannot refuse the guard and then answer replay.
 
 
 ```typescript

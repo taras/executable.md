@@ -11,11 +11,15 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
-import { run } from "effection";
+import { run, scoped } from "effection";
 import { expect } from "@executablemd/test-support/expect";
+import type { Operation } from "effection";
 import {
+  createDurableOperation,
   type DurableEvent,
+  type DurableStream,
   InMemoryStream,
+  type Json,
   ReplayGuard,
   type ReplayOutcome,
   StaleInputError,
@@ -634,5 +638,77 @@ describe("replay guard", () => {
         },
       });
     }
+  });
+});
+
+/**
+ * durableRun — a guard and the replay path read one settled result.
+ *
+ * The unit rows above prove repeated access through one `YieldEntry` is cached.
+ * They cannot prove the property that matters, which spans two phases: a guard
+ * validates a retained result in the check phase, and the replay path consumes
+ * it afterwards. If those are two reads of the stream's own event, a source
+ * answering differently between them has the guard approve one value while
+ * execution uses another, and nothing downstream can detect it.
+ *
+ * The journal here is partial — no Close — so replay consumes the retained
+ * Yield and then continues live, which is the shape that reaches both phases.
+ */
+describe("durableRun — one retained result across check and replay", () => {
+  it("hands the check phase and replay the same first answer", function* () {
+    const answers: Json[] = ["first", "second"];
+    const reads = { count: 0 };
+
+    const event: Record<string, unknown> = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "call", name: "work" },
+    };
+    const result: Record<string, unknown> = { status: "ok" };
+    Object.defineProperty(result, "value", {
+      enumerable: true,
+      get() {
+        const answer = answers[Math.min(reads.count, answers.length - 1)];
+        reads.count++;
+        return answer;
+      },
+    });
+    event["result"] = result;
+
+    const stream = new InMemoryStream();
+    // Appended directly rather than through `append`, which clones and would
+    // resolve the accessor before the run ever starts.
+    const events = [event as unknown as DurableEvent];
+    const reading: DurableStream = {
+      // deno-lint-ignore require-yield
+      *readAll(): Operation<DurableEvent[]> {
+        return events;
+      },
+      append: (durable: DurableEvent) => stream.append(durable),
+    };
+
+    const checked: unknown[] = [];
+    const replayed = yield* scoped(function* () {
+      yield* ReplayGuard.around({
+        *check([yielded], next) {
+          checked.push(yielded.result.status === "ok" ? yielded.result.value : undefined);
+          return yield* next(yielded);
+        },
+      });
+      return yield* durableRun(
+        function* () {
+          return (yield createDurableOperation<Json>({ type: "call", name: "work" }, function* () {
+            throw new Error("replay must not re-execute this effect");
+          })) as Json;
+        },
+        { stream: reading },
+      );
+    });
+
+    // The guard saw the first answer, replay used the first answer, and the
+    // stream was asked exactly once.
+    expect(checked).toEqual(["first"]);
+    expect(replayed).toBe("first");
+    expect(reads.count).toBe(1);
   });
 });
