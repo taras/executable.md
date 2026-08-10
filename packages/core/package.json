@@ -4,7 +4,8 @@
   "description": "Core engine that evaluates executable.md documents.",
   "type": "module",
   "exports": {
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    "./host": "./host.ts"
   },
   "dependencies": {
     "@effectionx/context-api": "0.6.0",

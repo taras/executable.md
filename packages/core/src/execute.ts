@@ -29,6 +29,8 @@ import { exec, readTextFile, cwd } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
+import { consumeAtTerminal, issueExecution } from "./execution-request.ts";
+import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
 import type { Context } from "effection";
 import type {
@@ -612,10 +614,18 @@ function guardedJournal(
   stream: DurableStream,
   root: RootDocumentSource,
   coroutineId: CoroutineId,
+  admissions: readonly JournalAdmission[],
 ): DurableStream {
   const admitting: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
       const retained = retainEvents(yield* stream.readAll());
+      // What the trusted host required of this history, on the retained
+      // snapshot every later phase reads, in the order it was captured and
+      // stopping at the first refusal. Ahead of root-history admission,
+      // ReplayGuard, terminal reuse, authored work and any append.
+      for (const admission of admissions) {
+        yield* admission(retained);
+      }
       admitRootHistory(retained, root, coroutineId);
       return retained;
     },
@@ -793,7 +803,7 @@ const silentFactory: ModifierFactory = (_params) => (_args, next) =>
  * rendered text for a text root, the validated JSON for a value root. The pair
  * is journaled together so replay restores both; only `value` is public.
  */
-type DocumentResult = DocumentSuccess | DocumentFailureResult;
+export type DocumentResult = DocumentSuccess | DocumentFailureResult;
 
 type DocumentSuccess = {
   status: "ok";
@@ -1260,7 +1270,11 @@ export interface DocumentExecution extends Operation<Result<Json>> {
  * }, execution.output);
  * ```
  */
-function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution> {
+function* executeDocument(
+  options: ExecuteOptions,
+  admissions: readonly JournalAdmission[] = [],
+  completions: readonly CompletionFailure[] = [],
+): Operation<DocumentExecution> {
   const {
     stream,
     props = {},
@@ -1379,7 +1393,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       // check happens inside the read that every phase downstream depends on
       // rather than in middleware anything could replace.
       const returned = yield* durableRun(() => Execution.operations.document(props), {
-        stream: guardedJournal(journal, root, ROOT_COROUTINE),
+        stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
       });
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);
@@ -1400,7 +1414,7 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         resolve(Err(failure instanceof Error ? failure : new Error(String(failure))));
         return;
       }
-      resolve(Ok(result.value));
+      resolve(settleCompletion(Ok(result.value), completions));
     } catch (error) {
       // Close with everything already emitted — printed errors produced before
       // an abort stay visible to consumers of the close value.
@@ -1418,14 +1432,39 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
 }
 
 /**
- * Execution Api — a test-agnostic middleware surface around document
- * execution. The default provider runs the document; extensions decorate the
- * execution lifecycle with `Execution.around({ execute })` — observing
- * options, wrapping the returned handle, or mapping its completion Result —
- * without introducing another execution function.
+ * What an installation requires of the retained history, decided inside the
+ * execution's own journal read.
+ *
+ * Refusal-only: it throws or it returns. It is handed the exact retained
+ * snapshot and hands nothing back, so it cannot substitute a history, and it
+ * never receives a `next` to decline.
+ */
+export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<void>;
+
+/**
+ * What a trusted host attaches to one execution.
+ *
+ * `install` runs contextual behavior the document inherits. `admissions` is
+ * copied by canonical execution *before* `install` runs, so nothing an
+ * installation does afterwards — including anything it composes — can add to,
+ * remove from or observe the collection that ends up authoritative.
+ */
+export interface ExecutionInstallation {
+  readonly admissions?: readonly JournalAdmission[];
+  install?(): Operation<void>;
+}
+
+/**
+ * Execution Api — a policy surface around document execution.
+ *
+ * A handler is given an `ExecutionRequest`, not the execution. It may inspect
+ * the options, narrow or replace them with `withOptions()`, register an
+ * additive completion failure, install contextual behavior the document will
+ * inherit, refuse by throwing, and delegate. It returns nothing, and whatever
+ * it returns is ignored: only canonical execution completes a document.
  */
 export interface ExecutionApi {
-  execute(options: ExecuteOptions): Operation<DocumentExecution>;
+  execute(request: ExecutionRequest): Operation<void>;
   /**
    * The document's expansion, as `durableRun` runs it.
    *
@@ -1436,13 +1475,95 @@ export interface ExecutionApi {
   document(props: Record<string, Json>): Operation<DocumentResult>;
 }
 
+/**
+ * The canonical terminal.
+ *
+ * It records what the chain settled on and consumes the request. It does not
+ * run the document: that happens after the chain unwinds, in the invocation
+ * that issued the request, which is what keeps a handler from completing an
+ * execution by answering instead of delegating.
+ */
 export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution", {
-  *execute(options: ExecuteOptions): Operation<DocumentExecution> {
-    return yield* executeDocument(options);
+  // deno-lint-ignore require-yield
+  *execute(request: ExecutionRequest): Operation<void> {
+    consumeAtTerminal(request);
   },
   *document(props: Record<string, Json>): Operation<DocumentResult> {
     return yield* documentWorkflow(props);
   },
 });
 
-export const execute: Operations<ExecutionApi>["execute"] = Execution.operations.execute;
+/**
+ * Run one document execution, authoritatively.
+ *
+ * The order is the contract. Admissions are copied and frozen first, so what
+ * ends up authoritative is fixed before any installation, any middleware and
+ * any document code exists. Installations then run, then the chain is invoked
+ * with one opaque request, then the request must have reached the terminal
+ * exactly once, and only then does canonical core execute the document with the
+ * options the terminal recorded.
+ */
+function* runInvocation(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+): Operation<DocumentExecution> {
+  const admissions = Object.freeze(
+    installations.flatMap((installation) => [...(installation.admissions ?? [])]),
+  );
+
+  for (const installation of installations) {
+    if (installation.install) {
+      yield* installation.install();
+    }
+  }
+
+  const issued = issueExecution(options);
+  // Whatever a handler returns is not an execution, so it is not read.
+  yield* Execution.operations.execute(issued.request);
+
+  return yield* executeDocument(issued.settle(), admissions, issued.completions());
+}
+
+/** The ordinary entrypoint: one execution, nothing installed around it. */
+export function execute(options: ExecuteOptions): Operation<DocumentExecution> {
+  return runInvocation(options, []);
+}
+
+/**
+ * The trusted-host entrypoint.
+ *
+ * Reached through `@executablemd/core/host`, because attaching an admission is
+ * infrastructure rather than authoring: the value crosses as a function the
+ * host holds and passes, so a separately loaded workflow package composes by
+ * handing its closure over rather than by agreeing on a name.
+ */
+export function executeInstalled(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+): Operation<DocumentExecution> {
+  return runInvocation(options, [...installations]);
+}
+
+/**
+ * Apply every additive completion policy, in registration order.
+ *
+ * Additive means one direction only: the first policy that reports a failure
+ * turns a success into that failure, and nothing after it can turn a failure
+ * back into a success or replace it with a different one.
+ */
+function settleCompletion(
+  result: Result<Json>,
+  completions: readonly CompletionFailure[],
+): Result<Json> {
+  let settled = result;
+  for (const completion of completions) {
+    if (!settled.ok) {
+      return settled;
+    }
+    const failure = completion();
+    if (failure !== undefined) {
+      settled = Err(failure);
+    }
+  }
+  return settled;
+}
