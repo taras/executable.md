@@ -1042,6 +1042,19 @@ install contextual behavior, refuse by throwing, and delegate. The document is
 run afterwards, by the invocation that issued the request, under the options the
 canonical terminal recorded.
 
+Terminal acceptance stores a detached, immutable structural snapshot of the
+options: the containers are copied and frozen while the operational identities
+inside them — the selected `DurableStream`, each modifier factory — are carried
+across unchanged. The chain unwinds before the document runs, so an outer
+handler that delegates and then edits what it delegated changes only its own
+data. Replacing options before delegating, through `withOptions()`, remains the
+supported path.
+
+Each invocation owns a child scope. Contextual behavior an installation
+establishes is visible to the document and to its teardown, isolated from a
+concurrent invocation, and absent from the next execution in the same host
+scope.
+
 The request is the capability, and it is **one-use**. It carries a private
 reference to one invocation; a reconstructed look-alike, a superseded request, a
 foreign invocation's request, and a second delegation are each refused with a

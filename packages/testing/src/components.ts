@@ -135,8 +135,6 @@ export function* installHandlers(
       // live or partial journal (no root Close) hydrates nothing;
       // re-expansion records each result exactly once via its durable
       // operation.
-      // The request's candidate stream, inspected and not acted on: hydration
-      // restores what the journal already recorded and decides nothing.
       const replayed = yield* readCompletedRun(request.options.stream);
       if (replayed) {
         for (const result of replayed.results) {

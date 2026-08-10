@@ -98,14 +98,6 @@ class CanonicalRequest implements ExecutionRequest {
   }
 
   /**
-   * Take this request's options, once, on behalf of the invocation that minted
-   * it.
-   *
-   * A private field rather than a shared registry: reading it off a value this
-   * class did not construct throws, which is exactly the answer a reconstructed
-   * look-alike deserves, and it keeps the check out of any module-scoped state.
-   */
-  /**
    * Take this request's options on behalf of `invocation`, once.
    *
    * The expected invocation is supplied by the caller rather than read off the

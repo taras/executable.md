@@ -7765,25 +7765,27 @@ Defined in §8.1.
 | EP1 | Ordinary execution | `execute()` with nothing installed runs the document unchanged |
 | EP2 | Option transformation | Options replaced through `withOptions()` are the options the document runs under |
 | EP3 | Answering without delegating | A handler that returns instead of delegating is an `ExecutionProtocolError`: the journal is never read, nothing expands, nothing is appended |
-| EP4 | A substitute return | Whatever a handler returns after delegating is ignored, and the canonical execution is what the caller receives |
+| EP4 | A substitute return | Whatever a handler returns after delegating is ignored |
 | EP5 | Refusal before delegation | A throwing handler propagates, and performs no read, expansion, Yield or Close |
 | EP6 | Double delegation | Delegating the same request twice fails |
 | EP7 | A consumed request | Delegating a request a previous execution consumed fails |
 | EP8 | A reconstructed look-alike | A value rebuilt from the public shape is not a request, and nothing is read or run |
 | EP9 | A superseded request | Delegating a request a later `withOptions()` replaced fails |
-| EP10 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects, transforms and delegates the canonical request |
-| EP11 | Capture precedes installation | Admissions are copied before `install()` runs, so an installation cannot add one afterwards |
+| EP10 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects, transforms and delegates |
+| EP11 | Capture precedes installation | Admissions are copied before `install()` runs |
 | EP12 | Every admission, in order | Each captured admission runs, in capture order, on the retained history |
 | EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, `Execution.document`, authored work and any append |
 | EP14 | No ambient channel | Rebuilding the obsolete `executablemd.core.journal-admission` context and setting it to `[]`, before and during the invocation, removes no captured admission |
 | EP15 | Precedence over an existing failure | A completion policy is not consulted when the document already failed, and cannot replace its failure |
 | EP16 | Additive against a success | A completion policy still turns a successful document into a failure |
 | EP17 | First failure wins | With two policies, the first to report a failure is the result and the second is never consulted |
-| EP20 | Concurrent requests | Two live invocations cannot settle each other by swapping requests; each still runs its own document |
+| EP18 | An immutable history | An admission that tries to set `length`, replace an index, delete a member, reverse or splice the retained history is ineffective or refused; the next admission sees the original, the completed replay stays completed, and nothing is appended |
+| EP19 | A nested live foreign request | A nested invocation handed its caller's still-live request is refused as another execution's; both invocations then settle on their own |
+| EP20 | Concurrent live requests | Two invocations held at a barrier until both requests exist and neither is consumed each refuse the other's, and each still runs its own document |
 | EP21 | The exported default | Calling `Execution.operations.execute` directly with a live request refuses and consumes nothing; the request still settles its own invocation |
 | EP22 | Invalid values | `null`, `undefined`, primitives, symbols, plain objects and a proxy whose traps throw each produce a fresh cause-free `ExecutionProtocolError`, with no journal read or append |
-| EP23 | Invocation scope | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
-| EP18 | An immutable history | An admission that tries to set `length`, replace an index, delete a member, reverse or splice the retained history is ineffective or refused; the next admission sees the original, the completed replay stays completed, and nothing is appended |
+| EP23 | Invocation context | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
+| EP26 | An immutable options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events and the substituted one receives none |
 
 ### Tier SL — Own-scope context updates
 

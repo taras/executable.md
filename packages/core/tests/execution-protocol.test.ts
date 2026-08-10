@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, scoped, spawn, withResolvers } from "effection";
+import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
@@ -34,6 +34,11 @@ import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation, JournalAdmission } from "../host.ts";
 
 const DOC = "# Hello\n";
+
+/** A document that fails on its own terms, under <Output> error mode. */
+const FAILING_DOC = ["<Output>", "", "```bash exec", "exit 3", "```", "", "</Output>", ""].join(
+  "\n",
+);
 
 /** A journal that reports what a refused execution managed to do to it. */
 function watched(): { stream: InMemoryStream; reads: number } {
@@ -457,6 +462,151 @@ describe("Tier EP — the execution protocol", () => {
   // EP26: what the terminal accepted stops being the caller's to change. The
   // chain unwinds before the document runs, so a handler that delegates and
   // then edits what it delegated would otherwise change what executes.
+  // EP24: settlement owns the invocation scope. A caller that continues on the
+  // completion continues after this invocation's cleanup has finished — which a
+  // caller-owned resource would not give, since it would still be standing.
+  it("EP24: cleanup finishes before completion is observed", function* () {
+    const cases: Array<{ says: string; doc: string; policy: boolean }> = [
+      { says: "success", doc: DOC, policy: false },
+      { says: "document failure", doc: FAILING_DOC, policy: false },
+      { says: "completion-policy failure", doc: DOC, policy: true },
+    ];
+
+    for (const scenario of cases) {
+      const finalized: string[] = [];
+      const observed: string[] = [];
+
+      yield* scoped(function* () {
+        if (scenario.policy) {
+          yield* Execution.around({
+            *execute([request], next) {
+              request.addCompletionFailure(() => new Error("the policy failed it"));
+              yield* next(request);
+            },
+          });
+        }
+
+        const execution = yield* executeInstalled(
+          { ...inlineSource(scenario.doc), stream: new InMemoryStream() },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push("cleanup");
+                });
+              },
+            },
+          ],
+        );
+        yield* execution;
+        observed.push(`completion:${finalized.length}`);
+      });
+
+      // Exactly once, and already done when the completion was read.
+      expect(finalized).toEqual(["cleanup"]);
+      expect(observed).toEqual(["completion:1"]);
+    }
+  });
+
+  it("EP24b: concurrent invocations finalize independently, and leave nothing behind", function* () {
+    const finalized: string[] = [];
+
+    yield* scoped(function* () {
+      const run = (name: string) =>
+        function* (): Operation<void> {
+          const execution = yield* executeInstalled(
+            { ...inlineSource(DOC), stream: new InMemoryStream() },
+            [
+              {
+                *install(): Operation<void> {
+                  yield* ensure(() => {
+                    finalized.push(name);
+                  });
+                },
+              },
+            ],
+          );
+          yield* execution;
+        };
+      const first = yield* spawn(run("first"));
+      const second = yield* spawn(run("second"));
+      yield* first;
+      yield* second;
+    });
+
+    expect([...finalized].sort()).toEqual(["first", "second"]);
+  });
+
+  it("EP24c: a completed handle can be re-observed without refinalizing", function* () {
+    const finalized: string[] = [];
+
+    const results = yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource(DOC), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                finalized.push("cleanup");
+              });
+            },
+          },
+        ],
+      );
+      const first = yield* execution;
+      const second = yield* execution;
+      // Late subscription still replays the whole output.
+      const late = yield* collect(execution);
+      return [first.ok, second.ok, String(late).includes("Hello")];
+    });
+
+    expect(results).toEqual([true, true, true]);
+    expect(finalized).toEqual(["cleanup"]);
+  });
+
+  // EP25: cancelling a live handle halts authored work and finalizes once.
+  it("EP25: cancellation halts a suspended document and finalizes exactly once", function* () {
+    const finalized: string[] = [];
+    const reached = withResolvers<void>();
+    const halted: string[] = [];
+
+    yield* scoped(function* () {
+      yield* Execution.around({
+        *document([props], next) {
+          try {
+            reached.resolve();
+            yield* suspend();
+            return yield* next(props);
+          } finally {
+            halted.push("document");
+          }
+        },
+      });
+
+      const running = yield* spawn(function* () {
+        const execution = yield* executeInstalled(
+          { ...inlineSource(DOC), stream: new InMemoryStream() },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push("cleanup");
+                });
+              },
+            },
+          ],
+        );
+        yield* execution;
+      });
+
+      yield* reached.operation;
+      yield* running.halt();
+    });
+
+    expect(halted).toEqual(["document"]);
+    expect(finalized).toEqual(["cleanup"]);
+  });
+
   it("EP26: options are snapshotted when the terminal accepts them", function* () {
     // Control: replacing the same fields *before* delegating still works.
     const replaced = yield* scoped(function* () {

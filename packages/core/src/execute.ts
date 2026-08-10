@@ -1513,18 +1513,62 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
  * exactly once, and only then does canonical core execute the document with the
  * options the terminal recorded.
  */
-function runInvocation(
+/**
+ * Run one document execution, with the invocation owning its own lifetime.
+ *
+ * One structured owner task holds the invocation scope. Everything an
+ * installation established, and every child the document spawned, lives inside
+ * it — and settlement closes it. That is the difference from attaching a
+ * resource to the caller: a resource would keep the invocation standing for as
+ * long as the caller's scope lasted, so a suspended authored child would still
+ * be running while the caller went on to other work.
+ *
+ * The handle canonical core returns is the authoritative one. It exposes the
+ * inner execution's replay-safe output directly — there is no second channel
+ * bridging identical chunks — and its completion is the owner's final result,
+ * published only after the invocation scope has finished tearing down. So a
+ * caller that continues on the completion continues after cleanup, and a
+ * completed handle carries no live scope to re-enter.
+ *
+ * Failure before a handle exists keeps the existing pre-handle throwing
+ * behavior; once readiness is published, every later failure is a `Result`.
+ */
+function* runInvocation(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
 ): Operation<DocumentExecution> {
-  // A child scope of the caller's, owned by this invocation. Whatever an
-  // installation establishes lives here: visible to the document and to its
-  // teardown, invisible to a concurrent invocation, and gone before the next
-  // execution in the same host scope — which a plain `yield*` in the caller's
-  // scope would not give, since every later execution would inherit it.
-  return resource(function* (provide) {
-    yield* provide(yield* invoke(options, installations));
+  const ready = withResolvers<DocumentExecution>();
+  const settled = withResolvers<Result<Json>>();
+
+  yield* spawn(function* () {
+    let published = false;
+    try {
+      const outcome = yield* scoped(function* () {
+        const execution = yield* invoke(options, installations);
+        published = true;
+        ready.resolve(execution);
+        return yield* execution;
+      });
+      settled.resolve(outcome);
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (published) {
+        // The document had already begun, so its outcome is a Result — a
+        // teardown failure after that point does not become a thrown completion.
+        settled.resolve(Err(failure));
+        return;
+      }
+      ready.reject(failure);
+    }
   });
+
+  const execution = yield* ready.operation;
+  return {
+    output: execution.output,
+    *[Symbol.iterator]() {
+      return yield* settled.operation;
+    },
+  };
 }
 
 function* invoke(
