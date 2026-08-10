@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  claimDurablePublicationIdentity,
   durableAll,
   durableCall,
   durableRun,
@@ -23,6 +24,7 @@ import {
   InMemoryStream,
   serializeDurableEvent,
 } from "../mod.ts";
+import { durablePublicationIdentity } from "../guard.ts";
 import type { DurableEvent, DurableStream, Workflow } from "../mod.ts";
 
 /** A short, readable identity for an event in a timeline assertion. */
@@ -96,6 +98,37 @@ const EVENT: DurableEvent = {
 };
 
 describe("guardDurableStream", () => {
+  it("retains publication identity only through canonical guarded wrappers", function* () {
+    const backend = new InMemoryStream();
+    const identity = claimDurablePublicationIdentity(backend);
+    const guarded = guardDurableStream(backend, function* () {});
+    const nested = guardDurableStream(guarded, function* () {});
+    const loadedCopySpecifier = "../guard.ts" + "?loaded-copy=publication-identity";
+    const loadGuardCopy: () => Promise<typeof import("../guard.ts")> = () =>
+      import(loadedCopySpecifier);
+    const loadedCopy = yield* until(loadGuardCopy());
+    const unverifiable = loadedCopy.guardDurableStream(backend, function* () {});
+    const other = new InMemoryStream();
+    const otherIdentity = claimDurablePublicationIdentity(other);
+    const unknown: DurableStream = {
+      readAll: () => nested.readAll(),
+      append: (event) => nested.append(event),
+    };
+    const oldInheritance = Symbol.for("executablemd.durable-stream.inherit-provenance");
+    Object.defineProperty(unknown, oldInheritance, {
+      value: () => undefined,
+    });
+
+    expect(durablePublicationIdentity(backend)).toBe(identity);
+    expect(durablePublicationIdentity(guarded)).toBe(identity);
+    expect(durablePublicationIdentity(nested)).toBe(identity);
+    expect(durablePublicationIdentity(other)).toBe(otherIdentity);
+    expect(otherIdentity).not.toBe(identity);
+    expect(durablePublicationIdentity(unknown)).toBe(undefined);
+    expect(durablePublicationIdentity(unverifiable)).toBe(undefined);
+    expect(Reflect.ownKeys(nested).includes(oldInheritance)).toBe(false);
+  });
+
   it("delegates readAll without invoking the gate", function* () {
     const timeline: string[] = [];
     const guarded = guardDurableStream(recordingStream(timeline, [EVENT]), function* () {

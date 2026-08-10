@@ -296,6 +296,21 @@ same result after publication completes. Replay bypasses the coordinator,
 executor, continuation, and live append; a partially replayed run coordinates
 only its live suffix.
 
+The coordinator receives a non-operational publication identity and an
+infrastructure-failure activator. The canonical durable-stream module keeps the
+association between a claimed backend and that identity in private weak state.
+`guardDurableStream` associates only the wrapper it constructs with its source's
+identity, including through nested guards. Streams expose no identity property
+or inheritance callback; copied properties, custom wrappers and wrappers from
+another loaded copy acquire no authority.
+
+A provider
+whose execution and publication share a larger durability boundary calls it
+when that boundary cannot commit. It returns the first active failure by
+identity, so the provider throws that exact failure and later durable work stays
+fenced. The default coordinator does not call this continuation: an ordinary
+execution failure remains the existing failed protocol `Result`.
+
 The publication continuation uses the ordered append fence described above. A
 backing append failure therefore activates the same fail-stop state and raises
 `DurablePersistenceError` with the adapter error as its cause. A marked

@@ -33,7 +33,8 @@ export { InMemoryStream } from "./stream.ts";
 
 // Pre-persistence gate — runs before an event reaches its backend
 export { guardDurableStream } from "./guard.ts";
-export type { DurableEventGate } from "./guard.ts";
+export { claimDurablePublicationIdentity } from "./guard.ts";
+export type { DurableEventGate, DurablePublicationIdentity } from "./guard.ts";
 
 // HTTP-backed stream adapter
 export { useHttpDurableStream } from "./http-stream.ts";
@@ -79,7 +80,10 @@ export type { Executor } from "./effect.ts";
 
 // Structured live-operation coordination
 export { defaultLiveDurableOperationCoordinator } from "./live-coordinator.ts";
-export type { LiveDurableOperationCoordinator } from "./live-coordinator.ts";
+export type {
+  ActivateDurabilityFailure,
+  LiveDurableOperationCoordinator,
+} from "./live-coordinator.ts";
 
 // Workflow-enabled effects
 export { durableAction, durableCall, durableSleep, versionCheck } from "./operations.ts";

@@ -1,6 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
+import {
+  claimDurablePublicationIdentity,
+  type DurableEvent,
+  type DurablePublicationIdentity,
+  type DurableStream,
+} from "@executablemd/durable-streams";
+import type { Operation } from "effection";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { WorkspaceFilesystem } from "../../vendor/cloudflare-computer-dofs/generated/fs/filesystem.js";
@@ -36,6 +43,7 @@ export interface RunConnectionLease {
   readonly generation: ConnectionGeneration;
   readonly path: string;
   readonly database: WorkflowRunDatabase;
+  journalIdentity: DurablePublicationIdentity | undefined;
   open: boolean;
 }
 
@@ -70,8 +78,15 @@ export interface RunConnection {
 export interface WorkflowRunConnections {
   at(path: string): RunConnection;
   registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease;
+  registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   closeLease(lease: RunConnectionLease): void;
   validateLease(database: WorkflowRunDatabase): RunConnectionLease;
+  validateJournal(
+    database: WorkflowRunDatabase,
+    identity: DurablePublicationIdentity | undefined,
+  ): void;
+  afterRoutedJournalAppend(database: WorkflowRunDatabase, event: DurableEvent): Operation<void>;
+  beforeCommit(database: WorkflowRunDatabase): Operation<void>;
   authorizeTransaction(
     database: WorkflowRunDatabase,
     transaction: WorkflowRunTransaction,
@@ -273,8 +288,19 @@ export class WorkflowConnectionStateError extends Error {
   override name = "WorkflowConnectionStateError";
 }
 
+export interface WorkflowRunConnectionHooks {
+  afterRoutedJournalAppend?(database: WorkflowRunDatabase, event: DurableEvent): Operation<void>;
+  beforeCommit?(database: WorkflowRunDatabase): Operation<void>;
+}
+
+// deno-lint-ignore require-yield
+function* noop(): Operation<void> {
+  return undefined;
+}
+
 export function createWorkflowRunConnections(
   observeSavepoint: SavepointObserver = () => {},
+  hooks: WorkflowRunConnectionHooks = {},
 ): WorkflowRunConnections {
   const entries = new Map<string, RunConnection>();
   const leases = new WeakMap<WorkflowRunDatabase, RunConnectionLease>();
@@ -337,10 +363,21 @@ export function createWorkflowRunConnections(
         generation: connection.generation,
         path: connection.path,
         database,
+        journalIdentity: undefined,
         open: true,
       };
       leases.set(database, lease);
       return lease;
+    },
+
+    registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void {
+      const lease = validateLease(database);
+      if (lease.journalIdentity !== undefined) {
+        throw new WorkflowTransactionError(
+          "the WorkflowRun database journal identity is already installed.",
+        );
+      }
+      lease.journalIdentity = claimDurablePublicationIdentity(journal);
     },
 
     closeLease(lease: RunConnectionLease): void {
@@ -348,6 +385,28 @@ export function createWorkflowRunConnections(
     },
 
     validateLease,
+
+    validateJournal(
+      database: WorkflowRunDatabase,
+      identity: DurablePublicationIdentity | undefined,
+    ): void {
+      const selected = validateLease(database).journalIdentity;
+      if (selected === undefined || selected !== identity) {
+        throw new WorkflowTransactionError(
+          "the live Workspace journal is foreign to the selected WorkflowRun database.",
+        );
+      }
+    },
+
+    afterRoutedJournalAppend(database: WorkflowRunDatabase, event: DurableEvent): Operation<void> {
+      validateLease(database);
+      return hooks.afterRoutedJournalAppend?.(database, event) ?? noop();
+    },
+
+    beforeCommit(database: WorkflowRunDatabase): Operation<void> {
+      validateLease(database);
+      return hooks.beforeCommit?.(database) ?? noop();
+    },
     authorizeTransaction,
 
     issueToken(

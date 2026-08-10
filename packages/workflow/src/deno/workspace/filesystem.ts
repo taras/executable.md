@@ -1,8 +1,21 @@
-import { type Operation, until } from "effection";
+import { type Operation } from "effection";
+import { chmod as chmodPath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/chmod.js";
 import { link as linkFile } from "../../../vendor/cloudflare-computer-dofs/generated/fs/link.js";
+import { mkdir as mkdirPath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/mkdir.js";
+import { readdir as readDirectory } from "../../../vendor/cloudflare-computer-dofs/generated/fs/readdir.js";
 import type { WorkspaceDirentResult } from "../../../vendor/cloudflare-computer-dofs/generated/fs/readdir.d.ts";
+import { readRangeSync } from "../../../vendor/cloudflare-computer-dofs/generated/fs/readFile.js";
+import { readlink as readLink } from "../../../vendor/cloudflare-computer-dofs/generated/fs/readlink.js";
 import { rename as renamePath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/rename.js";
+import { rm as removePath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/rm.js";
+import {
+  lstat as lstatPath,
+  stat as statPath,
+} from "../../../vendor/cloudflare-computer-dofs/generated/fs/stat.js";
+import { symlink as createSymlink } from "../../../vendor/cloudflare-computer-dofs/generated/fs/symlink.js";
+import { writeFileSync } from "../../../vendor/cloudflare-computer-dofs/generated/fs/writeFile.js";
 import type { RunConnection } from "../connections.ts";
+import { throwWorkspaceFilesystemFailure } from "./errors.ts";
 
 export interface DenoWorkspaceEntry {
   readonly name: string;
@@ -50,40 +63,48 @@ export function createDenoWorkspaceFilesystem(
     return { kind, mode: value.mode, mtime: value.mtime, size: value.size };
   }
 
+  function filesystemOperation<T>(operation: () => T): T {
+    try {
+      return operation();
+    } catch (error) {
+      return throwWorkspaceFilesystemFailure(error);
+    }
+  }
+
+  function execute<T>(operation: () => T): T {
+    authorize();
+    return filesystemOperation(operation);
+  }
+
+  function readBytes(path: string): Uint8Array {
+    const metadata = statPath(dofs, path);
+    return new Uint8Array(readRangeSync(dofs, path, 0, metadata.size));
+  }
+
   return {
     *readFile(path): Operation<Uint8Array> {
-      authorize();
-      const stream = yield* until(filesystem.readFile(path));
-      return new Uint8Array(yield* until(new Response(stream).arrayBuffer()));
+      return execute(() => readBytes(path));
     },
 
     *readTextFile(path): Operation<string> {
-      authorize();
-      const value = yield* until(filesystem.readFile(path, "utf8"));
-      if (typeof value !== "string") {
-        throw new Error("the Workspace text read returned a byte stream");
-      }
-      return value;
+      const bytes = execute(() => readBytes(path));
+      return new TextDecoder().decode(bytes);
     },
 
     *stat(path): Operation<DenoWorkspaceStat> {
-      authorize();
-      return stat(yield* until(filesystem.stat(path)));
+      return stat(execute(() => statPath(dofs, path)));
     },
 
     *lstat(path): Operation<DenoWorkspaceStat> {
-      authorize();
-      return stat(yield* until(filesystem.lstat(path)));
+      return stat(execute(() => lstatPath(dofs, path)));
     },
 
     *readlink(path): Operation<string> {
-      authorize();
-      return yield* until(filesystem.readlink(path));
+      return execute(() => readLink(dofs, path));
     },
 
     *readdir(path): Operation<DenoWorkspaceEntry[]> {
-      authorize();
-      const entries = yield* until(filesystem.readdir(path));
+      const entries = execute(() => readDirectory(dofs, path));
       return entries.map((entry: WorkspaceDirentResult) => ({
         name: entry.name,
         kind: entry.isFile ? "file" : entry.isDirectory ? "directory" : "symlink",
@@ -91,40 +112,34 @@ export function createDenoWorkspaceFilesystem(
     },
 
     *writeFile(path, content, mode): Operation<void> {
-      authorize();
-      yield* until(filesystem.writeFile(path, content, mode === undefined ? {} : { mode }));
+      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+      execute(() =>
+        writeFileSync(dofs, path, bytes, mode === undefined ? {} : { mode }, filesystem.now),
+      );
     },
 
     *mkdir(path, options = {}): Operation<void> {
-      authorize();
-      yield* until(filesystem.mkdir(path, options));
+      execute(() => mkdirPath(dofs, path, options, filesystem.now));
     },
 
     *remove(path, options = {}): Operation<void> {
-      authorize();
-      yield* until(filesystem.rm(path, options));
+      execute(() => removePath(dofs, path, options));
     },
 
-    // deno-lint-ignore require-yield
     *rename(from, to): Operation<void> {
-      authorize();
-      renamePath(dofs, from, to);
+      execute(() => renamePath(dofs, from, to));
     },
 
     *chmod(path, mode): Operation<void> {
-      authorize();
-      yield* until(filesystem.chmod(path, mode));
+      execute(() => chmodPath(dofs, path, mode, filesystem.now));
     },
 
     *symlink(target, path): Operation<void> {
-      authorize();
-      yield* until(filesystem.symlink(target, path));
+      execute(() => createSymlink(dofs, target, path, filesystem.now));
     },
 
-    // deno-lint-ignore require-yield
     *link(existingPath, newPath): Operation<void> {
-      authorize();
-      linkFile(dofs, existingPath, newPath);
+      execute(() => linkFile(dofs, existingPath, newPath));
     },
   };
 }

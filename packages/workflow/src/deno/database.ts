@@ -250,6 +250,8 @@ function createHandle(connection: OpenConnection): Handle {
           return yield* body(transaction);
         });
 
+        yield* connection.connections.beforeCommit(handle);
+
         // Closed before the commit, not after: nothing may append to a
         // transaction whose contents are already decided.
         runConnection.validateTransaction(active);
@@ -413,6 +415,7 @@ function createHandle(connection: OpenConnection): Handle {
 
   lease = connection.connections.registerLease(handle, runConnection);
   journal = routeWorkflowRunJournal(handle, ordinaryJournal);
+  connection.connections.registerJournal(handle, journal);
 
   return {
     database: handle,

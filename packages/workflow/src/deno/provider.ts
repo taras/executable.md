@@ -69,6 +69,7 @@ import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
 import { SavepointObservation } from "./savepoints.ts";
 import { usePrivateWorkspace } from "./workspace/private.ts";
+import { useWorkspaceEffects } from "./workspace/effect.ts";
 
 const INSERT_RUN = `INSERT INTO workflow_run
   (id, run_id, definition, base, props, status, created_at, updated_at)
@@ -114,6 +115,7 @@ export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Oper
   });
   yield* useJournalRouting(connections);
   yield* usePrivateWorkspace(connections);
+  yield* useWorkspaceEffects(connections);
 
   yield* WorkflowRunStorage.around(
     {

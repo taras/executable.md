@@ -9,6 +9,7 @@ import {
   captureWorkspaceRoot,
   type CaptureWorkspaceRootOptions,
   currentWorkspaceRoot,
+  setCurrentWorkspaceRoot,
   verifyWorkspace,
 } from "./root.ts";
 import { restoreWorkspaceRoot, type RestoreWorkspaceRootOptions } from "./restore.ts";
@@ -17,6 +18,7 @@ export interface PrivateWorkspaceTransaction {
   readonly filesystem: DenoWorkspaceFilesystem;
   currentRoot(): Operation<string>;
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
+  publish(rootId: string): Operation<void>;
   restore(rootId: string, options?: RestoreWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
 }
 
@@ -95,6 +97,12 @@ export function usePrivateWorkspace(connections: WorkflowRunConnections): Operat
           *capture(options = {}): Operation<StoredWorkspaceRoot> {
             authorize();
             return captureWorkspaceRoot(connection, active, options);
+          },
+
+          // deno-lint-ignore require-yield
+          *publish(rootId: string): Operation<void> {
+            authorize();
+            setCurrentWorkspaceRoot(connection.database, rootId, connection.path);
           },
 
           // deno-lint-ignore require-yield

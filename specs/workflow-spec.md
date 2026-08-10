@@ -451,12 +451,70 @@ coordinator, execution, publication and live append; partial replay coordinates
 only its live suffix. Cancellation cannot append or resolve late. The
 callback-based durable-effect factory remains unchanged.
 
-The shared Workspace operation wrapper explicitly selects a contextual
-Workspace coordinator. Its default fails before execution or publication, and
-installing a provider does not enlist unrelated durable operations. Successful
-Workspace effect coordination finishes its mutation scope before capturing the
-root. The Deno coordinator that orders mutation teardown, root capture and
-filtered journal publication atomically is not part of this storage layer.
+The shared Workspace operation wrapper explicitly reads a contextual provider
+selection. The replaceable selection API carries no live-operation authority:
+it receives no executor, publisher, failure activator or durable publication
+identity. The live call retains those exact values behind an execution-owned
+capability associated with a same-named contextual invocation operation.
+Provider selection creates a one-use route and a separate opaque credential.
+The contextual invocation carries the route and an execution-owned capability
+but not its credential. A provider installed by another loaded package copy
+terminally consumes the route and calls that capability directly. It never sends inspection, execution,
+publication, failure activation or completion through `next`, so enclosing
+middleware at either priority receives no operational phase. Provider selection
+and invocation authority require no module registry and trust no replaceable
+structural value.
+
+The execution-owned capability permits one inspection, execution and
+publication during its original live call. It records the exact result only after the
+selected provider completes publication, and the durable operation resumes from
+that record rather than from the contextual call's structural response. A
+short-circuit, premature response or missing publication activates fail-stop;
+middleware cannot transform an authoritative published result or turn a later
+middleware exception into a different outcome. A foreign or substituted
+selector and a reused, completed or stale invocation fail before the provider
+opens a transaction. The default missing-provider path also fails before
+execution or publication, and installing a provider does not enlist unrelated
+durable operations.
+
+Successful Workspace effect coordination finishes its mutation scope before
+capturing the root. The Deno provider binds an adapter-private proof operation
+to one exact WorkflowRun handle through module-private executor identity. It
+retains the canonical durable-stream module's non-operational publication
+identity for that run's journal; the existing secret-filter wrapper privately
+preserves the identity only for wrappers it constructs. The provider receives
+the invocation's exact executor and publication identities from its
+execution-owned capability and validates them before it opens the caller-owned
+transaction. It refuses a foreign executor,
+publication identity, custom wrapper or copied property before transaction
+work. It runs the mutation in one operation savepoint, waits for mutation child
+teardown, captures and publishes the immutable root, and routes the
+already-filtered Yield through that transaction's journal before commit. Its
+publication operation calls the execution-owned publisher directly, so the
+transaction body cannot return until the exact Result has been appended and
+recorded as authoritative.
+
+The adapter-private proof filesystem invokes the pinned synchronous DOFS
+functions for its supported string and byte-array contract. It does not leave a
+Promise, response body or stream pull capable of reaching the authoritative
+connection after a cancelled mutation scope has torn down.
+
+A documented filesystem refusal is an operation result only after its mutation
+savepoint has rolled back successfully. It keeps the previous current root and
+commits exactly one failed Yield against that root. Connection or authority,
+savepoint, DOFS, schema, corruption, capture, current-root, routing, filtering,
+serialization, insertion, teardown and commit failures instead roll back the
+outer transaction and activate the durable run's first infrastructure failure.
+That identity fences later coordinators, executors and appends. An already
+active durability failure takes precedence. Cancellation at any phase publishes
+nothing.
+
+The provider-neutral coordinator receives the failure-activation continuation
+needed for this boundary. The default live coordinator ignores it and preserves
+ordinary success/failure publication. Replay bypasses coordination, and only an
+explicit Workspace operation selects the Workspace coordinator. The Deno proof
+operation is adapter-private: public filesystem effects and workflow
+start/resume do not reach it.
 
 The private restoration materializer loads a fully validated retained root and
 rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink
@@ -536,7 +594,6 @@ also left unchanged.
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
 leases and stale-owner recovery; public Workspace mutation and filesystem
-effects; provider-level atomic Workspace effect/journal publication; public root
-selection, history checkpoints and forks; `<File>` integration;
+effects; public root selection, history checkpoints and forks; `<File>` integration;
 workflow-owned worktrees; and deterministic Git and GitHub effects. Retained
 roots and private restoration do not expose any of those behaviors.

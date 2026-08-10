@@ -94,6 +94,7 @@ export function* useJournalRouting(connections: WorkflowRunConnections): Operati
                 }
                 validateRoute(connections, database, transaction, token);
                 yield* transaction.journal.append(event);
+                yield* connections.afterRoutedJournalAppend(database, event);
                 return true;
               },
             },

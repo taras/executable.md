@@ -18,6 +18,53 @@ import { createContext, type Operation } from "effection";
 import type { DurableStream } from "./stream.ts";
 import type { DurableEvent } from "./types.ts";
 
+class PublicationIdentity {
+  #opaque = undefined;
+}
+
+/** Non-operational identity for one durable publication backend. */
+export type DurablePublicationIdentity = PublicationIdentity;
+
+const publicationIdentities = (() => {
+  // This security identity is deliberately canonical-module-local. A loaded
+  // copy cannot enroll its wrappers into this copy's authority.
+  const identities = new WeakMap<DurableStream, DurablePublicationIdentity>();
+
+  return {
+    claim(stream: DurableStream): DurablePublicationIdentity {
+      if (identities.has(stream)) {
+        throw new Error("this durable stream already has a publication identity");
+      }
+      const identity = new PublicationIdentity();
+      identities.set(stream, identity);
+      return identity;
+    },
+
+    inherit(source: DurableStream, target: DurableStream): void {
+      const identity = identities.get(source);
+      if (identity !== undefined) {
+        identities.set(target, identity);
+      }
+    },
+
+    get(stream: DurableStream): DurablePublicationIdentity | undefined {
+      return identities.get(stream);
+    },
+  };
+})();
+
+/** Claim the exact backend identity retained by a provider. */
+export function claimDurablePublicationIdentity(stream: DurableStream): DurablePublicationIdentity {
+  return publicationIdentities.claim(stream);
+}
+
+/** @internal The live durable path reads identity without receiving stream authority. */
+export function durablePublicationIdentity(
+  stream: DurableStream,
+): DurablePublicationIdentity | undefined {
+  return publicationIdentities.get(stream);
+}
+
 export interface DurableEventRejectionOccurrence {
   rejected: boolean;
   error?: unknown;
@@ -60,7 +107,7 @@ export type DurableEventGate = (event: DurableEvent) => Operation<void>;
  * event with an `err` result, and that close crosses the gate on its own.
  */
 export function guardDurableStream(stream: DurableStream, gate: DurableEventGate): DurableStream {
-  return {
+  const guarded: DurableStream = {
     readAll: () => stream.readAll(),
 
     *append(event: DurableEvent): Operation<void> {
@@ -80,4 +127,6 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
       yield* stream.append(event);
     },
   };
+  publicationIdentities.inherit(stream, guarded);
+  return guarded;
 }
