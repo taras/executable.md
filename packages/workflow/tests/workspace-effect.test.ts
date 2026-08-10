@@ -295,41 +295,40 @@ function parse(source: string): { file: ts.SourceFile; checker: ts.TypeChecker }
 }
 
 /**
+ * The slots in which the grammar writes a name rather than a reference.
+ *
+ * TypeScript spells the distinction structurally: an `IdentifierName` fills a
+ * `name`, `propertyName` or `label` slot of the node that owns it, and a
+ * qualified name's `right` is the same thing in type position. Everywhere else
+ * an identifier is an `IdentifierReference`.
+ */
+const LABEL_SLOTS = ["name", "propertyName", "label"];
+
+/**
  * Whether this identifier refers to a binding at all.
  *
- * Not a scope question — the checker answers those. This is only about
- * positions where an identifier is a label rather than a reference: the member
- * in `x.process`, the loop label in `break process`, the imported member in
- * `{ Deno as portable }`, the key in `{ process: local }`. None of them reads
- * the name they spell.
+ * Not a scope question — the checker answers those. This asks the grammar
+ * instead of listing the node kinds someone remembered: the member in
+ * `x.process`, the label in `break process`, the imported member in
+ * `{ Deno as portable }`, the key in `{ process: local }`, a named tuple
+ * element, an import attribute and every declaration's own name all fill a
+ * name slot, and none of them reads the name it spells.
+ *
+ * A shorthand property is the one name slot that is also a read, because
+ * `{ process }` declares a property and reads a binding with one identifier.
  */
 function refers(node: ts.Identifier): boolean {
   const parent = node.parent;
   if (parent === undefined) {
     return true;
   }
-  if (ts.isPropertyAccessExpression(parent)) {
-    return parent.name !== node;
+  if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+    return true;
   }
-  if (ts.isQualifiedName(parent)) {
-    return parent.right !== node;
-  }
-  if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) {
+  if (ts.isQualifiedName(parent) && parent.right === node) {
     return false;
   }
-  if (ts.isBindingElement(parent)) {
-    return parent.name !== node && parent.propertyName !== node;
-  }
-  if (ts.isPropertyAssignment(parent)) {
-    return parent.name !== node;
-  }
-  if (ts.isLabeledStatement(parent)) {
-    return parent.label !== node;
-  }
-  if (ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) {
-    return parent.label !== node;
-  }
-  return true;
+  return !LABEL_SLOTS.some((slot) => Reflect.get(parent, slot) === node);
 }
 
 /**
@@ -584,6 +583,20 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(forbiddenNames("const process = 1;\nconst environment = { process };")).toEqual([]);
     expect(forbiddenNames("function hold(Buffer: number) {\n  return { Buffer };\n}")).toEqual([]);
     expect(forbiddenNames("const environment = { process: local };")).toEqual([]);
+
+    // A name slot is a name slot wherever the grammar puts one: a named tuple
+    // element and an import attribute key are labels, and the specifier beside
+    // the attribute is still read as a module.
+    expect(forbiddenNames("type Pair = [process: string, Deno?: number];")).toEqual([]);
+    expect(
+      forbiddenNames('import data from "./portable.json" with {\n  process: "portable",\n};'),
+    ).toEqual([]);
+    expect(forbiddenNames("type Pair = [value: typeof process];")).toEqual(["process"]);
+    expect(forbiddenNames('import data from "node:fs" with {\n  process: "portable",\n};')).toEqual(
+      ["node:fs"],
+    );
+    expect(forbiddenNames("enum Kind {\n  process,\n}")).toEqual([]);
+    expect(forbiddenNames("interface Host {\n  process: number;\n}")).toEqual([]);
 
     // The same forms still end at their own boundary.
     expect(
