@@ -21,6 +21,7 @@ import {
   InMemoryStream,
   type Json,
   ReplayGuard,
+  ReplayIndex,
   type ReplayOutcome,
   StaleInputError,
   type Workflow,
@@ -710,5 +711,141 @@ describe("durableRun — one retained result across check and replay", () => {
     expect(checked).toEqual(["first"]);
     expect(replayed).toBe("first");
     expect(reads.count).toBe(1);
+  });
+});
+
+/**
+ * Detachment reaches the whole result, not its outermost object.
+ *
+ * Freezing `{ ...result }` stops nobody: `value` is still the journal's own
+ * object, and an accessor beneath it answers afresh on every read. The guard
+ * validates one tree and replay consumes another, with nothing in between able
+ * to notice.
+ */
+/** One member of a retained JSON object, when it really is one. */
+function member(value: Json | undefined, key: string): Json | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value[key]
+    : undefined;
+}
+
+describe("durableRun — a retained result detaches completely", () => {
+  it("a nested accessor is read once and cannot answer twice", function* () {
+    const answers = ["first", "second"];
+    const reads = { count: 0 };
+
+    const nested: Record<string, unknown> = {};
+    Object.defineProperty(nested, "target", {
+      enumerable: true,
+      get() {
+        const answer = answers[Math.min(reads.count, answers.length - 1)];
+        reads.count++;
+        return answer;
+      },
+    });
+
+    const event = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "call", name: "work" },
+      result: { status: "ok", value: nested },
+    };
+    const events = [event as unknown as DurableEvent];
+    const appended = new InMemoryStream();
+    const reading: DurableStream = {
+      // deno-lint-ignore require-yield
+      *readAll(): Operation<DurableEvent[]> {
+        return events;
+      },
+      append: (durable: DurableEvent) => appended.append(durable),
+    };
+
+    const checked: unknown[] = [];
+    const replayed = yield* scoped(function* () {
+      yield* ReplayGuard.around({
+        *check([yielded], next) {
+          checked.push(
+            member(yielded.result.status === "ok" ? yielded.result.value : undefined, "target"),
+          );
+          return yield* next(yielded);
+        },
+      });
+      return yield* durableRun(
+        function* () {
+          return (yield createDurableOperation<Json>({ type: "call", name: "work" }, function* () {
+            throw new Error("replay must not re-execute this effect");
+          })) as Json;
+        },
+        { stream: reading },
+      );
+    });
+
+    expect(checked).toEqual(["first"]);
+    expect(member(replayed, "target")).toBe("first");
+    expect(reads.count).toBe(1);
+  });
+
+  it("a nested member that refuses is refused once, not retried", function* () {
+    const reads = { count: 0 };
+    const nested: Record<string, unknown> = {};
+    Object.defineProperty(nested, "target", {
+      enumerable: true,
+      get() {
+        reads.count++;
+        throw new Error("the backend will not produce this member");
+      },
+    });
+
+    const index = new ReplayIndex([
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "call", name: "work" },
+        result: { status: "ok", value: nested },
+      } as unknown as DurableEvent,
+    ]);
+    const entry = index.peekYield("root");
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let caught: unknown;
+      try {
+        void entry?.result;
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error | undefined)?.message).toBe(
+        "the backend will not produce this member",
+      );
+    }
+    // Refused once and remembered, so a source cannot refuse the guard and then
+    // answer replay.
+    expect(reads.count).toBe(1);
+  });
+
+  it("a detached result shares nothing with the source it was read from", function* () {
+    const list = ["a"];
+    const nested = { list };
+    const source = { nested };
+    const index = new ReplayIndex([
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "call", name: "work" },
+        result: { status: "ok", value: source },
+      } as unknown as DurableEvent,
+    ]);
+    const result = index.peekYield("root")?.result;
+    const value = result?.status === "ok" ? result.value : undefined;
+
+    // The settlement itself is stable, and nothing beneath it is the source's.
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(value).not.toBe(source);
+    expect(member(value, "nested")).not.toBe(nested);
+    expect(member(member(value, "nested"), "list")).not.toBe(list);
+
+    // So rewriting the source afterwards cannot change what replay will use.
+    list[0] = "rewritten";
+    list.push("injected");
+    expect(member(member(value, "nested"), "list")).toEqual(["a"]);
   });
 });

@@ -585,6 +585,55 @@ describe("Tier DT — projection", () => {
   });
 });
 
+/**
+ * The preamble is what precedes the outline, not what precedes the title.
+ *
+ * A document may open at a deeper level than the one supplying its title. The
+ * shallowest heading is then not the first, and anchoring the preamble to it
+ * puts an earlier addressable section inside the preamble — where it is
+ * retained, rendered, and executed by every other target, while still being a
+ * target in its own right.
+ */
+describe("Tier DT — preamble boundary", () => {
+  const OPENS_DEEP = [
+    "## Before",
+    "",
+    "before body",
+    "",
+    "# Title",
+    "",
+    "## After",
+    "",
+    "after body",
+    "",
+  ].join("\n");
+
+  it("DT63: a section before the title is addressable and is not preamble", function* () {
+    expect(catalog(OPENS_DEEP)).toEqual(["Before", "After"]);
+    expect(outline(OPENS_DEEP).preambleEnd).toBe(0);
+  });
+
+  it("DT64: selecting the later section retains neither the earlier one nor its body", function* () {
+    const projected = project(OPENS_DEEP, "After");
+    expect(projected).toBe(["# Title", "", "## After", "", "after body", ""].join("\n"));
+    expect(projected).not.toContain("## Before");
+    expect(projected).not.toContain("before body");
+  });
+
+  it("DT65: the earlier section remains independently addressable", function* () {
+    // Its subtree runs to the next heading, so the blank line separating them
+    // is retained exactly as authored.
+    expect(project(OPENS_DEEP, "Before")).toBe(["## Before", "", "before body", "", ""].join("\n"));
+  });
+
+  it("DT66: real preamble text before the first heading is still retained", function* () {
+    const withPreamble = `preamble text\n\n${OPENS_DEEP}`;
+    expect(project(withPreamble, "After")).toBe(
+      ["preamble text", "", "# Title", "", "## After", "", "after body", ""].join("\n"),
+    );
+  });
+});
+
 describe("Tier DT — projected parsing", () => {
   function* parsed(body: string, selector?: string) {
     return yield* parseRootMarkdownDefinition("__root__", "doc.md", body, selector);

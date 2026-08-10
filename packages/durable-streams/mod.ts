@@ -58,7 +58,7 @@ export type { DivergenceDecision, DivergenceInfo, DivergenceKind } from "./diver
 
 // ReplayGuard API — pluggable validation for replay staleness detection
 export { ReplayGuard } from "./replay-guard.ts";
-export type { ReplayOutcome } from "./replay-guard.ts";
+export type { ReplayOutcome, RetainedHistory } from "./replay-guard.ts";
 
 // Context
 export { DurableContext } from "./context.ts";

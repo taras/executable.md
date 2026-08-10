@@ -10,7 +10,9 @@ import type {
   CoroutineId,
   DurableEvent,
   EffectDescription,
+  Json,
   Result,
+  SerializedError,
   Yield,
 } from "./types.ts";
 
@@ -23,6 +25,94 @@ export interface YieldEntry {
 type Settled =
   | { readonly kind: "result"; readonly result: Result }
   | { readonly kind: "refusal"; readonly refusal: unknown };
+
+/**
+ * A detached copy of one retained JSON value.
+ *
+ * Every property is read once and rebuilt, so nothing the stream still owns
+ * remains reachable: a nested accessor cannot answer one thing to a guard and
+ * another to replay, and no later mutation of the source changes what replay
+ * used. Keys are defined rather than assigned, because `__proto__` reaches an
+ * inherited setter on some runtimes and would rewrite the copy's prototype
+ * instead of becoming a member of it.
+ *
+ * The copy is not frozen through. Detaching is what makes the settlement
+ * stable against the journal; freezing would be a claim against the *consumer*,
+ * and replayed values are legitimately mutable — an eval binding restored from
+ * a journal is pushed to by the iteration that resumes on it.
+ *
+ * A cycle is refused. `Json` has none, and a value that does is not a retained
+ * result this can detach — refusing is remembered like any other refusal.
+ */
+function detachJson(value: Json, seen: Set<object>): Json {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    throw new TypeError("a retained result cannot contain a cycle");
+  }
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const items: Json[] = [];
+      for (let index = 0; index < value.length; index++) {
+        items.push(detachJson(value[index]!, seen));
+      }
+      return items;
+    }
+    const detached: { [key: string]: Json } = {};
+    for (const [key, member] of Object.entries(value)) {
+      Object.defineProperty(detached, key, {
+        value: detachJson(member, seen),
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      });
+    }
+    return detached;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+/** A detached copy of a retained failure's description. */
+function detachError(error: SerializedError): SerializedError {
+  const detached: SerializedError = { message: error.message };
+  const name = error.name;
+  const stack = error.stack;
+  return Object.freeze({
+    ...detached,
+    ...(name === undefined ? {} : { name }),
+    ...(stack === undefined ? {} : { stack }),
+  });
+}
+
+/**
+ * A retained result detached from everything the stream still owns.
+ *
+ * Each member is read exactly once, here, and the tree beneath it is rebuilt.
+ * Freezing only the outer object would leave a `value` the journal can still
+ * rewrite — which is the whole substitution this exists to prevent.
+ */
+function detachResult(result: Result): Result {
+  const status = result.status;
+  if (status === "ok") {
+    if (!("value" in result)) {
+      return Object.freeze({ status });
+    }
+    const value = result.value;
+    return Object.freeze(
+      value === undefined ? { status } : { status, value: detachJson(value, new Set()) },
+    );
+  }
+  if (status === "err") {
+    if (!("error" in result)) {
+      throw new TypeError("a retained failure carries the error it failed with");
+    }
+    return Object.freeze({ status, error: detachError(result.error) });
+  }
+  return Object.freeze({ status });
+}
 
 /**
  * One retained Yield, and the one cell that owns what it settled to.
@@ -43,11 +133,12 @@ type Settled =
  * check phase is handed as well as the one replay reads from, and the stream's
  * event is consulted at most once for either.
  *
- * The snapshot is a frozen copy of the result's own members, so the members a
- * consumer reads — a settled `value` above all — are read from the stream
- * exactly once rather than re-read per access. Both outcomes are kept: a
- * refusal is remembered and re-raised rather than retried, so a source cannot
- * refuse the guard and then answer replay.
+ * The settlement is detached from the stream entirely, not merely frozen at the
+ * top: the whole result tree is rebuilt from members read once each, so a
+ * nested accessor beneath `value` cannot answer one thing to a guard and
+ * another to replay. Both outcomes are kept — a refusal is remembered and
+ * re-raised rather than retried, so a source cannot refuse the guard and then
+ * answer replay.
  */
 class RetainedYield implements YieldEntry {
   readonly type = "yield" as const;
@@ -65,7 +156,7 @@ class RetainedYield implements YieldEntry {
   get result(): Result {
     if (this.settled === undefined) {
       try {
-        this.settled = { kind: "result", result: Object.freeze({ ...this.event.result }) };
+        this.settled = { kind: "result", result: detachResult(this.event.result) };
       } catch (refusal) {
         this.settled = { kind: "refusal", refusal };
       }

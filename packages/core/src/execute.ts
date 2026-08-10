@@ -625,7 +625,40 @@ function holdRootSelection(root: RootDocumentSource): Operation<void> {
       }
       return yield* next(event);
     },
+    *admit([history], next) {
+      // A journal with no retained terminal result replays what it has and
+      // then continues live, so a root import it does not contain is one this
+      // run performs. A journal that *does* carry a terminal result is
+      // different: reusing it means standing behind a selection, and a history
+      // that never recorded one — or recorded two — establishes nothing to
+      // stand behind.
+      if (history.terminal && countRootImports(history.yields) !== 1) {
+        throw new Error(UNREADABLE_ROOT_RECORD);
+      }
+      return yield* next(history);
+    },
   });
+}
+
+/**
+ * How many retained events are recognizably the root import.
+ *
+ * Recognized by description alone, so an import that failed for reasons
+ * selection knows nothing about still counts as the one that happened. An
+ * event that will not say what it is is not counted, which leaves a history
+ * that offers no recognizable root import — refused above.
+ */
+function countRootImports(yields: readonly Yield[]): number {
+  let found = 0;
+  for (const event of yields) {
+    const root = attempt(
+      () => event.description.type === "import_component" && event.description.name === "__root__",
+    );
+    if (root === true) {
+      found += 1;
+    }
+  }
+  return found;
 }
 
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>

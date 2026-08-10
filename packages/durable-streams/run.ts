@@ -110,6 +110,19 @@ export function* durableRun<T extends WorkflowValue>(
   // See replay-guard-spec.md §5.5.
   yield* runCheckPhase(replayIndex, scope);
 
+  // ── REPLAY GUARD: Admit phase ──
+  // The retained history has been offered in full and nothing has been reused
+  // yet. A guard that requires something of the history as a whole — that an
+  // event it validates is present, and present once — refuses here, before the
+  // recorded terminal result below can answer for history nobody validated.
+  yield* ReplayGuard.invoke(scope, "admit", [
+    {
+      coroutineId,
+      yields: replayIndex.retainedYields(),
+      terminal: replayIndex.hasClose(coroutineId),
+    },
+  ]);
+
   // If the root coroutine already has a Close event in the journal,
   // the workflow completed in a previous run. Return the stored result
   // directly without re-running the workflow.

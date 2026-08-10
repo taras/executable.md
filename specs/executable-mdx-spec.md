@@ -2725,7 +2725,10 @@ duplicate canonical path is reported as an ambiguity rather than resolved.
 Source ranges are defined against the original, unprojected body:
 
 - the **preamble** runs from the body start to immediately before the first
-  outermost heading;
+  root-flow heading, whatever its depth — a document may open at a deeper level
+  than the one supplying its title, and anchoring here to the outermost heading
+  would put an earlier addressable section inside the preamble, where every
+  other target would retain and run it;
 - an **ancestor's direct content** runs from its heading start to its first
   child heading's start, or to its subtree end when it has no child heading;
   and
@@ -2952,6 +2955,13 @@ it settled to: a guard's check phase runs after the index is built, so a guard
 that would refuse an event has to get its chance before the stream is asked to
 produce that event's result.
 
+The settlement is detached from the journal, not merely frozen at the top: the
+whole result tree is rebuilt from members read once each, so a nested accessor
+beneath a recorded value cannot answer one thing to a guard and another to
+replay. Detaching is the stability claim; the copy is not frozen through,
+because replayed values are legitimately mutable — an eval binding restored from
+a journal is pushed to by the iteration that resumes on it.
+
 "Read once" spans the phases, not one accessor. The guard validates a recorded
 selection and the replay path then projects it, and those observe one settled
 value: the check phase is handed the retained Yields rather than the stream's
@@ -2970,6 +2980,17 @@ work, and never appends new history.
 A root import whose recorded result is not `ok` is left alone: a root can fail
 for reasons that are not about selection, and those failures are not this
 protocol's to interpret.
+
+A replay that reuses **retained terminal history** must first establish exactly
+one recognizable root import. Reusing a recorded terminal result means standing
+behind the selection its root import established, and a history that recorded
+none — or recorded two — establishes nothing to stand behind; the per-event
+check has nothing to object to, so the refusal belongs to the history as a
+whole. A missing, duplicated, or unreadable required root import fails with the
+same fixed cause-free diagnostic, executes no authored work, appends nothing,
+and never returns the retained terminal result. A journal with no retained
+terminal result is unaffected: it replays what it has and continues live, so a
+root import it does not contain is one this run performs.
 
 ### 5.5 The Component Api
 
@@ -7529,6 +7550,10 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a catalog or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
 | TX34–TX37 | Totality, inside the value | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
+| DT63–DT66 | Preamble boundary | A section before the title is addressable and is not preamble; selecting a later section neither renders nor executes it; it stays independently addressable; real preamble text before the first heading is still retained |
+| TX44/TX45 | Preamble execution | Selecting the later section runs no component of the earlier one, which still runs when it is the target |
+| TX46 | Nested substitution | A nested `target` accessor answering Alpha then Beta cannot substitute a section: Alpha alone executes, the member is read once, and the appended Close describes Alpha |
+| TX47–TX50 | Terminal history | Targeted and untargeted completed journals with the root import removed, and one with it duplicated, are refused before terminal reuse; an intact journal still replays |
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |

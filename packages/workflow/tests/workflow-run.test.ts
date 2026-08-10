@@ -400,6 +400,19 @@ describe("Tier WR — workflow runs", () => {
       description: { type: "workflow_run", name: "workflow_run", base: "main" },
       result: { status: "ok", value: { runId: "seeded-run", base: "main", pinnedCommit: COMMIT } },
     });
+    // The root import a real completed run always records. A retained terminal
+    // result is reused on the strength of the selection its root import
+    // established, so a journal that carries one without the other describes a
+    // run that never happened and is refused.
+    yield* stream.append({
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: "__root__" },
+      result: {
+        status: "ok",
+        value: { kind: "repository", path: "<eval>", content: "# Hello\n" },
+      },
+    });
     yield* stream.append({
       type: "close",
       coroutineId: "root",

@@ -615,6 +615,11 @@ parses a copy in which the scanner's top-level component spans are blanked,
 because a Markdown parser reading raw XMD cannot tell a component's children
 from the root flow.
 
+A document's preamble is what precedes its outline — the source before the first
+root-flow heading, whatever its depth. A document may open at a deeper level than
+the one supplying its title, and an earlier section is a target in its own right
+rather than preamble every other target carries.
+
 Selection resolves exactly once, before the document expands and before any
 authored effect runs. A selector may glob, but it must name exactly one catalog
 entry: naming none and naming several are both failures, and two sections that

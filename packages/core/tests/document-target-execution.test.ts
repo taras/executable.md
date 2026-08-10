@@ -1041,6 +1041,51 @@ describe("Tier TX — one read across check and replay", () => {
       .filter((event) => event.type === "yield" && event.description.name === "__root__");
   }
 
+  /**
+   * The same substitution one level down.
+   *
+   * The record itself is stable; only the `target` member beneath it answers
+   * afresh. Freezing the outer result stops nothing here — the guard reads a
+   * record naming Alpha and replay reads the same record naming Beta.
+   */
+  it("TX46: a nested target accessor cannot substitute another section", function* () {
+    const alpha = yield* recordedSelection("Alpha");
+    const events = yield* partialJournal("Alpha");
+    const reads = { count: 0 };
+    const targets = ["Alpha", "Beta"];
+
+    const stream = new PlantedStream(events, (event) => {
+      const record: Record<string, unknown> = { ...asRecord(alpha) };
+      Object.defineProperty(record, "target", {
+        enumerable: true,
+        get() {
+          const answer = targets[Math.min(reads.count, targets.length - 1)];
+          reads.count++;
+          return answer;
+        },
+      });
+      return {
+        ...event,
+        result: { status: "ok", value: record as unknown as Json },
+      };
+    });
+
+    const seen: Probes = { names: [], ids: [] };
+    const text = yield* scoped(function* () {
+      yield* useProbes(seen);
+      return asText(
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Alpha" }), stream })),
+      );
+    });
+
+    expect(seen.names).toEqual(["pre", "title", "alpha", "inner"]);
+    expect(text).not.toContain("## Beta");
+    expect(reads.count).toBe(1);
+    const close = stream.appended.find((event) => event.type === "close");
+    expect(JSON.stringify(close)).toContain("alpha content");
+    expect(JSON.stringify(close)).not.toContain("beta content");
+  });
+
   it("TX43: a source that answers twice decides nothing twice", function* () {
     const alpha = yield* recordedSelection("Alpha");
     const beta = yield* recordedSelection("Beta");
@@ -1081,5 +1126,135 @@ describe("Tier TX — one read across check and replay", () => {
     expect(close).toBeDefined();
     expect(JSON.stringify(close)).toContain("alpha content");
     expect(JSON.stringify(close)).not.toContain("beta content");
+  });
+});
+
+/**
+ * A section before the title must not run as preamble.
+ *
+ * The projection rows prove the text is absent; only a component that records
+ * its own invocation proves the section did not execute.
+ */
+describe("Tier TX — preamble boundary", () => {
+  const OPENS_DEEP = [
+    "## Before",
+    "",
+    'before body <Probe name="before" />',
+    "",
+    "# Title",
+    "",
+    'title content <Probe name="title" />',
+    "",
+    "## After",
+    "",
+    'after body <Probe name="after" />',
+    "",
+  ].join("\n");
+
+  it("TX44: selecting the later section never executes the earlier one", function* () {
+    const seen: Probes = { names: [], ids: [] };
+    const text = yield* run(
+      inlineSource(OPENS_DEEP, { target: "After" }),
+      new InMemoryStream(),
+      seen,
+    );
+    expect(seen.names).toEqual(["title", "after"]);
+    expect(text).not.toContain("## Before");
+    expect(text).not.toContain("before body");
+  });
+
+  it("TX45: the earlier section still runs when it is the target", function* () {
+    const seen: Probes = { names: [], ids: [] };
+    yield* run(inlineSource(OPENS_DEEP, { target: "Before" }), new InMemoryStream(), seen);
+    expect(seen.names).toEqual(["before"]);
+  });
+});
+
+/**
+ * Tier TX — a retained terminal result needs the import that produced it.
+ *
+ * `durableRun` reuses a recorded Close before replaying anything, and the check
+ * phase only ever sees the Yields a journal actually contains. A journal whose
+ * root import is gone therefore offers the guard nothing to validate, and the
+ * Close answers for a selection that was never established — a resume asking
+ * for one section receives another section's completed result.
+ *
+ * A replay that means to reuse terminal history must first establish exactly
+ * one recognizable root import.
+ */
+describe("Tier TX — a terminal journal without its root import", () => {
+  /** A completed journal for `target`, minus its root-import Yield. */
+  function* withoutRootImport(target: string): Operation<InMemoryStream> {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target }), complete, { names: [], ids: [] });
+    const stripped = new InMemoryStream();
+    for (const event of complete.snapshot()) {
+      if (event.type === "yield" && event.description.name === "__root__") {
+        continue;
+      }
+      yield* stripped.append(event);
+    }
+    return stripped;
+  }
+
+  /** Hold a resume against a stripped journal to the refusal contract. */
+  function* refusesStripped(stream: InMemoryStream, target?: string): Operation<void> {
+    const before = stream.snapshot().length;
+    const seen: Probes = { names: [], ids: [] };
+    const source =
+      target === undefined ? inlineSource(SECTIONS) : inlineSource(SECTIONS, { target });
+    const error = yield* failure(source, stream, seen);
+
+    expect((error as Error).message).toBe(UNREADABLE_RECORD);
+    expect((error as Error).cause).toBe(undefined);
+    expect(isDocumentTargetError(error)).toBe(false);
+    // Never the retained Close's own outcome.
+    expect((error as Error).message).not.toContain("alpha content");
+    expect(seen.names).toEqual([]);
+    expect(stream.snapshot().length).toBe(before);
+  }
+
+  it("TX47: a targeted journal missing its root import refuses", function* () {
+    yield* refusesStripped(yield* withoutRootImport("Alpha"), "Beta");
+    yield* refusesStripped(yield* withoutRootImport("Alpha"), "Alpha");
+  });
+
+  it("TX48: an untargeted journal missing its root import refuses", function* () {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS), complete, { names: [], ids: [] });
+    const stripped = new InMemoryStream();
+    for (const event of complete.snapshot()) {
+      if (event.type === "yield" && event.description.name === "__root__") {
+        continue;
+      }
+      yield* stripped.append(event);
+    }
+    yield* refusesStripped(stripped);
+  });
+
+  it("TX49: a duplicated root import refuses", function* () {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), complete, { names: [], ids: [] });
+    const doubled = new InMemoryStream();
+    for (const event of complete.snapshot()) {
+      yield* doubled.append(event);
+      if (event.type === "yield" && event.description.name === "__root__") {
+        yield* doubled.append(event);
+      }
+    }
+    yield* refusesStripped(doubled, "Alpha");
+  });
+
+  it("TX50: the control — an intact terminal journal still replays", function* () {
+    const stream = new InMemoryStream();
+    const golden = yield* run(inlineSource(SECTIONS, { target: "Alpha" }), stream, {
+      names: [],
+      ids: [],
+    });
+    const replayed = yield* run(inlineSource(SECTIONS, { target: "Alpha" }), stream, {
+      names: [],
+      ids: [],
+    });
+    expect(replayed).toBe(golden);
   });
 });

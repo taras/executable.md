@@ -60,7 +60,7 @@ export interface DocumentOutline {
   readonly entries: readonly DocumentTarget[];
   /** Canonical encoded fragments in source order, duplicates retained. */
   readonly targets: readonly string[];
-  /** Where the preamble ends: the first outermost heading, or the body end. */
+  /** Where the preamble ends: the first root-flow heading, or the body end. */
   readonly preambleEnd: number;
   readonly bodyLength: number;
 }
@@ -912,7 +912,12 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
     headings,
     entries,
     targets: entries.map((entry) => entry.target),
-    preambleEnd: outermost[0]!.start,
+    // The first heading in the root flow, whatever its depth. The preamble is
+    // what precedes the outline, and a document may open at a deeper level than
+    // the one that supplies its title — anchoring here to the shallowest
+    // heading would put an earlier addressable section inside the preamble,
+    // where every other target would retain and run it.
+    preambleEnd: raw[0]!.start,
     bodyLength: body.length,
   };
 }

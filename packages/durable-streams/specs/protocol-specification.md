@@ -315,10 +315,21 @@ validation meaningful — with two reads, a source answering differently between
 them has a guard approve one result while execution uses another, and nothing
 downstream can detect the substitution.
 
-Both outcomes of that read are kept. A result is snapshotted as a frozen copy of
-its own members, so a settled `value` is read from the stream exactly once
-rather than re-read per access; a read that threw is remembered and re-raised
-rather than retried, so a source cannot refuse the guard and then answer replay.
+Both outcomes of that read are kept. The settlement is **detached**: the whole
+result tree is rebuilt from members read once each, so nothing the stream still
+owns remains reachable and a nested accessor cannot answer one thing to a guard
+and another to replay. The detached copy is not frozen through — detaching is
+the claim against the stream, while freezing would be a claim against the
+consumer, and replayed values are legitimately mutable. A read that threw is
+remembered and re-raised rather than retried, so a source cannot refuse the
+guard and then answer replay.
+
+After every retained event has been offered to `check` and before any recorded
+terminal result is reused, guards receive the retained history once through
+`admit`. A guard that requires something of the history as a whole — that an
+event it validates is present, and present once — refuses there, because a
+per-event check has nothing to object to in a journal that simply omits the
+event.
 
 
 ```typescript
