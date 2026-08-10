@@ -396,6 +396,33 @@ describe("Tier EP — the execution protocol", () => {
     expect(result.ok ? "" : result.error.message).toContain("the policy's failure");
   });
 
+  it("EP17: the first policy to fail wins, and later ones do not replace it", function* () {
+    const asked: string[] = [];
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          request.addCompletionFailure(() => {
+            asked.push("first");
+            return new Error("the first policy");
+          });
+          request.addCompletionFailure(() => {
+            asked.push("second");
+            return new Error("the second policy");
+          });
+          yield* next(request);
+        },
+      });
+      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
+    });
+
+    expect(result.ok).toBe(false);
+    const message = result.ok ? "" : result.error.message;
+    expect(message).toContain("the first policy");
+    expect(message).not.toContain("the second policy");
+    // The second is never even consulted once the result is a failure.
+    expect(asked).toEqual(["first"]);
+  });
+
   it("EP14: the obsolete ambient admission channel does not exist", function* () {
     const ran: string[] = [];
     // Rebuilt by name, cleared before and during the invocation. There is
