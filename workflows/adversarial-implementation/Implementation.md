@@ -1,5 +1,5 @@
 ---
-required: [plan, authorization, instructions, planner, implementor]
+required: [plan, authorization, instructions, planner, implementor, worktree]
 
 props:
   plan: { type: string }
@@ -14,6 +14,7 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
+  worktree: { type: string }
 
 returns:
   report: { type: string }
@@ -55,26 +56,33 @@ returns:
 
 # Implementation
 
-Implementation begins only after the user authorizes the converged plan. The
-implementor edits worktree files; deterministic operations own Git metadata and
-remote effects.
+Implementation begins only after the user authorizes the converged plan.
+
+The implementor does not edit files. Under `xmd workflow` an Agent is read-only,
+enforced by the host rather than by anything this document writes, so the
+implementor inspects the checkout and returns an XMD fragment describing the
+change it proposes. A constrained evaluator preflights that fragment and expands
+the components it admits, and those expansions are what write files — each one an
+ordinary durable effect with its own expansion identity, journal result, and
+Workspace transaction. Staging, committing, pushing, and opening the pull request
+are separate deterministic effects the document performs afterwards.
+
+That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
 ## Target shape
 
-<Capture as="implementationSchema" select="code[lang=json]">
+<Capture as="proposalSchema" select="code[lang=json]">
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "changedFiles": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
+    "changes": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
     "commitMessage": { "type": "string", "minLength": 1 },
     "report": { "type": "string" }
   },
-  "required": ["changedFiles", "commitMessage", "report"],
+  "required": ["changes", "title", "commitMessage", "report"],
   "additionalProperties": false
 }
 ```
@@ -121,10 +129,12 @@ remote effects.
 ```
 </Capture>
 
-<Loop name="implementation" max={5}>
-  <Agent name={implementor}>
-    <Session name="implementor">
-      <Prompt as="implementationCandidate" throwOnError>
+<Agent name={props.implementor}>
+  <Session name="implementor">
+    <Agent.AddDir path={props.worktree} />
+
+    <Loop name="implementation" max={5}>
+      <Prompt as="proposalCandidate" throwOnError>
         Repository instructions:
 
         {props.instructions}
@@ -141,144 +151,44 @@ remote effects.
 
         Result contract:
 
-        {implementationSchema}
+        {proposalSchema}
 
-        Implement the authorized plan in the current working directory. Report
-        changed files, validation, and newly discovered scope. Do not modify
-        shared Git metadata. Return only JSON matching the supplied result
-        contract.
+        Implement the authorized plan by returning Executable.md source that
+        performs it. You have read-only access to the registered checkout and
+        cannot modify anything directly; the `changes` field is the only way
+        your work takes effect.
+
+        `changes` may use only `<Dir>`, `<File>`, and `<DeleteFile>`. It may not
+        contain eval or exec blocks, imports, or any other component. Report
+        validation and newly discovered scope in `report`. Return only JSON
+        matching the supplied result contract.
       </Prompt>
 
       <Loop max={2}>
-        <SafeParse schema={implementationSchema} as="parsedImplementation">
-          {implementationCandidate}
+        <SafeParse schema={proposalSchema} as="parsedProposal">
+          {proposalCandidate}
         </SafeParse>
 
-        <If condition={parsedImplementation.ok}>
+        <If condition={parsedProposal.ok}>
           <Break />
           <Else>
-            <Prompt as="implementationCandidate" throwOnError>
-              Correct your previous response without changing its meaning.
-              Do not use tools, modify files, or perform additional analysis.
-
-              Previous response:
-
-              {implementationCandidate}
-
-              Validation errors:
-
-              <Each in={parsedImplementation.errors} let="error">
-              - {error.instancePath}: {error.message}
-              </Each>
-
-              Result contract:
-
-              {implementationSchema}
-
-              Return only corrected JSON.
-            </Prompt>
-          </Else>
-        </If>
-      </Loop>
-
-      <Parse schema={implementationSchema} as="implementation">
-        {implementationCandidate}
-      </Parse>
-    </Session>
-  </Agent>
-
-  <Commit
-    paths={implementation.changedFiles}
-    message={implementation.commitMessage}
-    as="commit"
-  />
-  <PullRequest
-    commit={commit}
-    draft
-    as="pullRequest"
-  />
-
-  <Agent name={planner}>
-    <Session name="planner">
-      <Prompt as="verdictCandidate" throwOnError>
-        Repository instructions:
-
-        {props.instructions}
-
-        Authorized plan:
-
-        {props.plan}
-
-        Authorization record:
-
-        {props.authorization.assessment}
-        User response: {props.authorization.response}
-        Rationale: {props.authorization.rationale}
-
-        Pull request:
-
-        #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
-        head {pullRequest.headSha} onto base {pullRequest.baseSha}
-
-        Reviews:
-
-        <Each in={pullRequest.reviews} let="review">
-        - {review.author} ({review.state}) on {review.headSha}: {review.body}
-        </Each>
-
-        Comments:
-
-        <Each in={pullRequest.comments} let="comment">
-        - {comment.author} on {comment.path}: {comment.body}
-        </Each>
-
-        Checks:
-
-        <Each in={pullRequest.checks} let="check">
-        - {check.name}: {check.status} / {check.conclusion} — {check.url}
-        </Each>
-
-        Result contract:
-
-        {pullRequestVerdictSchema}
-
-        Review the diff at {pullRequest.headSha} against {pullRequest.baseSha},
-        together with the authorized plan and instruction content above. The
-        reviews, comments, and checks listed here are the complete current
-        state; you have no network access, so do not attempt to fetch more.
-
-        A verdict is about one head. If the head moves, this verdict no longer
-        describes the pull request and a fresh review is required.
-
-        Classify every finding and include a focused revision prompt when the
-        review fails. Return only JSON matching the supplied result contract.
-      </Prompt>
-
-      <Loop max={2}>
-        <SafeParse schema={pullRequestVerdictSchema} as="parsedVerdict">
-          {verdictCandidate}
-        </SafeParse>
-
-        <If condition={parsedVerdict.ok}>
-          <Break />
-          <Else>
-            <Prompt as="verdictCandidate" throwOnError>
+            <Prompt as="proposalCandidate" throwOnError>
               Correct your previous response without changing its meaning.
               Do not use tools or perform additional analysis.
 
               Previous response:
 
-              {verdictCandidate}
+              {proposalCandidate}
 
               Validation errors:
 
-              <Each in={parsedVerdict.errors} let="error">
+              <Each in={parsedProposal.errors} let="error">
               - {error.instancePath}: {error.message}
               </Each>
 
               Result contract:
 
-              {pullRequestVerdictSchema}
+              {proposalSchema}
 
               Return only corrected JSON.
             </Prompt>
@@ -286,109 +196,198 @@ remote effects.
         </If>
       </Loop>
 
-      <Parse schema={pullRequestVerdictSchema} as="verdict">
-        {verdictCandidate}
+      <Parse schema={proposalSchema} as="proposal">
+        {proposalCandidate}
       </Parse>
-    </Session>
-  </Agent>
 
-  <Capture as="checkpointMaterial">
-    ## Authorized plan
+      <Expand
+        source={proposal.changes}
+        allow={["Dir", "File", "DeleteFile"]}
+      />
+      <Git.Add paths="." />
+      <Git.Commit message={proposal.commitMessage} as="commit" />
+      <Git.Push />
+      <PullRequest title={proposal.title} draft={true} as="pullRequest">
+        {proposal.report}
+      </PullRequest>
 
-    {props.plan}
+      <Agent name={props.planner}>
+        <Session name="planner">
+          <Agent.AddDir path={props.worktree} />
 
-    ## Pull request
+          <Prompt as="verdictCandidate" throwOnError>
+            Repository instructions:
 
-    #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
-    head {pullRequest.headSha} onto base {pullRequest.baseSha}
+            {props.instructions}
 
-    ### Reviews
+            Authorized plan:
 
-    <Each in={pullRequest.reviews} let="review">
-    - {review.author} ({review.state}) on {review.headSha}: {review.body}
-    </Each>
+            {props.plan}
 
-    ### Comments
+            Authorization record:
 
-    <Each in={pullRequest.comments} let="comment">
-    - {comment.author} on {comment.path}: {comment.body}
-    </Each>
+            {props.authorization.assessment}
+            User response: {props.authorization.response}
+            Rationale: {props.authorization.rationale}
 
-    ### Checks
+            Proposed change, as the source that performed it:
 
-    <Each in={pullRequest.checks} let="check">
-    - {check.name}: {check.status} / {check.conclusion}
-    </Each>
+            {proposal.changes}
 
-    ## Planner review
+            Implementor report:
 
-    Passed: {verdict.passed}
+            {proposal.report}
 
-    {verdict.review}
+            Pull request:
 
-    ## What approval performs
+            #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
+            head {pullRequest.headSha} onto base {pullRequest.baseSha}
+            commit {commit}
 
-    Revision prompt sent to the implementor when the verdict has not passed:
+            Result contract:
 
-    {verdict.revisionPrompt}
+            {pullRequestVerdictSchema}
 
-    A finding whose disposition is `defer` becomes an issue, with the evidence
-    shown beneath it.
+            Review the change at {pullRequest.headSha} against
+            {pullRequest.baseSha}, together with the authorized plan, the
+            instruction content above, and the registered checkout. You have no
+            network access: everything you may judge is either rendered here or
+            readable in the checkout.
 
-    <Each in={verdict.findings} let="finding">
-    ### {finding.title}
+            A verdict is about one head. If the head moves, this verdict no
+            longer describes the pull request and a fresh review is required.
 
-    Disposition: {finding.disposition}
+            Classify every finding and include a focused revision prompt when
+            the review fails. Return only JSON matching the supplied result
+            contract.
+          </Prompt>
 
-    {finding.description}
+          <Loop max={2}>
+            <SafeParse schema={pullRequestVerdictSchema} as="parsedVerdict">
+              {verdictCandidate}
+            </SafeParse>
 
-    Evidence:
+            <If condition={parsedVerdict.ok}>
+              <Break />
+              <Else>
+                <Prompt as="verdictCandidate" throwOnError>
+                  Correct your previous response without changing its meaning.
+                  Do not use tools or perform additional analysis.
 
-    <Each in={finding.evidence} let="item">
-    - {item}
-    </Each>
-    </Each>
-  </Capture>
-  <UserCheckpoint
-    purpose="resolve the pull-request review"
-    agent={planner}
-    material={checkpointMaterial}
-    as="reviewCheckpoint"
-  />
-  <If condition={reviewCheckpoint.proceed}>
-    <Each in={verdict.findings} let="finding">
-      <If condition={finding.disposition === "defer"}>
-        <Issue
-          pullRequest={pullRequest}
-          finding={finding}
-        />
+                  Previous response:
+
+                  {verdictCandidate}
+
+                  Validation errors:
+
+                  <Each in={parsedVerdict.errors} let="error">
+                  - {error.instancePath}: {error.message}
+                  </Each>
+
+                  Result contract:
+
+                  {pullRequestVerdictSchema}
+
+                  Return only corrected JSON.
+                </Prompt>
+              </Else>
+            </If>
+          </Loop>
+
+          <Parse schema={pullRequestVerdictSchema} as="verdict">
+            {verdictCandidate}
+          </Parse>
+        </Session>
+      </Agent>
+
+      <Capture as="checkpointMaterial">
+        ## Authorized plan
+
+        {props.plan}
+
+        ## Change performed
+
+        Commit {commit} on the workflow branch, pushed before the pull request
+        was opened.
+
+        {proposal.changes}
+
+        ## Pull request
+
+        #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
+        head {pullRequest.headSha} onto base {pullRequest.baseSha}
+
+        ## Planner review
+
+        Passed: {verdict.passed}
+
+        {verdict.review}
+
+        ## What approval performs
+
+        Revision prompt sent to the implementor when the verdict has not passed:
+
+        {verdict.revisionPrompt}
+
+        A finding whose disposition is `defer` becomes an issue, with the
+        evidence shown beneath it.
+
+        <Each in={verdict.findings} let="finding">
+        ### {finding.title}
+
+        Disposition: {finding.disposition}
+
+        {finding.description}
+
+        Evidence:
+
+        <Each in={finding.evidence} let="item">
+        - {item}
+        </Each>
+        </Each>
+      </Capture>
+      <UserCheckpoint
+        purpose="resolve the pull-request review"
+        agent={props.planner}
+        material={checkpointMaterial}
+        as="reviewCheckpoint"
+      />
+      <If condition={reviewCheckpoint.proceed}>
+        <Each in={verdict.findings} let="finding">
+          <If condition={finding.disposition === "defer"}>
+            <Issue
+              pullRequest={pullRequest}
+              finding={finding}
+            />
+          </If>
+        </Each>
+        <If condition={verdict.passed}>
+          <Break />
+          <Else>
+            <Prompt>
+              Revise the implementation using this review:
+
+              {verdict.review}
+
+              Focused revision prompt:
+
+              {verdict.revisionPrompt}
+
+              User involvement record:
+
+              {reviewCheckpoint.assessment}
+              User response: {reviewCheckpoint.response}
+              Rationale: {reviewCheckpoint.rationale}
+            </Prompt>
+          </Else>
+        </If>
+        <Else>
+          <Break />
+        </Else>
       </If>
-    </Each>
-    <If condition={verdict.passed}>
-      <Break />
-      <Else>
-        <Prompt agent={implementor} session="implementor">
-          Revise the implementation using this review:
-
-          {verdict.review}
-
-          Focused revision prompt:
-
-          {verdict.revisionPrompt}
-
-          User involvement record:
-
-          {reviewCheckpoint.assessment}
-          User response: {reviewCheckpoint.response}
-          Rationale: {reviewCheckpoint.rationale}
-        </Prompt>
-      </Else>
-    </If>
-    <Else>
-      <Break />
-    </Else>
-  </If>
-</Loop>
+    </Loop>
+  </Session>
+</Agent>
 
 <Return value={{
   report: checkpointMaterial,
@@ -399,6 +398,104 @@ remote effects.
   decision: reviewCheckpoint
 }} />
 
+## Agents inspect; XMD mutates
+
+The implementor's proposal is XMD source, and `<Expand>` is what runs it (#369;
+the public component name is still open, and the workflow Workspace
+specification uses this spelling as a placeholder). The evaluator parses the
+complete fragment before its first effect, resolves the allowlist to pinned
+component identities supplied by this document, refuses everything outside that
+set — eval and exec blocks, imports, native execution, arbitrary JavaScript
+expressions — and only then expands what it admitted. Rejected syntax produces
+no partial effect.
+
+The allowlist is authority, not prompting guidance. It admits `<Dir>`, `<File>`,
+and `<DeleteFile>` and nothing else, so a fragment cannot stage, commit, push,
+open a pull request, or reach a secret by naming a component. `<Git.Add>` in
+particular stays out: what gets staged and committed is this document's decision,
+not the proposal's.
+
+The exact filtered generated source is retained, so a replay expands the same
+fragment without asking the implementor again — and so the source is available to
+the reviewer and to the user as the literal description of what happened.
+
+Being lexically inside `<Agent>` selects an agent for nested prompts and grants
+that agent nothing. `<Expand>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, and
+`<PullRequest>` are XMD's own effects against the authoritative Workspace; the
+agent process never sees them and could not perform them.
+
+`<Agent.AddDir>` registers the checkout with each session that has to read it.
+The implementor's registration sits outside the loop so it happens once;
+the planner's sits inside, so it repeats per iteration. Re-registering a path a
+session already holds has to be idempotent for that to be safe — the ordered
+directory set must stay the same set — which is a requirement on #302 rather
+than something this document can guarantee.
+
+## Every mutation is one effect, and pushing is separate
+
+Each step is one expansion, one effect, and one transaction:
+
+```text
+<Expand>       → each admitted <File> publishes its mutation, the resulting
+                 logical Workspace root, and its journal result together
+<Git.Add>      → stages explicit paths; "." is written explicitly because
+                 omission never means all paths
+<Git.Commit>   → commits only the staged index, fails when nothing is staged,
+                 and journals reconciliation evidence: repository and worktree
+                 identity, branch, commit and parent SHAs, tree SHA, staged
+                 paths, message evidence — not Git object contents
+<Git.Push>     → an external effect; the remote ref cannot join the local
+                 transaction, so it observes remote state and adopts, performs,
+                 or fails, and never force-pushes
+<PullRequest>  → requires that pushed head; it never pushes on its own
+```
+
+Push is explicit precisely so that neither `<Git.Commit>` nor `<PullRequest>`
+hides remote mutation (#370). Replaying a completed commit creates no second
+commit and replaying a completed push performs no remote mutation; resuming
+after uncertain completion reconciles against retained state rather than
+repeating the effect (#294, #297).
+
+**Open question for #295 and #297.** A revision iteration commits again, pushes
+the same branch again, and reaches `<PullRequest>` again under a new expansion
+identity. The reconciliation that keeps that from opening a second pull request
+is the effect-specific natural key — repository, head branch, base — rather than
+expansion identity alone. A head that advanced on the same branch is the normal
+shape of a revision, not a conflict, and #295's "conflicting head is diagnosed"
+needs to distinguish the two.
+
+## The reviewer sees what it judges
+
+The planner has no network access, so whatever the prompt does not render is
+invisible to the review. What the prompt renders is the proposal source that
+performed the change, the implementor's report, and the pull request's identity —
+number, URL, state, head SHA, base SHA — together with the checkout the planner
+can read directly.
+
+`<PullRequest>`'s creation result is deliberately minimal (#295): stable provider
+identity, number, URL, state, head SHA and base SHA. Reviews, comments and check
+results are *not* fields on it, because a creation result that pretended to stay
+fresh would be lying about a remote that keeps changing. They are separate reads.
+
+**Missing: that read.** No component or issue defines the forge observation that
+returns existing reviews, comments and check results for a pull request. The
+requirement is unchanged and worth stating exactly, because it is what makes the
+review adversarial rather than uninformed:
+
+- the reviewer must receive every existing review with its body, every comment,
+  and every check result, iterated rather than stringified; and
+- the user's checkpoint must carry the same consequential content, so a person
+  approving the change reads the original objections in their own words rather
+  than the planner's summary of them.
+
+Until that read exists, this stage reviews the change it just made against the
+plan and the checkout, and an objection raised by anyone other than the planner
+does not reach either surface.
+
+The verdict names one head. The prompt reviews the change at `headSha` against
+`baseSha`, and a moved head requires a fresh review — the same rule #295 states
+for a stored verdict.
+
 ## The stage returns its control state
 
 Like `Planning`, this is a **value component**: it resolves a user decision
@@ -408,50 +505,22 @@ and nothing derived from them. The caller reads
 `decision.proceed && verdictPassed` directly, so there is no second copy of that
 answer to disagree with the first.
 
-## The reviewer sees the complete pull request
+The pull-request handle stays internal. `start.md` gates on the verdict and the
+decision rather than on forge state, and the filtered journal records the
+external effect independently. A return field typed `string` would be worse than
+useless — a conforming `<PullRequest>` would perform its external effect and only
+then fail this component's return validation. If a later caller genuinely needs
+the handle, it is declared with #295's object schema, never a placeholder.
 
-`<PullRequest>` (#295) resolves a structured handle carrying the number, URL,
-head and base identities, state, reviews, comments, and checks. This stage
-consumes all of it, because the planner cannot recover any of it itself: agent
-network access is denied for the supervised exercise, so whatever the prompt does
-not render is invisible to the review. Every category — reviews, comments, and
-checks — is rendered explicitly into both the planner prompt and the checkpoint
-material the user reads, each collection iterated with `<Each>` and never
-stringified as an object. A review that cannot see a failing check or an existing
-objection is not adversarial, it is uninformed.
+There is no `changedFiles` field in the proposal either, and for the same reason
+the stage returns no `authorized` flag: the fragment already says what it writes,
+and a second list is one no schema could hold in agreement with the first. What
+was actually staged and committed is `<Git.Commit>`'s journaled evidence.
 
-The two surfaces carry the same categories and the same consequential content,
-including each review's body: a user approving the change reads the original
-objections rather than the planner's summary of them. The checkpoint omits only a
-check's link, which is a way to find evidence rather than evidence itself.
-
-The checkpoint additionally carries what the planner prompt has no reason to —
-the revision prompt and each finding's evidence — because those are what an
-approval performs rather than what the review consumed.
-
-The prompt names the revision under review: the planner reviews the diff at
-`headSha` against `baseSha`, and a verdict describes that head only. A moved head
-invalidates it and a fresh review is required — the same rule #295 states for a
-stored verdict.
-
-The **member field names** used above — a review's `author`, `state`, `headSha`
-and `body`, a comment's `author`, `path` and `body`, a check's `name`, `status`,
-`conclusion` and `url` — are #295's to settle. This document depends on that
-schema rather than defining a competing one; what is settled here is that the
-planner receives the complete snapshot, not what each member is called.
-
-The handle stays internal: it is not part of this component's declared return,
-because `start.md` gates on the verdict and decision rather than on pull-request
-state, and the artifact ledger (#291) records the effect and its handle
-independently. A return field typed `string` would be worse than useless — a
-conforming `<PullRequest>` would perform its durable effects and only then fail
-this component's return validation. If a later caller genuinely needs the handle,
-it is declared with #295's object schema, never a placeholder.
-
-The agent, parsing, and control-flow syntax runs today. This component declares
-`returns`, so it contains no `<Output>` and its whole body runs fail-fast: the
-final `<Parse>` in each repair loop ends the stage rather than passing malformed
-data to a durable effect, and a failure binds nothing at all.
+This component declares `returns`, so it contains no `<Output>` and its whole
+body runs fail-fast: the final `<Parse>` in each repair loop ends the stage
+rather than passing malformed data to a durable effect, and a failure binds
+nothing at all.
 
 The user's decision outranks the verdict here too. `reviewCheckpoint.proceed` is
 read before `verdict.passed`, so a declined pull-request review leaves the loop
@@ -469,7 +538,7 @@ What the workflow should ultimately do about it stays unresolved under #290.
 
 Deferred `<Issue>` creation sits **inside** the approved branch, after the
 checkpoint. The planner proposes a disposition; the user's approval is what
-turns that proposal into a durable GitHub object. Creating the issues first
+turns that proposal into a durable forge object. Creating the issues first
 would make the planner's classification take effect before anyone approved it,
 and an issue is not undone by a later decline.
 
@@ -478,10 +547,12 @@ in the material the checkpoint assessed. That rule only means something if the
 material actually shows them, so `checkpointMaterial` carries every value an
 approval sets in motion, unchanged and unsummarized:
 
+- the **change itself**, as the source that performed it, rather than a
+  description of it;
 - the **revision prompt** that goes to the implementor when the verdict has not
-  passed — the literal `verdict.revisionPrompt`, not a description of it; and
+  passed — the literal `verdict.revisionPrompt`; and
 - each finding's **evidence**, because `<Issue>` receives the complete finding
-  and a `defer` disposition turns it into a durable GitHub object.
+  and a `defer` disposition turns it into a durable forge object.
 
 Approving instructions or evidence the user never read would be the same
 authority leak as not asking at all. It is not an invitation to amend them
@@ -491,20 +562,33 @@ cannot be silently amended by prose. A user who wants different effects declines
 and `proceed: false` performs none of them — no issue, no revision turn, no
 acceptance.
 
-`<Commit>` (#294), `<PullRequest>` (#295), and `<Issue>` (#296) do not exist,
-and reconciling those durable GitHub effects idempotently is #297. Until they
-land, the loop above cannot expand at all — the three names resolve to nothing,
-which is the unresolved printed error, so the missing capability is inside the
-stage rather than only around it. The effects they stand for remain explicit
-user-run steps between manual stages.
+The commit, push, and pull request are the one asymmetry, and it is deliberate:
+they happen *before* the review checkpoint because the review is a review of a
+pull request. What the user authorized earlier, at the authorization checkpoint,
+was implementing the plan — which is what those effects carry out. The review
+checkpoint then authorizes what comes after the review: the deferred issues, the
+revision turn, or acceptance.
 
-The surrounding workflow will record each parsed implementation result, commit
-and pull-request handle, planner verdict, and user-checkpoint result as artifact
-versions (#291). Only implementation source files are written into the worktree.
+## What does not exist yet
 
-`<Agent name={implementor}>`, `agent={planner}` and the other expression props
-read bare bindings; the prompt bodies interpolate `{props.plan}` and
-`{props.instructions}`. #305 unifies the two spellings.
+| Written above | Supplied by | Status |
+| --- | --- | --- |
+| `<Agent.AddDir>` and the read-only ceiling | #302 | unbuilt |
+| `<Expand>` | #369 | unbuilt; public name open |
+| `<Git.Add>`, `<Git.Commit>` | #294 | unbuilt |
+| `<Git.Push>` | #370 | unbuilt |
+| `<PullRequest>` | #295 | unbuilt |
+| `<Issue>` | #296 | unbuilt |
+| shared forge reconciliation behind push, pull request and issue | #297 | unbuilt |
+| the forge read that returns reviews, comments and checks | — | unowned |
+
+The agent, parsing, capture, and control-flow syntax runs today; the loop body
+above does not expand, because those names resolve to nothing. Until they land,
+the effects they stand for remain explicit user-run steps between manual stages.
+
+Props are namespaced throughout (#305). `proposal`, `commit`, `pullRequest`,
+`verdict`, `checkpointMaterial`, and `reviewCheckpoint` are authored bindings and
+stay bare.
 
 ## Finding dispositions
 
