@@ -285,6 +285,33 @@ function bindingNames(name: ts.BindingName, into: Set<string>): void {
   }
 }
 
+/** Whether a declaration list binds its containing function rather than its block. */
+function hoists(list: ts.VariableDeclarationList): boolean {
+  return (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0;
+}
+
+/**
+ * The `var` names a function body binds, wherever inside it they are written.
+ *
+ * `var` belongs to the function, not to the `if` or the loop it sits in, so
+ * collecting only a block's own statements would leave the binding invisible
+ * from the statement that reads it. Nested functions and classes own their
+ * own, and are not descended into.
+ */
+function hoistedNames(node: ts.Node, into: Set<string>): void {
+  ts.forEachChild(node, function collect(child: ts.Node): void {
+    if (ts.isFunctionLike(child) || ts.isClassLike(child)) {
+      return;
+    }
+    if (ts.isVariableDeclarationList(child) && hoists(child)) {
+      for (const declaration of child.declarations) {
+        bindingNames(declaration.name, into);
+      }
+    }
+    ts.forEachChild(child, collect);
+  });
+}
+
 /** The names one statement introduces into the scope that holds it. */
 function statementNames(node: ts.Node, into: Set<string>): void {
   if (ts.isVariableStatement(node)) {
@@ -331,6 +358,9 @@ function scopeNames(node: ts.Node): Set<string> | undefined {
     for (const statement of node.statements) {
       statementNames(statement, names);
     }
+    if (ts.isSourceFile(node)) {
+      hoistedNames(node, names);
+    }
     return names;
   }
   if (ts.isCaseBlock(node)) {
@@ -345,12 +375,18 @@ function scopeNames(node: ts.Node): Set<string> | undefined {
     for (const parameter of node.parameters) {
       bindingNames(parameter.name, names);
     }
+    typeParameterNames(node.typeParameters, names);
     if (
       (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) &&
       node.name !== undefined
     ) {
       names.add(node.name.text);
     }
+    hoistedNames(node, names);
+    return names;
+  }
+  if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
+    typeParameterNames(node.typeParameters, names);
     return names;
   }
   if (ts.isCatchClause(node)) {
@@ -372,9 +408,20 @@ function scopeNames(node: ts.Node): Set<string> | undefined {
     if (node.name !== undefined) {
       names.add(node.name.text);
     }
+    typeParameterNames(node.typeParameters, names);
     return names;
   }
   return undefined;
+}
+
+/** A type parameter binds its own name for the declaration that introduces it. */
+function typeParameterNames(
+  parameters: ts.NodeArray<ts.TypeParameterDeclaration> | undefined,
+  into: Set<string>,
+): void {
+  for (const parameter of parameters ?? []) {
+    into.add(parameter.name.text);
+  }
 }
 
 /**
@@ -437,6 +484,14 @@ function names(node: ts.Identifier): boolean {
   }
   if (ts.isQualifiedName(parent)) {
     return parent.right !== node;
+  }
+  // `{ process: local }` and `{ Deno as portable }` name the member being
+  // taken, not a binding being read. Both sides are labels.
+  if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) {
+    return false;
+  }
+  if (ts.isBindingElement(parent)) {
+    return parent.name !== node && parent.propertyName !== node;
   }
   if (
     ts.isPropertyAssignment(parent) ||
@@ -626,6 +681,33 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(forbiddenNames("const { process } = deps;\nconst pid = process.pid;")).toEqual([]);
     expect(forbiddenNames("try { run(); } catch (process) { report(process); }")).toEqual([]);
     expect(forbiddenNames("[1].forEach((process) => report(process));")).toEqual([]);
+
+    // Binding semantics, not a list of node shapes. An aliased member is a
+    // label on both sides, a type parameter binds its own scope, and `var`
+    // belongs to the function however deeply it is nested.
+    expect(forbiddenNames("const { process: local } = deps;")).toEqual([]);
+    expect(forbiddenNames(`import { Deno as portable } from "./host.ts";`)).toEqual([]);
+    expect(forbiddenNames(`export { process as runner } from "./host.ts";`)).toEqual([]);
+    expect(forbiddenNames("function read<Deno>(value: Deno): Deno { return value; }")).toEqual([]);
+    expect(forbiddenNames("interface Holder<Buffer> { value: Buffer }")).toEqual([]);
+    expect(
+      forbiddenNames(
+        "function read() {\n  if (ready) var process = portable;\n  return process.pid;\n}",
+      ),
+    ).toEqual([]);
+    expect(
+      forbiddenNames(
+        "function read() {\n  for (var Buffer of list) use(Buffer);\n  return Buffer;\n}",
+      ),
+    ).toEqual([]);
+
+    // The same forms still end at their own boundary.
+    expect(
+      forbiddenNames("function read<Deno>(value: Deno): Deno { return value; }\nDeno.cwd();"),
+    ).toEqual(["Deno"]);
+    expect(
+      forbiddenNames("function read() {\n  var process = portable;\n}\nconst pid = process.pid;"),
+    ).toEqual(["process"]);
 
     // Shadowing is lexical, so it ends where its scope does.
     expect(
