@@ -406,20 +406,60 @@ function attempt<T>(read: () => T): T | undefined {
  * that have nothing to do with selection — an unreadable file — and those
  * recorded failures are not this protocol's to interpret.
  */
+/**
+ * A value the journal refused to produce.
+ *
+ * Distinct from `undefined`, which is an ordinary absent value. Reading a
+ * member and finding nothing there, and reading a member that will not say what
+ * is there, are different facts about a record, and one of them is a refusal:
+ * conflating them is how "the root import will not say what it settled to"
+ * became "this is not the root import" and fell through to terminal-result
+ * reuse.
+ */
+const UNREADABLE: unique symbol = Symbol("unreadable");
+
+/** One read of journal-controlled data: its value, or a refusal. */
+function read<T>(get: () => T): T | typeof UNREADABLE {
+  try {
+    return get();
+  } catch {
+    return UNREADABLE;
+  }
+}
+
+/** The settlements the protocol recognizes as an ordinary failed root import. */
+const SETTLED_FAILURES: readonly string[] = ["err", "cancelled"];
+
 function recordedRootImport(event: Yield): RootImportRecord {
-  const recorded = attempt(() => {
-    if (event.description.type !== "import_component" || event.description.name !== "__root__") {
-      return undefined;
-    }
-    return event.result.status === "ok" ? { value: event.result.value } : undefined;
-  });
-  if (recorded === undefined) {
+  // Identification first. An event that will not say what it is cannot be
+  // claimed as the root import, so it stays unrelated.
+  const description = read(() => event.description);
+  if (description === UNREADABLE) {
     return UNRELATED;
   }
-  // Recognized and successful, so from here every way of failing to read it is
-  // the same answer. `attempt` covers the throwing ways; `readRootSelection`
-  // returns MALFORMED for the rest.
-  return attempt(() => readRootSelection(recorded.value)) ?? MALFORMED;
+  const type = read(() => description.type);
+  const name = read(() => description.name);
+  if (type !== "import_component" || name !== "__root__") {
+    return UNRELATED;
+  }
+
+  // Identified. From here the event owes this protocol an answer, and every way
+  // of not giving one is malformed — except the ordinary failed settlement,
+  // which is a root import that failed for reasons selection knows nothing
+  // about.
+  const result = read(() => event.result);
+  if (result === UNREADABLE || typeof result !== "object" || result === null) {
+    return MALFORMED;
+  }
+  const status = read(() => result.status);
+  if (status !== "ok") {
+    return typeof status === "string" && SETTLED_FAILURES.includes(status) ? UNRELATED : MALFORMED;
+  }
+  const value = read(() => ("value" in result ? result.value : undefined));
+  if (value === UNREADABLE || value === undefined) {
+    return MALFORMED;
+  }
+  return attempt(() => readRootSelection(value)) ?? MALFORMED;
 }
 
 function readRootSelection(value: unknown): RootImportRecord {

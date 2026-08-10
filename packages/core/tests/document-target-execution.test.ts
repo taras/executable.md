@@ -767,24 +767,26 @@ function omit(value: unknown, key: string): Record<string, unknown> {
  */
 const PLANTED = "pl4nted-s3cret";
 
-/** A stream that answers reads with a substituted recorded root import. */
+/**
+ * A stream that answers reads with a substituted recorded root import.
+ *
+ * The substitution is a function of the healthy event, so a row can plant at
+ * any depth: inside a normally readable `result.value`, or on the envelope
+ * itself — `result`, `result.status`, `result.value` — which is where a damaged
+ * backend's unreadability actually lives.
+ */
 class PlantedStream implements DurableStream {
   readonly appended: DurableEvent[] = [];
 
   constructor(
     private readonly events: readonly DurableEvent[],
-    private readonly planted: unknown,
+    private readonly plant: (event: DurableEvent) => DurableEvent,
   ) {}
 
   // deno-lint-ignore require-yield
   *readAll(): Operation<DurableEvent[]> {
     return this.events.map((event) =>
-      event.type === "yield" && event.description.name === "__root__"
-        ? // The one cast in this file. `Result.value` is typed `Json`, and the
-          // point of these rows is to put something there that is not — which
-          // is what a damaged backend does and what the boundary must survive.
-          { ...event, result: { status: "ok", value: this.planted as Json } }
-        : event,
+      event.type === "yield" && event.description.name === "__root__" ? this.plant(event) : event,
     );
   }
 
@@ -794,18 +796,59 @@ class PlantedStream implements DurableStream {
   }
 }
 
+/**
+ * Substitute the recorded root-import result value.
+ *
+ * `Result.value` is typed `Json`, and the point of these rows is to put
+ * something there that is not — which is what a damaged backend does and what
+ * the boundary has to survive. The casts in this file exist for that reason and
+ * no other.
+ */
+function plantValue(value: unknown): (event: DurableEvent) => DurableEvent {
+  return (event) => ({ ...event, result: { status: "ok", value: value as Json } });
+}
+
+/** Replace part of the recorded root-import envelope with a refusing accessor. */
+function plantEnvelope(
+  member: "result" | "status" | "value",
+): (event: DurableEvent) => DurableEvent {
+  const refuse = () => {
+    throw new Error(`envelope refused: ${PLANTED}`);
+  };
+  return (event) => {
+    if (member === "result") {
+      const planted: Record<string, unknown> = { ...event };
+      Object.defineProperty(planted, "result", { enumerable: true, get: refuse });
+      return planted as unknown as DurableEvent;
+    }
+    const result: Record<string, unknown> =
+      member === "status"
+        ? { value: { kind: "repository", path: "doc.md", content: SECTIONS } }
+        : { status: "ok" };
+    Object.defineProperty(result, member, { enumerable: true, get: refuse });
+    return { ...event, result: result as unknown as DurableEvent["result"] };
+  };
+}
+
 describe("Tier TX — unreadable recorded selections", () => {
-  /** A completed journal, then a stream that answers reads with `planted`. */
-  function* plantedStream(planted: unknown): Operation<PlantedStream> {
+  /** A completed journal, then a stream that answers reads with `plant`. */
+  function* plantedStream(plant: (event: DurableEvent) => DurableEvent): Operation<PlantedStream> {
     const healthy = new InMemoryStream();
     yield* failure(inlineSource(SECTIONS, { target: "Missing" }), healthy);
-    return new PlantedStream(healthy.snapshot(), planted);
+    return new PlantedStream(healthy.snapshot(), plant);
   }
 
-  /** Resume a planted journal both ways and hold every refusal to the contract. */
-  function* refusesTotally(planted: unknown): Operation<void> {
+  /**
+   * Resume a planted journal both ways and hold every refusal to the contract.
+   *
+   * Both directions matter and they fail differently when the boundary is
+   * wrong: the original `Missing` selector would replay the recorded failure,
+   * and the different, genuinely valid `Beta` selector would replay that same
+   * `Missing` failure — an outcome for a request nobody made.
+   */
+  function* refusesTotally(plant: (event: DurableEvent) => DurableEvent): Operation<void> {
     for (const target of ["Missing", "Beta"]) {
-      const stream = yield* plantedStream(planted);
+      const stream = yield* plantedStream(plant);
       const seen: Probes = { names: [], ids: [] };
       const error = yield* scoped(function* () {
         yield* useProbes(seen);
@@ -819,6 +862,7 @@ describe("Tier TX — unreadable recorded selections", () => {
 
       expect((error as Error).message).toBe(UNREADABLE_RECORD);
       expect((error as Error).cause).toBe(undefined);
+      // Never the recorded failure, for either request.
       expect(isDocumentTargetError(error)).toBe(false);
       // Nothing the record planted escapes, by any route a consumer would use.
       const rendered = `${String(error)} ${(error as Error).stack ?? ""} ${JSON.stringify({
@@ -835,12 +879,14 @@ describe("Tier TX — unreadable recorded selections", () => {
   it("TX34: recorded content whose frontmatter no parser accepts is malformed", function* () {
     // Valid JSON, valid string, unparseable document: without a total boundary
     // the YAML parser's own failure escapes, carrying the planted text with it.
-    yield* refusesTotally({
-      kind: "target-failure",
-      path: `${PLANTED}.md`,
-      content: `---\n: [unbalanced\n  ${PLANTED}\n---\n\n# T\n`,
-      failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
-    });
+    yield* refusesTotally(
+      plantValue({
+        kind: "target-failure",
+        path: `${PLANTED}.md`,
+        content: `---\n: [unbalanced\n  ${PLANTED}\n---\n\n# T\n`,
+        failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
+      }),
+    );
   });
 
   it("TX35: an unreadable member is malformed, and says nothing about itself", function* () {
@@ -855,30 +901,115 @@ describe("Tier TX — unreadable recorded selections", () => {
         throw new Error(`accessor refused: ${PLANTED}`);
       },
     });
-    yield* refusesTotally(record);
+    yield* refusesTotally(plantValue(record));
   });
 
   it("TX36: a record that refuses key enumeration is malformed", function* () {
     yield* refusesTotally(
-      new Proxy(
-        {
-          kind: "target-failure",
-          path: "doc.md",
-          content: "# T\n\n## Beta\n",
-          failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
-        },
-        {
-          ownKeys() {
-            throw new Error(`enumeration refused: ${PLANTED}`);
+      plantValue(
+        new Proxy(
+          {
+            kind: "target-failure",
+            path: "doc.md",
+            content: "# T\n\n## Beta\n",
+            failure: { kind: "no-match", selector: "Missing", matches: [], available: [] },
           },
-        },
+          {
+            ownKeys() {
+              throw new Error(`enumeration refused: ${PLANTED}`);
+            },
+          },
+        ),
       ),
     );
   });
 
   it("TX37: a value that is not a record at all is malformed", function* () {
     for (const planted of [`a string ${PLANTED}`, 7, null, [PLANTED]]) {
-      yield* refusesTotally(planted);
+      yield* refusesTotally(plantValue(planted));
     }
+  });
+
+  /**
+   * The envelope, not its contents.
+   *
+   * Recognizing the event and reading its settled value are different questions,
+   * and answering both with one absent value conflates "this is not the root
+   * import" with "the root import will not say what it settled to". The second
+   * then delegates, and `durableRun` reuses the recorded terminal result — so a
+   * request for a section that really exists is answered with the failure of a
+   * request nobody made.
+   */
+  it("TX38: a successful root result whose value refuses to be read is malformed", function* () {
+    yield* refusesTotally(plantEnvelope("value"));
+  });
+
+  it("TX39: a root result whose settlement refuses to be read is malformed", function* () {
+    yield* refusesTotally(plantEnvelope("status"));
+  });
+
+  /**
+   * Where this boundary begins, stated rather than assumed.
+   *
+   * `result` is the protocol envelope, and `durableRun` reads it while building
+   * its replay index — before any guard's check phase. A stream that will not
+   * produce it therefore fails inside the durable protocol's own read, carrying
+   * that read's error, and no fixed diagnostic of this protocol's applies.
+   *
+   * What still has to hold is the safety property: the recorded terminal result
+   * is not reused, nothing authored runs, and nothing is appended. Those are
+   * asserted here; the diagnostic is not, because claiming it would describe a
+   * refusal this package never performed.
+   */
+  it("TX40: an unreadable result envelope fails before this boundary, reusing nothing", function* () {
+    const stream = yield* plantedStream(plantEnvelope("result"));
+    const seen: Probes = { names: [], ids: [] };
+    const error = yield* scoped(function* () {
+      yield* useProbes(seen);
+      try {
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Beta" }), stream }));
+      } catch (caught) {
+        return caught;
+      }
+      throw new Error("the run completed instead of failing");
+    });
+
+    // Not the recorded failure: no terminal result was reused for a request
+    // nobody made.
+    expect(isDocumentTargetError(error)).toBe(false);
+    expect((error as Error).message).not.toContain("matches no document target");
+    expect(seen.names).toEqual([]);
+    expect(stream.appended).toEqual([]);
+  });
+
+  it("TX41: a successful root result with no value at all is malformed", function* () {
+    yield* refusesTotally((event) => ({ ...event, result: { status: "ok" } }));
+  });
+
+  /**
+   * The other side of the classification: an ordinary failed settlement on the
+   * root import is recognized and left alone, because a root can fail for
+   * reasons that are not about selection.
+   */
+  it("TX42: an ordinary failed root settlement is not this protocol's to refuse", function* () {
+    const stream = yield* plantedStream((event) => ({
+      ...event,
+      result: { status: "err", error: { message: "the file went away" } },
+    }));
+    const error = yield* scoped(function* () {
+      try {
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Beta" }), stream }));
+      } catch (caught) {
+        return caught;
+      }
+      throw new Error("the run completed instead of failing");
+    });
+    // Not refused by this protocol. Because the guard leaves the event alone,
+    // the completed journal's terminal result is reused as it always is — and
+    // that path deserializes, so what arrives is the recorded outcome's message
+    // rather than a reconstructed typed failure. That is the ordinary durable
+    // behavior an unclaimed event should get.
+    expect((error as Error).message).not.toBe(UNREADABLE_RECORD);
+    expect((error as Error).message).toContain("matches no document target");
   });
 });

@@ -2925,12 +2925,31 @@ exactly the failure the recorded selector produces against that content. A
 catalog, a match list, or a kind that the recorded document contradicts is
 therefore malformed too.
 
-Reading a record is **total**. Every way a recognized successful record can fail
-to be read is the same answer: an unreadable property, a key list a Proxy
-refuses to produce, recorded markdown whose frontmatter no parser accepts, and
-any other exception raised while reading or verifying it are all malformed. The
-boundary is synchronous throughout, so it can swallow no cancellation and no
+Reading a record is **total**, and identification is separate from reading. An
+event that will not say what it is stays unrelated — it cannot be claimed as the
+root import. Once it *is* identified as the root import, every way of not
+producing a selection is malformed:
+
+- an absent, unreadable, or invalid result or settlement, except the ordinary
+  failed settlement, which is a root import that failed for reasons selection
+  knows nothing about and stays unrelated;
+- a successful result whose value is absent or unreadable;
+- an unreadable property, a key list a Proxy refuses to produce, recorded
+  markdown whose frontmatter no parser accepts, and any other exception raised
+  while reading or verifying the record.
+
+Absence and refusal are represented distinctly. Using one value for both is what
+turns "the root import will not say what it settled to" into "this is not the
+root import", which delegates and lets the recorded terminal result be reused
+for a request nobody made.
+
+The boundary is synchronous throughout, so it can swallow no cancellation and no
 durability failure — neither arises inside a synchronous parse.
+
+It begins where the durable protocol hands the event over. A `result` envelope
+that cannot be read at all fails inside `durableRun`'s own replay indexing,
+before any guard runs; no diagnostic of this protocol applies there, and what
+still holds is that the recorded terminal result is not reused.
 
 A malformed record fails before the recorded terminal result can be reused, with
 one fixed, cause-free diagnostic and nothing else: no journal text, parser
@@ -7499,7 +7518,10 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX25–TX27 | Failed replay | The same failing selector replays its own recorded failure with no authored effect; a different failure kind or a different selector is stale; live and replayed failures are the same structural error |
 | TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a catalog or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
-| TX34–TX37 | Totality | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
+| TX34–TX37 | Totality, inside the value | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
+| TX38/TX39/TX41 | Totality, on the envelope | A successful result whose value refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated, for the original failing selector and for a different selector that would otherwise succeed |
+| TX40 | Where the boundary begins | An unreadable `result` envelope fails in the durable protocol's own replay indexing, ahead of any guard; the recorded terminal result is still not reused, nothing authored runs, and nothing is appended |
+| TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
 
 ### Tier SL — Own-scope context updates
 
