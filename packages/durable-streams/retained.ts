@@ -109,15 +109,39 @@ export function detachJson(value: Json, seen: Set<object> = new Set()): Json {
   }
 }
 
+/**
+ * A detached copy, frozen through.
+ *
+ * The authoritative retained graph is what admission validated and what replay
+ * consumes, so nothing that reaches a caller may write to it. Freezing is the
+ * claim against *policy*, not against a workflow: what a document finally
+ * receives is a fresh mutable copy taken from this, never this.
+ */
+function sealJson(value: Json): Json {
+  const detached = detachJson(value);
+  freezeDeep(detached);
+  return detached;
+}
+
+function freezeDeep(value: Json): void {
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  Object.freeze(value);
+  for (const member of Array.isArray(value) ? value : Object.values(value)) {
+    freezeDeep(member);
+  }
+}
+
 /** A detached copy of a retained failure's description. */
 function detachError(error: SerializedError): SerializedError {
   const name = error.name;
   const stack = error.stack;
-  return {
+  return Object.freeze({
     message: error.message,
     ...(name === undefined ? {} : { name }),
     ...(stack === undefined ? {} : { stack }),
-  };
+  });
 }
 
 /**
@@ -134,15 +158,15 @@ function detachResult(result: Result): Result {
       return { status };
     }
     const value = result.value;
-    return value === undefined ? { status } : { status, value: detachJson(value) };
+    return Object.freeze(value === undefined ? { status } : { status, value: sealJson(value) });
   }
   if (status === "err") {
     if (!("error" in result)) {
       throw new TypeError("a retained failure carries the error it failed with");
     }
-    return { status, error: detachError(result.error) };
+    return Object.freeze({ status, error: detachError(result.error) });
   }
-  return { status };
+  return Object.freeze({ status });
 }
 
 /**
@@ -177,13 +201,13 @@ function detachDescription(description: EffectDescription): EffectDescription {
   const detached: EffectDescription = { type, name };
   for (const [key, member] of extra) {
     Object.defineProperty(detached, key, {
-      value: detachJson(member),
+      value: sealJson(member),
       enumerable: true,
-      writable: true,
-      configurable: true,
+      writable: false,
+      configurable: false,
     });
   }
-  return detached;
+  return Object.freeze(detached);
 }
 
 /** Everything about a retained Yield except what it settled to. */
@@ -361,4 +385,64 @@ function isRetained(event: DurableEvent): boolean {
     event instanceof RetainedClose ||
     event instanceof RetainedRefusal
   );
+}
+
+/**
+ * An isolated observation of a retained event, for public policy to read.
+ *
+ * A replay guard is composable policy, and composition means handlers read,
+ * annotate, and pass along. What it must never mean is that a handler edits the
+ * history the execution already validated: the authoritative graph is what
+ * admission accepted and what replay consumes, and a guard that could rewrite a
+ * root selection or an effect description after admission would hold exactly
+ * the authority the private gate exists to keep out of public hands.
+ *
+ * So policy reads a copy. It is deep and mutable, so middleware may compose over
+ * it as freely as it likes, and nothing it does reaches replay.
+ */
+export function observeEvent(event: DurableEvent): DurableEvent {
+  if (event.type === "close") {
+    return { type: "close", coroutineId: event.coroutineId, result: consumable(event.result) };
+  }
+  return {
+    type: "yield",
+    coroutineId: event.coroutineId,
+    description: observeDescription(event.description),
+    result: consumable(event.result),
+  };
+}
+
+function observeDescription(description: EffectDescription): EffectDescription {
+  const copy: EffectDescription = { type: description.type, name: description.name };
+  for (const [key, member] of Object.entries(description)) {
+    if (key === "type" || key === "name") {
+      continue;
+    }
+    Object.defineProperty(copy, key, {
+      value: detachJson(member),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return copy;
+}
+
+/**
+ * A retained result as a consumer may hold it: ordinary mutable JSON.
+ *
+ * The authoritative copy is frozen so policy cannot rewrite it. A document
+ * that resumes on a restored binding writes to it, so what a workflow receives
+ * is a fresh copy taken from that authority rather than the authority itself.
+ */
+export function consumable(result: Result): Result {
+  if (result.status === "ok") {
+    return "value" in result && result.value !== undefined
+      ? { status: "ok", value: detachJson(result.value) }
+      : { status: "ok" };
+  }
+  if (result.status === "err") {
+    return { status: "err", error: { ...result.error } };
+  }
+  return { status: "cancelled" };
 }

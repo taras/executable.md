@@ -654,7 +654,14 @@ journal it replays through and validates the recorded selection inside the read
 itself, ahead of public guard policy, of a retained terminal result being
 reused, of authored work, and of any append. The retained history it owns covers
 every event that takes part in that decision, a recorded completion included, so
-no event can present one identity to the validation and another to the run. Reusing a terminal result also
+no event can present one identity to the validation and another to the run.
+
+Three views of that history stay distinct. The **authoritative** one is what
+admission validated and replay consumes, and it is immutable to policy.
+Replaceable public policy reads an **isolated observation** of it, so a handler
+composes freely without acquiring the authority the gate exists to withhold.
+What a document receives is a **fresh mutable copy**, because a resumed binding
+is ordinary data its own continuation writes to. Reusing a terminal result also
 requires exactly one recognizable root import belonging to the coroutine whose
 result is being reused.
 

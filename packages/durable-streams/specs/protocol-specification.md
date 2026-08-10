@@ -362,6 +362,22 @@ event it validates is present, and present once — refuses there, because a
 per-event check has nothing to object to in a journal that simply omits the
 event. Its default is a no-op.
 
+A replay distinguishes three views of one history, and conflating any two hands
+authority to whoever holds the wrong one:
+
+1. the **authoritative retained history**, which admission validated and replay
+   consumes — detached from the backend and immutable to policy, its
+   descriptions and results frozen through;
+2. **isolated guard observations**, a deep mutable copy made per guard
+   invocation, over which middleware composes freely and from which nothing
+   flows back; and
+3. **values delivered to workflow code**, a fresh mutable copy taken from the
+   authority at consumption, so replayed values stay ordinary JSON.
+
+Handing policy the authoritative events would let a guard rename effect A to B —
+so a workflow asking for B consumes A's result without B ever running — or
+rewrite a recorded root selection after admission accepted it.
+
 Replay guards are **composable policy, not authority**. Guards compose through
 middleware, and a handler installed further out may decline to delegate — which
 is what composition is for. An invariant that must not be negotiable therefore

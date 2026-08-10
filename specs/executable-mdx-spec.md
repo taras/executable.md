@@ -2778,7 +2778,15 @@ indexing, or terminal reuse — a recorded completion as much as a recorded effe
 another while the run reuses it, and cannot carry one result while admission
 accepts it and another while the run consumes it. A recorded completion's result
 is detached as the history is retained, and recognized during admission, so
-nothing the backend still owns reaches a later phase. Public `ReplayGuard` policy remains composable and may short-circuit
+nothing the backend still owns reaches a later phase.
+
+That snapshot is also immutable to public policy. Guard `check`, `admit`, and
+`decide` receive an isolated copy rather than the retained events, so a handler
+cannot rewrite a recorded target, the recorded content, a selection failure, an
+effect description, or a result after admission accepted it. What a document
+finally receives is a third thing again: a fresh mutable copy taken from the
+authority at consumption, so a resumed binding is still ordinary JSON its own
+continuation writes to. Public `ReplayGuard` policy remains composable and may short-circuit
 other public guards; it cannot suppress this.
 
 Reusing a recorded terminal result additionally requires exactly one

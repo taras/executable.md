@@ -1858,3 +1858,189 @@ describe("Tier TX — a terminal result cannot be replaced after admission", () 
     expect(appended).toEqual([]);
   });
 });
+
+/**
+ * Tier TX — public policy observes; it does not hold authority.
+ *
+ * The execution-owned gate validates a history and replay consumes it. Between
+ * those, public `ReplayGuard` policy runs — `check`, then `admit`, then `decide`
+ * during replay — and it is code any enclosing scope may install. Handing it the
+ * retained events themselves would let it rewrite the root selection, the
+ * recorded content, an effect description, or a result *after* admission had
+ * accepted them, which is exactly the authority the private gate exists to keep
+ * out of public hands.
+ *
+ * Recorded before the fix, resuming a partial Alpha journal as Alpha with
+ * `check` rewriting the retained root-import target to Beta: the run executed
+ * the Beta projection.
+ */
+describe("Tier TX — guards observe a copy, not the retained history", () => {
+  /** A partial Alpha journal: the recorded import, no terminal result. */
+  function* partialAlpha(): Operation<InMemoryStream> {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), complete, { names: [], ids: [] });
+    const partial = new InMemoryStream();
+    for (const event of complete.snapshot()) {
+      if (event.type === "close") {
+        continue;
+      }
+      yield* partial.append(event);
+    }
+    return partial;
+  }
+
+  /** Rewrite a root-import observation the way hostile policy would. */
+  function rewriteRoot(event: Yield, change: (record: Record<string, unknown>) => void): void {
+    if (event.description.name !== "__root__" || event.result.status !== "ok") {
+      return;
+    }
+    const record = event.result.value;
+    if (isJsonObject(record)) {
+      change(record as unknown as Record<string, unknown>);
+    }
+  }
+
+  /** Resume Alpha with `install` in scope; report what ran. */
+  function* resume(
+    stream: InMemoryStream,
+    install: () => Operation<void>,
+  ): Operation<{ seen: Probes; text: string | undefined; error: unknown; appended: number }> {
+    const before = stream.snapshot().length;
+    const seen: Probes = { names: [], ids: [] };
+    const outcome = yield* scoped(function* () {
+      yield* install();
+      yield* useProbes(seen);
+      try {
+        return {
+          text: asText(
+            yield* collect(
+              yield* execute({ ...inlineSource(SECTIONS, { target: "Alpha" }), stream }),
+            ),
+          ),
+          error: undefined,
+        };
+      } catch (error) {
+        return { text: undefined, error };
+      }
+    });
+    return { seen, ...outcome, appended: stream.snapshot().length - before };
+  }
+
+  /** Every root mismatch has the same shape of answer. */
+  function expectAlphaOnly(outcome: {
+    seen: Probes;
+    text: string | undefined;
+    error: unknown;
+  }): void {
+    expect(outcome.seen.names).not.toContain("beta");
+    expect(outcome.text ?? "").not.toContain("beta content");
+    if (outcome.error === undefined) {
+      expect(outcome.text).toContain("alpha content");
+    }
+  }
+
+  it("TX72: check cannot rewrite the retained root target", function* () {
+    const outcome = yield* resume(yield* partialAlpha(), function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          rewriteRoot(event, (record) => {
+            record["target"] = "Beta";
+          });
+          return yield* next(event);
+        },
+      });
+    });
+    expectAlphaOnly(outcome);
+  });
+
+  it("TX73: admit cannot rewrite the retained root target", function* () {
+    const outcome = yield* resume(yield* partialAlpha(), function* () {
+      yield* ReplayGuard.around({
+        *admit([history], next) {
+          for (const event of history.yields) {
+            rewriteRoot(event, (record) => {
+              record["target"] = "Beta";
+            });
+          }
+          return yield* next(history);
+        },
+      });
+    });
+    expectAlphaOnly(outcome);
+  });
+
+  it("TX74: decide cannot rewrite the retained root target", function* () {
+    const outcome = yield* resume(yield* partialAlpha(), function* () {
+      yield* ReplayGuard.around({
+        decide([event], next) {
+          rewriteRoot(event, (record) => {
+            record["target"] = "Beta";
+          });
+          return next(event);
+        },
+      });
+    });
+    expectAlphaOnly(outcome);
+  });
+
+  it("TX75: the recorded content and failure record are equally out of reach", function* () {
+    const outcome = yield* resume(yield* partialAlpha(), function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          rewriteRoot(event, (record) => {
+            record["content"] = "# Rewritten\\n\\n## Beta\\n\\nrewritten beta\\n";
+            record["kind"] = "target-failure";
+            record["failure"] = {
+              kind: "no-match",
+              selector: "Alpha",
+              matches: [],
+              available: [],
+            };
+          });
+          return yield* next(event);
+        },
+      });
+    });
+    expectAlphaOnly(outcome);
+    expect(outcome.text ?? "").not.toContain("rewritten beta");
+  });
+
+  it("TX76: a completed journal refused for a mismatch appends nothing", function* () {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), complete, { names: [], ids: [] });
+    const outcome = yield* scoped(function* () {
+      const seen: Probes = { names: [], ids: [] };
+      const before = complete.snapshot().length;
+      yield* useProbes(seen);
+      let error: unknown;
+      try {
+        yield* collect(
+          yield* execute({ ...inlineSource(SECTIONS, { target: "Beta" }), stream: complete }),
+        );
+      } catch (caught) {
+        error = caught;
+      }
+      return { seen, error, appended: complete.snapshot().length - before };
+    });
+    expect(outcome.error).toBeInstanceOf(StaleInputError);
+    expect(outcome.seen.names).toEqual([]);
+    expect(outcome.appended).toBe(0);
+  });
+
+  it("TX77: downstream guard composition still reads its observation", function* () {
+    const observed: string[] = [];
+    const outcome = yield* resume(yield* partialAlpha(), function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          // An annotation on the observation: composition still works, and
+          // nothing it writes reaches replay.
+          Object.assign(event.description, { annotated: true });
+          observed.push(event.description.name);
+          return yield* next(event);
+        },
+      });
+    });
+    expect(observed).toContain("__root__");
+    expectAlphaOnly(outcome);
+  });
+});

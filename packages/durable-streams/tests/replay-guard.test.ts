@@ -22,6 +22,7 @@ import {
   type Json,
   ReplayGuard,
   ReplayIndex,
+  retainEvents,
   type ReplayOutcome,
   StaleInputError,
   type Workflow,
@@ -848,5 +849,147 @@ describe("durableRun — a retained result detaches completely", () => {
     list[0] = "rewritten";
     list.push("injected");
     expect(member(member(value, "nested"), "list")).toEqual(["a"]);
+  });
+});
+
+/**
+ * Guard policy cannot rewrite the identity or result replay consumes.
+ *
+ * A replay guard is composable policy. Composition means reading, annotating,
+ * and passing along; it must not mean editing the history the execution already
+ * validated. Given the retained events themselves, a guard could rename effect
+ * A to B and have a workflow asking for B consume A's result, without B ever
+ * running.
+ */
+describe("replay guard — observation is isolated from replay authority", () => {
+  function journal(): DurableEvent[] {
+    return [
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "call", name: "A" },
+        result: { status: "ok", value: "A-result" },
+      },
+    ];
+  }
+
+  function reading(events: DurableEvent[], appended: DurableEvent[]): DurableStream {
+    return {
+      // deno-lint-ignore require-yield
+      *readAll(): Operation<DurableEvent[]> {
+        return events;
+      },
+      // deno-lint-ignore require-yield
+      *append(event: DurableEvent): Operation<void> {
+        appended.push(event);
+      },
+    };
+  }
+
+  /** Run a workflow asking for `name`, with `install` in scope. */
+  function* asking(
+    name: string,
+    events: DurableEvent[],
+    install: () => Operation<void>,
+  ): Operation<{ value: unknown; error: unknown; ran: boolean; appended: DurableEvent[] }> {
+    const appended: DurableEvent[] = [];
+    let ran = false;
+    const outcome = yield* scoped(function* () {
+      yield* install();
+      try {
+        const value = yield* durableRun(
+          function* () {
+            return (yield createDurableOperation<Json>({ type: "call", name }, function* () {
+              ran = true;
+              return `${name}-live`;
+            })) as Json;
+          },
+          { stream: reading(events, appended) },
+        );
+        return { value, error: undefined };
+      } catch (error) {
+        return { value: undefined, error };
+      }
+    });
+    return { ...outcome, ran, appended };
+  }
+
+  it("check cannot rename A to B and feed B the A result", function* () {
+    const outcome = yield* asking("B", journal(), function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          Object.assign(event.description, { name: "B" });
+          return yield* next(event);
+        },
+      });
+    });
+    // B never received A's result: either B ran live, or the run failed.
+    expect(outcome.value).not.toBe("A-result");
+    if (outcome.error === undefined) {
+      expect(outcome.ran).toBe(true);
+      expect(outcome.value).toBe("B-live");
+    }
+  });
+
+  it("admit cannot rename A to B and feed B the A result", function* () {
+    const outcome = yield* asking("B", journal(), function* () {
+      yield* ReplayGuard.around({
+        *admit([history], next) {
+          for (const event of history.yields) {
+            Object.assign(event.description, { name: "B" });
+          }
+          return yield* next(history);
+        },
+      });
+    });
+    expect(outcome.value).not.toBe("A-result");
+  });
+
+  it("decide cannot rewrite the result replay is about to feed", function* () {
+    const outcome = yield* asking("A", journal(), function* () {
+      yield* ReplayGuard.around({
+        decide([event], next) {
+          if (event.result.status === "ok") {
+            Object.assign(event.result, { value: "rewritten-by-policy" });
+          }
+          return next(event);
+        },
+      });
+    });
+    expect(outcome.value).toBe("A-result");
+    expect(outcome.ran).toBe(false);
+  });
+
+  it("a public ReplayIndex observation cannot change what replay decides", function* () {
+    const events = journal();
+    const index = new ReplayIndex(retainEvents(events));
+    const entry = index.peekYield("root");
+    expect(entry).toBeDefined();
+
+    // Whatever a caller does with what the index hands back, the retained
+    // answer is unchanged.
+    try {
+      Object.assign(entry!.description, { name: "B" });
+    } catch {
+      // A frozen description refuses the write outright, which is the same
+      // conclusion reached more directly.
+    }
+    expect(index.peekYield("root")?.description.name).toBe("A");
+    expect(index.peekYield("root")?.result).toEqual({ status: "ok", value: "A-result" });
+  });
+
+  it("the control — an unmodified guard still replays the recorded result", function* () {
+    const seen: string[] = [];
+    const outcome = yield* asking("A", journal(), function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          seen.push(event.description.name);
+          return yield* next(event);
+        },
+      });
+    });
+    expect(seen).toEqual(["A"]);
+    expect(outcome.value).toBe("A-result");
+    expect(outcome.ran).toBe(false);
   });
 });

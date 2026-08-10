@@ -389,6 +389,16 @@ A replay guard has three stages, separated by a strict I/O boundary:
 
 The separation between generator and synchronous stages is necessary because the replay loop is synchronous. All observation-gathering must happen upfront.
 
+### Three views of one history
+
+A replay distinguishes three things, and conflating any two of them hands authority to whoever holds the wrong one:
+
+1. **The authoritative retained history.** What a consumer's own admission validated and what replay consumes. Detached from the backend and immutable to policy — its descriptions and results are frozen through, so nothing that receives it can rewrite what replay will decide.
+2. **Isolated guard observations.** What `check`, `admit`, and `decide` receive: a deep, mutable copy made per invocation. Middleware may read, annotate, and compose over it freely; nothing it writes reaches replay.
+3. **Values delivered to workflow code.** A fresh mutable copy taken from the authority at the moment of consumption. A document that resumes on a restored binding writes to it, so replayed values stay ordinary JSON.
+
+Handing policy the authoritative events would let a guard rename effect A to B — so a workflow asking for B consumes A's result without B ever running — or rewrite a recorded root selection after admission accepted it.
+
 ### Guards are policy, not authority
 
 A replay guard is **composable policy**. Guards compose through `Api.around`, and a handler installed further out may decline to call `next` — declining is what composition is for, and it means any single guard's opinion can be suppressed by another.

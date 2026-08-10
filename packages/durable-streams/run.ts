@@ -19,6 +19,7 @@ import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
+import { observeEvent } from "./retained.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
@@ -46,7 +47,13 @@ function unalignedReplay(replayIndex: ReplayIndex, coroutineId: string) {
  */
 function* runCheckPhase(replayIndex: ReplayIndex, scope: Scope): Operation<void> {
   for (const event of replayIndex.retainedYields()) {
-    yield* ReplayGuard.invoke(scope, "check", [event]);
+    // An isolated observation, not the retained event. Guards compose by
+    // reading and passing along; what composition must not become is the power
+    // to edit a history the execution already validated.
+    const observed = observeEvent(event);
+    if (observed.type === "yield") {
+      yield* ReplayGuard.invoke(scope, "check", [observed]);
+    }
   }
 }
 
@@ -118,7 +125,10 @@ export function* durableRun<T extends WorkflowValue>(
   yield* ReplayGuard.invoke(scope, "admit", [
     {
       coroutineId,
-      yields: replayIndex.retainedYields(),
+      yields: replayIndex.retainedYields().flatMap((event) => {
+        const observed = observeEvent(event);
+        return observed.type === "yield" ? [observed] : [];
+      }),
       terminal: replayIndex.hasClose(coroutineId),
     },
   ]);
