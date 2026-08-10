@@ -104,18 +104,28 @@ class CanonicalRequest implements ExecutionRequest {
    * class did not construct throws, which is exactly the answer a reconstructed
    * look-alike deserves, and it keeps the check out of any module-scoped state.
    */
-  static consume(request: ExecutionRequest): void {
+  /**
+   * Take this request's options on behalf of `invocation`, once.
+   *
+   * The expected invocation is supplied by the caller rather than read off the
+   * request, which is the whole point: a request another invocation issued is
+   * *also* a canonical request, and accepting it would let one execution's
+   * terminal settle another's.
+   *
+   * Every check runs before anything is written, so a rejected delegation
+   * consumes neither invocation and both remain usable afterwards.
+   */
+  static consume(request: unknown, invocation: Invocation): void {
     // `#invocation in request` recognizes a value this class constructed
-    // without reading anything off it and without a registry to consult. A
-    // look-alike rebuilt from the public shape simply is not one.
-    //
-    // The request's own invocation is the authority, so nothing per-call has to
-    // live at module scope — which is what keeps two concurrent executions from
-    // consuming each other's requests.
-    if (!(#invocation in request)) {
+    // without reading anything off it and without a registry to consult. It is
+    // also total: `in` on a primitive, on null, or on a proxy whose traps throw
+    // is guarded here, so nothing native or planted escapes.
+    if (!isCanonical(request)) {
       throw new ExecutionProtocolError("delegated a request canonical execution did not issue");
     }
-    const invocation = request.#invocation;
+    if (request.#invocation !== invocation) {
+      throw new ExecutionProtocolError("delegated a request another execution issued");
+    }
     if (invocation.consumed) {
       throw new ExecutionProtocolError("delegated an execution request more than once");
     }
@@ -125,11 +135,35 @@ class CanonicalRequest implements ExecutionRequest {
     invocation.consumed = true;
     invocation.settled = request.options;
   }
+
+  /** Whether this class built `value`, answered without trusting it. */
+  static own(value: unknown): value is CanonicalRequest {
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    try {
+      return #invocation in value;
+    } catch {
+      // A revoked proxy, or one whose `has` trap refuses. Not one of ours.
+      return false;
+    }
+  }
+}
+
+function isCanonical(value: unknown): value is CanonicalRequest {
+  return CanonicalRequest.own(value);
 }
 
 /** One execution's request and what the invocation reads back from it. */
 export interface IssuedExecution {
   readonly request: ExecutionRequest;
+  /**
+   * Settle this invocation on `request`, or refuse it.
+   *
+   * Called only by the invocation's own private terminal — the default handler
+   * of the same-name Api instance canonical core built for this call.
+   */
+  consume(request: unknown): void;
   /** The options the terminal recorded, or a refusal when it was never reached. */
   settle(): ExecuteOptions;
   /** Every completion policy registered, in registration order. */
@@ -140,6 +174,9 @@ export function issueExecution(options: ExecuteOptions): IssuedExecution {
   const invocation = new Invocation();
   return {
     request: new CanonicalRequest(invocation, options, invocation.generation),
+    consume(request: unknown): void {
+      CanonicalRequest.consume(request, invocation);
+    },
     settle(): ExecuteOptions {
       const settled = invocation.settled;
       if (!invocation.consumed || settled === undefined) {
@@ -151,15 +188,4 @@ export function issueExecution(options: ExecuteOptions): IssuedExecution {
       return Object.freeze([...invocation.completions]);
     },
   };
-}
-
-/**
- * Consume a request on behalf of canonical execution's terminal handler.
- *
- * The terminal is one object built at module evaluation while an invocation is
- * per call, so it cannot close over the invocation — it reads the one the
- * request carries instead.
- */
-export function consumeAtTerminal(request: ExecutionRequest): void {
-  CanonicalRequest.consume(request);
 }

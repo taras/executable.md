@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { createContext, scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
@@ -267,6 +267,141 @@ describe("Tier EP — the execution protocol", () => {
     expect(String(output)).toContain("Foreign");
   });
 
+  it("EP20: concurrent invocations cannot swap requests", function* () {
+    const captured: ExecutionRequest[] = [];
+    const refusals: unknown[] = [];
+
+    const outputs = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          captured.push(request);
+          const foreign = captured.find((other) => other !== request);
+          if (foreign) {
+            // Try the other live invocation's request first.
+            refusals.push(yield* raised(next(foreign)));
+          }
+          yield* next(request);
+        },
+      });
+      const run = (doc: string) =>
+        function* (): Operation<string> {
+          return String(
+            yield* collect(yield* execute({ ...inlineSource(doc), stream: new InMemoryStream() })),
+          );
+        };
+      const first = yield* spawn(run("# First\n"));
+      const second = yield* spawn(run("# Second\n"));
+      return [yield* first, yield* second];
+    });
+
+    expect(refusals.length).toBeGreaterThan(0);
+    for (const refusal of refusals) {
+      expect(refusal).toBeInstanceOf(ExecutionProtocolError);
+    }
+    // Each invocation still ran its own document.
+    expect(outputs[0]).toContain("First");
+    expect(outputs[1]).toContain("Second");
+  });
+
+  it("EP21: the exported default refuses and consumes nothing", function* () {
+    const captured: ExecutionRequest[] = [];
+    const output = yield* scoped(function* () {
+      let reentered = false;
+      yield* Execution.around({
+        *execute([request], next) {
+          // The standalone call below re-enters this same handler, because the
+          // public descriptor shares the stable name. Let it pass straight
+          // through so what is under test is the default it reaches.
+          if (reentered) {
+            yield* next(request);
+            return;
+          }
+          captured.push(request);
+          reentered = true;
+          const standalone = yield* raised(Execution.operations.execute(request));
+          reentered = false;
+          expect(standalone).toBeInstanceOf(ExecutionProtocolError);
+          expect(String(standalone)).toContain("outside canonical core");
+          // The request survived that, and still settles this invocation.
+          yield* next(request);
+        },
+      });
+      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+    });
+
+    expect(String(output)).toContain("Hello");
+    expect(captured).toHaveLength(1);
+  });
+
+  it("EP22: null, primitives and hostile shapes are refused without a native error", function* () {
+    const hostile = new Proxy(
+      {},
+      {
+        has() {
+          throw new Error("PLANTED-HAS-TRAP");
+        },
+        get() {
+          throw new Error("PLANTED-GET-TRAP");
+        },
+      },
+    );
+    const values: unknown[] = [null, undefined, 7, "request", true, Symbol("r"), {}, hostile];
+
+    for (const value of values) {
+      const journal = watched();
+      const failure = yield* scoped(function* () {
+        yield* Execution.around({
+          *execute([,], next) {
+            yield* next(value as ExecutionRequest);
+          },
+        });
+        return yield* raised(execute({ ...inlineSource(DOC), stream: journal.stream }));
+      });
+
+      expect(failure).toBeInstanceOf(ExecutionProtocolError);
+      expect(String(failure)).not.toContain("PLANTED");
+      expect(failure instanceof Error ? failure.cause : "none").toBeUndefined();
+      expect(journal.reads).toEqual(0);
+      expect(journal.stream.snapshot()).toEqual([]);
+    }
+  });
+
+  // EP23: contextual behavior an installation establishes is the invocation's.
+  // It has to reach document teardown, stay out of a concurrent invocation, and
+  // be gone from the next ordinary execution in the same host scope.
+  it("EP23: invocation-installed context reaches teardown and leaks nowhere", function* () {
+    const Marker = createContext<string | undefined>("tier-ep.marker", undefined);
+    const seen: string[] = [];
+
+    yield* scoped(function* () {
+      yield* Execution.around({
+        *document([props], next) {
+          seen.push(`document:${(yield* Marker.get()) ?? "absent"}`);
+          try {
+            return yield* next(props);
+          } finally {
+            seen.push("teardown");
+          }
+        },
+      });
+
+      yield* collect(
+        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
+          {
+            *install(): Operation<void> {
+              yield* Marker.set("installed");
+            },
+          },
+        ]),
+      );
+
+      // A later ordinary execution in the same host scope must not inherit it.
+      yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+    });
+
+    expect(seen).toEqual(["document:installed", "teardown", "document:absent", "teardown"]);
+  });
+
   it("EP11: admissions are copied before install() runs", function* () {
     const order: string[] = [];
     const late: JournalAdmission[] = [];
@@ -354,6 +489,168 @@ describe("Tier EP — the execution protocol", () => {
 
   // EP15: additive means one direction. A policy can fail a success; it cannot
   // stand in for a failure the document already earned.
+  // EP18: an admission inspects or refuses. It does not edit. `readonly` is a
+  // compile-time claim, so each attempt below is made at runtime through the
+  // reflective route that ignores it — and every one has to be ineffective or
+  // throw, with the next admission still seeing the original history.
+  it("EP18: an admission cannot change the history anyone else reads", function* () {
+    const attempts: Array<{ says: string; edit: (retained: readonly DurableEvent[]) => void }> = [
+      { says: "length", edit: (retained) => void Reflect.set(retained, "length", 0) },
+      { says: "indexed replacement", edit: (retained) => void Reflect.set(retained, 0, undefined) },
+      { says: "deletion", edit: (retained) => void Reflect.deleteProperty(retained, 0) },
+      { says: "reverse", edit: (retained) => void [...[]].reverse.call(retained) },
+      { says: "splice", edit: (retained) => void [...[]].splice.call(retained, 0, 99) },
+    ];
+
+    // One completed journal, replayed once per attempt.
+    const first = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* collect(yield* execute({ ...inlineSource(DOC), stream: first }));
+    });
+    const original = first.snapshot().length;
+    expect(original).toBeGreaterThan(0);
+
+    for (const attempt of attempts) {
+      const journal = new InMemoryStream(first.snapshot());
+      const observed: number[] = [];
+      const expanded: string[] = [];
+
+      const output = yield* scoped(function* () {
+        yield* useMark(expanded);
+        return yield* collect(
+          yield* executeInstalled({ ...inlineSource(DOC), stream: journal }, [
+            {
+              admissions: [
+                // deno-lint-ignore require-yield
+                function* (retained) {
+                  observed.push(retained.length);
+                  // Ineffective or throwing — either is a refusal to edit.
+                  try {
+                    attempt.edit(retained);
+                  } catch {
+                    // A frozen array throws in strict mode; that is the point.
+                  }
+                },
+                // deno-lint-ignore require-yield
+                function* (retained) {
+                  observed.push(retained.length);
+                },
+              ],
+            },
+          ]),
+        );
+      });
+
+      // The second admission saw exactly what the first was given.
+      expect(observed).toEqual([original, original]);
+      // Still a completed replay: nothing authored ran and nothing was appended.
+      expect(String(output)).toContain("Hello");
+      expect(expanded).toEqual([]);
+      expect(journal.snapshot().length).toEqual(original);
+    }
+  });
+
+  it("EP15: a completion policy cannot replace an existing failure", function* () {
+    const asked: string[] = [];
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          request.addCompletionFailure(() => {
+            asked.push("policy");
+            return new Error("the policy's failure");
+          });
+          yield* next(request);
+        },
+      });
+      // A value root that declares `returns` and produces no <Return> fails on
+      // its own terms.
+      return yield* yield* execute({
+        ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
+        stream: new InMemoryStream(),
+      });
+    });
+
+    expect(result.ok).toBe(false);
+    const message = result.ok ? "" : result.error.message;
+    expect(message).not.toContain("the policy's failure");
+    // Not even consulted: the result was already a failure.
+    expect(asked).toEqual([]);
+  });
+
+  it("EP16: an additive failure still converts a success", function* () {
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          request.addCompletionFailure(() => new Error("the policy's failure"));
+          yield* next(request);
+        },
+      });
+      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain("the policy's failure");
+  });
+
+  it("EP17: the first policy to fail wins, and later ones do not replace it", function* () {
+    const asked: string[] = [];
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          request.addCompletionFailure(() => {
+            asked.push("first");
+            return new Error("the first policy");
+          });
+          request.addCompletionFailure(() => {
+            asked.push("second");
+            return new Error("the second policy");
+          });
+          yield* next(request);
+        },
+      });
+      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
+    });
+
+    expect(result.ok).toBe(false);
+    const message = result.ok ? "" : result.error.message;
+    expect(message).toContain("the first policy");
+    expect(message).not.toContain("the second policy");
+    // The second is never even consulted once the result is a failure.
+    expect(asked).toEqual(["first"]);
+  });
+
+  it("EP14: the obsolete ambient admission channel does not exist", function* () {
+    const ran: string[] = [];
+    // The exact channel a previous revision used, rebuilt by name and cleared —
+    // before the invocation and again from inside the middleware chain. There
+    // is nothing behind the name now, so neither clearing removes anything.
+    const obsolete = createContext<unknown>("executablemd.core.journal-admission", undefined);
+
+    yield* scoped(function* () {
+      yield* obsolete.set([]);
+      yield* Execution.around({
+        *execute([request], next) {
+          yield* obsolete.set([]);
+          yield* next(request);
+        },
+      });
+      yield* collect(
+        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
+          {
+            admissions: [
+              // deno-lint-ignore require-yield
+              function* () {
+                ran.push("still-ran");
+              },
+            ],
+          },
+        ]),
+      );
+    });
+
+    expect(ran).toEqual(["still-ran"]);
+  });
+
   it("EP15: a completion policy cannot replace an existing failure", function* () {
     const asked: string[] = [];
     const result = yield* scoped(function* () {

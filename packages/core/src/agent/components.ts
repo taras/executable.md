@@ -1,23 +1,24 @@
 /**
  * Agent component registration (specs/acp-client-spec.md).
  *
- * Registers the agent words as ordinary function components for this scope,
- * and decorates the Execution Api so prompt failures — and, when a root
- * provider is configured, provider teardown failures — participate in the
- * DocumentExecution completion.
+ * Registers the agent words as ordinary function components for this scope, and
+ * registers an additive completion policy so prompt failures — and, when a root
+ * provider is configured, provider teardown failures — turn an otherwise
+ * successful document into a failure.
  *
- * Registration and execution decoration are separate concerns: the components
- * are defaults a document can replace by writing its own file with one of these
- * names, while the completion decoration belongs to the execution regardless of
- * which implementation answered.
+ * Registration and completion policy are separate concerns: the components are
+ * defaults a document can replace by writing its own file with one of these
+ * names, while the policy belongs to the execution regardless of which
+ * implementation answered.
  *
- * The root provider's lifetime is part of the execution: the middleware
- * returns a bridged DocumentExecution whose owning spawned operation
- * enters a scoped provider lifetime, runs the inner execution, forwards
- * its output (the bridged output closes when the inner output closes),
- * and resolves the completion only after provider cleanup has finished.
- * Teardown failures therefore affect the final result without delaying
- * rendered output.
+ * The root provider's lifetime is `Execution.document`. The provider scope
+ * surrounds the document's expansion and ends while the journal is still live,
+ * so cleanup has finished before the completion settles and rendered output is
+ * not delayed by it. A confirmed full replay never enters the provider at all.
+ *
+ * Completion precedence is first-failure: a document that already failed keeps
+ * its own failure, and prompt and teardown failures are added to a success
+ * rather than replacing anything.
  */
 
 import { Err, scoped, spawn, withResolvers } from "effection";

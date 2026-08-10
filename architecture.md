@@ -55,6 +55,9 @@ Existing documents and code get aligned to this section retroactively.
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
+| authority | the power to decide what an execution or effect *is* — whether it happens, what it may replay from, and what it settles to — as distinct from the power to observe or refuse one |
+| authoritative behavior | behavior that exercises authority; non-authoritative behavior may inspect, narrow, refuse or add a failure, but cannot bring an execution into being, substitute one, or rescue one |
+| trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
 ## Three axes
@@ -1023,8 +1026,17 @@ by registration order. They may refuse; they may not complete.
 
 ### Capability-backed execution
 
-Canonical core is authoritative for document execution. `Execution.execute`
-middleware is handed an opaque `ExecutionRequest` and returns nothing: it may
+Canonical core is authoritative for document execution. It invokes the stable
+`Execution` middleware through a private, per-invocation same-name Api whose
+instance-owned default handler is the authoritative terminal. A stable name
+shares the middleware context, so every public handler — including one installed
+through another loaded copy's descriptor — composes exactly as it always did;
+what a name does not share is the default handler, and that is where authority
+sits. The exported `Execution.execute` default always refuses, so calling it
+with a captured request settles nothing.
+
+`Execution.execute` middleware is handed an opaque `ExecutionRequest` and
+returns nothing: it may
 inspect the options, narrow them, register an additive completion policy,
 install contextual behavior, refuse by throwing, and delegate. The document is
 run afterwards, by the invocation that issued the request, under the options the

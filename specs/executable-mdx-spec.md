@@ -6264,8 +6264,11 @@ nothing, and has whatever it returns ignored. It may:
 - refuse, by throwing, before delegating; and
 - delegate.
 
-It may not complete an execution. Only canonical core runs a document, after the
-chain unwinds, with the options the terminal recorded — so a handler cannot
+It may not complete an execution. Canonical core invokes the stable `Execution`
+middleware through a private, per-invocation same-name Api whose instance-owned
+default handler is the authoritative terminal; the exported `Execution.execute`
+default always refuses. Only canonical core runs a document, after the chain
+unwinds, with the options that terminal recorded — so a handler cannot
 answer with a synthetic execution, manufacture or replace a `DocumentExecution`,
 wrap its output stream, turn a failure into a success, or reach the admissions
 the invocation captured.
@@ -7772,7 +7775,15 @@ Defined in §8.1.
 | EP11 | Capture precedes installation | Admissions are copied before `install()` runs, so an installation cannot add one afterwards |
 | EP12 | Every admission, in order | Each captured admission runs, in capture order, on the retained history |
 | EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, `Execution.document`, authored work and any append |
-| EP14 | No ambient channel | Rebuilding and clearing the obsolete `executablemd.core.journal-admission` name, before and during the invocation, has no effect |
+| EP14 | No ambient channel | Rebuilding the obsolete `executablemd.core.journal-admission` context and setting it to `[]`, before and during the invocation, removes no captured admission |
+| EP15 | Precedence over an existing failure | A completion policy is not consulted when the document already failed, and cannot replace its failure |
+| EP16 | Additive against a success | A completion policy still turns a successful document into a failure |
+| EP17 | First failure wins | With two policies, the first to report a failure is the result and the second is never consulted |
+| EP20 | Concurrent requests | Two live invocations cannot settle each other by swapping requests; each still runs its own document |
+| EP21 | The exported default | Calling `Execution.operations.execute` directly with a live request refuses and consumes nothing; the request still settles its own invocation |
+| EP22 | Invalid values | `null`, `undefined`, primitives, symbols, plain objects and a proxy whose traps throw each produce a fresh cause-free `ExecutionProtocolError`, with no journal read or append |
+| EP23 | Invocation scope | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
+| EP18 | An immutable history | An admission that tries to set `length`, replace an index, delete a member, reverse or splice the retained history is ineffective or refused; the next admission sees the original, the completed replay stays completed, and nothing is appended |
 
 ### Tier SL — Own-scope context updates
 

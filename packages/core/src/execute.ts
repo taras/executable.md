@@ -10,7 +10,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { Err, Ok, scoped, spawn, withResolvers, until } from "effection";
+import { Err, Ok, resource, scoped, spawn, withResolvers, until } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
@@ -29,7 +29,7 @@ import { exec, readTextFile, cwd } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
-import { consumeAtTerminal, issueExecution } from "./execution-request.ts";
+import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
 import type { Context } from "effection";
@@ -618,16 +618,26 @@ function guardedJournal(
 ): DurableStream {
   const admitting: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
-      const retained = retainEvents(yield* stream.readAll());
-      // What the trusted host required of this history, on the retained
-      // snapshot every later phase reads, in the order it was captured and
-      // stopping at the first refusal. Ahead of root-history admission,
-      // ReplayGuard, terminal reuse, authored work and any append.
+      // Frozen before anyone is offered it, and offered to everyone. `readonly`
+      // is a compile-time claim: without this an admission could splice, reorder
+      // or empty the history in place, and every later admission, root-history
+      // validation and the replay itself would consume what it left behind.
+      // The events themselves are the retained graph's own, already sealed.
+      const retained: readonly DurableEvent[] = Object.freeze(
+        retainEvents(yield* stream.readAll()),
+      );
+      // What the trusted host required of this history, on that exact snapshot,
+      // in the order it was captured and stopping at the first refusal. Ahead of
+      // root-history admission, ReplayGuard, terminal reuse, authored work and
+      // any append.
       for (const admission of admissions) {
         yield* admission(retained);
       }
       admitRootHistory(retained, root, coroutineId);
-      return retained;
+      // The same objects the admissions were held to. `readAll` is declared
+      // mutable by the protocol, so this is a fresh array over the identical
+      // sealed events rather than a second reading of the backend.
+      return [...retained];
     },
     append: (event: DurableEvent) => stream.append(event),
   };
@@ -1476,17 +1486,17 @@ export interface ExecutionApi {
 }
 
 /**
- * The canonical terminal.
+ * The public Execution surface.
  *
- * It records what the chain settled on and consumes the request. It does not
- * run the document: that happens after the chain unwinds, in the invocation
- * that issued the request, which is what keeps a handler from completing an
- * execution by answering instead of delegating.
+ * Its `execute` default always refuses. A stable name composes replaceable
+ * policy across loaded copies, and this descriptor is the one everybody can
+ * reach — so it must not be a terminal that would settle any branded request
+ * handed to it. Canonical core dispatches through a private instance instead.
  */
 export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution", {
   // deno-lint-ignore require-yield
-  *execute(request: ExecutionRequest): Operation<void> {
-    consumeAtTerminal(request);
+  *execute(_request: ExecutionRequest): Operation<void> {
+    throw new ExecutionProtocolError("invoked execution outside canonical core");
   },
   *document(props: Record<string, Json>): Operation<DocumentResult> {
     return yield* documentWorkflow(props);
@@ -1503,7 +1513,21 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
  * exactly once, and only then does canonical core execute the document with the
  * options the terminal recorded.
  */
-function* runInvocation(
+function runInvocation(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+): Operation<DocumentExecution> {
+  // A child scope of the caller's, owned by this invocation. Whatever an
+  // installation establishes lives here: visible to the document and to its
+  // teardown, invisible to a concurrent invocation, and gone before the next
+  // execution in the same host scope — which a plain `yield*` in the caller's
+  // scope would not give, since every later execution would inherit it.
+  return resource(function* (provide) {
+    yield* provide(yield* invoke(options, installations));
+  });
+}
+
+function* invoke(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
 ): Operation<DocumentExecution> {
@@ -1518,8 +1542,28 @@ function* runInvocation(
   }
 
   const issued = issueExecution(options);
+
+  // The terminal for this invocation and no other.
+  //
+  // A stable Api *name* shares the middleware context, so every public handler
+  // installed anywhere — including through another loaded copy's descriptor —
+  // composes around this call exactly as it composes around the public
+  // descriptor's. What a name does not share is the default handler: each
+  // `createApi()` instance owns its own, and this one is closed over this
+  // invocation. So the public chain terminates in a continuation no middleware
+  // can reach, replace, or reorder, and a request another invocation issued is
+  // refused here rather than settling somebody else's execution.
+  const invocationExecution = createApi<{
+    execute(request: ExecutionRequest): Operation<void>;
+  }>("Execution", {
+    // deno-lint-ignore require-yield
+    *execute(request: ExecutionRequest): Operation<void> {
+      issued.consume(request);
+    },
+  });
+
   // Whatever a handler returns is not an execution, so it is not read.
-  yield* Execution.operations.execute(issued.request);
+  yield* invocationExecution.operations.execute(issued.request);
 
   return yield* executeDocument(issued.settle(), admissions, issued.completions());
 }
