@@ -272,6 +272,130 @@ function moduleSpecifiers(source: string): string[] {
   return found;
 }
 
+/** Every name a binding pattern introduces, however deeply it destructures. */
+function bindingNames(name: ts.BindingName, into: Set<string>): void {
+  if (ts.isIdentifier(name)) {
+    into.add(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (ts.isBindingElement(element)) {
+      bindingNames(element.name, into);
+    }
+  }
+}
+
+/** The names one statement introduces into the scope that holds it. */
+function statementNames(node: ts.Node, into: Set<string>): void {
+  if (ts.isVariableStatement(node)) {
+    for (const declaration of node.declarationList.declarations) {
+      bindingNames(declaration.name, into);
+    }
+    return;
+  }
+  if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) {
+    if (node.name !== undefined) {
+      into.add(node.name.text);
+    }
+    return;
+  }
+  if (
+    ts.isTypeAliasDeclaration(node) ||
+    ts.isInterfaceDeclaration(node) ||
+    ts.isEnumDeclaration(node)
+  ) {
+    into.add(node.name.text);
+    return;
+  }
+  if (ts.isImportDeclaration(node) && node.importClause !== undefined) {
+    const clause = node.importClause;
+    if (clause.name !== undefined) {
+      into.add(clause.name.text);
+    }
+    if (clause.namedBindings !== undefined) {
+      if (ts.isNamespaceImport(clause.namedBindings)) {
+        into.add(clause.namedBindings.name.text);
+      } else {
+        for (const element of clause.namedBindings.elements) {
+          into.add(element.name.text);
+        }
+      }
+    }
+  }
+}
+
+/** Whether this node opens a lexical scope, and what that scope declares. */
+function scopeNames(node: ts.Node): Set<string> | undefined {
+  const names = new Set<string>();
+  if (ts.isSourceFile(node) || ts.isBlock(node) || ts.isModuleBlock(node)) {
+    for (const statement of node.statements) {
+      statementNames(statement, names);
+    }
+    return names;
+  }
+  if (ts.isCaseBlock(node)) {
+    for (const clause of node.clauses) {
+      for (const statement of clause.statements) {
+        statementNames(statement, names);
+      }
+    }
+    return names;
+  }
+  if (ts.isFunctionLike(node)) {
+    for (const parameter of node.parameters) {
+      bindingNames(parameter.name, names);
+    }
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) &&
+      node.name !== undefined
+    ) {
+      names.add(node.name.text);
+    }
+    return names;
+  }
+  if (ts.isCatchClause(node)) {
+    if (node.variableDeclaration !== undefined) {
+      bindingNames(node.variableDeclaration.name, names);
+    }
+    return names;
+  }
+  if (ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node)) {
+    const initializer = node.initializer;
+    if (initializer !== undefined && ts.isVariableDeclarationList(initializer)) {
+      for (const declaration of initializer.declarations) {
+        bindingNames(declaration.name, names);
+      }
+    }
+    return names;
+  }
+  if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+    if (node.name !== undefined) {
+      names.add(node.name.text);
+    }
+    return names;
+  }
+  return undefined;
+}
+
+/**
+ * Whether this name reaches an ambient global rather than something declared.
+ *
+ * A parameter, import or local named `process` is not the host's `process`,
+ * and the scope that declares it is the only place that is true — so the
+ * answer is the enclosing scope chain, walked outward from the reference.
+ */
+function unbound(node: ts.Identifier): boolean {
+  let scope: ts.Node | undefined = node.parent;
+  while (scope !== undefined) {
+    const declared = scopeNames(scope);
+    if (declared !== undefined && declared.has(node.text)) {
+      return false;
+    }
+    scope = scope.parent;
+  }
+  return true;
+}
+
 /**
  * Host globals this source actually reads.
  *
@@ -290,7 +414,7 @@ function hostGlobals(source: string): string[] {
   const found: string[] = [];
 
   function visit(node: ts.Node): void {
-    if (ts.isIdentifier(node) && HOST_GLOBALS.includes(node.text) && names(node)) {
+    if (ts.isIdentifier(node) && HOST_GLOBALS.includes(node.text) && names(node) && unbound(node)) {
       if (!found.includes(node.text)) {
         found.push(node.text);
       }
@@ -487,6 +611,31 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(forbiddenNames("const b = Buffer.from([]);")).toEqual(["Buffer"]);
     expect(forbiddenNames("const here = __dirname;")).toEqual(["__dirname"]);
     expect(forbiddenNames("type F = Deno.FsFile;")).toEqual(["Deno"]);
+
+    // A name is the host's only when nothing declared it. A parameter, an
+    // import and a local are all something else that happens to be spelled
+    // the same way.
+    expect(
+      forbiddenNames("function inspect(process: { pid: number }) { return process.pid; }"),
+    ).toEqual([]);
+    expect(forbiddenNames("const Buffer = 1;\nconst b = Buffer;")).toEqual([]);
+    expect(forbiddenNames(`import { Deno } from "./host.ts";\nconst c = Deno.cwd();`)).toEqual([]);
+    expect(forbiddenNames(`import Buffer from "./bytes.ts";\nconst b = Buffer.from([]);`)).toEqual(
+      [],
+    );
+    expect(forbiddenNames("const { process } = deps;\nconst pid = process.pid;")).toEqual([]);
+    expect(forbiddenNames("try { run(); } catch (process) { report(process); }")).toEqual([]);
+    expect(forbiddenNames("[1].forEach((process) => report(process));")).toEqual([]);
+
+    // Shadowing is lexical, so it ends where its scope does.
+    expect(
+      forbiddenNames(
+        "function inner(process: unknown) { return process; }\nconst pid = process.pid;",
+      ),
+    ).toEqual(["process"]);
+    expect(
+      forbiddenNames("{\n  const Deno = 1;\n  use(Deno);\n}\nconst home = Deno.cwd();"),
+    ).toEqual(["Deno"]);
 
     // Every runtime this repository names an entry point after, not only the
     // one whose adapter exists today.
