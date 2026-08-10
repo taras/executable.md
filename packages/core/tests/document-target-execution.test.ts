@@ -949,37 +949,17 @@ describe("Tier TX — unreadable recorded selections", () => {
   });
 
   /**
-   * Where this boundary begins, stated rather than assumed.
+   * The envelope itself, which used to be an exception.
    *
-   * `result` is the protocol envelope, and `durableRun` reads it while building
-   * its replay index — before any guard's check phase. A stream that will not
-   * produce it therefore fails inside the durable protocol's own read, carrying
-   * that read's error, and no fixed diagnostic of this protocol's applies.
-   *
-   * What still has to hold is the safety property: the recorded terminal result
-   * is not reused, nothing authored runs, and nothing is appended. Those are
-   * asserted here; the diagnostic is not, because claiming it would describe a
-   * refusal this package never performed.
+   * `ReplayIndex` read every Yield's result while building itself — before any
+   * guard's check phase — so a stream that would not produce the envelope
+   * failed inside indexing and carried its own error out past every refusal.
+   * Indexing now reads identity and leaves the result alone until a consumer
+   * asks, which puts this case back inside the same sanitized refusal as the
+   * rest. The ordering property itself is pinned in the durable-streams suite.
    */
-  it("TX40: an unreadable result envelope fails before this boundary, reusing nothing", function* () {
-    const stream = yield* plantedStream(plantEnvelope("result"));
-    const seen: Probes = { names: [], ids: [] };
-    const error = yield* scoped(function* () {
-      yield* useProbes(seen);
-      try {
-        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Beta" }), stream }));
-      } catch (caught) {
-        return caught;
-      }
-      throw new Error("the run completed instead of failing");
-    });
-
-    // Not the recorded failure: no terminal result was reused for a request
-    // nobody made.
-    expect(isDocumentTargetError(error)).toBe(false);
-    expect((error as Error).message).not.toContain("matches no document target");
-    expect(seen.names).toEqual([]);
-    expect(stream.appended).toEqual([]);
+  it("TX40: a root event whose result refuses to be read is malformed", function* () {
+    yield* refusesTotally(plantEnvelope("result"));
   });
 
   it("TX41: a successful root result with no value at all is malformed", function* () {

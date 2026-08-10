@@ -2946,10 +2946,12 @@ for a request nobody made.
 The boundary is synchronous throughout, so it can swallow no cancellation and no
 durability failure — neither arises inside a synchronous parse.
 
-It begins where the durable protocol hands the event over. A `result` envelope
-that cannot be read at all fails inside `durableRun`'s own replay indexing,
-before any guard runs; no diagnostic of this protocol applies there, and what
-still holds is that the recorded terminal result is not reused.
+It covers the whole envelope, including a `result` that cannot be read at all.
+That requires replay indexing to read a Yield's *identity* without reading what
+it settled to: a guard's check phase runs after the index is built, so a guard
+that would refuse an event has to get its chance before the stream is asked to
+produce that event's result. `ReplayIndex` therefore defers the read until a
+consumer asks, and reads it once.
 
 A malformed record fails before the recorded terminal result can be reused, with
 one fixed, cause-free diagnostic and nothing else: no journal text, parser
@@ -7519,8 +7521,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a catalog or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
 | TX34–TX37 | Totality, inside the value | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
-| TX38/TX39/TX41 | Totality, on the envelope | A successful result whose value refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated, for the original failing selector and for a different selector that would otherwise succeed |
-| TX40 | Where the boundary begins | An unreadable `result` envelope fails in the durable protocol's own replay indexing, ahead of any guard; the recorded terminal result is still not reused, nothing authored runs, and nothing is appended |
+| TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
 
 ### Tier SL — Own-scope context updates

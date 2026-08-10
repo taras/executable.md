@@ -298,3 +298,88 @@ describe("ReplayIndex", () => {
     });
   });
 });
+
+/**
+ * Ordering — indexing reads identity, never a Yield's result.
+ *
+ * A replay guard's check phase runs after the index is built and before
+ * anything is replayed, so a guard that would refuse an event has to get its
+ * chance before the stream is asked what that event settled to. Reading
+ * eagerly took that chance away: a backend that could not produce a result
+ * failed inside construction, carrying its own error out past every guard.
+ *
+ * These are unit-level on purpose. The consequence for a document run is
+ * covered in `@executablemd/core`'s Tier TX; what belongs here is the ordering
+ * property itself.
+ */
+describe("ReplayIndex — result access ordering", () => {
+  /** A Yield whose result refuses to be read, counting attempts. */
+  function refusingYield(coroutineId: string, reads: { count: number }): DurableEvent {
+    const event: Record<string, unknown> = {
+      type: "yield",
+      coroutineId,
+      description: { type: "call", name: "work" },
+    };
+    Object.defineProperty(event, "result", {
+      enumerable: true,
+      get() {
+        reads.count++;
+        throw new Error("the backend will not produce this result");
+      },
+    });
+    return event as unknown as DurableEvent;
+  }
+
+  it("builds an index over a Yield whose result cannot be read", function* () {
+    const reads = { count: 0 };
+    const index = new ReplayIndex([refusingYield("root", reads)]);
+
+    // Construction completed, and it never asked.
+    expect(reads.count).toBe(0);
+    // Identity is indexed, because indexing is what identity is for.
+    expect(index.yieldCount("root")).toBe(1);
+    expect(index.peekYield("root")?.description).toEqual({ type: "call", name: "work" });
+    expect(index.hasAnyUnconsumedYields()).toBe(true);
+    // Still never asked: peeking is not consuming.
+    expect(reads.count).toBe(0);
+  });
+
+  it("reads the result only when a consumer asks for it", function* () {
+    const reads = { count: 0 };
+    const index = new ReplayIndex([refusingYield("root", reads)]);
+    const entry = index.peekYield("root");
+    expect(entry).toBeDefined();
+
+    let caught: unknown;
+    try {
+      void entry?.result;
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error | undefined)?.message).toBe("the backend will not produce this result");
+    expect(reads.count).toBe(1);
+  });
+
+  it("reads a result once, so a changing source cannot change replay", function* () {
+    let answers = 0;
+    const event: Record<string, unknown> = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "call", name: "work" },
+    };
+    Object.defineProperty(event, "result", {
+      enumerable: true,
+      get() {
+        answers++;
+        return { status: "ok", value: answers };
+      },
+    });
+
+    const index = new ReplayIndex([event as unknown as DurableEvent]);
+    const entry = index.peekYield("root");
+    expect(entry?.result).toEqual({ status: "ok", value: 1 });
+    expect(entry?.result).toEqual({ status: "ok", value: 1 });
+    expect(index.peekYield("root")?.result).toEqual({ status: "ok", value: 1 });
+    expect(answers).toBe(1);
+  });
+});

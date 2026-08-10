@@ -297,7 +297,17 @@ replay runs, even for children spawned during teardown.
 
 The replay index is a derived, in-memory structure built from the stream
 on startup. It provides per-coroutine cursored access to yield events
-and keyed access to close events:
+and keyed access to close events.
+
+Indexing reads each Yield's **identity** and not its result. A replay guard's
+check phase runs after the index is built and before anything is replayed, so a
+guard that would refuse an event has to get that chance before the stream is
+asked to produce what the event settled to — an eager read hands a backend that
+cannot produce a result the ability to fail past every guard, carrying its own
+error. The result is read when a consumer asks for it, and read once, so a
+source that answers differently on a second read cannot change what replay
+already used.
+
 
 ```typescript
 class ReplayIndex {
@@ -312,7 +322,8 @@ class ReplayIndex {
     for (const event of events) {
       if (event.type === "yield") {
         const list = this.yields.get(event.coroutineId) ?? [];
-        list.push({ description: event.description, result: event.result });
+        // Identity now; the result when a consumer asks. See below.
+        list.push(new RetainedYield(event));
         this.yields.set(event.coroutineId, list);
       }
       if (event.type === "close") {

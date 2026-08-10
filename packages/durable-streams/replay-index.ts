@@ -5,11 +5,50 @@
  * to Close events. See spec §4.1.
  */
 
-import type { Close, CoroutineId, DurableEvent, EffectDescription, Result } from "./types.ts";
+import type {
+  Close,
+  CoroutineId,
+  DurableEvent,
+  EffectDescription,
+  Result,
+  Yield,
+} from "./types.ts";
 
 export interface YieldEntry {
   description: EffectDescription;
   result: Result;
+}
+
+/**
+ * One retained Yield whose result has not been read yet.
+ *
+ * Indexing reads a Yield's identity, because that is what indexing is for. It
+ * deliberately does not read the *result*: a replay guard's check phase runs
+ * after the index is built and before anything is replayed, and a guard that
+ * would have refused an event must get to refuse it before the stream is asked
+ * to produce what that event settled to. Reading eagerly took that chance away
+ * — a backend that could not produce a result failed during construction,
+ * carrying its own error out past every guard.
+ *
+ * The read happens once and is kept, so a source that answers differently on a
+ * second read cannot change what replay already used.
+ */
+class RetainedYield implements YieldEntry {
+  readonly description: EffectDescription;
+  private event: Yield;
+  private settled: { result: Result } | undefined;
+
+  constructor(event: Yield) {
+    this.event = event;
+    this.description = event.description;
+  }
+
+  get result(): Result {
+    if (this.settled === undefined) {
+      this.settled = { result: this.event.result };
+    }
+    return this.settled.result;
+  }
 }
 
 export class ReplayIndex {
@@ -29,10 +68,7 @@ export class ReplayIndex {
           list = [];
           this.yields.set(event.coroutineId, list);
         }
-        list.push({
-          description: event.description,
-          result: event.result,
-        });
+        list.push(new RetainedYield(event));
       }
       if (event.type === "close") {
         this.closes.set(event.coroutineId, event);
