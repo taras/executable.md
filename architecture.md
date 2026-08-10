@@ -1008,6 +1008,58 @@ hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
 
+## Authoritative behavior
+
+**Authoritative** behavior decides what an execution *is*: whether it runs at
+all, what history it may replay from, what options it runs under, and what it
+settles to. **Non-authoritative** behavior observes, narrows, refuses, or adds —
+it can stop something from happening and can make a success into a failure, but
+it cannot bring an execution into being, substitute one, or rescue one.
+
+Public middleware is non-authoritative by construction. `Execution` and
+`ReplayGuard` handlers compose lexically, and a handler installed further out
+may answer without delegating — so anything they could decide would be decided
+by registration order. They may refuse; they may not complete.
+
+### Capability-backed execution
+
+Canonical core is authoritative for document execution. `Execution.execute`
+middleware is handed an opaque `ExecutionRequest` and returns nothing: it may
+inspect the options, narrow them, register an additive completion policy,
+install contextual behavior, refuse by throwing, and delegate. The document is
+run afterwards, by the invocation that issued the request, under the options the
+canonical terminal recorded.
+
+The request is the capability, and it is **one-use**. It carries a private
+reference to one invocation; a reconstructed look-alike, a superseded request, a
+foreign invocation's request, and a second delegation are each refused with a
+fresh, cause-free `ExecutionProtocolError`, before any journal read, expansion
+or append. Reaching the end of the chain without consuming the request is the
+same refusal.
+
+### Trusted host orchestration
+
+A **trusted host** is the code that decides what an execution is for — a CLI
+entrypoint, a workflow runner — as distinct from the document, the components it
+expands, and the middleware packages composed around it.
+
+A host attaches requirements to one execution through
+`@executablemd/core/host`: `executeInstalled(options, installations)`, where an
+installation carries `admissions` and an optional `install()`. Admissions are
+copied and frozen **before** any installation runs, so what ends up
+authoritative is fixed before any installed code, any middleware and any
+document code exists. Each runs inside the execution's own journal read, on the
+retained snapshot, in capture order, stopping at the first refusal — ahead of
+root-history admission, `ReplayGuard`, terminal reuse, authored work and any
+append.
+
+Admissions are refusal-only functions: they receive the retained history, return
+nothing, and never receive a `next`. They travel as values the host holds and
+passes — not through a context, an Api, a stable name, structural metadata or
+module-scoped state — which is why a separately loaded package composes here by
+handing over a closure rather than by agreeing on a name, and why no middleware
+can read, transport or remove the collection.
+
 ### The weak journal-provenance association
 
 Journal provenance is the one further exception, and it is deliberately narrow.

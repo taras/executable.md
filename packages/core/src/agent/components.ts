@@ -183,7 +183,14 @@ function* withRootProvider(
   }
 }
 
-/** The one failure a successful document earns from prompts and teardown. */
+/**
+ * The one failure a successful document earns from prompts and teardown.
+ *
+ * Flat, and primary first: the prompt failures in the order they were recorded,
+ * then whatever dismantling the provider raised. A reader looking for what went
+ * wrong first finds it first, and an `AggregateError` a member already is gets
+ * unpacked rather than nested.
+ */
 function completionFailure(
   failures: SequencedFailure[],
   teardown: Error | undefined,
@@ -191,17 +198,18 @@ function completionFailure(
   const promptErrors = [...failures]
     .sort((a, b) => a.sequence - b.sequence)
     .map((failure) => failure.error);
-  if (promptErrors.length === 0) {
-    return teardown;
+  const promptMessage = `${promptErrors.length} agent prompt(s) failed`;
+
+  if (promptErrors.length > 0 && teardown) {
+    return new AggregateError(
+      [...promptErrors, ...flatten(teardown)],
+      `${promptMessage}; agent provider teardown failed`,
+    );
   }
-  const prompted = new AggregateError(
-    promptErrors,
-    `${promptErrors.length} agent prompt(s) failed`,
-  );
-  if (!teardown) {
-    return prompted;
+  if (promptErrors.length > 0) {
+    return new AggregateError(promptErrors, promptMessage);
   }
-  return new AggregateError([prompted, teardown], `${promptErrors.length} agent prompt(s) failed`);
+  return teardown;
 }
 
 function flatten(error: Error): Error[] {

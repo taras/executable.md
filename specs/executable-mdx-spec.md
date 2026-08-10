@@ -6251,12 +6251,39 @@ execution, and the root eval scope (§5.5), and the output→stream
 bridge — so nothing leaks onto the caller's scope and the whole run
 inherits them contextually.
 
-`execute` is delivered through the `Execution` context Api. The default
-provider runs the document; extensions decorate the execution lifecycle
-with `Execution.around({ execute })` middleware — observing options,
-wrapping the returned handle, or mapping its completion `Result` — without
-introducing another execution function. Core itself has no knowledge of
-any particular extension.
+`execute` is delivered through the `Execution` context Api, and the Api is a
+**policy** surface rather than an execution one. A handler installed with
+`Execution.around({ execute })` receives an opaque `ExecutionRequest`, returns
+nothing, and has whatever it returns ignored. It may:
+
+- read the options as they stand (`request.options`);
+- narrow or replace them (`request.withOptions(options)`), which supersedes the
+  request it was derived from;
+- register an additive completion failure (`request.addCompletionFailure`);
+- install contextual behavior the document will inherit;
+- refuse, by throwing, before delegating; and
+- delegate.
+
+It may not complete an execution. Only canonical core runs a document, after the
+chain unwinds, with the options the terminal recorded — so a handler cannot
+answer with a synthetic execution, manufacture or replace a `DocumentExecution`,
+wrap its output stream, turn a failure into a success, or reach the admissions
+the invocation captured.
+
+The request is a one-use capability. It carries a private reference to a single
+invocation, and delegating a reconstructed look-alike, a request a later
+`withOptions()` superseded, a request another invocation issued, or the same
+request twice is an `ExecutionProtocolError` — fresh and cause-free, raised
+before the journal is read, before the document expands, and before anything is
+appended. An invocation whose chain returns without ever reaching the terminal
+fails the same way.
+
+Completion failures are additive and apply inside canonical completion, not by
+wrapping the returned handle: an execution that already failed keeps its own
+failure, the first policy that reports one turns a success into that failure,
+and no later policy replaces it.
+
+Core itself has no knowledge of any particular extension.
 
 ### 8.2 Usage from standalone code
 
@@ -7725,6 +7752,27 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
+
+### Tier EP — The execution protocol
+
+Defined in §8.1.
+
+| # | Test | Verify |
+|---|------|--------|
+| EP1 | Ordinary execution | `execute()` with nothing installed runs the document unchanged |
+| EP2 | Option transformation | Options replaced through `withOptions()` are the options the document runs under |
+| EP3 | Answering without delegating | A handler that returns instead of delegating is an `ExecutionProtocolError`: the journal is never read, nothing expands, nothing is appended |
+| EP4 | A substitute return | Whatever a handler returns after delegating is ignored, and the canonical execution is what the caller receives |
+| EP5 | Refusal before delegation | A throwing handler propagates, and performs no read, expansion, Yield or Close |
+| EP6 | Double delegation | Delegating the same request twice fails |
+| EP7 | A consumed request | Delegating a request a previous execution consumed fails |
+| EP8 | A reconstructed look-alike | A value rebuilt from the public shape is not a request, and nothing is read or run |
+| EP9 | A superseded request | Delegating a request a later `withOptions()` replaced fails |
+| EP10 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects, transforms and delegates the canonical request |
+| EP11 | Capture precedes installation | Admissions are copied before `install()` runs, so an installation cannot add one afterwards |
+| EP12 | Every admission, in order | Each captured admission runs, in capture order, on the retained history |
+| EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, `Execution.document`, authored work and any append |
+| EP14 | No ambient channel | Rebuilding and clearing the obsolete `executablemd.core.journal-admission` name, before and during the invocation, has no effect |
 
 ### Tier SL — Own-scope context updates
 
