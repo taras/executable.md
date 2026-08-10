@@ -277,21 +277,25 @@ class RetainedClose implements Close {
   declare readonly type: "close";
   declare readonly coroutineId: CoroutineId;
   declare readonly result: Result;
-  #source: Close;
-  #identity: Settled<CoroutineId> | undefined;
-  #settled: Settled<Result> | undefined;
+  #identity: Settled<CoroutineId>;
+  #settled: Settled<Result>;
 
   constructor(source: Close) {
-    this.#source = source;
+    // Settled here, while the history is being retained, rather than at a first
+    // later read. A Close carries the result a completed run hands back, and
+    // deferring that read leaves an interval — between the moment a consumer's
+    // private admission accepts the history and the moment terminal reuse
+    // consumes it — in which the backend still owns the answer and can replace
+    // it. Reading once at a later getter closes repeated reads and leaves that
+    // window open.
+    //
+    // Settling cannot throw: a refusal is captured and re-raised from the
+    // getter, so retaining a history is never the thing that fails.
+    this.#identity = settle(() => readCoroutineId(source));
+    this.#settled = settle(() => detachResult(source.result));
     present(this, "type", () => "close" as const);
-    present(this, "coroutineId", () => {
-      this.#identity ??= settle(() => readCoroutineId(this.#source));
-      return resolve(this.#identity);
-    });
-    present(this, "result", () => {
-      this.#settled ??= settle(() => detachResult(this.#source.result));
-      return resolve(this.#settled);
-    });
+    present(this, "coroutineId", () => resolve(this.#identity));
+    present(this, "result", () => resolve(this.#settled));
   }
 }
 

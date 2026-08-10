@@ -206,6 +206,26 @@ describe("retained history — a Close settles once", () => {
     expect(asked).toBe(1);
   });
 
+  /**
+   * Detached while the history is retained, not at a first later read.
+   *
+   * Memoizing on first access closes repeated reads and leaves the interval
+   * between a consumer's admission and terminal reuse open: nobody has touched
+   * the getter yet, so the backend still owns the answer.
+   */
+  it("a terminal result is detached before anyone reads it", function* () {
+    const value: Record<string, unknown> = { output: "original" };
+    const retained = retain({
+      type: "close",
+      coroutineId: "root",
+      result: { status: "ok", value },
+    } as unknown as DurableEvent);
+
+    // Mutated before the retained result has ever been read.
+    value["output"] = "planted after retention";
+    expect(retained.result).toEqual({ status: "ok", value: { output: "original" } });
+  });
+
   it("a terminal result is detached from the source", function* () {
     const value = { list: ["a"] };
     const retained = retain({
@@ -216,6 +236,15 @@ describe("retained history — a Close settles once", () => {
     const held = retained.result;
     value.list.push("injected");
     expect(held).toEqual({ status: "ok", value: { list: ["a"] } });
+  });
+
+  it("a cancelled terminal result is retained as itself", function* () {
+    const retained = retain({
+      type: "close",
+      coroutineId: "root",
+      result: { status: "cancelled" },
+    } as unknown as DurableEvent);
+    expect(retained.result).toEqual({ status: "cancelled" });
   });
 
   it("the control — an intact history classifies and settles normally", function* () {

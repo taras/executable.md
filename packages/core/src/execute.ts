@@ -642,7 +642,15 @@ function admitRootHistory(
       // history holding one while the import that authorized it is absent
       // describes a run that never happened, whichever coroutine the Close
       // claims to belong to.
+      //
+      // Its result is recognized here as well as its coroutine. The retained
+      // history has already settled both, and forcing them now is what makes a
+      // refusal this run's fixed diagnostic rather than a failure surfacing
+      // later, out of some other phase's hands.
       if (attempt(() => event.coroutineId) === undefined) {
+        throw new Error(UNREADABLE_ROOT_RECORD);
+      }
+      if (attempt(() => event.result) === undefined) {
         throw new Error(UNREADABLE_ROOT_RECORD);
       }
       terminal = true;

@@ -1712,3 +1712,149 @@ describe("Tier TX — a shifting terminal coroutine", () => {
     expect(reads).toBe(1);
   });
 });
+
+/**
+ * Tier TX — nothing the backend still owns survives admission.
+ *
+ * The private gate accepts a history; public `ReplayGuard` policy runs next;
+ * terminal reuse happens after that. If a Close still points at the backend's
+ * own result through all of it, those two later phases are a window in which
+ * the answer can be replaced — and public policy is code any enclosing scope
+ * may install.
+ *
+ * Recorded before the fix, resuming Alpha under a `check` handler that rewrites
+ * the raw Close result:
+ *
+ * ```json
+ * {"ok":true,"value":"planted after admission","appended":0}
+ * ```
+ */
+describe("Tier TX — a terminal result cannot be replaced after admission", () => {
+  /** An intact Alpha journal whose Close carries a caller-owned result. */
+  function* plantableJournal(): Operation<{
+    events: DurableEvent[];
+    planted: Record<string, unknown>;
+  }> {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), complete, { names: [], ids: [] });
+
+    const events: DurableEvent[] = [];
+    let planted: Record<string, unknown> = {};
+    for (const event of complete.snapshot()) {
+      if (event.type === "close") {
+        const value = parseJson(event.result.status === "ok" ? (event.result.value ?? null) : null);
+        if (isJsonObject(value)) {
+          planted = value;
+        }
+        events.push({
+          type: "close",
+          coroutineId: "root",
+          result: { status: "ok", value },
+        } as DurableEvent);
+        continue;
+      }
+      events.push(event);
+    }
+    return { events, planted };
+  }
+
+  function reading(events: DurableEvent[], appended: DurableEvent[]): DurableStream {
+    return {
+      // deno-lint-ignore require-yield
+      *readAll(): Operation<DurableEvent[]> {
+        return events;
+      },
+      // deno-lint-ignore require-yield
+      *append(event: DurableEvent): Operation<void> {
+        appended.push(event);
+      },
+    };
+  }
+
+  it("TX69: public policy cannot rewrite the terminal result it was shown", function* () {
+    const { events, planted } = yield* plantableJournal();
+    const appended: DurableEvent[] = [];
+    const stream = reading(events, appended);
+
+    const text = yield* scoped(function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          // Public policy, running between private admission and terminal
+          // reuse, rewriting what the backend still owns.
+          planted["output"] = "planted after admission";
+          planted["value"] = "planted after admission";
+          return yield* next(event);
+        },
+      });
+      return asText(
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target: "Alpha" }), stream })),
+      );
+    });
+
+    expect(text).toContain("alpha content");
+    expect(text).not.toContain("planted after admission");
+    expect(appended).toEqual([]);
+  });
+
+  it("TX70: a terminal result that refuses is the fixed diagnostic", function* () {
+    const { events } = yield* plantableJournal();
+    let asked = 0;
+    const refusing = events.map((event) => {
+      if (event.type !== "close") {
+        return event;
+      }
+      const close: Record<string, unknown> = { type: "close", coroutineId: "root" };
+      Object.defineProperty(close, "result", {
+        enumerable: true,
+        get() {
+          asked += 1;
+          if (asked === 1) {
+            throw new Error("the backend will not produce this result");
+          }
+          return { status: "ok", value: "answered later" };
+        },
+      });
+      return close as unknown as DurableEvent;
+    });
+
+    const appended: DurableEvent[] = [];
+    const seen: Probes = { names: [], ids: [] };
+    const error = yield* scoped(function* () {
+      yield* useProbes(seen);
+      try {
+        yield* collect(
+          yield* execute({
+            ...inlineSource(SECTIONS, { target: "Alpha" }),
+            stream: reading(refusing, appended),
+          }),
+        );
+      } catch (caught) {
+        return caught;
+      }
+      throw new Error("the run completed instead of failing");
+    });
+
+    expect((error as Error).message).toBe(UNREADABLE_RECORD);
+    expect((error as Error).cause).toBe(undefined);
+    expect((error as Error).message).not.toContain("answered later");
+    // Read once during retention, and never retried afterwards.
+    expect(asked).toBe(1);
+    expect(seen.names).toEqual([]);
+    expect(appended).toEqual([]);
+  });
+
+  it("TX71: the control — an intact terminal journal still replays", function* () {
+    const { events } = yield* plantableJournal();
+    const appended: DurableEvent[] = [];
+    const text = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(SECTIONS, { target: "Alpha" }),
+          stream: reading(events, appended),
+        }),
+      ),
+    );
+    expect(text).toContain("alpha content");
+    expect(appended).toEqual([]);
+  });
+});

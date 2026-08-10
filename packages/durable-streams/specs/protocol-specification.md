@@ -338,9 +338,18 @@ too, so no phase can be shown a different event than the phase before it. An
 event that refuses to say what it is is refused from every member.
 
 A Yield's settlement stays lazy, so a guard's check remains the first ordinary
-consumer of a recorded result. A Close keeps its own cell, memoized the same
-way. Every cell keeps both outcomes: a refusal is remembered and re-raised
-rather than retried.
+consumer of a recorded result.
+
+A Close's result is settled while the history is retained. A Close carries what
+a completed run hands back, and deferring that read leaves an interval — between
+the moment a consumer's own admission accepts the history and the moment
+terminal reuse consumes it — in which the backend still owns the answer and can
+replace it. Memoizing on first access closes repeated reads and leaves that
+window open.
+
+Every cell keeps both outcomes: a refusal is remembered and re-raised rather
+than retried, so retaining a history never fails and a refusal reaches whichever
+phase asks.
 
 The detached result is ordinary mutable JSON. Detaching is the claim against the
 stream; making the copy immutable would be a claim against the consumer, and

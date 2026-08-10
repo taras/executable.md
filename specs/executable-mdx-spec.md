@@ -2775,7 +2775,10 @@ of a retained terminal result being reused, of authored work, and of any append.
 The snapshot it owns covers **every** event that participates in admission,
 indexing, or terminal reuse — a recorded completion as much as a recorded effect
 — so a completion cannot belong to one coroutine while admission asks and to
-another while the run reuses it. Public `ReplayGuard` policy remains composable and may short-circuit
+another while the run reuses it, and cannot carry one result while admission
+accepts it and another while the run consumes it. A recorded completion's result
+is detached as the history is retained, and recognized during admission, so
+nothing the backend still owns reaches a later phase. Public `ReplayGuard` policy remains composable and may short-circuit
 other public guards; it cannot suppress this.
 
 Reusing a recorded terminal result additionally requires exactly one
@@ -7600,7 +7603,9 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX47–TX50 | Terminal history | Targeted and untargeted completed journals with the root import removed, and one with it duplicated, are refused before terminal reuse; an intact journal still replays |
 | TX51–TX56 | Identity authority | A completed or partial Alpha journal resumed as Beta is refused with an enclosing `check` handler that never delegates, with the equivalent `admit` handler, and with a same-name guard from another loaded copy; same-target replay and ordinary guard composition are the controls |
 | TX57–TX60 | Terminal binding | A root import on a child coroutine, a valid one plus a root-named child event, none at all, and two on the terminal coroutine each refuse before terminal reuse |
-| TX61–TX63 | Detached but mutable | A replayed run updates a restored object exactly as a live one does; `__proto__` is an own data member; nested objects and arrays detach from the journal's own |
+| TX61 | Detached but mutable | A partial replay restores a binding from the journal and the live continuation writes to it, matching the complete run exactly |
+| TX68 | Shifting terminal coroutine | A Close that moves from a child to the root returns nothing: the fixed diagnostic, no retained output, nothing expanded, nothing appended, the coroutine asked once |
+| TX69–TX71 | Post-admission replacement | Public guard policy rewriting the backend's own terminal result does not change what replay returns; a terminal result that refuses is the fixed diagnostic, read once, with nothing expanded and nothing appended; the intact control replays |
 | TX64–TX67 | Validation order | An unresolvable target outranks an invalid schema on inspection, live execution, and replay; a resolvable target lets the schema failure be reported; the control runs |
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
