@@ -87,6 +87,10 @@ const WorkspaceInvocationCollision = createApi<InvocationCollisionApi>(
   },
 );
 
+/** The diagnostic a provenance refusal must carry, and no other. */
+const PROVENANCE_REFUSAL =
+  "the live Workspace journal does not have the provenance of the selected WorkflowRun.";
+
 function* raised(operation: Operation<unknown>): Operation<unknown> {
   try {
     yield* operation;
@@ -892,6 +896,10 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         );
         expect(failure).toBe(caught);
         expect(failure).toBeInstanceOf(Error);
+        // The refusal names the fact that failed. A generic, stale-identity or
+        // unrelated pre-transaction error would satisfy every other assertion
+        // here while reporting the wrong thing to whoever reads the run.
+        expect(Reflect.get(failure ?? {}, "message")).toBe(PROVENANCE_REFUSAL);
         expect(mutations).toBe(0);
         expect(laterExecutions).toBe(0);
         // Refused before the transaction does any work: no savepoint opened,

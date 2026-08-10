@@ -54,7 +54,7 @@ Existing documents and code get aligned to this section retroactively.
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
-| journal provenance | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
+| `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
 ## Three axes
 
@@ -947,8 +947,9 @@ coordination; a wrapper-private one could not refuse duplicate establishment on
 an arbitrary stream. Neither adds a security property this lacks, and both
 enlarge the trusted surface.
 
-This is not permission for module-scoped caches or registries generally. Any
-other candidate is refused unless it satisfies every constraint above.
+This exception authorizes only the canonical `JournalProvenance` association
+described here. It creates no general eligibility test for module-scoped state;
+any other exception requires its own explicit architecture decision.
 
 ## State across loaded copies
 

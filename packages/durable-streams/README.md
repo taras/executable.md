@@ -677,7 +677,7 @@ import {
   establishJournalProvenance,
   guardDurableStream,
   preserveJournalProvenance,
-} from "@effectionx/durable-streams";
+} from "@executablemd/durable-streams";
 
 const provenance = establishJournalProvenance(journal); // retained by the provider
 ```
