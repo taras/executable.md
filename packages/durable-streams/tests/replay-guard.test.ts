@@ -823,6 +823,8 @@ describe("durableRun — a retained result detaches completely", () => {
   });
 
   it("a detached result shares nothing with the source it was read from", function* () {
+    // Detachment is the claim, not immutability: the copy is ordinary JSON and
+    // a consumer may write to it, which `updates an existing property` covers.
     const list = ["a"];
     const nested = { list };
     const source = { nested };
@@ -837,8 +839,7 @@ describe("durableRun — a retained result detaches completely", () => {
     const result = index.peekYield("root")?.result;
     const value = result?.status === "ok" ? result.value : undefined;
 
-    // The settlement itself is stable, and nothing beneath it is the source's.
-    expect(Object.isFrozen(result)).toBe(true);
+    // Nothing beneath the settlement is the source's.
     expect(value).not.toBe(source);
     expect(member(value, "nested")).not.toBe(nested);
     expect(member(member(value, "nested"), "list")).not.toBe(list);

@@ -12,14 +12,26 @@
  * (e.g., content hash, status code). There is no separate metadata field —
  * inputs belong in the effect description, outputs belong in the result.
  *
- * The API has two phases:
+ * A guard is **composable policy, not authority**. Guards compose through
+ * `Api.around`, and a handler installed further out may decline to call `next`.
+ * That is what composition is for, and it is why an invariant that must not be
+ * negotiable — durable identity above all — belongs somewhere a caller cannot
+ * replace, such as inside the `DurableStream` a consumer hands to `durableRun`.
+ *
+ * The API has three stages:
  *
  * 1. **check** (before replay begins): Runs in generator context inside
  *    `durableRun`, after the journal is loaded but before the workflow starts.
  *    I/O is allowed — this is where file hashing, network checks, and other
  *    observation-gathering happens. Results are cached in middleware closures.
  *
- * 2. **decide** (during replay): Runs synchronously inside
+ * 2. **admit** (after every check, before terminal reuse): Runs once with the
+ *    retained history as a whole. A guard that requires something of the
+ *    history rather than of one event — that an event it validates is present,
+ *    and present once — refuses here, because a per-event check has nothing to
+ *    object to in a journal that omits the event. Default is a no-op.
+ *
+ * 3. **decide** (during replay): Runs synchronously inside
  *    `DurableEffect.enter()`, after identity matching succeeds but before
  *    the stored result is fed to the generator. Must be pure and side-effect-
  *    free. Reads from the cache populated during the check phase.

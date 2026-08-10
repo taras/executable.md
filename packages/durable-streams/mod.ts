@@ -25,6 +25,7 @@ export type {
 
 // ReplayIndex
 export { ReplayIndex } from "./replay-index.ts";
+export { detachJson, retainEvents, RetainedYield } from "./retained.ts";
 export type { YieldEntry } from "./replay-index.ts";
 
 // Stream interface

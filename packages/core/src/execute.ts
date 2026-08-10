@@ -17,8 +17,10 @@ import {
   durableRun,
   createDurableOperation,
   ephemeral,
-  ReplayGuard,
+  retainEvents,
   StaleInputError,
+  type CoroutineId,
+  type DurableEvent,
   type DurableStream,
   type Yield,
 } from "@executablemd/durable-streams";
@@ -356,6 +358,9 @@ type SelectionOutcome =
  */
 const UNREADABLE_ROOT_RECORD = "The recorded root document import cannot be read by this version.";
 
+/** The coroutine a document execution's own terminal result belongs to. */
+const ROOT_COROUTINE = "root";
+
 /**
  * What a recorded event turned out to be.
  *
@@ -574,6 +579,98 @@ function describeSelection(selection: SelectionOutcome): string {
 }
 
 /**
+ * The journal a document execution reads and appends through, with the
+ * definition-identity check that a resumed run must pass built into the read.
+ *
+ * **This authority is not middleware.** Exact canonical target is
+ * workflow-definition identity, and identity may not be decided by anything a
+ * document, a component, or an enclosing scope can replace. A public
+ * `ReplayGuard` handler installed further out can decline to call `next`, which
+ * is exactly what composable policy is allowed to do — and exactly why the
+ * comparison cannot live there. Here it is a step inside `readAll`, owned by
+ * the execution, reachable through no context and replaceable by nothing.
+ *
+ * It runs where a journal first becomes readable, so it is ahead of everything
+ * a wrong answer could reach: public guard policy, any retained Yield reaching
+ * execution, a retained Close being reused, authored work, and any append.
+ *
+ * It also owns the retained snapshot. The events it validates are the events it
+ * returns, so the identity and settlement it decided on are what every later
+ * phase observes rather than a second reading of the backend's own objects.
+ */
+function guardedJournal(
+  stream: DurableStream,
+  root: RootDocumentSource,
+  coroutineId: CoroutineId,
+): DurableStream {
+  return {
+    *readAll(): Operation<DurableEvent[]> {
+      const retained = retainEvents(yield* stream.readAll());
+      admitRootHistory(retained, root, coroutineId);
+      return retained;
+    },
+    append: (event: DurableEvent) => stream.append(event),
+  };
+}
+
+/**
+ * Decide whether this run may replay the history it was handed.
+ *
+ * Synchronous and total over journal-provided values: every way the history can
+ * refuse to be read is the one fixed diagnostic, and the retained events it
+ * reads are the ones the caller keeps.
+ */
+function admitRootHistory(
+  retained: readonly DurableEvent[],
+  root: RootDocumentSource,
+  coroutineId: CoroutineId,
+): void {
+  const imports: Yield[] = [];
+  let terminal = false;
+  for (const event of retained) {
+    const kind = attempt(() => event.type);
+    if (kind === "close") {
+      terminal ||= attempt(() => event.coroutineId) === coroutineId;
+      continue;
+    }
+    if (kind !== "yield" || event.type !== "yield") {
+      continue;
+    }
+    if (isRootImport(event)) {
+      imports.push(event);
+    }
+  }
+
+  // A journal with no retained terminal result replays what it has and then
+  // continues live, so a root import it does not contain is one this run
+  // performs. A journal that carries one is standing behind a selection: a
+  // history that recorded none, recorded two, or recorded one belonging to some
+  // other coroutine establishes nothing for this coroutine to stand behind.
+  if (terminal) {
+    const owned = imports.filter((event) => attempt(() => event.coroutineId) === coroutineId);
+    if (imports.length !== 1 || owned.length !== 1) {
+      throw new Error(UNREADABLE_ROOT_RECORD);
+    }
+  }
+
+  for (const event of imports) {
+    admitRootSelection(event, root);
+  }
+}
+
+/** Whether a retained event is recognizably the root import. */
+function isRootImport(event: DurableEvent): boolean {
+  return (
+    attempt(
+      () =>
+        event.type === "yield" &&
+        event.description.type === "import_component" &&
+        event.description.name === "__root__",
+    ) === true
+  );
+}
+
+/**
  * Hold a resumed run to the selection its journal recorded.
  *
  * Only `type` and `name` decide whether a journal entry matches, and the root
@@ -587,78 +684,35 @@ function describeSelection(selection: SelectionOutcome): string {
  * glob naming the same section replays, and so does the same failing selector,
  * while any difference in outcome is stale input.
  *
- * A recorded failed selection is reproduced here, not delegated. Nothing later
- * would reproduce it with its fields intact — `durableRun` reuses a recorded
- * root Close before any effect is replayed, and that path restores a
+ * A recorded failed selection is reproduced here, not left for later. Nothing
+ * later would reproduce it with its fields intact — `durableRun` reuses a
+ * recorded root Close before any effect is replayed, and that path restores a
  * deserialized error — so a recorded failure is rebuilt from its structural
- * record and raised before that reuse. Either way no authored effect runs.
+ * record and raised ahead of that reuse. Either way no authored effect runs.
  *
- * This is also why validation is in the check phase rather than the decide
- * phase: a decision made during replay never runs for a completed journal,
- * which is exactly the run whose recorded selection must still be the one being
- * asked for.
+ * Partial histories are held to the same rule: a recorded root import that
+ * names another section is refused before replay continues into it.
  */
-function holdRootSelection(root: RootDocumentSource): Operation<void> {
-  return ReplayGuard.around({
-    *check([event], next) {
-      const recorded = recordedRootImport(event);
-      if (recorded.kind === "unrelated") {
-        return yield* next(event);
-      }
-      // Refused here, so a corrupted record can never reach the recorded
-      // terminal result. Nothing is delegated, nothing is executed, and no
-      // history is appended.
-      if (recorded.kind === "malformed") {
-        throw new Error(UNREADABLE_ROOT_RECORD);
-      }
-      const requested = requestedSelection(root, recorded.outline);
-      if (!sameSelection(recorded.selection, requested)) {
-        throw new StaleInputError(
-          `the recorded root document import ran ${describeSelection(recorded.selection)}, and ` +
-            `this run asks for ${describeSelection(requested)}. Re-run the document from the ` +
-            "start rather than resuming from a journal that recorded another selection.",
-          { coroutineId: event.coroutineId, description: event.description },
-        );
-      }
-      if (recorded.selection.kind === "failed") {
-        throw documentTargetError(recorded.selection.failure);
-      }
-      return yield* next(event);
-    },
-    *admit([history], next) {
-      // A journal with no retained terminal result replays what it has and
-      // then continues live, so a root import it does not contain is one this
-      // run performs. A journal that *does* carry a terminal result is
-      // different: reusing it means standing behind a selection, and a history
-      // that never recorded one — or recorded two — establishes nothing to
-      // stand behind.
-      if (history.terminal && countRootImports(history.yields) !== 1) {
-        throw new Error(UNREADABLE_ROOT_RECORD);
-      }
-      return yield* next(history);
-    },
-  });
-}
-
-/**
- * How many retained events are recognizably the root import.
- *
- * Recognized by description alone, so an import that failed for reasons
- * selection knows nothing about still counts as the one that happened. An
- * event that will not say what it is is not counted, which leaves a history
- * that offers no recognizable root import — refused above.
- */
-function countRootImports(yields: readonly Yield[]): number {
-  let found = 0;
-  for (const event of yields) {
-    const root = attempt(
-      () => event.description.type === "import_component" && event.description.name === "__root__",
-    );
-    if (root === true) {
-      found += 1;
-    }
+function admitRootSelection(event: Yield, root: RootDocumentSource): void {
+  const recorded = recordedRootImport(event);
+  if (recorded.kind === "unrelated") {
+    return;
   }
-  return found;
+  if (recorded.kind === "malformed") {
+    throw new Error(UNREADABLE_ROOT_RECORD);
+  }
+  const requested = requestedSelection(root, recorded.outline);
+  if (!sameSelection(recorded.selection, requested)) {
+    throw new StaleInputError(
+      `the recorded root document import ran ${describeSelection(recorded.selection)}, and ` +
+        `this run asks for ${describeSelection(requested)}. Re-run the document from the ` +
+        "start rather than resuming from a journal that recorded another selection.",
+      { coroutineId: event.coroutineId, description: event.description },
+    );
+  }
+  if (recorded.selection.kind === "failed") {
+    throw documentTargetError(recorded.selection.failure);
+  }
 }
 
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>
@@ -1279,10 +1333,6 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
         { at: "min" },
       );
 
-      // Installed before the durable run, so the check phase sees the recorded
-      // root import before `durableRun` can reuse a recorded Close.
-      yield* holdRootSelection(root);
-
       // The policy is selected here — before the durable run and before any
       // document, frontmatter, prop, component, or eval code exists — so the
       // root component import is already behind the gate. What comes back is
@@ -1290,8 +1340,11 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       // execution that owns it.
       const journal = yield* useSecretDetection(secretDetection, stream);
 
+      // The journal is wrapped before it reaches `durableRun`, so the identity
+      // check happens inside the read that every phase downstream depends on
+      // rather than in middleware anything could replace.
       const returned = yield* durableRun(() => Execution.operations.document(props), {
-        stream: journal,
+        stream: guardedJournal(journal, root, ROOT_COROUTINE),
       });
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);

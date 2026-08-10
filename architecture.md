@@ -647,6 +647,20 @@ selection is an outcome too, and is recorded and compared as one — otherwise a
 journal left by a selector that matched nothing would answer a later request for
 a section that does exist.
 
+Validating that identity is **execution-owned**. Replay guards are composable
+policy — a handler installed further out may decline to delegate — so identity,
+which must not be negotiable, is not decided there. The execution owns the
+journal it replays through and validates the recorded selection inside the read
+itself, ahead of public guard policy, of a retained terminal result being
+reused, of authored work, and of any append. Reusing a terminal result also
+requires exactly one recognizable root import belonging to the coroutine whose
+result is being reused.
+
+Every public path validates in one order: parse the source, resolve the target,
+compile schemas, then build the projected definition. A caller who named a
+section the document does not offer hears that, rather than a complaint about a
+schema they never reached.
+
 A recorded selection is a closed protocol, and a record that does not satisfy it
 is refused rather than delegated. "This event is not the root import" and "the
 root import, malformed" are different answers: one continues, the other fails

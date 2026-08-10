@@ -5,14 +5,13 @@
  * to Close events. See spec §4.1.
  */
 
+import { retainEvents } from "./retained.ts";
 import type {
   Close,
   CoroutineId,
   DurableEvent,
   EffectDescription,
-  Json,
   Result,
-  SerializedError,
   Yield,
 } from "./types.ts";
 
@@ -21,157 +20,10 @@ export interface YieldEntry {
   result: Result;
 }
 
-/** What one retained Yield's single read of the stream produced. */
-type Settled =
-  | { readonly kind: "result"; readonly result: Result }
-  | { readonly kind: "refusal"; readonly refusal: unknown };
-
-/**
- * A detached copy of one retained JSON value.
- *
- * Every property is read once and rebuilt, so nothing the stream still owns
- * remains reachable: a nested accessor cannot answer one thing to a guard and
- * another to replay, and no later mutation of the source changes what replay
- * used. Keys are defined rather than assigned, because `__proto__` reaches an
- * inherited setter on some runtimes and would rewrite the copy's prototype
- * instead of becoming a member of it.
- *
- * The copy is not frozen through. Detaching is what makes the settlement
- * stable against the journal; freezing would be a claim against the *consumer*,
- * and replayed values are legitimately mutable — an eval binding restored from
- * a journal is pushed to by the iteration that resumes on it.
- *
- * A cycle is refused. `Json` has none, and a value that does is not a retained
- * result this can detach — refusing is remembered like any other refusal.
- */
-function detachJson(value: Json, seen: Set<object>): Json {
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-  if (seen.has(value)) {
-    throw new TypeError("a retained result cannot contain a cycle");
-  }
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const items: Json[] = [];
-      for (let index = 0; index < value.length; index++) {
-        items.push(detachJson(value[index]!, seen));
-      }
-      return items;
-    }
-    const detached: { [key: string]: Json } = {};
-    for (const [key, member] of Object.entries(value)) {
-      Object.defineProperty(detached, key, {
-        value: detachJson(member, seen),
-        enumerable: true,
-        writable: false,
-        configurable: false,
-      });
-    }
-    return detached;
-  } finally {
-    seen.delete(value);
-  }
-}
-
-/** A detached copy of a retained failure's description. */
-function detachError(error: SerializedError): SerializedError {
-  const detached: SerializedError = { message: error.message };
-  const name = error.name;
-  const stack = error.stack;
-  return Object.freeze({
-    ...detached,
-    ...(name === undefined ? {} : { name }),
-    ...(stack === undefined ? {} : { stack }),
-  });
-}
-
-/**
- * A retained result detached from everything the stream still owns.
- *
- * Each member is read exactly once, here, and the tree beneath it is rebuilt.
- * Freezing only the outer object would leave a `value` the journal can still
- * rewrite — which is the whole substitution this exists to prevent.
- */
-function detachResult(result: Result): Result {
-  const status = result.status;
-  if (status === "ok") {
-    if (!("value" in result)) {
-      return Object.freeze({ status });
-    }
-    const value = result.value;
-    return Object.freeze(
-      value === undefined ? { status } : { status, value: detachJson(value, new Set()) },
-    );
-  }
-  if (status === "err") {
-    if (!("error" in result)) {
-      throw new TypeError("a retained failure carries the error it failed with");
-    }
-    return Object.freeze({ status, error: detachError(result.error) });
-  }
-  return Object.freeze({ status });
-}
-
-/**
- * One retained Yield, and the one cell that owns what it settled to.
- *
- * Indexing reads a Yield's identity, because that is what indexing is for. It
- * deliberately does not read the *result*: a replay guard's check phase runs
- * after the index is built and before anything is replayed, and a guard that
- * would have refused an event must get to refuse it before the stream is asked
- * to produce what that event settled to. Reading eagerly took that chance away
- * — a backend that could not produce a result failed during construction,
- * carrying its own error out past every guard.
- *
- * The cell spans the whole replay lifecycle, not one accessor. A guard
- * validates a retained result and a replay consumer then uses it, and those
- * must be the same value: a source answering differently between the two would
- * have the guard approve one thing and execution perform another, which no
- * amount of validation downstream can detect. This is therefore the object the
- * check phase is handed as well as the one replay reads from, and the stream's
- * event is consulted at most once for either.
- *
- * The settlement is detached from the stream entirely, not merely frozen at the
- * top: the whole result tree is rebuilt from members read once each, so a
- * nested accessor beneath `value` cannot answer one thing to a guard and
- * another to replay. Both outcomes are kept — a refusal is remembered and
- * re-raised rather than retried, so a source cannot refuse the guard and then
- * answer replay.
- */
-class RetainedYield implements YieldEntry {
-  readonly type = "yield" as const;
-  readonly coroutineId: CoroutineId;
-  readonly description: EffectDescription;
-  private event: Yield;
-  private settled: Settled | undefined;
-
-  constructor(event: Yield) {
-    this.event = event;
-    this.coroutineId = event.coroutineId;
-    this.description = event.description;
-  }
-
-  get result(): Result {
-    if (this.settled === undefined) {
-      try {
-        this.settled = { kind: "result", result: detachResult(this.event.result) };
-      } catch (refusal) {
-        this.settled = { kind: "refusal", refusal };
-      }
-    }
-    if (this.settled.kind === "refusal") {
-      throw this.settled.refusal;
-    }
-    return this.settled.result;
-  }
-}
-
 export class ReplayIndex {
   private yields = new Map<CoroutineId, YieldEntry[]>();
-  /** Every retained Yield in stream order, each owning its own result cell. */
-  private retained: RetainedYield[] = [];
+  /** Every retained Yield in stream order, each owning its own settled cells. */
+  private retained: Yield[] = [];
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
   /** Coroutines where replay has been disabled (run-live mode). */
@@ -179,17 +31,24 @@ export class ReplayIndex {
   /** Retained coroutine identities reached by the current definition. */
   private claimed = new Set<CoroutineId>();
 
+  /**
+   * Index a journal's events by identity, without reading what they settled to.
+   *
+   * The events are retained first — idempotently, so a caller that already
+   * produced the stable history hands the same objects on rather than a second
+   * wrapping of them, and every phase then observes one identity and one
+   * settlement per event.
+   */
   constructor(events: DurableEvent[]) {
-    for (const event of events) {
+    for (const event of retainEvents(events)) {
       if (event.type === "yield") {
         let list = this.yields.get(event.coroutineId);
         if (!list) {
           list = [];
           this.yields.set(event.coroutineId, list);
         }
-        const entry = new RetainedYield(event);
-        this.retained.push(entry);
-        list.push(entry);
+        this.retained.push(event);
+        list.push(event);
       }
       if (event.type === "close") {
         this.closes.set(event.coroutineId, event);

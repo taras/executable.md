@@ -324,12 +324,31 @@ consumer, and replayed values are legitimately mutable. A read that threw is
 remembered and re-raised rather than retried, so a source cannot refuse the
 guard and then answer replay.
 
+A retained Yield's **identity** — its event type, its coroutine, and its
+complete effect description — is read together and once, and kept. Reading those
+members separately would let a source present an unrelated event to one phase
+and a significant one to the next, which is the same substitution as answering
+differently about a result, one level up. Identity and settlement are separate
+cells; both keep both outcomes.
+
+The detached result is ordinary mutable JSON. Detaching is the claim against the
+stream; making the copy immutable would be a claim against the consumer, and
+replayed values are legitimately written to.
+
 After every retained event has been offered to `check` and before any recorded
 terminal result is reused, guards receive the retained history once through
 `admit`. A guard that requires something of the history as a whole — that an
 event it validates is present, and present once — refuses there, because a
 per-event check has nothing to object to in a journal that simply omits the
-event.
+event. Its default is a no-op.
+
+Replay guards are **composable policy, not authority**. Guards compose through
+middleware, and a handler installed further out may decline to delegate — which
+is what composition is for. An invariant that must not be negotiable therefore
+does not belong in a guard. A consumer whose durable identity depends on
+validating retained history owns that validation itself, for example by wrapping
+the `DurableStream` it passes to `durableRun` so the check happens inside the
+read every later phase depends on.
 
 
 ```typescript

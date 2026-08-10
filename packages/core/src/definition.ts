@@ -162,11 +162,16 @@ export function* parseRootMarkdownDefinition(
   content: string,
   selector?: string,
 ): Operation<ParsedRootDocument> {
+  // The order is the contract, and it is the same on every public path.
+  // Syntax first, because the outline comes from it; then the target, because a
+  // caller who named nothing the document offers asked the wrong question and
+  // should hear that rather than a complaint about a schema they did not reach;
+  // then the schemas; then the projected definition.
   const body = parseSource(path, content);
-  const frontmatter = yield* compileFrontmatter(body.data);
   const outline = outlineDocument(body.content, scanComponentSpans(body.content));
 
   if (selector === undefined) {
+    const frontmatter = yield* compileFrontmatter(body.data);
     const bodySegments = scanSegments(body.content, {
       path,
       baseOffset: body.baseOffset,
@@ -179,6 +184,7 @@ export function* parseRootMarkdownDefinition(
   }
 
   const entry = selectTarget(outline, selector);
+  const frontmatter = yield* compileFrontmatter(body.data);
   const newlines = newlineCounts(body.content);
   const bodySegments: Segment[] = [];
   for (const range of retainedRanges(outline, entry)) {

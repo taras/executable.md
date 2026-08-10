@@ -10,7 +10,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ReplayIndex } from "../replay-index.ts";
-import type { DurableEvent, Json } from "../types.ts";
+import { RetainedYield } from "../retained.ts";
+import type { DurableEvent, Json, Yield } from "../types.ts";
 
 function yieldEvent<T extends Json>(
   coroutineId: string,
@@ -381,5 +382,154 @@ describe("ReplayIndex — result access ordering", () => {
     expect(entry?.result).toEqual({ status: "ok", value: 1 });
     expect(index.peekYield("root")?.result).toEqual({ status: "ok", value: 1 });
     expect(answers).toBe(1);
+  });
+});
+
+/**
+ * A retained Yield has one identity, read once.
+ *
+ * Identity is what every phase uses to decide *which* event it is looking at:
+ * the private authority gate finds the root import by it, the index groups by
+ * it, guards read it, and replay matches on it. Read separately, a source can
+ * present an unrelated event to one phase and the root import to the next —
+ * which is the same substitution as answering differently about a result, one
+ * level up.
+ */
+describe("RetainedYield — one stable identity", () => {
+  /** A Yield whose identity members answer differently on each read. */
+  function shifting(answers: {
+    type?: string[];
+    coroutineId?: string[];
+    name?: string[];
+    extra?: Json[];
+  }): { event: DurableEvent; reads: { count: number } } {
+    const reads = { count: 0 };
+    // Each member counts its own reads, so one accessor's answers cannot be
+    // shifted by another's; `reads.count` totals them.
+    const answering = <T>(list: T[] | undefined, fallback: T): (() => T) => {
+      const answers = list ?? [fallback];
+      let taken = 0;
+      return () => {
+        const answer = answers[Math.min(taken, answers.length - 1)]!;
+        taken++;
+        reads.count++;
+        return answer;
+      };
+    };
+    const description: Record<string, unknown> = {};
+    Object.defineProperty(description, "type", { enumerable: true, value: "import_component" });
+    Object.defineProperty(description, "name", {
+      enumerable: true,
+      get: answering(answers.name, "__root__"),
+    });
+    Object.defineProperty(description, "marker", {
+      enumerable: true,
+      get: answering(answers.extra, "stable"),
+    });
+    const event: Record<string, unknown> = { result: { status: "ok", value: 1 } };
+    Object.defineProperty(event, "type", {
+      enumerable: true,
+      get: answering(answers.type, "yield"),
+    });
+    Object.defineProperty(event, "coroutineId", {
+      enumerable: true,
+      get: answering(answers.coroutineId, "root"),
+    });
+    Object.defineProperty(event, "description", { enumerable: true, value: description });
+    return { event: event as unknown as DurableEvent, reads };
+  }
+
+  it("a name that turns into __root__ is seen the same way by every phase", function* () {
+    const { event } = shifting({ name: ["unrelated", "__root__"] });
+    const retained = new RetainedYield(event as Yield);
+    const answers = [
+      retained.description.name,
+      retained.description.name,
+      retained.description.name,
+    ];
+    expect(answers).toEqual(["unrelated", "unrelated", "unrelated"]);
+  });
+
+  it("a name that turns away from __root__ is seen the same way by every phase", function* () {
+    const { event } = shifting({ name: ["__root__", "unrelated"] });
+    const retained = new RetainedYield(event as Yield);
+    expect(retained.description.name).toBe("__root__");
+    expect(retained.description.name).toBe("__root__");
+  });
+
+  it("a shifting coroutine id settles once", function* () {
+    const { event } = shifting({ coroutineId: ["root", "root.3"] });
+    const retained = new RetainedYield(event as Yield);
+    expect(retained.coroutineId).toBe("root");
+    expect(retained.coroutineId).toBe("root");
+  });
+
+  it("a shifting event type settles once", function* () {
+    const { event } = shifting({ type: ["yield", "close"] });
+    const retained = new RetainedYield(event as Yield);
+    expect(retained.type).toBe("yield");
+    expect(retained.type).toBe("yield");
+  });
+
+  it("a shifting nested description member settles once", function* () {
+    const { event } = shifting({ extra: ["stable", "swapped"] });
+    const retained = new RetainedYield(event as Yield);
+    expect(retained.description["marker"]).toBe("stable");
+    expect(retained.description["marker"]).toBe("stable");
+  });
+
+  it("identity is read once for all three members together", function* () {
+    const { event, reads } = shifting({});
+    const retained = new RetainedYield(event as Yield);
+    void retained.type;
+    void retained.coroutineId;
+    void retained.description;
+    void retained.description["marker"];
+    // Four members across two objects, each read exactly once.
+    expect(reads.count).toBe(4);
+  });
+
+  it("an identity accessor that refuses is refused once, not retried", function* () {
+    const reads = { count: 0 };
+    const event: Record<string, unknown> = {
+      type: "yield",
+      description: { type: "call", name: "work" },
+      result: { status: "ok" },
+    };
+    Object.defineProperty(event, "coroutineId", {
+      enumerable: true,
+      get() {
+        reads.count++;
+        throw new Error("the backend will not say which coroutine this is");
+      },
+    });
+    const retained = new RetainedYield(event as unknown as Yield);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let caught: unknown;
+      try {
+        void retained.coroutineId;
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error | undefined)?.message).toBe(
+        "the backend will not say which coroutine this is",
+      );
+    }
+    expect(reads.count).toBe(1);
+  });
+
+  it("the description is detached from the source", function* () {
+    const marker = { nested: "original" };
+    const source = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "call", name: "work", marker },
+      result: { status: "ok" },
+    };
+    const retained = new RetainedYield(source as unknown as Yield);
+    const held = retained.description["marker"];
+    expect(held).not.toBe(marker);
+    marker.nested = "rewritten";
+    expect(held).toEqual({ nested: "original" });
   });
 });

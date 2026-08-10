@@ -377,15 +377,33 @@ Divergence detection catches _structural_ mismatches — the effect sequence cha
 
 The canonical example is a file-backed effect. If the workflow previously read `./component.mdx` and that file has since been edited, replaying the stored result would silently use stale content. A replay guard detects this and can halt replay with an error.
 
-### The two-phase model
+### The three stages
 
-Every replay guard has two phases, separated by a strict I/O boundary:
+A replay guard has three stages, separated by a strict I/O boundary:
 
-**Phase 1 — `check`**: runs in generator context before replay begins. I/O is allowed. Use it to gather current state (compute file hashes, check timestamps) and cache results in the middleware closure.
+**Stage 1 — `check`**: runs in generator context before replay begins, once per retained `Yield`. I/O is allowed. Use it to gather current state (compute file hashes, check timestamps) and cache results in the middleware closure.
 
-**Phase 2 — `decide`**: runs synchronously inside the replay loop, after identity matching succeeds. Must be pure — no I/O, no side effects. Reads from the cache populated during `check` and returns a `ReplayOutcome`.
+**Stage 2 — `admit`**: runs once after every retained event has been offered to `check`, and before a recorded terminal result is reused. It receives the retained history as a whole — the coroutine about to be resumed, its retained `Yield`s, and whether a terminal result exists for it. A guard that requires something of the history *as a whole* — that an event it validates is present at all, and present once — refuses here, because a per-event `check` has nothing to object to in a journal that simply omits the event. The default is a no-op.
 
-This separation is necessary because the replay loop is synchronous. All observation-gathering must happen upfront.
+**Stage 3 — `decide`**: runs synchronously inside the replay loop, after identity matching succeeds. Must be pure — no I/O, no side effects. Reads from the cache populated during `check` and returns a `ReplayOutcome`.
+
+The separation between generator and synchronous stages is necessary because the replay loop is synchronous. All observation-gathering must happen upfront.
+
+### Guards are policy, not authority
+
+A replay guard is **composable policy**. Guards compose through `Api.around`, and a handler installed further out may decline to call `next` — declining is what composition is for, and it means any single guard's opinion can be suppressed by another.
+
+That makes a guard the wrong place for anything that decides *identity*. A consumer whose durable identity must hold regardless of what a document, a component, or an enclosing scope installs owns that check itself — for example by wrapping the `DurableStream` it hands to `durableRun`, so the validation happens inside the read every later phase depends on, reachable through no context and replaceable by nothing. `@executablemd/core` does exactly that for a document's selected target.
+
+Use guards for staleness policy. Do not use them to enforce an invariant that must not be negotiable.
+
+### Retained events are read once
+
+Every phase of a replay reads the same events, and a journal is data a backend supplies. Events are therefore **retained**: read once and detached from whatever the backend still owns.
+
+A retained `Yield`'s **identity** — its event type, its coroutine, and its complete effect description — is read together and kept, so no phase can be shown a different event than the phase before it. What the event **settled to** stays lazy and separate, because the index is built before guards run and a guard that would refuse an event must get that chance before the stream is asked to produce a result. Both reads keep both outcomes: a refusal is remembered and re-raised rather than retried.
+
+A detached result shares no object or array with the journal, and remains ordinary mutable JSON — detaching is a claim against the *stream*, not against the consumer, and replayed values are legitimately written to.
 
 ### Writing a replay guard
 

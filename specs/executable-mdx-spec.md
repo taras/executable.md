@@ -2762,7 +2762,29 @@ The live root import records the **exact canonical target**, never the caller's
 selector. An untargeted import records no target member at all, so journals
 written before targets existed stay readable by untargeted runs.
 
-A replay guard validates the selection before the recorded run is reused. It
+Selection validation is **execution-owned and non-contextual**. Exact canonical
+target is workflow-definition identity, and identity may not be decided by
+anything a document, a component, or an enclosing scope can replace — a public
+replay guard installed further out may decline to delegate, which is what
+composable policy is for. The check therefore lives inside the journal the
+execution hands to `durableRun`: it reads the retained history once, owns the
+retained snapshot every later phase observes, validates the recorded selection
+and the required root-import structure against it, and passes that same snapshot
+on. It runs ahead of public guard policy, of any retained Yield reaching
+execution, of a retained terminal result being reused, of authored work, and of
+any append. Public `ReplayGuard` policy remains composable and may short-circuit
+other public guards; it cannot suppress this.
+
+Reusing a recorded terminal result additionally requires exactly one
+recognizable root import in the retained history, belonging to the coroutine
+whose terminal result is being reused. Reusing that result means standing behind
+the selection its root import established; a history that recorded none,
+recorded two, or recorded one belonging to another coroutine establishes nothing
+to stand behind. A partial history is held to the same selection rule: a
+recorded root import that names another section is refused before replay
+continues into it.
+
+The validation itself proceeds as follows. It
 resolves the current selector against the *recorded* content and requires the
 same selection outcome; the recorded content is then what the projection is
 taken from. A different selector naming the same section replays, and so does
@@ -2773,6 +2795,25 @@ reported as itself: the guard retains no failure object from the selection it
 could not match. The check runs before a completed run's recorded terminal
 result can be reused, so a finished journal cannot answer for a selection it
 never made.
+
+##### One validation order
+
+`inspectDocument()`, a live `execute()`, and a replayed `execute()` validate a
+root document in one order:
+
+1. parse the source far enough to obtain the body and its outline;
+2. resolve the requested target;
+3. compile frontmatter, props, and return schemas;
+4. build and project the selected definition.
+
+Resolving the target before compiling schemas is what makes the answer the same
+on all three paths, and it is the useful order: a caller who named a section the
+document does not offer asked the wrong question, and should hear that rather
+than a complaint about a schema they never reached. So an unresolvable target
+with an invalid props schema raises `DocumentTargetError`; a resolvable target
+with an invalid schema raises `PropsSchemaError`; an unresolvable target with a
+valid schema raises `DocumentTargetError`. A recorded failed selection keeps the
+same precedence on replay and is not replaced by the recorded terminal error.
 
 ##### Naming a root document
 
@@ -7554,6 +7595,10 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX44/TX45 | Preamble execution | Selecting the later section runs no component of the earlier one, which still runs when it is the target |
 | TX46 | Nested substitution | A nested `target` accessor answering Alpha then Beta cannot substitute a section: Alpha alone executes, the member is read once, and the appended Close describes Alpha |
 | TX47–TX50 | Terminal history | Targeted and untargeted completed journals with the root import removed, and one with it duplicated, are refused before terminal reuse; an intact journal still replays |
+| TX51–TX56 | Identity authority | A completed or partial Alpha journal resumed as Beta is refused with an enclosing `check` handler that never delegates, with the equivalent `admit` handler, and with a same-name guard from another loaded copy; same-target replay and ordinary guard composition are the controls |
+| TX57–TX60 | Terminal binding | A root import on a child coroutine, a valid one plus a root-named child event, none at all, and two on the terminal coroutine each refuse before terminal reuse |
+| TX61–TX63 | Detached but mutable | A replayed run updates a restored object exactly as a live one does; `__proto__` is an own data member; nested objects and arrays detach from the journal's own |
+| TX64–TX67 | Validation order | An unresolvable target outranks an invalid schema on inspection, live execution, and replay; a resolvable target lets the schema failure be reported; the control runs |
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |

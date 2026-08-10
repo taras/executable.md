@@ -22,10 +22,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
-import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
+import { detachJson, ReplayGuard } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream, Yield } from "@executablemd/durable-streams";
+import { createApi } from "@effectionx/context-api";
 import { API, useHostFiles } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { execute } from "../src/execute.ts";
 import { inspectDocument } from "../src/inspect.ts";
 import { getExpansion } from "../src/expansion.ts";
@@ -1256,5 +1259,377 @@ describe("Tier TX — a terminal journal without its root import", () => {
       ids: [],
     });
     expect(replayed).toBe(golden);
+  });
+});
+
+/**
+ * Tier TX — definition identity is not middleware.
+ *
+ * Exact canonical target is workflow-definition identity, and identity may not
+ * be decided by anything a document, a component, or an enclosing scope can
+ * replace. A public `ReplayGuard` handler installed further out may decline to
+ * call `next` — that is what composable policy is *for* — so a comparison
+ * living there is a comparison an outer handler can switch off.
+ *
+ * These install exactly such a handler and assert the answer does not change.
+ */
+describe("Tier TX — identity authority is execution-owned", () => {
+  /** A guard that swallows every stage it is given, calling `next` for none. */
+  function* useSuppressingGuard(stage: "check" | "admit"): Operation<void> {
+    if (stage === "check") {
+      yield* ReplayGuard.around({
+        // deno-lint-ignore require-yield
+        *check() {},
+      });
+      return;
+    }
+    yield* ReplayGuard.around({
+      // deno-lint-ignore require-yield
+      *admit() {},
+    });
+  }
+
+  /** Resume `stream` as `target` with `install` in scope, and report what happened. */
+  function* resumeWith(
+    stream: InMemoryStream,
+    target: string,
+    install: () => Operation<void>,
+  ): Operation<{ error: unknown; seen: Probes; appended: number }> {
+    const before = stream.snapshot().length;
+    const seen: Probes = { names: [], ids: [] };
+    const error = yield* scoped(function* () {
+      yield* install();
+      yield* useProbes(seen);
+      try {
+        yield* collect(yield* execute({ ...inlineSource(SECTIONS, { target }), stream }));
+      } catch (caught) {
+        return caught;
+      }
+      return undefined;
+    });
+    return { error, seen, appended: stream.snapshot().length - before };
+  }
+
+  /** A completed journal for `target`. */
+  function* completed(target: string): Operation<InMemoryStream> {
+    const stream = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target }), stream, { names: [], ids: [] });
+    return stream;
+  }
+
+  /** A journal for `target` with its terminal result removed. */
+  function* partial(target: string): Operation<InMemoryStream> {
+    const complete = yield* completed(target);
+    const stripped = new InMemoryStream();
+    for (const event of complete.snapshot()) {
+      if (event.type === "close") {
+        continue;
+      }
+      yield* stripped.append(event);
+    }
+    return stripped;
+  }
+
+  it("TX51: an enclosing check handler that never delegates cannot admit Beta", function* () {
+    const outcome = yield* resumeWith(yield* completed("Alpha"), "Beta", () =>
+      useSuppressingGuard("check"),
+    );
+    expect(outcome.error).toBeInstanceOf(StaleInputError);
+    expect(outcome.seen.names).toEqual([]);
+    expect(outcome.appended).toBe(0);
+  });
+
+  it("TX52: an enclosing admit handler that never delegates cannot admit Beta", function* () {
+    const outcome = yield* resumeWith(yield* completed("Alpha"), "Beta", () =>
+      useSuppressingGuard("admit"),
+    );
+    expect(outcome.error).toBeInstanceOf(StaleInputError);
+    expect(outcome.seen.names).toEqual([]);
+    expect(outcome.appended).toBe(0);
+  });
+
+  /**
+   * A guard registered under the same name by a separately loaded copy composes
+   * with this run's guards, because an Effection context is keyed by its name.
+   * That is the portability mechanism, and it is exactly why identity is not
+   * kept there.
+   */
+  it("TX53: a same-name guard from another loaded copy cannot admit Beta", function* () {
+    const foreign = createApi<{ check(event: Yield): Operation<void> }>(
+      "DurableEffection.ReplayGuard",
+      {
+        // deno-lint-ignore require-yield
+        *check() {},
+      },
+    );
+    const outcome = yield* resumeWith(yield* completed("Alpha"), "Beta", function* () {
+      yield* foreign.around({
+        // deno-lint-ignore require-yield
+        *check() {},
+      });
+    });
+    expect(outcome.error).toBeInstanceOf(StaleInputError);
+    expect(outcome.seen.names).toEqual([]);
+    expect(outcome.appended).toBe(0);
+  });
+
+  it("TX54: a partial journal is held to its recorded selection too", function* () {
+    const outcome = yield* resumeWith(yield* partial("Alpha"), "Beta", () =>
+      useSuppressingGuard("check"),
+    );
+    expect(outcome.error).toBeInstanceOf(StaleInputError);
+    expect(outcome.seen.names).toEqual([]);
+    expect(outcome.appended).toBe(0);
+  });
+
+  it("TX55: the controls — the same target replays, complete and partial", function* () {
+    const whole = yield* resumeWith(yield* completed("Alpha"), "Alpha", () =>
+      useSuppressingGuard("check"),
+    );
+    expect(whole.error).toBe(undefined);
+
+    const half = yield* resumeWith(yield* partial("Alpha"), "Alpha", () =>
+      useSuppressingGuard("check"),
+    );
+    expect(half.error).toBe(undefined);
+    expect(half.seen.names).toEqual(["pre", "title", "alpha", "inner"]);
+  });
+
+  it("TX56: ordinary guard composition still works", function* () {
+    const stream = yield* completed("Alpha");
+    const observed: string[] = [];
+    const outcome = yield* resumeWith(stream, "Alpha", function* () {
+      yield* ReplayGuard.around({
+        *check([event], next) {
+          observed.push(event.description.name);
+          return yield* next(event);
+        },
+      });
+    });
+    expect(outcome.error).toBe(undefined);
+    expect(observed).toContain("__root__");
+  });
+});
+
+/**
+ * Tier TX — the root import that authorizes a terminal result is the terminal
+ * coroutine's own.
+ *
+ * Reusing a recorded terminal result means standing behind the selection its
+ * root import established. A root import belonging to some other coroutine
+ * established that coroutine's selection, not this one's, and two of them
+ * establish nothing at all.
+ */
+describe("Tier TX — a terminal result needs its own root import", () => {
+  /** A completed Alpha journal, rewritten event by event. */
+  function* rewritten(
+    change: (events: DurableEvent[]) => DurableEvent[],
+  ): Operation<InMemoryStream> {
+    const complete = new InMemoryStream();
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), complete, { names: [], ids: [] });
+    const rebuilt = new InMemoryStream();
+    for (const event of change(complete.snapshot())) {
+      yield* rebuilt.append(event);
+    }
+    return rebuilt;
+  }
+
+  function isRootImport(event: DurableEvent): boolean {
+    return event.type === "yield" && event.description.name === "__root__";
+  }
+
+  /** Hold a resume to the refusal contract. */
+  function* refuses(stream: InMemoryStream): Operation<void> {
+    const before = stream.snapshot().length;
+    const seen: Probes = { names: [], ids: [] };
+    const error = yield* failure(inlineSource(SECTIONS, { target: "Alpha" }), stream, seen);
+    expect((error as Error).message).toBe(UNREADABLE_RECORD);
+    expect((error as Error).cause).toBe(undefined);
+    expect(seen.names).toEqual([]);
+    expect(stream.snapshot().length).toBe(before);
+  }
+
+  it("TX57: only a child coroutine carries the root import", function* () {
+    yield* refuses(
+      yield* rewritten((events) =>
+        events.map((event) => (isRootImport(event) ? { ...event, coroutineId: "root.7" } : event)),
+      ),
+    );
+  });
+
+  it("TX58: a valid root import plus a root-named child event", function* () {
+    yield* refuses(
+      yield* rewritten((events) =>
+        events.flatMap((event) =>
+          isRootImport(event) ? [event, { ...event, coroutineId: "root.7" }] : [event],
+        ),
+      ),
+    );
+  });
+
+  it("TX59: no root import at all", function* () {
+    yield* refuses(yield* rewritten((events) => events.filter((event) => !isRootImport(event))));
+  });
+
+  it("TX60: two root imports on the terminal coroutine", function* () {
+    yield* refuses(
+      yield* rewritten((events) =>
+        events.flatMap((event) => (isRootImport(event) ? [event, event] : [event])),
+      ),
+    );
+  });
+});
+
+/**
+ * Tier TX — a detached retained value is still ordinary JSON.
+ *
+ * Detaching is a claim against the journal, not against the document. A
+ * replayed value a document goes on to update must behave as it did when the
+ * run first produced it.
+ */
+describe("Tier TX — detached values stay mutable", () => {
+  const MUTATES = [
+    "```js eval",
+    "const state = { count: 0, tags: ['a'] };",
+    "```",
+    "",
+    "```js eval",
+    "state.count += 1;",
+    "state.tags.push('b');",
+    "output(`${state.count}:${state.tags.join(',')}`);",
+    "```",
+    "",
+  ].join("\n");
+
+  function* runMutating(stream: InMemoryStream): Operation<string> {
+    return yield* scoped(function* () {
+      // The portable compiler: a data: module is not importable under every runtime.
+      yield* useTempFileCompiler();
+      return asText(yield* collect(yield* execute({ ...inlineSource(MUTATES), stream })));
+    });
+  }
+
+  it("TX61: a replayed run updates a restored object exactly as a live one does", function* () {
+    const live = new InMemoryStream();
+    const golden = yield* runMutating(live);
+    expect(golden).toContain("1:a,b");
+
+    // Same journal, replayed: the restored binding is written to again.
+    expect(yield* runMutating(live)).toBe(golden);
+  });
+
+  it("TX62: `__proto__` is retained as an own data member", function* () {
+    const source: Record<string, unknown> = {};
+    Object.defineProperty(source, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    const detached = detachJson(source as Json);
+    expect(Object.getPrototypeOf(detached)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyNames(detached)).toEqual(["__proto__"]);
+    expect(({} as Record<string, unknown>)["polluted"]).toBe(undefined);
+  });
+
+  it("TX63: nested objects and arrays detach from the journal's own", function* () {
+    const list = ["a"];
+    const nested = { list };
+    const source = { nested };
+    const detached = detachJson(source as unknown as Json);
+    const heldNested = (detached as Record<string, Json>)["nested"];
+    expect(heldNested).not.toBe(nested);
+    expect((heldNested as Record<string, Json>)["list"]).not.toBe(list);
+
+    list.push("injected");
+    nested.list = ["replaced"];
+    expect((heldNested as Record<string, Json>)["list"]).toEqual(["a"]);
+  });
+});
+
+/**
+ * Tier TX — one validation order on every public path.
+ *
+ * A caller who named a section the document does not offer asked the wrong
+ * question, and should hear that — not a complaint about a schema they never
+ * reached. Resolving the target before compiling schemas makes the answer the
+ * same whether a host inspects, runs, or resumes.
+ */
+describe("Tier TX — target resolution precedes schema compilation", () => {
+  const BROKEN_SCHEMA = [
+    "---",
+    "props:",
+    "  type: object",
+    "  properties:",
+    "    who:",
+    "      type: not-a-json-schema-type",
+    "---",
+    "",
+    "# Title",
+    "",
+    "## Kept",
+    "",
+    "kept body",
+    "",
+  ].join("\n");
+
+  const GOOD_SCHEMA = BROKEN_SCHEMA.replace("not-a-json-schema-type", "string");
+
+  /** The failure each public path reports for one source and selector. */
+  function* onEveryPath(source: string, target: string): Operation<unknown[]> {
+    const inspected = yield* scoped(function* () {
+      try {
+        yield* inspectDocument(inlineSource(source, { target }));
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    });
+
+    const stream = new InMemoryStream();
+    const live = yield* failure(inlineSource(source, { target }), stream);
+    // The same journal again: a recorded failed selection keeps its precedence
+    // and is not replaced by the recorded terminal error.
+    const replayed = yield* failure(inlineSource(source, { target }), stream);
+    return [inspected, live, replayed];
+  }
+
+  it("TX64: an unresolvable target outranks an invalid schema on all three paths", function* () {
+    for (const failed of yield* onEveryPath(BROKEN_SCHEMA, "Missing")) {
+      expect(isDocumentTargetError(failed)).toBe(true);
+      expect(asDocumentTargetError(failed)?.data).toMatchObject({
+        kind: "no-match",
+        selector: "Missing",
+        available: ["Kept"],
+      });
+    }
+  });
+
+  it("TX65: a resolvable target lets the invalid schema be reported", function* () {
+    const [inspected, live] = yield* onEveryPath(BROKEN_SCHEMA, "Kept");
+    for (const failed of [inspected, live]) {
+      expect(isDocumentTargetError(failed)).toBe(false);
+      expect((failed as Error).name).toBe("PropsSchemaError");
+    }
+  });
+
+  it("TX66: an unresolvable target with a valid schema still reports the target", function* () {
+    for (const failed of yield* onEveryPath(GOOD_SCHEMA, "Missing")) {
+      expect(isDocumentTargetError(failed)).toBe(true);
+    }
+  });
+
+  it("TX67: the control — a resolvable target and a valid schema run", function* () {
+    const info = yield* inspectDocument(inlineSource(GOOD_SCHEMA, { target: "Kept" }));
+    expect(info.target).toBe("Kept");
+    const text = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(GOOD_SCHEMA, { target: "Kept" }),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    expect(text).toContain("kept body");
   });
 });
