@@ -82,13 +82,9 @@ const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
  * Every name that would mean a host reached the shared coordination surface.
  *
  * Storage and runtime implementation types, the adapter's private transaction
- * identities, runtime detection, process globals, and any import that reaches
- * an adapter, a vendored source or a host process.
+ * identities, runtime detection, and process globals.
  */
 const FORBIDDEN = [
-  "node:sqlite",
-  "node:process",
-  "node:child_process",
   "DatabaseSync",
   "SQLite",
   "sqlite",
@@ -107,11 +103,24 @@ const FORBIDDEN = [
   "Bun",
   "globalThis",
   "navigator",
-  "src/deno/",
-  "/deno.ts",
-  "vendor/",
-  "@effectionx/process",
 ];
+
+/**
+ * A module specifier only one host can resolve.
+ *
+ * Named by shape rather than one at a time: a list of the host modules anyone
+ * thought of is a list of the ones that had already been noticed, and the
+ * import that crosses this boundary next is the one nobody wrote down.
+ */
+function hostModule(specifier: string): boolean {
+  return (
+    /^(node|bun|deno|cloudflare):/.test(specifier) ||
+    specifier.includes("/deno/") ||
+    specifier.endsWith("/deno.ts") ||
+    specifier.includes("vendor/") ||
+    specifier === "@effectionx/process"
+  );
+}
 
 /**
  * Source with its comments removed.
@@ -160,9 +169,31 @@ function code(source: string): string {
   return output;
 }
 
+/** Every module this source imports, however the import is written. */
+function specifiers(source: string): string[] {
+  const found: string[] = [];
+  for (const pattern of [
+    /\bfrom\s*["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']/g,
+    /\bimport\s*["']([^"']+)["']/g,
+    /\brequire\s*\(\s*["']([^"']+)["']/g,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      found.push(match[1]);
+    }
+  }
+  return found;
+}
+
 function forbiddenNames(source: string): string[] {
   const scanned = code(source);
-  return FORBIDDEN.filter((name) => scanned.includes(name));
+  const crossings = FORBIDDEN.filter((name) => scanned.includes(name));
+  for (const specifier of specifiers(scanned)) {
+    if (hostModule(specifier) && !crossings.includes(specifier)) {
+      crossings.push(specifier);
+    }
+  }
+  return crossings;
 }
 
 describe("Tier DLC — Workspace coordination selection", () => {
@@ -249,11 +280,25 @@ describe("Tier DLC — Workspace coordination selection", () => {
       `const value = "DOFS"; \n`,
     );
     expect(forbiddenNames(`import { DatabaseSync } from "node:sqlite";`)).toEqual([
-      "node:sqlite",
       "DatabaseSync",
       "sqlite",
+      "node:sqlite",
     ]);
     expect(forbiddenNames("// the Deno adapter owns DOFS and its savepoints")).toEqual([]);
+
+    // A host module is a crossing by its shape, not because someone listed it.
+    // `node:crypto` names nothing else on this list, and shared source did
+    // import it while an earlier version of this test reported a clean
+    // boundary.
+    expect(forbiddenNames(`import { randomUUID } from "node:crypto";`)).toEqual(["node:crypto"]);
+    expect(forbiddenNames(`export { x } from "node:os";`)).toEqual(["node:os"]);
+    expect(forbiddenNames(`const m = await import("bun:sqlite");`)).toEqual([
+      "sqlite",
+      "bun:sqlite",
+    ]);
+    expect(forbiddenNames(`import "../deno.ts";`)).toEqual(["../deno.ts"]);
+    expect(forbiddenNames("// run ids used to come from node:crypto")).toEqual([]);
+    expect(forbiddenNames(`const note = "node:crypto";`)).toEqual([]);
 
     const found = (yield* glob({
       root: REPOSITORY,
