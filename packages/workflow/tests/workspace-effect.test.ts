@@ -344,10 +344,26 @@ function refers(node: ts.Identifier): boolean {
 function hostGlobals(parsed: { file: ts.SourceFile; checker: ts.TypeChecker }): string[] {
   const found: string[] = [];
 
+  /**
+   * The binding this identifier reads.
+   *
+   * `{ process }` writes one name in two roles: the property the literal
+   * declares and the value it reads. The ordinary symbol is the property — it
+   * is declared right there, so asking for it would answer that every host
+   * global is locally declared the moment it is put in an object. The value
+   * symbol is the one the shorthand refers to.
+   */
+  function binding(node: ts.Identifier): ts.Symbol | undefined {
+    const parent = node.parent;
+    if (parent !== undefined && ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+      return parsed.checker.getShorthandAssignmentValueSymbol(parent);
+    }
+    return parsed.checker.getSymbolAtLocation(node);
+  }
+
   function visit(node: ts.Node): void {
     if (ts.isIdentifier(node) && HOST_GLOBALS.includes(node.text) && refers(node)) {
-      const symbol = parsed.checker.getSymbolAtLocation(node);
-      const declared = (symbol?.declarations ?? []).some(
+      const declared = (binding(node)?.declarations ?? []).some(
         (declaration) => declaration.getSourceFile() === parsed.file,
       );
       if (!declared && !found.includes(node.text)) {
@@ -559,6 +575,15 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(forbiddenNames("type Value<T> = T extends infer Buffer ? Buffer : never;")).toEqual([]);
     expect(forbiddenNames("process: for (;;) {\n  break process;\n}")).toEqual([]);
     expect(forbiddenNames("class Queue {\n  get process() {\n    return 1;\n  }\n}")).toEqual([]);
+
+    // A shorthand property writes one name in two roles. The property it
+    // declares is not the binding it reads, and reading an ambient global is
+    // a crossing however briefly the value is held.
+    expect(forbiddenNames("const environment = { process };")).toEqual(["process"]);
+    expect(forbiddenNames("const runtimes = { Deno, Bun };")).toEqual(["Deno", "Bun"]);
+    expect(forbiddenNames("const process = 1;\nconst environment = { process };")).toEqual([]);
+    expect(forbiddenNames("function hold(Buffer: number) {\n  return { Buffer };\n}")).toEqual([]);
+    expect(forbiddenNames("const environment = { process: local };")).toEqual([]);
 
     // The same forms still end at their own boundary.
     expect(
