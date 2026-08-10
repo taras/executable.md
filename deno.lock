@@ -3974,6 +3974,7 @@
       "npm:mdast-util-to-string@4",
       "npm:oxlint-tsgolint@0.25.0",
       "npm:oxlint@1.74.0",
+      "npm:typescript@5",
       "npm:unist-util-select@5",
       "npm:zod@^4.3.6"
     ],

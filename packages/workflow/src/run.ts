@@ -28,7 +28,6 @@
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
-import { randomUUID } from "node:crypto";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { ReplayGuard } from "@executablemd/durable-streams";
 import type { EffectDescription, Json, Workflow, Yield } from "@executablemd/durable-streams";
@@ -77,7 +76,9 @@ function* record(description: EffectDescription, base: string): Workflow<unknown
     // value back without running this at all, so neither the identifier nor Git
     // is reached a second time.
     const pinnedCommit = yield* revParse(`${base}^{commit}`);
-    return { runId: randomUUID(), base, pinnedCommit };
+    // Web Crypto rather than `node:crypto`: a run id is allocated in shared
+    // code, which names no host.
+    return { runId: crypto.randomUUID(), base, pinnedCommit };
   });
 }
 

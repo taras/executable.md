@@ -690,7 +690,12 @@ BEGIN
 COMMIT
 ```
 
-A crash commits all three or none. Nested child effects finish before the
+A crash commits all three or none. Nothing runs after a killed host dies — no
+cleanup, no commit, no rollback — so the operating system closes its connection
+and releases its locks, and the next connection recovers the database to the
+last committed state, exposing neither the mutation, the root, the pointer
+change nor the result. Another connection never sees them while that
+transaction is uncommitted either. Nested child effects finish before the
 parent's effect transaction begins. Direct filesystem operations and
 declarative Git operations use this boundary.
 
@@ -840,6 +845,14 @@ refusal from infrastructure failure and cancellation, and activates the durable
 fail-stop fence for infrastructure failures. This foundation is not a public
 filesystem effect: `<File>`, `API.Files`, workflow start/resume and history
 commands do not route to it in this slice.
+
+That boundary holds across processes as well as within one. A host killed
+between the mutation and the commit publishes nothing, and a process that
+opens the database afterwards finds the last committed filesystem, current
+root, retained roots and ordered event-to-root associations. Reopening replays
+recorded effects instead of performing them, and the adapter-private
+materializer reconstructs an older event's root from that root's retained DOFS
+manifests and blobs.
 
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be

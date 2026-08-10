@@ -509,6 +509,25 @@ That identity fences later coordinators, executors and appends. An already
 active durability failure takes precedence. Cancellation at any phase publishes
 nothing.
 
+Losing the host is not one of those phases. Nothing runs after the process
+dies: no cleanup, no commit, no rollback. The operating system closes the
+connection and releases the locks it held, and the next connection to open the
+database recovers it. The mutation, the immutable root, the current-root
+pointer and the routed journal row have all been written inside the
+caller-owned transaction by then; recovery exposes the last committed state and
+none of them.
+
+A second connection sees that same last committed state for as long as the
+writer's transaction is uncommitted, so a crash publishes nothing that was not
+already visible before it.
+
+A later process therefore opens the last committed state and nothing else: the
+same live filesystem, the same current root, the same retained roots, manifest
+and blob references, and the same ordered journal with the same event
+identities and Workspace-root associations. Recorded effects replay rather than
+execute again, and the private restoration materializer reconstructs any
+retained root from that state without the process that wrote it.
+
 The provider-neutral coordinator receives the failure-activation continuation
 needed for this boundary. The default live coordinator ignores it and preserves
 ordinary success/failure publication. Replay bypasses coordination, and only an
